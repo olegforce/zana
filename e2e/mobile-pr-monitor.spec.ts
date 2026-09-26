@@ -57,6 +57,8 @@ test('PR Monitor mobile list, filters and full-screen detail preserve the deskto
     await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
     await drawer.getByRole('button', { name: 'More', exact: true }).click();
+    // The HTTP client's initial plugin catalogue hydrates separately from the desktop.
+    await expect(drawer.getByText('PR Monitor', { exact: true })).toBeVisible({ timeout: 30_000 });
     await drawer.getByText('PR Monitor', { exact: true }).click();
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
     for (const width of [320, 390, 820]) {
