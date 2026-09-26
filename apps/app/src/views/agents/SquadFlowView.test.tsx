@@ -243,7 +243,8 @@ describe('SquadFlowView separate Team-run canvases', () => {
   it('uses one pannable scrollport for the full stack instead of nested run scrollports', () => {
     expect(css).toMatch(/\.squad-flow-run-groups \{[^}]*overflow:\s*auto;[^}]*cursor:\s*grab;/s);
     expect(css).toMatch(/\.squad-flow-run-groups \.squad-flow-canvas \{[^}]*overflow:\s*visible;/s);
-    expect(view).toContain('aria-label="Squad run canvases. Drag empty space to pan."');
+    expect(view).toContain('Squad run canvases. Drag empty space to pan.');
+    expect(view).toContain('Agent canvases. Swipe to explore.');
     expect(view).toContain('pannable={false}');
   });
 });
@@ -260,6 +261,7 @@ describe('mobile canvas interaction', () => {
     };
     const { container, getByLabelText, rerender } = render(<SquadGraph graph={graph} onInspectExecution={inspectJob} />);
     const node = container.querySelector<HTMLButtonElement>('.squad-flow-node')!;
+    expect(node.title).toContain('Tap to open agent');
     node.setPointerCapture = vi.fn();
     fireEvent.pointerDown(node, { pointerId: 1, pointerType: 'touch', button: 0 });
     fireEvent.pointerMove(node, { pointerId: 1, pointerType: 'touch', clientX: 90 });
