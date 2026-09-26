@@ -238,11 +238,19 @@ export function ThreadStatusBadge({
       className={`thread-chip thread-status-badge is-${tone}`}
       data-testid="thread-detail-status"
       data-status={status}
+      aria-label={label}
+      title={label}
     >
       <span className={`tab-agent-dot agent-${tone}`} aria-hidden="true" />
       {label}
     </span>
   );
+}
+
+/** Move the same live controls into the phone header; embedded views stay local. */
+export function ThreadDetailActions({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
+  const actions = <div className="thread-detail-actions">{children}</div>;
+  return target ? createPortal(actions, target) : actions;
 }
 
 export function ThreadDetailHeading({

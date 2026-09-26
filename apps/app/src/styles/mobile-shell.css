@@ -419,43 +419,62 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
   flex-wrap: wrap;
   gap: 6px;
 }
-/* The title occupies the shell's first row; these controls share the second. */
+/* Agent pages lend all header controls to the shell's single 48px row. */
 .app-shell[data-mobile='true'] .thread-detail-main:has(> [data-title-in-shell='true']) {
   padding: 0 12px 12px;
   gap: 8px;
 }
-.app-shell[data-mobile='true'] .thread-detail-header[data-title-in-shell='true'] {
-  flex-wrap: nowrap;
-  min-height: 44px;
-  gap: 4px;
-}
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-heading {
-  flex: 0 0 auto;
-  order: 2;
-}
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-actions {
-  flex: 1;
-  min-width: 0;
-}
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-status-badge { order: -1; }
+.app-shell[data-mobile='true'] .thread-detail-header[data-title-in-shell='true'][data-controls-in-shell='true'] { display: none; }
 .app-shell[data-mobile='true'] .agent-session-main:has(> [data-title-in-shell='true']) { padding: 0; gap: 0; }
-.app-shell[data-mobile='true'] .agent-session-main > [data-title-in-shell='true'] { padding: 0 12px; }
-.mobile-cli-context { display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; font-size: 12px; color: var(--text-muted); }
-.mobile-cli-context .mobile-agent-status { flex-shrink: 0; }
-.mobile-cli-project { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.mobile-cli-project svg { flex-shrink: 0; }
-.mobile-cli-project > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search { margin-left: auto; }
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search:is(:focus-within, .has-query) { flex: 1; }
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search:is(:focus-within, .has-query) input {
-  flex: 1;
-  width: 0;
-  max-width: none;
+.mobile-thread-controls-slot:empty { display: none; }
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) {
+  padding: 0 4px 0 52px;
+  justify-content: flex-start;
 }
-.app-shell[data-mobile='true'] [data-title-in-shell='true'] :is(.icon-btn, .thread-detail-overflow-btn) {
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) .titlebar-bell { display: none; }
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) .mobile-thread-title-slot {
+  position: static;
+  flex: 1;
+}
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) .mobile-thread-actions-slot {
+  position: static;
+  flex: 0 0 44px;
+  transform: none;
+}
+.mobile-thread-controls-slot { min-width: 0; flex: 0 0 auto; }
+.mobile-thread-controls-slot .thread-detail-actions { gap: 0; min-width: 0; }
+.mobile-thread-controls-slot :is(.icon-btn, .thread-detail-overflow-btn) {
   flex-shrink: 0;
   width: 44px;
   height: 44px;
+}
+.mobile-thread-controls-slot .icon-btn > svg { width: 18px; height: 18px; }
+.app-shell[data-mobile='true'] .mobile-thread-controls-slot :is(.thread-status-badge, .mobile-cli-status) {
+  order: -1;
+  flex: 0 0 20px;
+  width: 20px;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  background: transparent;
+  font-size: 0;
+  border: 0;
+  animation: none;
+}
+/* Search temporarily uses the title's space, with a touch-sized close action. */
+.mobile-thread-controls-slot .thread-detail-search-close { display: none; }
+.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query) .thread-detail-search-close { display: flex; }
+.titlebar:has(.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query)) .mobile-thread-title-slot { display: none; }
+.titlebar:has(.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query)) .mobile-thread-controls-slot { flex: 1; }
+.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query) { flex: 1; }
+.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query) input {
+  flex: 1;
+  width: 0;
+  max-width: none;
+  margin: 0;
+  font-size: 16px;
 }
 .app-shell[data-mobile='true'] .thread-detail-view.is-secondary-open .thread-detail-main,
 .app-shell[data-mobile='true'] .split-workspace-host:has(> .thread-secondary-panel) > .split-workspace-main {
@@ -1045,3 +1064,20 @@ body:has(.app-shell[data-mobile='true'])
   position: relative;
   top: auto;
 }
+
+/* A selected mobile List item uses the same header, with Back in the menu slot. */
+.app-shell[data-mobile='true']:has(.titlebar .agent-monitor-back) .sidebar-trigger-overlay { display: none; }
+.mobile-thread-controls-slot .agent-monitor-back {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  justify-content: center;
+}
+.mobile-thread-controls-slot .agent-monitor-back > span { display: none; }
+.app-shell[data-mobile='true'] .agents-board:has(.agent-monitor-main [data-controls-in-shell='true']) > .agents-board-toolbar { display: none; }
+.app-shell[data-mobile='true'] .agents-board-content:has(.agent-monitor-main [data-controls-in-shell='true']) > .cohort-bar { display: none; }

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { ThreadDetailHeading } from './thread/timeline/ThreadBanners.js';
-import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_TITLE_ID, useMobileThreadActionsTarget, useMobileThreadTitleTarget } from './useMobileThreadTitleTarget.js';
+import { ThreadDetailActions, ThreadDetailHeading } from './thread/timeline/ThreadBanners.js';
+import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_CONTROLS_ID, MOBILE_THREAD_TITLE_ID, useMobileThreadActionsTarget, useMobileThreadControlsTarget, useMobileThreadTitleTarget } from './useMobileThreadTitleTarget.js';
 
 const layout = vi.hoisted(() => ({ compact: true }));
 vi.mock('../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
@@ -11,8 +11,10 @@ afterEach(() => { cleanup(); layout.compact = true; });
 function Heading({ enabled, title }: { enabled: boolean; title: string }) {
   const target = useMobileThreadTitleTarget(enabled);
   const actions = useMobileThreadActionsTarget(enabled);
+  const controls = useMobileThreadControlsTarget(enabled);
   return <div data-testid="thread-header">
     <ThreadDetailHeading title={title} titleTarget={target} overflowTarget={actions} overflow={<button>Agent actions</button>} />
+    <ThreadDetailActions target={controls}><button>Search agent</button></ThreadDetailActions>
   </div>;
 }
 
@@ -20,6 +22,7 @@ function Fixture({ enabled = true, title = 'Review a long mobile agent title', s
   return <>
     {layout.compact && slot && <div id={MOBILE_THREAD_TITLE_ID} data-testid="shell-title" />}
     {layout.compact && slot && <div id={MOBILE_THREAD_ACTIONS_ID} data-testid="shell-actions" />}
+    {layout.compact && slot && <div id={MOBILE_THREAD_CONTROLS_ID} data-testid="shell-controls" />}
     <Heading enabled={enabled} title={title} />
   </>;
 }
@@ -30,6 +33,8 @@ it('moves the live heading and actions into the shell without keeping duplicates
   expect(within(shell).getByRole('heading', { level: 1 }).textContent).toBe('Review a long mobile agent title');
   expect(within(screen.getByTestId('thread-header')).queryByRole('heading')).toBeNull();
   expect(within(screen.getByTestId('thread-header')).queryByRole('button')).toBeNull();
+  const controls = screen.getByTestId('shell-controls');
+  expect(within(controls).getByRole('button', { name: 'Search agent' })).toBeTruthy();
   const actions = screen.getByTestId('shell-actions');
   expect(within(actions).getByRole('button', { name: 'Agent actions' })).toBeTruthy();
   rerender(<Fixture title="Renamed agent" />);
@@ -38,6 +43,7 @@ it('moves the live heading and actions into the shell without keeping duplicates
   unmount();
   expect(shell.childElementCount).toBe(0);
   expect(actions.childElementCount).toBe(0);
+  expect(controls.childElementCount).toBe(0);
 });
 
 it('releases the shell title when navigation or focus leaves the thread page', () => {
@@ -45,7 +51,9 @@ it('releases the shell title when navigation or focus leaves the thread page', (
   rerender(<Fixture enabled={false} />);
   expect(screen.getByTestId('shell-title').childElementCount).toBe(0);
   expect(screen.getByTestId('shell-actions').childElementCount).toBe(0);
-  expect(within(screen.getByTestId('thread-header')).getByRole('button')).toBeTruthy();
+  expect(screen.getByTestId('shell-controls').childElementCount).toBe(0);
+  expect(within(screen.getByTestId('thread-header')).getByRole('button', { name: 'Search agent' })).toBeTruthy();
+  expect(within(screen.getByTestId('thread-header')).getByRole('button', { name: 'Agent actions' })).toBeTruthy();
   expect(within(screen.getByTestId('thread-header')).getByRole('heading')).toBeTruthy();
   rerender(<Fixture />);
   expect(within(screen.getByTestId('shell-title')).getByRole('heading')).toBeTruthy();
@@ -57,7 +65,7 @@ it('returns to the desktop heading and reconnects when the mobile slot remounts'
   rerender(<Fixture />);
   expect(screen.queryByTestId('shell-title')).toBeNull();
   expect(screen.queryByTestId('shell-actions')).toBeNull();
-  expect(within(screen.getByTestId('thread-header')).getByRole('button')).toBeTruthy();
+  expect(within(screen.getByTestId('thread-header')).getByRole('button', { name: 'Agent actions' })).toBeTruthy();
   expect(within(screen.getByTestId('thread-header')).getByRole('heading')).toBeTruthy();
   layout.compact = true;
   rerender(<Fixture />);
@@ -67,7 +75,7 @@ it('returns to the desktop heading and reconnects when the mobile slot remounts'
 it('keeps the ordinary heading when no shell slot is available', () => {
   render(<Fixture slot={false} />);
   expect(within(screen.getByTestId('thread-header')).getByRole('heading')).toBeTruthy();
-  expect(within(screen.getByTestId('thread-header')).getByRole('button')).toBeTruthy();
+  expect(within(screen.getByTestId('thread-header')).getByRole('button', { name: 'Agent actions' })).toBeTruthy();
 });
 
 it('retains the action handler when it renders in the shell', () => {

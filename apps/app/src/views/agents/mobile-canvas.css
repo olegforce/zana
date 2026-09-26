@@ -1,0 +1,17 @@
+.app-shell[data-mobile='true'] .agents-view-toggle-btn:has(.agents-view-toggle-label) { gap: 2px; padding: 4px 0; font-size: 10px; }
+.app-shell[data-mobile='true'] .agents-board-close-idle .agents-board-btn-count { display: none; }
+.app-shell[data-mobile='true'] .squad-flow { min-width: 0; gap: 8px; padding: 8px 0 12px; }
+.mobile-canvas-hint { margin: 0; padding: 0 12px; color: var(--text-muted); font-size: 12px; }
+.app-shell[data-mobile='true'] .squad-flow-head { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+.app-shell[data-mobile='true'] .squad-flow-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.app-shell[data-mobile='true'] .squad-flow-rollup { flex-basis: 100%; margin-left: 0; gap: 6px; }
+.app-shell[data-mobile='true'] .squad-flow-switcher { margin: 0 12px; }
+.app-shell[data-mobile='true'] .squad-flow-tab { min-height: 44px; }
+.app-shell[data-mobile='true'] .squad-flow-canvas { margin: 0 12px; touch-action: pan-x pan-y; }
+.app-shell[data-mobile='true'] .squad-flow-node { touch-action: pan-x pan-y; cursor: pointer; }
+.app-shell[data-mobile='true'] .squad-flow-run-groups { min-width: 0; touch-action: pan-x pan-y; }
+.app-shell[data-mobile='true'] .squad-flow-run-groups .squad-flow-canvas {
+  overflow: auto;
+  height: min(55dvh, 420px);
+  min-height: 180px;
+}

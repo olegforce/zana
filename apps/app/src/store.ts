@@ -467,6 +467,9 @@ interface UiState {
   // preference shared by the cross-project and per-project boards (persisted to
   // AppConfig.agentsBoardView). Default 'board'.
   agentsBoardView: AgentsBoardView;
+  // Session-local phone choice; desktop Flow never opts a phone into Canvas.
+  mobileAgentsBoardView: AgentsBoardView | null;
+  setMobileAgentsBoardView: (view: AgentsBoardView) => void;
   setAgentsBoardView: (view: AgentsBoardView) => void;
   // Right-edge Favorites drawer: the slide-over list of starred agents the user
   // is following. Toggled from the titlebar star button. Persisted in
@@ -1010,6 +1013,7 @@ export const useUi = create<UiState>((set, get) => ({
   unread: {},
   projectView: {},
   agentsBoardView: 'board',
+  mobileAgentsBoardView: null,
   explorerFile: {},
   explorerGoto: {},
   recentFiles: {},
@@ -1337,6 +1341,7 @@ export const useUi = create<UiState>((set, get) => ({
       focusedProjectId: projectId
     });
   },
+  setMobileAgentsBoardView: (view) => set({ mobileAgentsBoardView: view }),
   setAgentsBoardView: (view) => {
     set({ agentsBoardView: view });
     persistAgentsBoardView(view);

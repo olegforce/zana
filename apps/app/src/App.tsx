@@ -12,7 +12,7 @@ import {
 } from './components/MobileShellChrome.js';
 import { SidebarTriggerOverlay } from './components/SidebarTriggerOverlay.js';
 import { MobileSettingsBack } from './components/MobileSettingsBack.js';
-import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_TITLE_ID } from './components/useMobileThreadTitleTarget.js';
+import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_CONTROLS_ID, MOBILE_THREAD_TITLE_ID } from './components/useMobileThreadTitleTarget.js';
 import { AgentLauncher } from './components/AgentLauncher.js';
 import { SettingsPane } from './components/listpane/SettingsPane.js';
 import { ExtensionsPane } from './components/listpane/ExtensionsPane.js';
@@ -758,6 +758,7 @@ export function App() {
             </span>
           )}
         </button>
+        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_CONTROLS_ID} className="mobile-thread-controls-slot" />}
         {mobileNavigation.isCompact && <div id={MOBILE_THREAD_ACTIONS_ID} className="mobile-thread-actions-slot" />}
       </div>
       {/* Full-width update banner, in its own grid row below the titlebar (the

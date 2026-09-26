@@ -186,13 +186,12 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await expect(threadHeader.locator('h1')).toHaveCount(0);
       await expect(phone.getByTestId('thread-detail-status')).toBeVisible();
       const shellBox = (await phone.locator('.titlebar').boundingBox())!;
-      const headerBox = (await threadHeader.boundingBox())!;
+      await expect(threadHeader).toBeHidden();
       const titleBox = (await shellTitle.boundingBox())!;
       expect(titleBox.y).toBeGreaterThanOrEqual(shellBox.y);
       expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
-      expect(headerBox.y).toBe(shellBox.y + shellBox.height);
-      expect(headerBox.height).toBe(44);
-      expect(headerBox.y + headerBox.height).toBeLessThanOrEqual(96);
+      expect(shellBox.height).toBe(48);
+      expect((await phone.getByTestId('thread-timeline').boundingBox())!.y).toBeLessThanOrEqual(56);
       const searchToggle = phone.getByRole('button', { name: 'Search in thread', exact: true });
       const panelToggle = phone.getByRole('button', { name: 'Show right panel', exact: true });
       const overflow = phone.getByTestId('thread-overflow-trigger');
@@ -201,30 +200,38 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
         const box = (await button.boundingBox())!;
         expect(box.height).toBeGreaterThanOrEqual(44);
         expect(box.width).toBeGreaterThanOrEqual(44);
-        expect(box.y).toBe(headerBox.y);
+        expect(box.y).toBeGreaterThanOrEqual(shellBox.y);
+        expect(box.y + box.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
         expect(box.x + box.width).toBeLessThanOrEqual(width);
       }
       await expect(phone.locator('.mobile-thread-actions-slot').getByTestId('thread-overflow-trigger')).toBeVisible();
       await expect(threadHeader.getByTestId('thread-overflow-trigger')).toHaveCount(0);
       const overflowBox = (await overflow.boundingBox())!;
-      const bellBox = (await phone.locator('.titlebar-bell').boundingBox())!;
+      await expect(phone.locator('.titlebar-bell')).toBeHidden();
       expect(overflowBox.width).toBeGreaterThanOrEqual(44);
       expect(overflowBox.height).toBeGreaterThanOrEqual(44);
       expect(overflowBox.y).toBeGreaterThanOrEqual(shellBox.y);
       expect(overflowBox.y + overflowBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
-      expect(bellBox.x + bellBox.width).toBeLessThanOrEqual(overflowBox.x);
-      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(bellBox.x);
+      const statusBox = (await phone.getByTestId('thread-detail-status').boundingBox())!;
+      expect(titleBox.width).toBeGreaterThan(80);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(statusBox.x);
+      expect(statusBox.width).toBeLessThanOrEqual(20);
+      expect((await panelToggle.boundingBox())!.x + 44).toBeLessThanOrEqual(overflowBox.x);
       await searchToggle.click();
       const search = phone.getByRole('searchbox', { name: 'Search in thread', exact: true });
       await search.fill('desktop');
-      expect((await threadHeader.boundingBox())!.height).toBe(44);
-      const statusBox = (await phone.getByTestId('thread-detail-status').boundingBox())!;
+      await expect(threadHeader).toBeHidden();
+      expect((await phone.locator('.titlebar').boundingBox())!.height).toBe(48);
       const searchBox = (await search.boundingBox())!;
       const panelBox = (await panelToggle.boundingBox())!;
-      expect(searchBox.width).toBeGreaterThan(20);
-      expect(searchBox.x).toBeGreaterThanOrEqual(statusBox.x + statusBox.width);
+      expect(searchBox.width).toBeGreaterThan(60);
+      const searchStatus = (await phone.getByTestId('thread-detail-status').boundingBox())!;
+      expect(searchBox.x).toBeGreaterThanOrEqual(searchStatus.x + searchStatus.width);
       expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(panelBox.x);
-      await search.press('Escape');
+      await phone.getByRole('button', { name: 'Close search', exact: true }).click();
+      await expect(shellTitle).toBeVisible();
+      await expect(search).toHaveValue('');
+      await expect(phone.getByRole('button', { name: 'Close search', exact: true })).toBeHidden();
       await overflow.click();
       await expect(phone.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible();
       for (const item of await phone.getByRole('menu', { name: 'Agent actions', exact: true }).getByRole('menuitem').all()) {
@@ -253,7 +260,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await preview.getByRole('button', { name: 'Show less', exact: true }).click();
       await expect(more).toBeVisible();
       expect((await prompt.boundingBox())!.height).toBeLessThanOrEqual(140);
-      await phone.screenshot({ path: testInfo.outputPath(`mobile-two-row-header-${width}.png`) });
+      await phone.screenshot({ path: testInfo.outputPath(`mobile-single-row-header-${width}.png`) });
     }
     await phone.setViewportSize({ width: 1280, height: 844 });
     await expect(shellTitle).toHaveCount(0);
@@ -261,7 +268,18 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     await expect(threadHeader.getByTestId('thread-overflow-trigger')).toBeVisible();
     await expect(phone.locator('.titlebar-title')).toBeVisible();
     await expect(phone.getByTestId('thread-prompt-context')).toContainText('git: mobile-panel-theme');
-    await expect(phone.getByTestId('thread-workspace-banner')).toBeVisible();
+    // The workspace status is host-backed and mounts for the first time on
+    // desktop. Wait for the real dirty-workspace precondition before its UI.
+    const loadedThread = await (await context.request.get(`${serverUrl}/api/v1/threads/${threadId}`)).json();
+    const environmentId = loadedThread.thread.environmentId;
+    expect(environmentId).toBeTruthy();
+    await expect.poll(async () => {
+      const response = await context.request.get(`${serverUrl}/api/v1/environments/${environmentId}/status`);
+      if (!response.ok()) return `HTTP ${response.status()}`;
+      const status = await response.json();
+      return status.dirty && status.files.some((file: { path: string }) => file.path === 'theme-example.ts');
+    }, { timeout: 30_000 }).toBe(true);
+    await expect(phone.getByTestId('thread-workspace-banner')).toBeVisible({ timeout: 30_000 });
     await expect(phone.getByTestId('thread-workspace-review')).toBeVisible();
     await expect(phone.locator('.mobile-message-preview')).toHaveCount(0);
     checkActiveHeader = false;
@@ -497,9 +515,8 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
         expect(box!.x).toBeGreaterThanOrEqual(0);
         expect(box!.x + box!.width).toBeLessThanOrEqual(width);
       }
-      const menuBox = (await agentMenu.boundingBox())!;
-      const bellBox = (await phone.locator('.titlebar-bell').boundingBox())!;
-      expect(bellBox.x + bellBox.width).toBeLessThanOrEqual(menuBox.x);
+      await expect(phone.locator('.titlebar-bell')).toBeHidden();
+      await expect(phone.locator('.titlebar').getByTestId('thread-overflow-trigger')).toBeVisible();
       expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         width
       );

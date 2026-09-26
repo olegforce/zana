@@ -196,12 +196,15 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
       await expect(cliTitle).toHaveText('Mobile terminal');
       const cliHeader = page.getByTestId('agent-session-view').locator('.thread-detail-header');
       await expect(cliHeader.locator('h1')).toHaveCount(0);
-      await expect(cliHeader.locator('.mobile-cli-project')).toHaveText('Mobile interface verification');
-      await expect(cliHeader.locator('.mobile-agent-status')).toBeVisible();
-      expect((await cliHeader.boundingBox())!.height).toBe(44);
+      await expect(cliHeader).toBeHidden();
+      const cliControls = page.locator('.mobile-thread-controls-slot');
+      await expect(cliControls.getByRole('img', { name: /Mobile interface verification/ })).toBeVisible();
+      await expect(cliControls.getByRole('button', { name: 'Show right panel' })).toBeVisible();
+      expect((await page.locator('.titlebar').boundingBox())!.height).toBe(48);
       const terminal = page.locator('.agent-session-terminal .xterm');
       await expect(terminal).toBeVisible();
-      expect((await terminal.boundingBox())!.height).toBeGreaterThan(650);
+      expect((await terminal.boundingBox())!.height).toBeGreaterThan(700);
+      expect((await terminal.boundingBox())!.y).toBeLessThanOrEqual(56);
       await page.screenshot({ path: testInfo.outputPath(`${width}-cli-agent-header.png`) });
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
       await search.fill('Responsive agent 1 delay');
@@ -517,10 +520,45 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           expect(await page.locator('.inbox-list-pane .list-body').evaluate(el => el.scrollTop)).toBeCloseTo(listScroll, 0);
         }
         if (name === 'agents') {
-          await expect(page.getByRole('button', { name: 'Flow view', exact: true })).toHaveCount(0);
+          await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toBeVisible();
           if (width === 320) {
             await expect(page.getByRole('button', { name: 'Board view', exact: true })).toHaveAttribute('aria-pressed', 'true');
           }
+          await page.getByRole('button', { name: 'Canvas view', exact: true }).click();
+          const canvas = page.locator('.squad-flow-canvas').first();
+          await expect(canvas).toBeVisible();
+          const canvasBox = await canvas.boundingBox();
+          expect(canvasBox!.width).toBeGreaterThanOrEqual(width - 48);
+          expect(canvasBox!.x + canvasBox!.width).toBeLessThanOrEqual(width);
+          const canvasAgent = canvas.locator('.squad-flow-node').first();
+          await expect(canvasAgent).toBeVisible();
+          expect(await canvasAgent.evaluate(el => getComputedStyle(el).touchAction)).toBe('pan-x pan-y');
+          await page.screenshot({ path: testInfo.outputPath(`${width}-agents-canvas.png`) });
+          const nodeBox = await canvasAgent.boundingBox();
+          expect(nodeBox!.x).toBeGreaterThanOrEqual(canvasBox!.x);
+          expect(nodeBox!.x + nodeBox!.width).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width);
+          if (width === 320) {
+            const beforePan = await canvas.evaluate(el => el.scrollLeft);
+            const position = await canvasAgent.getAttribute('style');
+            const touch = await context.newCDPSession(page);
+            const x = nodeBox!.x + nodeBox!.width / 2;
+            const y = nodeBox!.y + nodeBox!.height / 2;
+            await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+            for (const offset of [20, 40, 60, 80]) {
+              await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - offset, y }] });
+            }
+            await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            await expect.poll(() => canvas.evaluate(el => el.scrollLeft)).toBeGreaterThan(beforePan + 15);
+            await expect(canvasAgent).toHaveAttribute('style', position!);
+            await expect(page).not.toHaveURL(/\/sessions\//);
+            await touch.detach();
+            await canvas.evaluate((el, left) => { el.scrollLeft = left; }, beforePan);
+          }
+          await canvasAgent.tap();
+          await expect(page).toHaveURL(/\/sessions\//);
+          await expect(page.locator('.agent-terminal-modal')).toHaveCount(0);
+          await page.goBack();
+          await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toHaveAttribute('aria-pressed', 'true');
           await page.getByRole('button', { name: 'List view', exact: true }).click();
           await expect(page.locator('.agent-monitor-row').first()).toBeVisible();
           await page.screenshot({ path: testInfo.outputPath(`${width}-agents-list.png`) });
@@ -538,6 +576,9 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await expect(page.getByTestId('agent-monitor-thread')).toBeVisible();
           await expect(page.getByTestId('thread-timeline')).toContainText('Response to:');
           expect((await page.locator('.agent-monitor-main').boundingBox())!.width).toBeGreaterThanOrEqual(width - 32);
+          await expect(page.locator('.titlebar').getByRole('button', { name: 'Back to agents', exact: true })).toBeVisible();
+          await expect(page.locator('.agent-monitor-main .thread-detail-header')).toBeHidden();
+          await expect(page.locator('.agents-board-toolbar')).toBeHidden();
           await page.screenshot({ path: testInfo.outputPath(`${width}-agents-list-thread.png`) });
           await page.getByRole('button', { name: 'Back to agents', exact: true }).click();
           await expect(list).toBeVisible();
@@ -550,6 +591,10 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await expect(list).toBeHidden();
           await expect(page.getByTestId('agent-session-view')).toBeVisible();
           await expect(page.locator('#cc-terminal-anchor-agent-monitor .xterm')).toBeVisible();
+          await expect(page.locator('.titlebar').getByRole('button', { name: 'Back to agents', exact: true })).toBeVisible();
+          await expect(page.locator('.agent-monitor-main .thread-detail-header')).toBeHidden();
+          await expect(page.locator('.agents-board-toolbar')).toBeHidden();
+          expect((await page.locator('#cc-terminal-anchor-agent-monitor .xterm').boundingBox())!.y).toBeLessThanOrEqual(56);
           await page.screenshot({ path: testInfo.outputPath(`${width}-agents-list-terminal.png`) });
           await page.getByRole('button', { name: 'Back to agents', exact: true }).click();
           await expect(page.locator('.agent-monitor-main')).toHaveCount(0);
@@ -651,7 +696,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
     await expect(page.getByRole('button', { name: 'Back to agents', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Flow view', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 900 });
-    await expect(page.getByRole('button', { name: 'Flow view', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toBeVisible();
     await expect(page.getByTestId('mobile-agent-board')).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.getByRole('button', { name: 'Flow view', exact: true })).toHaveAttribute('aria-pressed', 'true');

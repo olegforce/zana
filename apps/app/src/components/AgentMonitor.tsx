@@ -51,6 +51,7 @@ import { openScheduleFromAgents } from './scheduler/openScheduledLive.js';
 import { groupSessionsByTeamRun } from '../lib/teamRunOrganization.js';
 import { PaneEmptyState } from './PaneEmptyState.js';
 import { useCompactLayout } from '../hooks/useCompactLayout.js';
+import { useMobileThreadControlsTarget } from './useMobileThreadTitleTarget.js';
 
 /**
  * The Agents "List" view: a live monitor — item list (left), the selected
@@ -439,21 +440,20 @@ function AgentMonitorTerminal({
 }) {
   const agent = selected?.kind === 'agent' ? selected : null;
   const thread = selected?.kind === 'thread' ? selected : null;
+  const backTarget = useMobileThreadControlsTarget(Boolean(onBack));
+  const back = onBack ? <button type="button" className="agent-monitor-back" onClick={onBack} autoFocus aria-label="Back to agents" title="Back to agents">
+    <ArrowLeft size={18} aria-hidden="true" /><span>Back to agents</span>
+  </button> : null;
   return (
     <section className="agent-monitor-main">
-      {onBack && (
-        <button type="button" className="agent-monitor-back" onClick={onBack} autoFocus>
-          <ArrowLeft size={18} aria-hidden="true" />
-          Back to agents
-        </button>
-      )}
+      {backTarget ? createPortal(back, backTarget) : back}
       {!thread && !agent && (
         <header className="agent-monitor-main-head">
           <TerminalIcon size={13} aria-hidden="true" />
           <span className="agent-monitor-main-title">No agent selected</span>
         </header>
       )}
-      {!thread && agent && (
+      {!thread && agent && !backTarget && (
         <header className="agent-monitor-main-head">
           <TerminalIcon size={13} aria-hidden="true" />
           <span className="agent-monitor-main-title">{agent.card.session.title}</span>
@@ -473,10 +473,11 @@ function AgentMonitorTerminal({
       >
         {thread ? (
           <div className="agent-monitor-thread" data-testid="agent-monitor-thread">
-            <ThreadDetail key={thread.id} threadId={thread.id} embedded />
+            <ThreadDetail key={thread.id} threadId={thread.id} embedded mobileTitleInShell={Boolean(onBack)} />
           </div>
         ) : agent ? (
           <AgentMonitorSession
+            mobileTitleInShell={Boolean(onBack)}
             card={agent.card}
             showProject={showProject}
             executions={executions}
@@ -494,12 +495,14 @@ function AgentMonitorTerminal({
 }
 
 function AgentMonitorSession({
+  mobileTitleInShell,
   card,
   showProject,
   executions,
   onInspectExecution
 }: {
   card: AgentCard;
+  mobileTitleInShell: boolean;
   showProject: boolean;
   executions: readonly ExecutionBoardProjection[];
   onInspectExecution?: (projectId: string, executionId: string) => void;
@@ -620,6 +623,7 @@ function AgentMonitorSession({
 
   return (
     <AgentSessionView
+      mobileTitleInShell={mobileTitleInShell}
       session={t}
       projectId={card.projectId}
       projectName={card.projectName}

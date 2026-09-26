@@ -7,7 +7,7 @@ import { type ThreadContextWindowUsage, type TimelineRow } from '@zana-ai/zcc-se
 import { buildTimelineViewRows, type TimelineViewWorkflowWorkRow } from '@zana-ai/zcc-thread-view';
 import { product } from '../../lib/product-client.js';
 import { ThreadCommandComposer } from '../../components/ThreadCommandComposer.js';
-import { useMobileThreadActionsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
+import { useMobileThreadActionsTarget, useMobileThreadControlsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
 import { ThreadTimeline } from '../../components/thread/ThreadTimeline.js';
 import { ThreadDiffPanel } from '../../components/thread/ThreadDiffPanel.js';
 import { ThreadWorkspaceBanner } from '../../components/thread/ThreadWorkspaceBanner.js';
@@ -16,7 +16,7 @@ import {
   timelineHasInFlightRetry,
   timelineRowsAwaitUser
 } from '../../components/thread/thread-timeline-model.js';
-import { ThreadDetailHeading, ThreadPromptModeCard, ThreadStatusBadge, ThreadTodoCard } from '../../components/thread/timeline/ThreadBanners.js';
+import { ThreadDetailActions, ThreadDetailHeading, ThreadPromptModeCard, ThreadStatusBadge, ThreadTodoCard } from '../../components/thread/timeline/ThreadBanners.js';
 import {
   BackgroundCommandsCard,
   ModelFallbackCard,
@@ -102,6 +102,7 @@ export function ThreadDetailView() {
 export function ThreadDetail({
   threadId,
   embedded = false,
+  mobileTitleInShell = false,
   modal = false,
   leadingContent,
   messageActions,
@@ -109,6 +110,8 @@ export function ThreadDetail({
 }: {
   threadId: string;
   embedded?: boolean;
+  /** A focused mobile list detail shares the shell header while retaining its list. */
+  mobileTitleInShell?: boolean;
   /** Hosted in the thread inspector modal; dialog close/fullscreen live on the modal header. */
   modal?: boolean;
   leadingContent?: ReactNode;
@@ -125,9 +128,11 @@ export function ThreadDetail({
   );
   const pendingInteractions = useOpenPendingInteractions(threadId);
   const pane = useOptionalPaneContext();
-  const mobileHeaderInShell = !embedded && !modal && route.threadId === threadId && pane?.isFocused !== false;
+  const mobileHeaderInShell = !modal && pane?.isFocused !== false
+    && (mobileTitleInShell || (!embedded && route.threadId === threadId));
   const mobileTitleTarget = useMobileThreadTitleTarget(mobileHeaderInShell);
   const mobileActionsTarget = useMobileThreadActionsTarget(mobileHeaderInShell);
+  const mobileControlsTarget = useMobileThreadControlsTarget(mobileHeaderInShell);
   const compact = useCompactLayout();
   const hostedSecondary = pane?.secondaryPanelHost != null;
   const viewRef = useRef<HTMLElement>(null);
@@ -717,7 +722,7 @@ export function ThreadDetail({
     >
       <div className="thread-detail-split">
       <div className="thread-detail-main">
-        <header className="thread-detail-header" data-title-in-shell={Boolean(mobileTitleTarget) || undefined}>
+        <header className="thread-detail-header" data-title-in-shell={Boolean(mobileTitleTarget) || undefined} data-controls-in-shell={Boolean(mobileControlsTarget) || undefined}>
           <ThreadDetailHeading
             title={title}
             titleTarget={mobileTitleTarget}
@@ -740,8 +745,9 @@ export function ThreadDetail({
               />
             }
           />
-          <div className="thread-detail-actions">
+          <ThreadDetailActions target={mobileControlsTarget}>
             <ThreadDetailSearch
+              mobileHeader={Boolean(mobileControlsTarget)}
               value={searchDraft}
               onChange={setSearchDraft}
               onSubmit={runThreadSearch}
@@ -784,7 +790,7 @@ export function ThreadDetail({
                 <PanelRight size={14} />
               </button>
             ) : null}
-          </div>
+          </ThreadDetailActions>
         </header>
         <div className="thread-detail-body">
           <div className="thread-detail-column">

@@ -19,6 +19,7 @@ import { AgentMonitor } from './AgentMonitor.js';
 import { AgentViewToggle, ScheduledColumnToggle } from './AgentViewToggle.js';
 import { agentFleetItem, threadFleetItem } from './fleet-item.js';
 import { useData, useUi } from '../store.js';
+import { MOBILE_THREAD_CONTROLS_ID } from './useMobileThreadTitleTarget.js';
 
 const agent = agentFleetItem({ projectId: 'p', projectName: 'Project', state: 'idle',
   session: { id: 'cli', projectId: 'p', profile: 'claude', title: 'Terminal task', status: 'running', cwd: '/tmp', createdAt: 1 }
@@ -29,27 +30,42 @@ const monitor = (items = cards) => <MemoryRouter><AgentMonitor cards={items} /><
 
 beforeEach(() => {
   layout.compact = true;
-  useUi.setState({ agentMonitor: null, agentsBoardView: 'flow' });
+  useUi.setState({ agentMonitor: null, agentsBoardView: 'flow', mobileAgentsBoardView: null });
   useData.setState({ projects: [], terminals: {}, agentsListOrganization: 'status', includeScheduledAgentsInAgentView: false });
 });
 afterEach(cleanup);
 
-it('shows only Board and List on mobile and preserves the desktop Flow preference', () => {
-  const { rerender } = render(<AgentViewToggle />);
-  expect(screen.getAllByRole('button')).toHaveLength(2);
-  expect(screen.queryByRole('button', { name: 'Flow view' })).toBeNull();
+it('offers Canvas without inheriting desktop Flow and preserves each screen choice', () => {
+  const { unmount } = render(<AgentViewToggle />);
+  expect(screen.getAllByRole('button')).toHaveLength(3);
+  expect(screen.getByRole('button', { name: 'Canvas view' }).getAttribute('aria-pressed')).toBe('false');
   expect(screen.getByRole('button', { name: 'Board view' }).getAttribute('aria-pressed')).toBe('true');
-  expect(useUi.getState().agentsBoardView).toBe('flow');
+  fireEvent.click(screen.getByRole('button', { name: 'Canvas view' }));
+  expect(useUi.getState().mobileAgentsBoardView).toBe('flow');
+  expect(screen.getByRole('button', { name: 'Canvas view' }).getAttribute('aria-pressed')).toBe('true');
+  unmount();
+  render(<AgentViewToggle />);
+  expect(screen.getByRole('button', { name: 'Canvas view' }).getAttribute('aria-pressed')).toBe('true');
+  cleanup();
+  const next = render(<AgentViewToggle />);
   layout.compact = false;
-  rerender(<AgentViewToggle />);
-  expect(screen.getByRole('button', { name: 'Flow view' }).getAttribute('aria-pressed')).toBe('true');
-  layout.compact = true;
-  rerender(<AgentViewToggle />);
+  next.rerender(<AgentViewToggle />);
   fireEvent.click(screen.getByRole('button', { name: 'List view' }));
   expect(useUi.getState().agentsBoardView).toBe('list');
-  expect(screen.getByRole('button', { name: 'List view' }).getAttribute('aria-pressed')).toBe('true');
+  layout.compact = true;
+  next.rerender(<AgentViewToggle />);
+  expect(screen.getByRole('button', { name: 'Canvas view' }).getAttribute('aria-pressed')).toBe('true');
   fireEvent.click(screen.getByRole('button', { name: 'Board view' }));
-  expect(useUi.getState().agentsBoardView).toBe('board');
+  expect(useUi.getState().agentsBoardView).toBe('list');
+  expect(useUi.getState().mobileAgentsBoardView).toBe('board');
+  fireEvent.click(screen.getByRole('button', { name: 'List view' }));
+  expect(useUi.getState().mobileAgentsBoardView).toBe('list');
+});
+
+it('retains the usual mobile List default until the user chooses another view', () => {
+  useUi.setState({ agentsBoardView: 'list' });
+  render(<AgentViewToggle />);
+  expect(screen.getByRole('button', { name: 'List view' }).getAttribute('aria-pressed')).toBe('true');
 });
 
 it('keeps scheduled agents independently toggleable on mobile', () => {
@@ -116,4 +132,20 @@ it('keeps the desktop split monitor and clears its selection when returning to m
   fireEvent.click(screen.getByRole('button', { name: /Terminal task/ }));
   unmount();
   expect(useUi.getState().agentMonitor).toBeNull();
+});
+
+it('puts the mobile list Back action in the shell and restores focus after returning', () => {
+  const { unmount } = render(<><div id={MOBILE_THREAD_CONTROLS_ID} data-testid="shell-controls" />{monitor()}</>);
+  const row = screen.getByRole('button', { name: /Conversation task/ });
+  fireEvent.click(row);
+  const back = screen.getByRole('button', { name: 'Back to agents' });
+  expect(screen.getByTestId('shell-controls').contains(back)).toBe(true);
+  fireEvent.click(back);
+  expect(screen.getByTestId('shell-controls').childElementCount).toBe(0);
+  expect(document.activeElement).toBe(row);
+  fireEvent.click(screen.getByRole('button', { name: /Terminal task/ }));
+  expect(document.querySelector('.agent-monitor-main-head')).toBeNull();
+  const slot = screen.getByTestId('shell-controls');
+  unmount();
+  expect(slot.childElementCount).toBe(0);
 });
