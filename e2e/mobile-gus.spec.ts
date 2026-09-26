@@ -80,6 +80,7 @@ test('GUS mobile keeps work, filters and ticket details on separate full-width s
     await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
     await drawer.getByRole('button', { name: 'More', exact: true }).click();
+    await expect(drawer.getByText('GUS', { exact: true })).toBeVisible({ timeout: 30_000 });
     await drawer.getByText('GUS', { exact: true }).click();
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
     for (const width of [320, 390, 820]) {
