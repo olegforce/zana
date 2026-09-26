@@ -5,6 +5,7 @@ import { loadPluginApp, renderSlot } from "../../compat/testing-app";
 import { COMPACT_VIEWPORT_QUERY } from "../../vendor/shared-ui/components/ui/hooks/use-compact-viewport";
 import type { Task, TaskMutationResult } from "../../shared/contract.js";
 import { makeTask } from "../../test-fixtures.js";
+import { TasksAppShell } from "../../shell/app-shell.js";
 
 window.matchMedia = (query: string) => ({
   matches: query === COMPACT_VIEWPORT_QUERY,
@@ -24,6 +25,9 @@ window.ResizeObserver ??= class {
 Element.prototype.scrollIntoView ??= () => {};
 
 const app = await loadPluginApp(() => import("../../app"));
+// Isolate list state from the outer responsive panel. Compact property menus
+// avoid relying on Radix desktop geometry in jsdom; built E2E covers placement.
+app.navPanels[0]!.component = TasksAppShell;
 
 afterEach(cleanup);
 

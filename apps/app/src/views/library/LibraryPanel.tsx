@@ -1,7 +1,7 @@
 import { product } from '../../lib/product-client.js';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Search, X, Trash2, ExternalLink, AtSign, BotMessageSquare } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Search, X, Trash2, ExternalLink, AtSign, BotMessageSquare } from 'lucide-react';
 
 import type { LibraryDoc, LibraryScope } from '@zana-ai/zcc-domain/product';
 import { useLibrary, useUi, useData } from '@/store';
@@ -11,6 +11,7 @@ import { PromptModal } from '@/components/PromptModal';
 import { DocPreview } from './library/DocPreview.js';
 import { DelayedStencilList } from '@/components/ui/Skeleton';
 import { LibraryTreeRows } from './library/LibraryTreeRows.js';
+import { useLibraryNavigation } from './library/useLibraryNavigation.js';
 import {
   buildLibraryTree,
   libraryBucketKey,
@@ -59,7 +60,7 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
   const loading = useLibrary((s) => s.loading);
   const projects = useData((s) => s.projects);
 
-  const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
+  const { compact, selectedDoc, setSelectedDoc, readerOpen, backToDocuments, rootRef, backRef } = useLibraryNavigation();
   const [searchQuery, setSearchQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['global']));
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
@@ -69,7 +70,6 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
   const [startEditing, setStartEditing] = useState(false);
   const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
 
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const [treeWidth, setTreeWidth] = useState(loadTreeWidth);
 
   const filteredDocs = useMemo(() => {
@@ -393,10 +393,11 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
   return (
     <div
       ref={rootRef}
+      data-mobile-pane={compact ? (readerOpen ? 'document' : 'documents') : undefined}
       className="explorer-view library-view library-panel"
       style={{ gridTemplateColumns: `${treeWidth}px minmax(0, 1fr)` }}
     >
-      <div className="explorer-tree">
+      <div className="explorer-tree" hidden={compact && readerOpen}>
         <div className="explorer-tree-header">
           <span className="explorer-tree-title">Library</span>
           <button
@@ -467,7 +468,7 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
         onDoubleClick={onResizeDoubleClick}
       />
 
-      <div className="explorer-viewer library-viewer">
+      <div className="explorer-viewer library-viewer" hidden={compact && !readerOpen}>
         {!selectedDoc ? (
           <div className="explorer-viewer-empty">
             <p>Select a document to preview</p>
@@ -475,8 +476,14 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
         ) : (
           <>
             <div className="explorer-viewer-header">
+              {compact && (
+                <button ref={backRef} type="button" className="library-mobile-back" onClick={backToDocuments}>
+                  <ArrowLeft size={18} aria-hidden="true" />
+                  <span>Back to documents</span>
+                </button>
+              )}
               <div className="explorer-viewer-path">
-                {selectedDoc.title}
+                <span className="library-document-title">{selectedDoc.title}</span>
                 <span className={`library-scope-badge ${selectedDoc.scope}`}>
                   {selectedDoc.scope === 'project' ? selectedDoc.projectName ?? 'Project' : 'Global'}
                 </span>
@@ -511,6 +518,7 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
                       relPath: ''
                     })
                   }
+                  hidden={compact}
                   title="Reveal in Finder"
                 >
                   <ExternalLink size={14} />
@@ -528,6 +536,7 @@ export function LibraryPanel({ deepLink = null }: { deepLink?: LibraryDeepLink |
                       doc: selectedDoc
                     })
                   }
+                  hidden={compact}
                   title="Delete"
                 >
                   <Trash2 size={14} />

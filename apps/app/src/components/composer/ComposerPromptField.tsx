@@ -52,7 +52,8 @@ export function ComposerPromptField({
           aria-label={expanded ? 'Make prompt box smaller' : 'Make prompt box larger'}
           title={expanded ? 'Make prompt box smaller' : 'Make prompt box larger'}
           data-testid={expandTestId}
-          onClick={onToggleExpanded}
+          aria-expanded={expanded}
+          onClick={(event) => { event.currentTarget.focus(); onToggleExpanded(); }}
         >
           {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </ComposerIconButton>

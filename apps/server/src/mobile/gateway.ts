@@ -73,7 +73,10 @@ function bounded(limit: number) {
 }
 /** Only product and renderer routes. Host enrollment, MCP and owner controls never cross this gateway. */
 export function isMobileProxyPath(path: string): boolean {
-  if (path.includes('\\') || /%2f|%5c|%00/i.test(path)) return false;
+  // Only route separators affect dispatch. Encoded slashes in query values
+  // (e.g. a library relPath) remain data, authorized by the product endpoint.
+  const route = path.split(/[?#]/, 1)[0];
+  if (route.includes('\\') || /%2f|%5c|%00/i.test(route)) return false;
   let pathname: string;
   try {
     pathname = decodeURIComponent(new URL(path, 'http://localhost').pathname);

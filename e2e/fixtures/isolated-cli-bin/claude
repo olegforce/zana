@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// Ordinary UI tests must never authenticate or spend tokens through a real CLI.
+process.stderr.write('Real Claude is disabled in deterministic E2E tests. Configure a fake claudeBinary or explicitly opt into a live test.\n');
+process.exitCode = 78;

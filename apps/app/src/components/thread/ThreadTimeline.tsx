@@ -241,6 +241,12 @@ export function ThreadTimeline({
     onReachedBottom?.();
   };
 
+  const onMessageExpand = useCallback(() => {
+    // Reading a prompt is scrollback: resizing it must not jump to the reply.
+    setPinnedAway(true);
+    setInitialOpen(false);
+  }, []);
+
   return (
     <div className="thread-detail-timeline-shell">
       <div className="thread-banner-stack">
@@ -271,6 +277,7 @@ export function ThreadTimeline({
             expansion={expansionWithRetention}
             unreadRowId={unreadRowId}
             onCopy={onCopy}
+            onMessageExpand={onMessageExpand}
             onTitleAction={onTitleAction}
             onTitleLink={onTitleLink}
             onOpenDiff={onOpenDiff}

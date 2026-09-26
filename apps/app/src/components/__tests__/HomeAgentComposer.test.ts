@@ -199,7 +199,7 @@ describe('ThreadCommandComposer submit path', () => {
     expect(source).toContain('useThreadPermissionMode');
     expect(source).toContain('permissionModeOptionsFor');
     expect(source).toContain('acpMode: selectedComposerMode?.usesSlashPlan ? undefined : selectedComposerMode?.nativeValue');
-    expect(source).toContain('compactLabel: row.compactLabel');
+    expect(source).toContain("compactLabel: compact && row.value === 'full' ? 'Full access' : row.compactLabel");
     expect(source).toContain('description: row.description');
     expect(source).toContain('permissionOptions.length > 1');
     expect(source).toContain('PluginComposerMeta');
@@ -213,7 +213,7 @@ describe('ThreadCommandComposer submit path', () => {
     expect(source).not.toContain('openAgentModal');
   });
 
-  it('shows follow-up model inside the card and Local/Edits under it', () => {
+  it('keeps desktop metadata below the card and mobile permissions in the toolbar', () => {
     const source = readFileSync(new URL('../ThreadCommandComposer.tsx', import.meta.url), 'utf8');
     expect(source).toContain('environmentLabel');
     expect(source).toContain('thread-env-label');
@@ -283,7 +283,8 @@ describe('ThreadCommandComposer submit path', () => {
     expect(source).toContain('ComposerRemoteHostBadge');
     expect(source).toContain('HostSshIdentityDialog');
     expect(source.indexOf('<EnvironmentPicker')).toBeGreaterThan(metaIdx);
-    expect(source.indexOf('ariaLabel="Permission mode"')).toBeGreaterThan(metaIdx);
+    expect(source.indexOf('{!compact && permissionPicker}')).toBeGreaterThan(metaIdx);
+    expect(source.indexOf('permission={compact ? permissionPicker : undefined}')).toBeLessThan(metaIdx);
 
     const css = readFileSync(new URL('../../styles/global.css', import.meta.url), 'utf8');
     const stopStart = css.indexOf('.thread-command-composer .thread-command-stop {');

@@ -352,9 +352,9 @@ function TaskDetail({ task }: { task: Task }) {
   const parentTask = parent.data ?? null;
 
   return (
-    <div className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3">
-      <div className="flex flex-1 items-stretch rounded-lg border border-border bg-card shadow-2xs">
-        <div className="mx-auto w-full min-w-0 max-w-[55rem] flex-1 px-7 pb-16 pt-8 @3xl:px-13 @3xl:pt-11">
+    <div className="tasks-detail @container flex min-h-full flex-col bg-surface-recessed-solid p-3">
+      <div className="tasks-detail-surface flex flex-1 items-stretch rounded-lg border border-border bg-card shadow-2xs">
+        <div className="tasks-detail-main mx-auto w-full min-w-0 max-w-[55rem] flex-1 px-7 pb-16 pt-8 @3xl:px-13 @3xl:pt-11">
           {parentTask || subtasks.data?.length ? (
             <div className="mb-4 flex flex-wrap items-center gap-2">
               {parentTask ? (
@@ -396,7 +396,7 @@ function TaskDetail({ task }: { task: Task }) {
             presets={presets.data}
             onUpdate={(update) => void updateTask(update)}
             onError={(message) => push(message)}
-            className="mb-4 @[45rem]:hidden"
+            className="tasks-detail-inline-properties mb-4 @[45rem]:hidden"
           />
 
           <TasksEditor
@@ -495,7 +495,7 @@ function TaskDetail({ task }: { task: Task }) {
           presets={presets.data}
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push(message)}
-          className="hidden @[45rem]:block"
+          className="tasks-detail-properties hidden @[45rem]:block"
         />
       </div>
       <DetailToasts toasts={toasts} onDismiss={dismiss} />

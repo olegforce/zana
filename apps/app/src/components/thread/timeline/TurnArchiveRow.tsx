@@ -19,6 +19,7 @@ export function TurnArchiveRow({
   expansion,
   unreadRowId,
   onCopy,
+  onMessageExpand,
   onTitleAction,
   onTitleLink,
   onOpenDiff,
@@ -40,6 +41,7 @@ export function TurnArchiveRow({
   expansion: ReturnType<typeof collectTimelineAutoExpansionRowIds>;
   unreadRowId?: string | null;
   onCopy?: (text: string) => void;
+  onMessageExpand?: () => void;
   onTitleAction?: TimelineTitleActionHandler;
   onTitleLink?: TimelineTitleLinkHandler;
   onOpenDiff?: (path: string) => void;
@@ -112,6 +114,7 @@ export function TurnArchiveRow({
           expansion={expansion}
           unreadRowId={unreadRowId}
           onCopy={onCopy}
+          onMessageExpand={onMessageExpand}
           onTitleAction={onTitleAction}
           onTitleLink={onTitleLink}
           onOpenDiff={onOpenDiff}

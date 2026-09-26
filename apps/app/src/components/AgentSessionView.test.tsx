@@ -326,9 +326,9 @@ describe('AgentSessionView', () => {
     expect(source).toContain("kind: 'inbox'");
     expect(source).toContain('<ThreadInboxTab');
     expect(source).toContain('thread-detail-split');
-    expect(source).toContain('thread-detail-header');
+    expect(source).toContain('<AgentSessionHeader');
     expect(source.indexOf('thread-detail-split')).toBeLessThan(source.indexOf('thread-detail-main agent-session-main'));
-    expect(source.indexOf('thread-detail-main agent-session-main')).toBeLessThan(source.indexOf('className="thread-detail-header"'));
+    expect(source.indexOf('thread-detail-main agent-session-main')).toBeLessThan(source.indexOf('<AgentSessionHeader'));
     expect(source).toContain('thread-detail-view--modal');
     expect(source).toContain('data-testid="split-pane-close"');
     expect(source).toContain('thread-detail-view--split-pane');

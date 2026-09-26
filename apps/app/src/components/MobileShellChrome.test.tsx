@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { MobileConnectionMenu, MobileNavDrawer, MobileShellReporter, useMobileNavigation } from './MobileShellChrome.js';
+import { MobileNavDrawer, MobileShellReporter, useMobileNavigation } from './MobileShellChrome.js';
 const native = vi.hoisted(() => ({
   available: true,
   bridgeVersion: 3,
@@ -37,21 +37,21 @@ beforeEach(() => {
     removeEventListener: vi.fn()
   }));
 });
-it('hosts the native connection menu in the page header and restores fallback chrome on unmount', () => {
-  const { unmount } = render(<MobileConnectionMenu />);
+it('owns shell chrome while device controls live in the drawer, restoring fallback chrome on unmount', () => {
+  const { unmount } = render(<MemoryRouter><MobileShellReporter unread={0} /></MemoryRouter>);
   expect(native.post).toHaveBeenCalledWith({ type: 'shell-chrome', visible: true });
-  fireEvent.click(screen.getByRole('button', { name: 'Connection options' }));
-  expect(native.post).toHaveBeenCalledWith({ type: 'open-native', screen: 'connection-menu' });
+  expect(screen.queryByRole('button', { name: 'Connection options' })).toBeNull();
   unmount();
   expect(native.post).toHaveBeenLastCalledWith({ type: 'shell-chrome', visible: false });
 });
-it.each(['browser', 'older-shell', 'no-native-ui'])('does not replace existing controls for %s', (kind) => {
+it.each(['browser', 'older-shell', 'no-native-ui', 'wide-screen'])('does not replace existing controls for %s', (kind) => {
   if (kind === 'browser') native.available = false;
   if (kind === 'older-shell') native.bridgeVersion = 2;
   if (kind === 'no-native-ui') native.capabilities = ['badge'];
-  render(<MobileConnectionMenu />);
+  if (kind === 'wide-screen') narrow = false;
+  render(<MemoryRouter><MobileShellReporter unread={0} /></MemoryRouter>);
   expect(screen.queryByRole('button', { name: 'Connection options' })).toBeNull();
-  expect(native.post).not.toHaveBeenCalled();
+  expect(native.post).not.toHaveBeenCalledWith({ type: 'shell-chrome', visible: true });
 });
 afterEach(() => {
   cleanup();
@@ -96,8 +96,8 @@ it('traps drawer focus, closes on Escape and restores focus', () => {
   const first = screen.getAllByRole('button', { name: 'Close navigation' })[1]!;
   expect(document.activeElement).toBe(first);
   fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
-  expect(document.activeElement).toBe(screen.getByText('Last item'));
-  fireEvent.keyDown(screen.getByText('Last item'), { key: 'Tab' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'This device' }));
+  fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
   expect(document.activeElement).toBe(first);
   fireEvent.keyDown(first, { key: 'Escape' });
   expect(close).toHaveBeenCalledOnce();
@@ -136,7 +136,7 @@ it('uses the settings return action in the drawer header and keeps it in the foc
   expect(screen.queryByText('Zana')).toBeNull();
   expect(document.activeElement).toBe(back);
   fireEvent.keyDown(back, { key: 'Tab', shiftKey: true });
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Preferences' }));
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'This device' }));
   fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
   expect(document.activeElement).toBe(back);
 });

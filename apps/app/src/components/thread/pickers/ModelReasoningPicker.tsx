@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Search, X } from 'lucide-react';
+import { useCompactLayout } from '../../../hooks/useCompactLayout.js';
+import { useDialogFocusTrap } from '../../../hooks/useDialogFocusTrap.js';
 import { placePopoverMenu, useExclusivePopover } from '../../ui/PopoverPicklist.js';
 import { stripModelBrandPrefix } from './model-brand-prefix.js';
 import type { ModelPickerOption, PickerOption } from './model-picker-option.js';
@@ -14,6 +16,7 @@ import {
 import { providerIconForId } from './provider-icon.js';
 import { emptyModelsHint } from './harness-login.js';
 import { Skeleton } from '../../ui/Skeleton.js';
+import '../../../styles/mobile-model-picker.css';
 
 const MODEL_SEARCH_MIN_OPTIONS = 5;
 const MENU_MIN_WIDTH = 208;
@@ -72,11 +75,13 @@ export function ModelReasoningPicker({
   disabled
 }: ModelReasoningPickerProps) {
   const [open, setOpen] = useExclusivePopover();
+  const compact = useCompactLayout();
   const [query, setQuery] = useState('');
   const [showMoreModels, setShowMoreModels] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const moreToggleRef = useRef<HTMLButtonElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -117,35 +122,48 @@ export function ModelReasoningPicker({
     () => buildModelNavRows({
       modelOptions: filteredModels,
       moreModelOptions: filteredMore,
-      isSearching
+      isSearching: isSearching || (compact && showMoreModels)
     }),
-    [filteredModels, filteredMore, isSearching]
+    [filteredModels, filteredMore, isSearching, compact, showMoreModels]
   );
   const showSearch = !modelLockedLabel
     && !modelIsLoading
     && displayed.modelOptions.length + displayed.moreModelOptions.length > MODEL_SEARCH_MIN_OPTIONS;
-  const showMorePanel = open && showMoreModels && !isSearching && filteredMore.length > 0;
+  const showMorePanel = open && !compact && showMoreModels && !isSearching && filteredMore.length > 0;
+
+  useDialogFocusTrap(menuRef, () => setOpen(false), open && compact);
+
+  useEffect(() => {
+    if (open && compact) closeRef.current?.focus();
+  }, [open, compact]);
 
   useEffect(() => {
     if (!open) {
       setQuery('');
       setShowMoreModels(false);
       setActiveIndex(-1);
-    } else if (showSearch) {
+    } else if (showSearch && !compact) {
       searchRef.current?.focus();
     }
-  }, [open, showSearch]);
+  }, [open, showSearch, compact]);
 
   useEffect(() => {
     if (isSearching) setShowMoreModels(false);
   }, [isSearching]);
 
   useEffect(() => {
+    if (!open || !compact || !showMoreModels || isSearching || document.activeElement === searchRef.current) return;
+    // More models becomes inline rows on mobile; hand focus off before the
+    // removed disclosure can leave the keyboard outside the modal.
+    menuRef.current?.querySelectorAll<HTMLButtonElement>('.model-reasoning-picker-row')[filteredModels.length]?.focus();
+  }, [open, compact, showMoreModels, isSearching, filteredModels.length]);
+
+  useEffect(() => {
     sectionRef.current?.scrollTo(0, 0);
   }, [normalizedQuery]);
 
   useEffect(() => {
-    if (!open || !triggerRef.current || !menuRef.current) return;
+    if (!open || compact || !triggerRef.current || !menuRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     // Give the 28px harness buttons room; longer rosters wrap inside the cap.
     const preferredWidth = canSwitchProviders
@@ -163,7 +181,30 @@ export function ModelReasoningPicker({
       menu.style.top = `${position.top}px`;
       menu.style.bottom = 'auto';
     }
-  }, [open, navRows.length, canSwitchProviders, providerOptions.length]);
+  }, [open, compact, navRows.length, canSwitchProviders, providerOptions.length]);
+
+  useEffect(() => {
+    if (!open || !compact || !menuRef.current) return;
+    const menu = menuRef.current;
+    const viewport = window.visualViewport;
+    const resize = () => {
+      // The visual viewport shrinks when the phone keyboard opens. Keep the
+      // header and model results inside it rather than behind the keyboard.
+      menu.style.top = `${viewport?.offsetTop ?? 0}px`;
+      menu.style.height = `${viewport?.height ?? window.innerHeight}px`;
+    };
+    menu.removeAttribute('style');
+    resize();
+    viewport?.addEventListener('resize', resize);
+    viewport?.addEventListener('scroll', resize);
+    window.addEventListener('resize', resize);
+    return () => {
+      viewport?.removeEventListener('resize', resize);
+      viewport?.removeEventListener('scroll', resize);
+      window.removeEventListener('resize', resize);
+      menu.removeAttribute('style');
+    };
+  }, [open, compact]);
 
   useEffect(() => {
     if (!showMorePanel || !menuRef.current || !moreMenuRef.current) return;
@@ -234,7 +275,12 @@ export function ModelReasoningPicker({
       disabled={disabled}
       title={triggerTitle}
       data-testid="model-reasoning-picker-trigger"
-      onClick={() => setOpen((current) => !current)}
+      onClick={() => {
+        // Safari does not focus a tapped button; make it the dialog's return
+        // target instead of reopening the composer's keyboard on dismissal.
+        if (compact) triggerRef.current?.focus();
+        setOpen((current) => !current);
+      }}
     >
       <span className="model-reasoning-picker-trigger-icon" aria-hidden="true">
         <ProviderMark
@@ -277,11 +323,25 @@ export function ModelReasoningPicker({
       {open && createPortal(
         <div
           ref={menuRef}
-          className="model-reasoning-picker-menu model-reasoning-picker-menu--models"
+          className={`model-reasoning-picker-menu model-reasoning-picker-menu--models${compact ? ' model-reasoning-picker-menu--mobile' : ''}`}
           role="dialog"
+          aria-modal={compact || undefined}
           aria-label="Provider and model"
           data-testid="model-reasoning-picker-menu"
+          onKeyDown={(event) => {
+            if (compact && event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+            }
+          }}
         >
+          {compact && <header className="mobile-model-picker-header">
+            <h2>{canSwitchProviders ? 'Harness & model' : 'Choose model'}</h2>
+            <button ref={closeRef} type="button" aria-label="Close model picker" onClick={() => setOpen(false)}>
+              <X size={22} aria-hidden="true" />
+            </button>
+          </header>}
           {canSwitchProviders ? (
             <>
               <div className="model-reasoning-picker-section-label">Harness</div>
@@ -297,11 +357,19 @@ export function ModelReasoningPicker({
                     aria-selected={active}
                     className={`model-reasoning-picker-tab${active ? ' is-active' : ''}`}
                     data-testid={`model-reasoning-provider-${provider.value}`}
-                    onClick={() => {
+                    onClick={(event) => {
+                      if (compact) {
+                        event.currentTarget.focus();
+                        setQuery('');
+                        setShowMoreModels(false);
+                        setActiveIndex(-1);
+                        sectionRef.current?.scrollTo(0, 0);
+                      }
                       if (provider.value !== selectedProviderId) onSelectedProviderChange?.(provider.value);
                     }}
                   >
-                    <ProviderMark providerId={provider.value} label={provider.label} size={14} />
+                    <ProviderMark providerId={provider.value} label={provider.label} size={compact ? 22 : 14} />
+                    {compact && <span>{provider.label}</span>}
                   </button>
                 );
               })}

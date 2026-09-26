@@ -273,6 +273,7 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
           <input
             type="text"
             className="inbox-filter-input"
+            aria-label={showingSaved ? 'Search saved reports' : 'Search inbox'}
             placeholder={showingSaved ? 'Filter saved reports…' : reportsOnly ? 'Filter reports…' : 'Filter inbox…'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}

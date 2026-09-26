@@ -1,7 +1,9 @@
 /** @vitest-environment happy-dom */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { ModelReasoningPicker } from './ModelReasoningPicker.js';
+
+vi.mock('../../../lib/app-surface.js', () => ({ getAppSurface: () => 'desktop' }));
 
 afterEach(cleanup);
 

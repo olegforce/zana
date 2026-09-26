@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Bookmark, BookmarkCheck, BotMessageSquare, Code2, Copy, CornerDownLeft, Download, ExternalLink, FileText, FolderOpen, Send, Sparkles, Star, Trash2 } from 'lucide-react';
 import './inbox-detail.css';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
+import { InboxMobileActions } from './InboxMobileActions.js';
+import { InboxMobileDocument } from './InboxMobileDocument.js';
 import { inboxQuestions } from '@zana-ai/zcc-domain/product';
 import type { InboxQuestion, Suggestion } from '@zana-ai/zcc-domain/product';
 import {
@@ -118,7 +121,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
   if (entries.length === 0 || !selected) {
     return <div className="inbox-detail-empty">Select an entry from the sidebar.</div>;
   }
-  return <Detail entry={selected} onDelete={() => handleDelete(selected.id)} onBack={onBack} />;
+  return <Detail key={selected.id} entry={selected} onDelete={() => handleDelete(selected.id)} onBack={onBack} />;
 }
 
 // Cumulative byte budget for a single PDF export / Save. Each doc is capped at
@@ -129,6 +132,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
 const EXPORT_TOTAL_BYTES_CAP = 32 * 1024 * 1024; // 32 MB of source markdown
 
 function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () => void; onBack?: () => void }) {
+  const compact = useCompactLayout();
   const navigate = useNavigate();
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
@@ -498,6 +502,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
                   sessionTitle={sessionTitleForTombstone(entry)}
                   onAnswerDeadSession={answerOnDeadSession}
                   deadSessionBusy={reopening}
+                  autoFocus={compact && replyExpanded}
                 />
               )
             ) : (
@@ -544,12 +549,18 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
         >
           {displayLabel}
         </span>
-        <span className="inbox-detail-ts">
+        {!compact && <span className="inbox-detail-ts">
           {formatAbsolute(entry.ts)}
           <span className="inbox-detail-ts-sep">·</span>
           {formatRelative(entry.ts)}
-        </span>
-        <div className="inbox-detail-actions">
+        </span>}
+        {compact ? <InboxMobileActions actions={[
+          { label: kept ? 'Remove keep flag' : 'Keep this entry', icon: <Star size={20} aria-hidden="true" />, pressed: kept, onSelect: () => { void toggleInboxKeep(entry.id); } },
+          ...(canExport ? [{ label: alreadySaved ? 'Saved for later' : saving ? 'Saving…' : 'Save for later', icon: <Bookmark size={20} aria-hidden="true" />, disabled: saving || alreadySaved, onSelect: () => { void onSave(); } }] : []),
+          ...(projectAlive ? [{ label: 'New agent from this message', icon: <BotMessageSquare size={20} aria-hidden="true" />, onSelect: () => setLauncherOpen(true) }] : []),
+          ...(canExport ? [{ label: exporting ? 'Exporting…' : 'Download PDF', icon: <Download size={20} aria-hidden="true" />, disabled: exporting, onSelect: () => { void exportPdf(); } }] : []),
+          { label: 'Delete message', icon: <Trash2 size={20} aria-hidden="true" />, danger: true, onSelect: onDelete }
+        ]} /> : <div className="inbox-detail-actions">
           <div className="inbox-detail-actions-group">
             <button
               type="button"
@@ -612,12 +623,13 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               <Trash2 size={14} strokeWidth={1.75} />
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       <div className="inbox-detail-title">{inboxPrimaryTitle(entry)}</div>
-      {(!projectAlive || aliveSession || sessionTombstoned) && (
+      {(compact || !projectAlive || aliveSession || sessionTombstoned) && (
         <div className="inbox-detail-meta">
+          {compact && <time className="inbox-mobile-time" dateTime={new Date(entry.ts).toISOString()} title={formatAbsolute(entry.ts)}>{formatRelative(entry.ts)}</time>}
           <SessionStatusPill
             projectAlive={projectAlive}
             live={!!aliveSession}
@@ -669,7 +681,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               onClick={() => void handleOpen()}
               className="inbox-detail-open"
               disabled={reopening}
-              aria-label={openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned })}
+              aria-label={`${openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned })}${compact ? ' agent' : ''}`}
               title={openAgentTitle({
                 reopening,
                 resumable,
@@ -679,6 +691,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               })}
             >
               {openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned })}
+              {compact ? ' agent' : null}
             </button>
           ) : (
             <div className="inbox-detail-unavailable">
@@ -849,7 +862,8 @@ function ReplyBox({
   sessionId,
   sessionTitle,
   onAnswerDeadSession,
-  deadSessionBusy = false
+  deadSessionBusy = false,
+  autoFocus = false
 }: {
   entry: InboxEntry;
   /** The LIVE session to inject into — the originating tab, or a reopened one.
@@ -862,6 +876,7 @@ function ReplyBox({
   onAnswerDeadSession?: (answer: string) => Promise<boolean>;
   /** True while a reopen is in flight (disables submit in dead-session mode). */
   deadSessionBusy?: boolean;
+  autoFocus?: boolean;
 }) {
   const answered = useInboxAnswered((s) => !!s.answeredIds[entry.id]);
   const blockerState = useExecutionInboxBlockerState(entry, answered);
@@ -922,6 +937,7 @@ function ReplyBox({
     <div className="inbox-reply">
       <textarea
         className="inbox-reply-input"
+        autoFocus={autoFocus}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -969,6 +985,7 @@ function DocExplorer({
   project: Project | null;
   originCwd?: string;
 }) {
+  const compact = useCompactLayout();
   const [selectedPath, setSelectedPath] = useState(docs[0]?.path ?? '');
   // Keep selection valid if the entry (and its docs) changes under us.
   useEffect(() => {
@@ -979,6 +996,13 @@ function DocExplorer({
 
   const selectedDoc = docs.find((d) => d.path === selectedPath) ?? docs[0] ?? null;
   const multi = docs.length > 1;
+
+  if (compact) return <div className="inbox-mobile-documents">
+    <h2>Documents <span>{docs.length}</span></h2>
+    {docs.map((doc) => <InboxMobileDocument key={doc.path} path={doc.path}>
+      <DocPreview project={project} doc={doc} originCwd={originCwd} />
+    </InboxMobileDocument>)}
+  </div>;
 
   return (
     <div className={`inbox-docs-explorer ${multi ? 'is-multi' : ''}`}>
@@ -1168,13 +1192,14 @@ function DocActions({
   onCopy: () => void;
   label: string;
 }) {
+  const compact = useCompactLayout();
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
     fn();
   };
   return (
     <div className="inbox-doc-actions">
-      <button
+      {!compact && <><button
         type="button"
         className="inbox-doc-open"
         onClick={stop(onReveal)}
@@ -1200,7 +1225,7 @@ function DocActions({
         aria-label={`Open ${label} in VS Code`}
       >
         <Code2 size={12} strokeWidth={1.75} />
-      </button>
+      </button></>}
       <button
         type="button"
         className="inbox-doc-open"
@@ -1209,6 +1234,7 @@ function DocActions({
         aria-label={`Copy path to ${label}`}
       >
         <Copy size={12} strokeWidth={1.75} />
+        {compact ? <span>Copy path</span> : null}
       </button>
     </div>
   );
@@ -1227,6 +1253,7 @@ function DocTombstone({
   result: FsReadResult;
   project: Project | null;
 }) {
+  const compact = useCompactLayout();
   const pushToast = useUi((s) => s.pushToast);
   const missing = !result.binary && !result.truncated;
   const revealProject = async () => {
@@ -1237,7 +1264,7 @@ function DocTombstone({
   return (
     <div className="inbox-doc-tombstone">
       <span>{docReadError(result)}</span>
-      {missing && project && (
+      {missing && project && !compact && (
         <button type="button" className="inbox-doc-tombstone-action" onClick={() => void revealProject()}>
           <FolderOpen size={12} strokeWidth={1.75} />
           Reveal project folder

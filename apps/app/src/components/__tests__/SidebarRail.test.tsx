@@ -76,8 +76,9 @@ describe('SidebarRail', () => {
         <SidebarRail className="sidebar" navAriaLabel="Nav" storageKey="zcc.testSidebarNavOrder" pinnedIds={['inbox']} items={[...items, { ...items[0], kind: 'row', id: 'tool', label: 'Tool', icon: null, to: '/tool', testId: 'nav-tool', active: false, mobileGroup: 'tools' }]} />
       </MobileNavDrawer>
     );
-    expect(markup).toContain('mobile-nav-primary');
-    expect(markup).toContain('>More<');
+    expect(markup).toContain('mobile-tools-grid');
+    expect(markup).toContain('Search plugins and tools');
+    expect(markup).toContain('data-testid="nav-tool"');
     expect(markup).toContain('aria-label="Close navigation"');
     expect(markup).not.toContain('data-sortable-nav-id');
     expect(markup).not.toContain('class="sidebar-resizer"');

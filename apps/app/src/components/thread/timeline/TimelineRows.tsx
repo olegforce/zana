@@ -61,6 +61,7 @@ interface TimelineRowsProps {
   expansion: ReturnType<typeof collectTimelineAutoExpansionRowIds>;
   unreadRowId?: string | null;
   onCopy?: (text: string) => void;
+  onMessageExpand?: () => void;
   onTitleAction?: TimelineTitleActionHandler;
   onTitleLink?: TimelineTitleLinkHandler;
   onOpenDiff?: (path: string) => void;
@@ -146,6 +147,7 @@ function TimelineRowView({
   expansion,
   unreadRowId,
   onCopy,
+  onMessageExpand,
   onTitleAction,
   onTitleLink,
   onOpenDiff,
@@ -182,6 +184,7 @@ function TimelineRowView({
     expansion,
     unreadRowId,
     onCopy,
+    onMessageExpand,
     onTitleAction,
     onTitleLink,
     onOpenDiff,
@@ -203,6 +206,8 @@ function TimelineRowView({
       <ConversationRow
         row={row}
         onCopy={onCopy}
+        onMessageExpand={onMessageExpand}
+        forceExpanded={forceExpandedRowIds?.has(row.id) === true}
         threadId={threadId}
         projectId={projectId}
         parentThreadId={parentThreadId}
@@ -260,6 +265,7 @@ function TimelineRowView({
         expansion={expansion}
         unreadRowId={unreadRowId}
         onCopy={onCopy}
+        onMessageExpand={onMessageExpand}
         onTitleAction={onTitleAction}
         onTitleLink={onTitleLink}
         onOpenDiff={onOpenDiff}

@@ -7,6 +7,7 @@ import { type ThreadContextWindowUsage, type TimelineRow } from '@zana-ai/zcc-se
 import { buildTimelineViewRows, type TimelineViewWorkflowWorkRow } from '@zana-ai/zcc-thread-view';
 import { product } from '../../lib/product-client.js';
 import { ThreadCommandComposer } from '../../components/ThreadCommandComposer.js';
+import { useMobileThreadActionsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
 import { ThreadTimeline } from '../../components/thread/ThreadTimeline.js';
 import { ThreadDiffPanel } from '../../components/thread/ThreadDiffPanel.js';
 import { ThreadWorkspaceBanner } from '../../components/thread/ThreadWorkspaceBanner.js';
@@ -27,6 +28,7 @@ import { ThreadDetailSearch } from '../../components/thread/ThreadDetailSearch.j
 import { createCoalescedRunner } from '../../lib/coalesced-runner.js';
 import { getThreadRoutePath } from '../../lib/route-paths.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
+import { useCompactLayout } from '../../hooks/useCompactLayout.js';
 import { pendingChildThreads, useThreads, type ThreadListItem } from '../../thread-store.js';
 import { useData } from '../../store.js';
 import { ThreadPendingInteractionBanner } from '../../components/thread/pending-interactions/ThreadPendingInteractionBanner.js';
@@ -123,6 +125,10 @@ export function ThreadDetail({
   );
   const pendingInteractions = useOpenPendingInteractions(threadId);
   const pane = useOptionalPaneContext();
+  const mobileHeaderInShell = !embedded && !modal && route.threadId === threadId && pane?.isFocused !== false;
+  const mobileTitleTarget = useMobileThreadTitleTarget(mobileHeaderInShell);
+  const mobileActionsTarget = useMobileThreadActionsTarget(mobileHeaderInShell);
+  const compact = useCompactLayout();
   const hostedSecondary = pane?.secondaryPanelHost != null;
   const viewRef = useRef<HTMLElement>(null);
   const panel = useThreadSecondaryPanel(threadId, {
@@ -711,9 +717,11 @@ export function ThreadDetail({
     >
       <div className="thread-detail-split">
       <div className="thread-detail-main">
-        <header className="thread-detail-header">
+        <header className="thread-detail-header" data-title-in-shell={Boolean(mobileTitleTarget) || undefined}>
           <ThreadDetailHeading
             title={title}
+            titleTarget={mobileTitleTarget}
+            overflowTarget={mobileActionsTarget}
             draggable={Boolean(pane?.beginPaneDrag)}
             onPointerDown={
               pane?.beginPaneDrag
@@ -837,7 +845,7 @@ export function ThreadDetail({
               includePluginMessageActions={includePluginMessageActions}
             />
             <div className="thread-composer-dock">
-              <PromptContextBanner
+              {!compact && <PromptContextBanner
                 threadId={threadId}
                 branchName={branchName}
                 isWorktree={isWorktree}
@@ -845,7 +853,7 @@ export function ThreadDetail({
                 originKind={originKind}
                 childCount={childThreads.length}
                 environmentId={environmentId}
-              />
+              />}
               <QueuedMessagesCard threadId={threadId} />
               <ModelFallbackCard fallback={modelFallback} />
               <BackgroundCommandsCard commands={backgroundCommands} workflows={workflows} />
@@ -868,10 +876,10 @@ export function ThreadDetail({
                 isExpanded={todoExpanded}
                 onToggle={() => setTodoExpanded((value) => !value)}
               />
-              <ThreadWorkspaceBanner
+              {!compact && <ThreadWorkspaceBanner
                 environmentId={environmentId}
                 onOpenDiff={(path) => openDiff(path)}
-              />
+              />}
               {archivedAt ? <ArchivedThreadBanner key={threadId} threadId={threadId} onRestored={() => { setArchivedAt(null); runLoadRef.current(); }} /> : <ThreadCommandComposer
                 threadId={threadId}
                 project={project ?? undefined}

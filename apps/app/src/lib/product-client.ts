@@ -25,6 +25,7 @@ import { hasDesktopBridge } from './app-surface.js';
 import { apiJson, fetchWithAppSurface } from './fetch-with-app-surface.js';
 import { readNdjsonEvents } from './ndjson-events.js';
 import { subscribeProductEvent } from './product-ws.js';
+import { readHttpLibrary, subscribeHttpLibrary } from './http-library.js';
 
 function noopSubscribe(_cb: unknown): () => void {
   return () => {};
@@ -934,16 +935,13 @@ function httpProduct(): Pick<
         )
     } as CcApi['harness'],
     library: {
-      list: async () => {
-        const body = await apiJson<{ docs: Awaited<ReturnType<CcApi['library']['list']>> }>('/library');
-        return body.docs;
-      },
+      list: readHttpLibrary,
       read: async (scope, relPath, projectId) => {
         const params = new URLSearchParams({ scope, relPath });
         if (projectId) params.set('projectId', projectId);
         return apiJson<Awaited<ReturnType<CcApi['library']['read']>>>(`/library/content?${params.toString()}`);
       },
-      onChanged: (cb) => subscribeProductEvent('library:changed', cb)
+      onChanged: subscribeHttpLibrary
     } as CcApi['library'],
     quickPrompts: {
       list: async () => {

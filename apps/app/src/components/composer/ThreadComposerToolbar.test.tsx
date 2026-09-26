@@ -84,6 +84,17 @@ it('keeps send and stop callbacks available without opening options', () => {
   ).toBe('false');
 });
 
+it('keeps permission changes outside the options disclosure beside the model', () => {
+  const change = vi.fn();
+  render(toolbar({ permission: <button onClick={change}>Full access</button> }));
+  const permission = screen.getByRole('button', { name: 'Full access' });
+  expect(permission.closest('.thread-command-options')).toBeNull();
+  expect(permission.closest('.thread-command-footer-start')).toContain(screen.getByText('Model'));
+  fireEvent.click(permission);
+  expect(change).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Composer options' }).getAttribute('aria-expanded')).toBe('false');
+});
+
 it('supports unavailable optional controls and distinct instances', () => {
   render(
     <>
@@ -98,6 +109,14 @@ it('supports unavailable optional controls and distinct instances', () => {
   fireEvent.click(toggles[0]);
   expect(toggles[0].getAttribute('aria-expanded')).toBe('true');
   expect(toggles[1].getAttribute('aria-expanded')).toBe('false');
+});
+
+it('keeps the run location in options without mixing it into model or permission controls', () => {
+  const { rerender } = render(toolbar({ location: <span>Remote build machine</span> }));
+  expect(screen.getByText('Remote build machine').closest('.thread-command-options')).toBeTruthy();
+  expect(screen.getByText('Location')).toBeTruthy();
+  rerender(toolbar());
+  expect(screen.queryByText('Location')).toBeNull();
 });
 
 it('collapses when writing resumes, without reacting to other fields or retaining listeners', () => {

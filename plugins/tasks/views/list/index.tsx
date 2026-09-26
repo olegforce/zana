@@ -37,6 +37,8 @@ import {
 } from "./lib.js";
 import { editedTasks, matchesFilters } from "./optimistic.js";
 import { useListTaskEdits } from "./use-task-edits.js";
+import { useIsMobileTasks } from "../../shell/mobile.js";
+import { MobileTaskFilters } from "./mobile-filters.js";
 import { TaskRow } from "./row.js";
 
 interface ListViewProps {
@@ -66,10 +68,13 @@ function LoadingRows() {
 }
 
 export function ListView({ projectId, activeOnly = false }: ListViewProps) {
+  const compact = useIsMobileTasks();
   const navigation = useTasksNavigation();
   const projects = useProjects();
   const { toasts, push, dismiss } = useDetailToasts();
   const preferenceScope = listPreferenceScope(projectId, activeOnly);
+  const [search, setSearch] = useState({ scope: preferenceScope, value: "" });
+  const query = compact && search.scope === preferenceScope ? search.value : "";
   const [preference, setPreference] = useState<ListPreference>(() =>
     loadListPreference(preferenceScope),
   );
@@ -142,7 +147,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   const displayTasks = useMemo(() => {
     if (tasksQuery.data === undefined) return undefined;
     return editedTasks(tasksQuery.data, edits.entries).filter((task) =>
-      matchesFilters(
+      (!query.trim() || `${task.key} ${task.title}`.toLowerCase().includes(query.trim().toLowerCase())) && matchesFilters(
         task,
         filters.statuses,
         filters.priorities,
@@ -151,6 +156,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     );
   }, [
     tasksQuery.data,
+    query,
     edits.entries,
     filters.statuses,
     filters.priorities,
@@ -162,10 +168,10 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   );
 
   const showProject = projectId === null;
-  const filtered = hasActiveFilters(filters);
+  const filtered = hasActiveFilters(filters) || Boolean(query.trim());
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const scopeKey = listScrollScopeKey({ projectId, activeOnly, filters, sort });
+  const scopeKey = listScrollScopeKey({ projectId, activeOnly, filters, sort }) + (query ? `|q=${encodeURIComponent(query)}` : "");
   const settledScope = useRef(scopeKey);
   const scopeChanged = settledScope.current !== scopeKey;
   useEffect(() => {
@@ -214,7 +220,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setFilters(EMPTY_FILTERS)}
+              onClick={() => { setFilters(EMPTY_FILTERS); setSearch({ scope: preferenceScope, value: "" }); }}
             >
               Clear filters
             </Button>
@@ -276,18 +282,20 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ListFilterBar
+    <div className="tasks-list-view flex h-full min-h-0 flex-col">
+      {compact ? <MobileTaskFilters query={query} onQuery={value => setSearch({ scope: preferenceScope, value })}
+        filters={filters} onChange={setFilters} sort={sort} onSortChange={setSort}
+        labelOptions={labelOptions} taskCount={displayTasks?.length} /> : <ListFilterBar
         filters={filters}
         onChange={setFilters}
         sort={sort}
         onSortChange={setSort}
         labelOptions={labelOptions}
         taskCount={displayTasks?.length}
-      />
+      />}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto @container"
+        className="tasks-list-scroll min-h-0 flex-1 overflow-y-auto @container"
       >
         {body}
       </div>

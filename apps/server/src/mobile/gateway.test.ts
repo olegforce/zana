@@ -284,6 +284,21 @@ describe('mobile gateway', () => {
       enabled: false
     });
   });
+  it('forwards nested document query paths without relaxing route or session checks', async () => {
+    const f = await setup();
+    const path = '/api/v1/library/content?scope=global&relPath=notes%2Freading.md';
+    expect((await f.call(path)).status).toBe(401);
+    const paired = await f.pair();
+    const session = await f.session(paired.json.credential);
+    const headers = { cookie: session.cookie };
+    expect((await f.call(path, { headers })).status).toBe(200);
+    expect(f.requests.at(-1)?.url).toBe(path);
+    const count = f.requests.length;
+    for (const route of ['/internal/hosts', '/api/v1%2Fsecret', '/internal%5chosts']) {
+      expect((await f.call(`${route}?relPath=notes%2Freading.md`, { headers })).status).toBe(404);
+    }
+    expect(f.requests).toHaveLength(count);
+  });
   it('validates upstream and public origins', async () => {
     for (const upstream of [
       'https://public.example',
@@ -305,6 +320,9 @@ describe('mobile gateway', () => {
       '/api/v2/test',
       '/_secret',
       '/api/v1%2fsecret',
+      '/api/v1%2Fsecret?relPath=notes%2Fdoc.md',
+      '/internal%5chosts?scope=global',
+      '/api/v1/%00?relPath=notes%2Fdoc.md',
       '/a\\b'
     ])
       expect(isMobileProxyPath(path)).toBe(false);
@@ -313,6 +331,8 @@ describe('mobile gateway', () => {
       '/threads/t1',
       '/plugins/a/assets/app.js',
       '/api/v1/threads',
+      '/api/v1/library/content?scope=global&relPath=notes%2Freading.md',
+      '/api/v1/library/content?scope=project&projectId=p&relPath=notes%5Creading.md',
       '/_zcc/bootstrap',
       '/_zcc/health'
     ])

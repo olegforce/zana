@@ -12,6 +12,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../vendor/shared-ui/components/ui/tooltip";
+import { useOpenTaskProjects, useIsMobileTasks } from "./mobile.js";
 import { useTasksRefresh } from "./refresh.js";
 
 const REFRESH_TASKS_LABEL = "Refresh tasks";
@@ -175,6 +176,8 @@ export function TasksTopbar({
   onNewTask,
   onBack,
 }: TasksTopbarProps) {
+  const openProjects = useOpenTaskProjects();
+  const compact = useIsMobileTasks();
   const project = useMemo(() => {
     if (route.kind === "project") {
       return (projects ?? []).find((p) => p.id === route.projectId) ?? null;
@@ -237,7 +240,7 @@ export function TasksTopbar({
             >
               <Icon name="ChevronLeft" className="size-4" />
             </Button>
-            {project ? (
+            {project && !compact ? (
               <button
                 type="button"
                 className="hidden min-w-0 items-center gap-2 text-muted-foreground hover:text-foreground @md:flex"
@@ -257,7 +260,7 @@ export function TasksTopbar({
                 <span className="truncate font-medium">{project.name}</span>
               </button>
             ) : null}
-            {project ? (
+            {project && !compact ? (
               <Icon
                 name="ChevronRight"
                 className="hidden size-3 shrink-0 text-muted-foreground @md:block"
@@ -272,7 +275,8 @@ export function TasksTopbar({
   })();
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border-hairline bg-background px-3.5 text-sm max-md:h-12 max-md:pl-12 max-md:pointer-coarse:pl-14">
+    <header className="tasks-topbar flex h-11 shrink-0 items-center gap-2.5 border-b border-border-hairline bg-background px-3.5 text-sm max-md:h-12 max-md:pl-12 max-md:pointer-coarse:pl-14">
+      {openProjects && route.kind !== "task" && <button className="tasks-projects-trigger" type="button" onClick={openProjects} aria-label="Choose task project" aria-haspopup="dialog"><Icon name="Folder" className="size-5" /></button>}
       <div className="min-w-0 flex-1 overflow-hidden">{breadcrumb}</div>
       {route.kind === "task" &&
       (pagerScope !== null || projects !== undefined) ? (
@@ -284,7 +288,7 @@ export function TasksTopbar({
           onNavigate={onNavigate}
         />
       ) : null}
-      {route.kind === "project" ? (
+      {route.kind === "project" && !compact ? (
         <span className="hidden @md:block">
           <ViewToggle
             view={route.view}

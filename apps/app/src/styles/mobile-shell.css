@@ -23,6 +23,8 @@
 .app-shell[data-mobile='true'] {
   --titlebar-h: 48px;
   --col-nav: 0px;
+  /* Phone actions live in the header; plugin pages need the full content width. */
+  --shell-trailing-reserve: 0px;
   width: 100%;
   height: var(--mobile-viewport-height, 100dvh);
   min-width: 0;
@@ -35,6 +37,25 @@
 .app-shell[data-mobile='true'] .titlebar-title {
   max-width: 32vw;
 }
+.mobile-thread-title-slot:empty { display: none; }
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-title-slot > h1) .titlebar-title { display: none; }
+.mobile-thread-title-slot:not(:empty) {
+  position: absolute;
+  left: 52px;
+  right: 56px;
+  min-width: 0;
+}
+.titlebar:has(.mobile-thread-actions-slot:not(:empty)) .mobile-thread-title-slot { right: 100px; }
+.mobile-thread-title-slot h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .app-shell[data-mobile='true'] .titlebar-fav {
   display: none;
 }
@@ -42,35 +63,63 @@
   min-width: 44px;
   min-height: 44px;
 }
-.app-shell[data-mobile='true'] .titlebar:has(.mobile-connection-menu) .titlebar-bell {
+.app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-actions-slot:not(:empty)) .titlebar-bell {
   right: 48px;
 }
-.mobile-connection-menu {
+.mobile-thread-actions-slot:empty { display: none; }
+.mobile-thread-actions-slot:not(:empty) {
   position: absolute;
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 44px;
   height: 44px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  color: var(--text-muted);
-  background: transparent;
-  cursor: pointer;
   -webkit-app-region: no-drag;
 }
-.mobile-connection-menu:is(:hover, :active) {
-  color: var(--text-primary);
-  background: var(--bg-hover);
+.mobile-thread-actions-slot .thread-detail-overflow-btn { width: 44px; height: 44px; }
+.mobile-thread-actions-slot .thread-detail-overflow-btn svg { width: 20px; height: 20px; }
+body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu {
+  min-width: min(260px, calc(100vw - 16px));
+  padding: 6px;
+  border-radius: 12px;
 }
-.mobile-connection-menu:focus-visible {
-  outline: 2px solid var(--accent-blue);
-  outline-offset: -2px;
+body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
+  min-height: 44px;
+  padding: 10px 12px;
+  gap: 10px;
+  font-size: 14px;
 }
+.mobile-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 10px 0 max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
+.mobile-device-actions > button {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 44px;
+  min-height: 56px;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mobile-device-actions > button:is(:hover, :active) { background: var(--bg-hover); color: var(--text-primary); }
+.mobile-device-actions > button:disabled { opacity: .5; cursor: default; }
+.mobile-device-actions > button:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.mobile-device-actions > p { flex-basis: 100%; margin: 0; color: var(--danger); font-size: 12px; }
 .app-shell[data-mobile='true'] .sidebar-trigger-overlay {
   height: 48px;
   padding-left: 4px;
@@ -85,7 +134,7 @@
   right: 16px;
   padding-left: 0;
 }
-.app-shell[data-mobile='true'].nav-settings :is(.titlebar-bell, .mobile-connection-menu) {
+.app-shell[data-mobile='true'].nav-settings :is(.titlebar-bell, .mobile-thread-actions-slot) {
   display: none;
 }
 .app-shell[data-mobile='true'].nav-settings :is(.titlebar, .mobile-nav-header) {
@@ -370,6 +419,44 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+/* The title occupies the shell's first row; these controls share the second. */
+.app-shell[data-mobile='true'] .thread-detail-main:has(> [data-title-in-shell='true']) {
+  padding: 0 12px 12px;
+  gap: 8px;
+}
+.app-shell[data-mobile='true'] .thread-detail-header[data-title-in-shell='true'] {
+  flex-wrap: nowrap;
+  min-height: 44px;
+  gap: 4px;
+}
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-heading {
+  flex: 0 0 auto;
+  order: 2;
+}
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-actions {
+  flex: 1;
+  min-width: 0;
+}
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-status-badge { order: -1; }
+.app-shell[data-mobile='true'] .agent-session-main:has(> [data-title-in-shell='true']) { padding: 0; gap: 0; }
+.app-shell[data-mobile='true'] .agent-session-main > [data-title-in-shell='true'] { padding: 0 12px; }
+.mobile-cli-context { display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; font-size: 12px; color: var(--text-muted); }
+.mobile-cli-context .mobile-agent-status { flex-shrink: 0; }
+.mobile-cli-project { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mobile-cli-project svg { flex-shrink: 0; }
+.mobile-cli-project > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search { margin-left: auto; }
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search:is(:focus-within, .has-query) { flex: 1; }
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] .thread-detail-search:is(:focus-within, .has-query) input {
+  flex: 1;
+  width: 0;
+  max-width: none;
+}
+.app-shell[data-mobile='true'] [data-title-in-shell='true'] :is(.icon-btn, .thread-detail-overflow-btn) {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+}
 .app-shell[data-mobile='true'] .thread-detail-view.is-secondary-open .thread-detail-main,
 .app-shell[data-mobile='true'] .split-workspace-host:has(> .thread-secondary-panel) > .split-workspace-main {
   display: none;
@@ -458,7 +545,7 @@
   .thread-command-toolbar[data-options-expanded='true']
   .thread-command-options {
   display: flex;
-  grid-row: 2;
+  grid-row: var(--composer-options-row, 2);
   flex-direction: column;
   max-height: min(240px, 40dvh);
   overflow-y: auto;
@@ -490,11 +577,18 @@
   .thread-command-toolbar[data-options-expanded='true']
   .thread-command-secondary-actions:has(button:not(:disabled)) {
   display: flex;
-  grid-row: 3;
+  grid-row: var(--composer-actions-row, 3);
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 0 4px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--border);
+}
+.app-shell[data-mobile='true'] .thread-context-meter-trigger { min-height: 44px; }
+.app-shell[data-mobile='true'] .thread-context-meter-card {
+  left: 0;
+  right: auto;
+  max-width: calc(100vw - 64px);
 }
 .app-shell[data-mobile='true']
   .thread-command-secondary-actions
@@ -716,6 +810,19 @@ body:has(.app-shell[data-mobile='true'])
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Keep schedule settings primary; run details scroll in a smaller bottom pane. */
+.app-shell[data-mobile='true'] .schedule-detail-layout {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, min(28%, 220px));
+}
+.app-shell[data-mobile='true'] :is(.schedule-detail-editor, .schedule-detail-info) {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.app-shell[data-mobile='true'] .schedule-detail-info {
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
 .app-shell[data-mobile='true'] :is(.settings-btn, .agents-view-toggle-btn, .agents-board-toolbar .btn) {
   min-height: 44px;
 }
@@ -884,4 +991,57 @@ body:has(.app-shell[data-mobile='true'])
   flex: 1 0 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* Sent prompts share a small height budget, including images and file lists. */
+.app-shell[data-mobile='true'] .thread-timeline-row.is-user .thread-timeline-bubble {
+  padding: 8px 12px;
+}
+.mobile-message-preview-viewport {
+  max-height: 72px;
+  overflow: hidden;
+}
+.mobile-message-preview-content {
+  display: flow-root;
+}
+.mobile-message-preview[data-overflowing='true'][data-expanded='false'] .mobile-message-preview-viewport {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent);
+}
+.mobile-message-preview[data-expanded='true'] .mobile-message-preview-viewport {
+  max-height: none;
+  overflow: visible;
+}
+.mobile-message-preview-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 0 0;
+  border: 0;
+  background: none;
+  color: var(--accent-blue);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mobile-message-preview-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+.mobile-message-preview .composer-image-thumbs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.mobile-message-preview .composer-image-thumb-preview {
+  width: 66px;
+  height: 44px;
+}
+/* An expanded prompt belongs in the scrolling transcript, even if it is short. */
+.app-shell[data-mobile='true'] .thread-timeline-current-turn > .thread-timeline-item.is-user:has(.mobile-message-preview[data-expanded='true']) {
+  position: relative;
+  top: auto;
 }

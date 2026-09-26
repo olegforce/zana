@@ -5,6 +5,8 @@ import { SlidersHorizontal } from 'lucide-react';
 export function ThreadComposerToolbar({
   mode,
   model,
+  permission,
+  location,
   reasoning,
   sendMode,
   secondaryActions,
@@ -13,6 +15,8 @@ export function ThreadComposerToolbar({
 }: {
   mode: ReactNode;
   model: ReactNode;
+  permission?: ReactNode;
+  location?: ReactNode;
   reasoning: ReactNode;
   sendMode: ReactNode;
   secondaryActions: ReactNode;
@@ -66,8 +70,13 @@ export function ThreadComposerToolbar({
             <span className="thread-command-option-label">While running</span>
             {sendMode}
           </div>
+          {location && <div className="thread-command-option thread-command-option--location">
+            <span className="thread-command-option-label">Location</span>
+            {location}
+          </div>}
         </div>
         <div className="thread-command-model">{model}</div>
+        {permission && <div className="thread-command-permission">{permission}</div>}
       </div>
       <div className="thread-command-footer-end">
         <div id={`${id}-actions`} className="thread-command-secondary-actions">

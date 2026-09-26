@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Folder, Laptop, Loader2, Mic, Paperclip, Square } from 'lucide-react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { ArrowUp, Folder, Laptop, Loader2, Mic, Minimize2, Paperclip, Square } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '@zana-ai/zcc-domain/product';
 import type { ThreadContextWindowUsage } from '@zana-ai/zcc-server-contract';
@@ -73,6 +73,10 @@ import { ThreadComposerToolbar } from './composer/ThreadComposerToolbar.js';
 import { useComposerPromptField } from './composer/use-composer-prompt-field.js';
 import { ProviderCliBanner } from './composer/ProviderCliBanner.js';
 import { useComposerProviderCli } from './composer/use-composer-provider-cli.js';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
+import { ComposerRunSettings, composerRunSummary } from './composer/ComposerRunSettings.js';
+import { useMobileComposerExpansion } from './composer/useMobileComposerExpansion.js';
+import '../styles/mobile-composer.css';
 
 export type ThreadSendMode = 'start' | 'auto' | 'steer' | 'queue-if-active' | 'steer-if-active';
 
@@ -125,6 +129,7 @@ export function ThreadCommandComposer({
   onPlanActionPending,
   onPlanActionHandled
 }: ThreadCommandComposerProps) {
+  const compact = useCompactLayout();
   const navigate = useNavigate();
   const route = useRouteState();
   const projects = useData((s) => s.projects);
@@ -183,6 +188,10 @@ export function ThreadCommandComposer({
     NAVIGATE_TO_THREAD_ON_CREATE_DEFAULT
   );
   const [expanded, setExpanded] = useState(false);
+  const composerRoot = useRef<HTMLDivElement>(null);
+  const expandedTitleId = useId();
+  const mobileExpanded = compact && expanded;
+  useMobileComposerExpansion(composerRoot, mobileExpanded, () => setExpanded(false));
   const [workspace, setWorkspace] = useState<WorkspacePickerValue>(() => defaultWorkspaceChoice(false));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -534,12 +543,14 @@ export function ThreadCommandComposer({
     field.markRestoreFocus();
     setError(null);
     setBusy(true);
+    setUploadProgress(field.images.length > 0 ? 0 : null);
     try {
       const imagePaths = field.images.length === 0
         ? []
         : await persistComposerImages(persistProjectId!, field.images, (ratio) => {
           setUploadProgress(ratio);
         });
+      setUploadProgress(null);
       const input = [
         ...(text.trim() ? [{ type: 'text' as const, text, mentions: applied.mentions }] : []),
         ...imagePaths.map((path) => ({ type: 'localImage' as const, path }))
@@ -667,6 +678,24 @@ export function ThreadCommandComposer({
     </ComposerIconButton>
   );
 
+  const permissionPicker = permissionOptions.length > 1 ? (
+    <PopoverPicklist
+      value={permissionMode}
+      options={permissionOptions.map((row) => ({
+        value: row.value,
+        label: row.label,
+        compactLabel: compact && row.value === 'full' ? 'Full access' : row.compactLabel,
+        description: row.description,
+        ...(row.tone ? { tone: row.tone } : {})
+      }))}
+      onChange={setPermissionMode}
+      ariaLabel="Permission mode"
+      searchable={false}
+      minWidth={280}
+    />
+  ) : null;
+  const runMachine = hosts.find((host) => host.id === (selectedProject?.remote ? selectedProject.hostId : hostId));
+
   return (
     <>
     <PluginComposerChrome
@@ -677,11 +706,22 @@ export function ThreadCommandComposer({
       providerId={resolvedProviderId}
     >
     <div
+      ref={composerRoot}
       className={`thread-command-composer${expanded ? ' is-expanded' : ''}${field.dropOver ? ' is-drop-over' : ''}${busy ? ' is-sending' : ''}`}
+      data-mobile-expanded={mobileExpanded || undefined}
+      role={mobileExpanded ? 'dialog' : undefined}
+      aria-modal={mobileExpanded || undefined}
+      aria-labelledby={mobileExpanded ? expandedTitleId : undefined}
       onKeyDown={onKeyDown}
       {...field.dropHandlers}
     >
       <span id="thread-command-label" className="thread-command-label">Agent composer</span>
+      {mobileExpanded && <header className="mobile-composer-expanded-header">
+        <h2 id={expandedTitleId}>Write a message</h2>
+        <button type="button" className="mobile-composer-expanded-done" onClick={() => setExpanded(false)}>
+          <Minimize2 size={18} aria-hidden="true" /> Done
+        </button>
+      </header>}
       {!threadId && providerCli.status && providerCliBlocked ? (
         <ProviderCliBanner
           displayName={providerCli.status.displayName}
@@ -733,6 +773,11 @@ export function ThreadCommandComposer({
           </ComposerToolbar>
         ) : (
           <ThreadComposerToolbar
+            permission={compact ? permissionPicker : undefined}
+            location={compact && threadId ? <span className="thread-command-location">
+              <Laptop size={14} aria-hidden="true" />
+              {remoteHostBadge ? <ComposerRemoteHostBadge {...remoteHostBadge} /> : (environmentLabel ?? 'Local')}
+            </span> : undefined}
             mode={
               <ComposerModePicker
                 value={composerMode}
@@ -856,12 +901,12 @@ export function ThreadCommandComposer({
         <div className="thread-command-composer-meta-start">
           {threadId ? (
             <>
-              <span className="thread-command-chip thread-command-env" data-testid="thread-env-label">
+              {!compact && <span className="thread-command-chip thread-command-env" data-testid="thread-env-label">
                 <Laptop size={14} aria-hidden="true" />
                 {remoteHostBadge
                   ? <ComposerRemoteHostBadge {...remoteHostBadge} />
                   : (environmentLabel ?? 'Local')}
-              </span>
+              </span>}
               <ComposerHostActionChip
                 action={hostAction}
                 busyLabel={hostBusy}
@@ -874,32 +919,49 @@ export function ThreadCommandComposer({
             </>
           ) : (
             <>
-              <div className="thread-command-chip">
-                <Folder size={14} aria-hidden="true" />
-                <ComposerProjectPicker
-                  projects={projects}
-                  value={projectId}
-                  onChange={setProjectId}
-                  disabled={Boolean(pinnedProject)}
-                  title={pinnedProject ? 'Locked to this project' : undefined}
-                />
-              </div>
-              {!selectedProject?.remote && !foreignHost && (
-                <EnvironmentPicker projectId={projectId} value={workspace} onChange={setWorkspace} />
-              )}
-              {showHostPicker && pickerHosts.length > 0 && (
+              <div className="thread-command-project">
+                <span className="thread-command-project-label">Project</span>
                 <div className="thread-command-chip">
-                  <Laptop size={14} aria-hidden="true" />
-                  <HostMachinePicker
-                    hosts={pickerHosts}
-                    project={selectedProject}
-                    value={hostId}
-                    onChange={setHostId}
-                    includeDisconnected
-                    alwaysShow
+                  <Folder size={14} aria-hidden="true" />
+                  <ComposerProjectPicker
+                    projects={projects}
+                    value={projectId}
+                    onChange={setProjectId}
+                    disabled={Boolean(pinnedProject)}
+                    title={pinnedProject ? 'Locked to this project' : undefined}
                   />
                 </div>
-              )}
+              </div>
+              <ComposerRunSettings summary={composerRunSummary({
+                machineName: runMachine?.name,
+                remote: Boolean(selectedProject?.remote),
+                foreignHost,
+                workspace: workspace.kind
+              })}>
+                {!selectedProject?.remote && !foreignHost && (
+                  <div className="composer-run-setting">
+                    <span className="composer-run-setting-label">Working folder</span>
+                    <EnvironmentPicker projectId={projectId} value={workspace} onChange={setWorkspace} />
+                  </div>
+                )}
+                {showHostPicker && pickerHosts.length > 0 && (
+                  <div className="composer-run-setting">
+                    <span className="composer-run-setting-label">Machine</span>
+                    <div className="thread-command-chip">
+                      <Laptop size={14} aria-hidden="true" />
+                      <HostMachinePicker
+                        hosts={pickerHosts}
+                        project={selectedProject}
+                        value={hostId}
+                        onChange={setHostId}
+                        includeDisconnected
+                        alwaysShow
+                      />
+                    </div>
+                  </div>
+                )}
+                {compact && selectedProject?.remote && <p className="mobile-run-settings-hint">This project uses its connected remote machine.</p>}
+              </ComposerRunSettings>
               <ComposerHostActionChip
                 action={hostAction}
                 busyLabel={hostBusy}
@@ -914,22 +976,7 @@ export function ThreadCommandComposer({
           )}
         </div>
         <div className="thread-command-composer-meta-end">
-          {permissionOptions.length > 1 && (
-            <PopoverPicklist
-              value={permissionMode}
-              options={permissionOptions.map((row) => ({
-                value: row.value,
-                label: row.label,
-                compactLabel: row.compactLabel,
-                description: row.description,
-                ...(row.tone ? { tone: row.tone } : {})
-              }))}
-              onChange={setPermissionMode}
-              ariaLabel="Permission mode"
-              searchable={false}
-              minWidth={280}
-            />
-          )}
+          {!compact && permissionPicker}
           <PluginComposerMeta
             scope={threadId ? { kind: 'thread', threadId } : { kind: 'new-thread', projectId: projectId ?? null }}
           />

@@ -1,35 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Ellipsis, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { SHELL_MENU_BRIDGE_VERSION } from '@zana-ai/zcc-mobile-bridge';
 import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { getNativeShell, installNativeShellEvents } from '../lib/native-shell.js';
 import zanaIcon from '../assets/zana-favicon.svg';
 import { MobileNavDismiss } from './mobile-nav-context.js';
+import { MobileDeviceActions } from './MobileDeviceActions.js';
 import '../styles/mobile-shell.css';
 
-export function MobileConnectionMenu() {
+function useMobileShellChromeOwnership() {
+  const compact = useCompactLayout();
   const shell = getNativeShell();
   // Keep v1/v2 phones and ordinary mobile browsers on their existing controls.
-  const supported = !!shell && shell.bridgeVersion >= SHELL_MENU_BRIDGE_VERSION
+  const supported = compact && !!shell && shell.bridgeVersion >= SHELL_MENU_BRIDGE_VERSION
     && shell.capabilities.includes('open-native');
   useEffect(() => {
     if (!supported || !shell) return;
     shell.post({ type: 'shell-chrome', visible: true });
     return () => shell.post({ type: 'shell-chrome', visible: false });
   }, [shell, supported]);
-  if (!supported) return null;
-  return (
-    <button
-      type="button"
-      className="mobile-connection-menu"
-      aria-label="Connection options"
-      title="Connection options"
-      onClick={() => shell.post({ type: 'open-native', screen: 'connection-menu' })}
-    >
-      <Ellipsis size={20} aria-hidden="true" />
-    </button>
-  );
 }
 
 export function useMobileNavigation() {
@@ -146,12 +136,14 @@ export function MobileNavDrawer({
           </button>
         </header>
         <MobileNavDismiss.Provider value={onClose}>{children}</MobileNavDismiss.Provider>
+        <MobileDeviceActions />
       </div>
     </>
   );
 }
 
 export function MobileShellReporter({ unread }: { unread: number }) {
+  useMobileShellChromeOwnership();
   const location = useLocation();
   useEffect(
     () =>

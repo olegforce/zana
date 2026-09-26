@@ -3,49 +3,60 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { MobileSidebarNav } from './MobileSidebarNav.js';
 import type { SidebarRailItem } from './SidebarRail.js';
+import { PROJECTS_SECTION_SORT_ID, PROJECT_SESSIONS_SECTION_SORT_ID } from './sidebarNavOrder.js';
 
 afterEach(cleanup);
-const primary: SidebarRailItem = { kind: 'row', id: 'inbox', label: 'Inbox', icon: null, to: '/inbox', testId: 'inbox', active: false };
-const tool: SidebarRailItem = { ...primary, id: 'docs', label: 'Docs', mobileGroup: 'tools' };
-const projects: SidebarRailItem = { kind: 'section', id: 'projects', node: <div /> };
+const row = (id: string, label: string): SidebarRailItem => ({ kind: 'row', id, label, icon: null, to: `/${id}`, testId: id, active: false });
+const projects: SidebarRailItem = { kind: 'section', id: PROJECTS_SECTION_SORT_ID, node: <div /> };
 const renderItem = (id: string) => <button key={id}>{id}</button>;
+const items = [row('home', 'New Chat'), row('inbox', 'Inbox'), row('agents', 'Agents'), row('docs', 'Documents'), row('acme/review', 'Review'), projects];
 
-it('keeps the primary destinations and projects reachable while disclosing all tools together', () => {
-  const home: SidebarRailItem = { ...primary, id: 'home', mobileGroup: 'featured' };
-  const agents: SidebarRailItem = { ...primary, id: 'agents', mobileGroup: 'featured' };
-  render(<MobileSidebarNav items={[home, primary, agents, tool, projects]} navAriaLabel="Main navigation" renderItem={renderItem} />);
+it('shows all tool and plugin destinations immediately without duplicating the main shortcuts', () => {
+  render(<MobileSidebarNav items={items} navAriaLabel="Main navigation" renderItem={renderItem} />);
   expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'inbox' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'projects' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'docs' })).toBeNull();
-  expect(screen.getAllByRole('button').slice(0, 3).map((button) => button.textContent)).toEqual(['home', 'agents', 'inbox']);
-  for (const name of ['home', 'agents']) {
-    const action = screen.getByRole('button', { name });
-    expect(action.closest('.mobile-nav-featured')).toBeTruthy();
-    expect(action.closest('.mobile-sidebar-scroll')).toBeNull();
-  }
-  for (const name of ['inbox', 'projects', 'More']) {
-    expect(screen.getByRole('button', { name }).closest('.mobile-sidebar-scroll')).toBeTruthy();
-  }
-  const toggle = screen.getByRole('button', { name: 'More' });
-  expect(toggle.getAttribute('aria-expanded')).toBe('false');
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  for (const id of ['agents', 'docs', 'acme/review']) expect(screen.getByRole('button', { name: id })).toBeTruthy();
+  for (const id of ['home', 'inbox', 'More']) expect(screen.queryByRole('button', { name: id })).toBeNull();
+  expect(screen.queryByRole('button', { name: PROJECTS_SECTION_SORT_ID })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Projects', exact: true })).toBeTruthy();
+});
+
+it('searches labels and plugin identifiers, handles no matches, and returns focus when cleared', () => {
+  render(<MobileSidebarNav items={items} navAriaLabel="Main navigation" renderItem={renderItem} />);
+  const search = screen.getByRole('searchbox', { name: 'Search plugins and tools' });
+  fireEvent.change(search, { target: { value: ' DOCUMENTS ' } });
   expect(screen.getByRole('button', { name: 'docs' })).toBeTruthy();
-  expect(document.getElementById(toggle.getAttribute('aria-controls')!)?.hidden).toBe(false);
-  fireEvent.click(toggle);
-  expect(screen.queryByRole('button', { name: 'docs' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'agents' })).toBeNull();
+  fireEvent.change(search, { target: { value: 'ACME' } });
+  expect(screen.getByRole('button', { name: 'acme/review' })).toBeTruthy();
+  fireEvent.change(search, { target: { value: 'missing' } });
+  expect(screen.getByRole('status').textContent).toContain('No plugins or tools match');
+  fireEvent.click(screen.getByRole('button', { name: 'Clear tools search' }));
+  expect(search).toBe(document.activeElement);
+  expect((search as HTMLInputElement).value).toBe('');
+  expect(screen.getByRole('button', { name: 'docs' })).toBeTruthy();
 });
 
-it('opens compact even when the current page belongs to More', () => {
-  render(<MobileSidebarNav items={[primary, { ...tool, active: true }]} navAriaLabel="Nav" renderItem={renderItem} />);
-  expect(screen.queryByRole('button', { name: 'docs' })).toBeNull();
-  expect(screen.getByRole('button', { name: 'More' }).getAttribute('aria-expanded')).toBe('false');
+it.each([
+  [PROJECTS_SECTION_SORT_ID, 'Projects'],
+  [PROJECT_SESSIONS_SECTION_SORT_ID, 'Project agents']
+])('opens %s separately and restores picker focus and search when returning', (id, label) => {
+  render(<MobileSidebarNav items={[...items.filter(item => item.kind === 'row'), { ...projects, id }]} navAriaLabel="Nav" renderItem={renderItem} />);
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'project' } });
+  fireEvent.click(screen.getByRole('button', { name: label, exact: true }));
+  const back = screen.getByRole('button', { name: 'Plugins & tools' });
+  expect(back).toBe(document.activeElement);
+  expect(screen.getByRole('button', { name: id })).toBeTruthy();
+  expect(screen.queryByRole('searchbox')).toBeNull();
+  fireEvent.click(back);
+  expect(screen.getByRole('button', { name: label, exact: true })).toBe(document.activeElement);
+  expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('project');
 });
 
-it('omits the tools disclosure when no tools are installed or contributed', () => {
-  render(<MobileSidebarNav items={[primary, projects]} navAriaLabel="Nav" renderItem={renderItem} />);
-  expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
-  expect(screen.getByRole('button', { name: 'projects' })).toBeTruthy();
-  expect(document.querySelector('.mobile-nav-featured')).toBeNull();
+it('handles an empty catalog and reacts to plugins arriving or disappearing', () => {
+  const { rerender } = render(<MobileSidebarNav items={[]} navAriaLabel="Nav" renderItem={renderItem} />);
+  expect(screen.getByRole('status').textContent).toBe('No tools available yet.');
+  rerender(<MobileSidebarNav items={[row('new-plugin', 'New plugin')]} navAriaLabel="Nav" renderItem={renderItem} />);
+  expect(screen.getByRole('button', { name: 'new-plugin' })).toBeTruthy();
+  rerender(<MobileSidebarNav items={[]} navAriaLabel="Nav" renderItem={renderItem} />);
+  expect(screen.queryByRole('button', { name: 'new-plugin' })).toBeNull();
 });

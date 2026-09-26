@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, PanelRight, X } from 'lucide-react';
 import type { AgentState, CliPlanFile, SessionStats, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { product } from '../lib/product-client.js';
 import { AgentDetailPanel } from './AgentDetailPanel.js';
+import { AgentSessionHeader } from './AgentSessionHeader.js';
 import { AgentDiffPanel } from './AgentDiffPanel.js';
 import { useSessionStats } from './AgentInsights.js';
 import { ThreadSecondaryPanel } from './thread/secondary-panel/ThreadSecondaryPanel.js';
@@ -151,7 +152,8 @@ export function AgentSessionView({
   stageChrome,
   stageOverlay,
   focusDiffKey = 0,
-  modal = false
+  modal = false,
+  mobileTitleInShell = false
 }: {
   session: TerminalSession;
   projectId: string;
@@ -173,6 +175,7 @@ export function AgentSessionView({
   stageOverlay?: ReactNode;
   focusDiffKey?: number;
   modal?: boolean;
+  mobileTitleInShell?: boolean;
 }) {
   const pane = useOptionalPaneContext();
   const viewRef = useRef<HTMLElement>(null);
@@ -347,11 +350,8 @@ export function AgentSessionView({
     >
       <div className="thread-detail-split">
       <div className="thread-detail-main agent-session-main">
-        <header className="thread-detail-header">
-          <div className="thread-detail-heading">
-            <h1>{session.title}</h1>
-          </div>
-          <div className="thread-detail-actions">
+        <AgentSessionHeader session={session} state={state} projectName={projectName}
+          useShellTitle={mobileTitleInShell && !modal && pane?.isFocused !== false}>
             {pane?.onToggleMaximize ? (
               <button
                 type="button"
@@ -388,8 +388,7 @@ export function AgentSessionView({
                 <PanelRight size={14} />
               </button>
             ) : null}
-          </div>
-        </header>
+        </AgentSessionHeader>
         {stageChrome}
         <div className="agent-session-terminal" id={terminalAnchorId} />
         {stageOverlay}

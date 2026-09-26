@@ -96,10 +96,10 @@ describe('Sidebar structure and compact accessibility', () => {
       const markup = renderToStaticMarkup(
         <MemoryRouter><MobileNavDrawer enabled open onClose={() => {}}><Sidebar /></MobileNavDrawer></MemoryRouter>
       );
-      expect(markup).toContain('data-testid="nav-home"');
-      expect(markup).toContain('>Inbox<');
+      expect(markup).toContain('data-testid="nav-agents"');
+      expect(markup).toContain('data-testid="nav-extensions"');
       expect(markup).toContain('>Settings<');
-      expect(markup).toContain('>More<');
+      expect(markup).toContain('mobile-tools-grid');
       expect(h.state.sidebarCollapsed).toBe(true);
     } finally {
       h.state.sidebarCollapsed = false;

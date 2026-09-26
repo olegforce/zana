@@ -40,7 +40,10 @@ export function LibraryTreeRows({
           !isDir && node.relPath === selectedRelPath && node.projectId === selectedProjectId;
         return (
           <div key={node.key}>
-            <div
+            <button
+              type="button"
+              aria-expanded={isDir ? isOpen : undefined}
+              aria-current={isActive ? 'true' : undefined}
               className={`tree-row ${isDir ? 'dir' : 'file'} ${isActive ? 'active' : ''}`}
               style={{ paddingLeft: 6 + depth * 12 }}
               onClick={() => (isDir ? onToggle(node.key) : node.doc && onSelect(node.doc))}
@@ -65,7 +68,7 @@ export function LibraryTreeRows({
               {isDir && typeof node.count === 'number' && (
                 <span className="library-tree-count">{node.count}</span>
               )}
-            </div>
+            </button>
             {isDir && isOpen && node.children && node.children.length > 0 && (
               <LibraryTreeRows
                 nodes={node.children}

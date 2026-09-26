@@ -1,4 +1,5 @@
 import { type PointerEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, ListTodo, Loader2, X } from 'lucide-react';
 import type {
   ActiveThinking,
@@ -246,11 +247,15 @@ export function ThreadStatusBadge({
 
 export function ThreadDetailHeading({
   title,
+  titleTarget,
+  overflowTarget,
   overflow,
   onPointerDown,
   draggable
 }: {
   title: string;
+  titleTarget?: HTMLElement | null;
+  overflowTarget?: HTMLElement | null;
   overflow?: ReactNode;
   onPointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
   draggable?: boolean;
@@ -260,8 +265,10 @@ export function ThreadDetailHeading({
       className={`thread-detail-heading${draggable ? ' split-pane-drag-handle' : ''}`}
       onPointerDown={onPointerDown}
     >
-      <h1 title={title}>{title}</h1>
-      {overflow}
+      {titleTarget
+        ? createPortal(<h1 title={title}>{title}</h1>, titleTarget)
+        : <h1 title={title}>{title}</h1>}
+      {overflowTarget ? createPortal(overflow, overflowTarget) : overflow}
     </div>
   );
 }

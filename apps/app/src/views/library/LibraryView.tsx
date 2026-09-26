@@ -1,7 +1,7 @@
 import { product } from '../../lib/product-client.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Trash2, ExternalLink, X, Search, Plus, AtSign, BotMessageSquare } from 'lucide-react';
+import { ArrowLeft, FileText, Trash2, ExternalLink, X, Search, Plus, AtSign, BotMessageSquare } from 'lucide-react';
 
 import type { Project, LibraryDoc, LibraryScope, LibrarySearchHit } from '@zana-ai/zcc-domain/product';
 import { useLibrary, useUi } from '@/store';
@@ -10,6 +10,7 @@ import { inspectAgentSession } from '@/lib/inspect-session';
 import { DocPreview } from './library/DocPreview.js';
 import { DelayedStencilList } from '@/components/ui/Skeleton';
 import { LibraryTreeRows } from './library/LibraryTreeRows.js';
+import { useLibraryNavigation } from './library/useLibraryNavigation.js';
 import { PromptModal } from '@/components/PromptModal';
 import {
   buildLibraryTree,
@@ -72,7 +73,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
     [allDocs, project.id]
   );
 
-  const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
+  const { compact, selectedDoc, setSelectedDoc, readerOpen, backToDocuments, rootRef, backRef } = useLibraryNavigation();
   const [searchQuery, setSearchQuery] = useState('');
   // Body-content matches for the current query, keyed by absPath. Populated by
   // the debounced main-process full-text search below; empty when the box is
@@ -101,7 +102,6 @@ export function LibraryView({ project, deepLink = null }: Props) {
   // Resizable doc-list column. The width lives on the grid via an inline CSS
   // var; dragging the splitter rewrites it and persists to localStorage on
   // mouse-up. A ref mirrors the live value so the listeners don't restart.
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const [listWidth, setListWidth] = useState(loadLibraryListWidth);
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -329,12 +329,12 @@ export function LibraryView({ project, deepLink = null }: Props) {
   // them to filteredDocs[0] in the same commit.
   useEffect(() => {
     if (pendingSelectId || pendingRevealId || pendingDeepLink) return;
-    if (!selectedDoc && filteredDocs.length > 0) {
+    if (!compact && !selectedDoc && filteredDocs.length > 0) {
       setSelectedDoc([...filteredDocs].sort((a, b) => b.updatedAt - a.updatedAt)[0]);
     } else if (selectedDoc && !filteredDocs.find((d) => d.id === selectedDoc.id)) {
       setSelectedDoc(null);
     }
-  }, [filteredDocs, selectedDoc, pendingSelectId, pendingRevealId, pendingDeepLink]);
+  }, [compact, filteredDocs, selectedDoc, pendingSelectId, pendingRevealId, pendingDeepLink]);
 
   useEffect(() => {
     if (!menu) return;
@@ -545,11 +545,12 @@ export function LibraryView({ project, deepLink = null }: Props) {
   return (
     <div
       ref={rootRef}
+      data-mobile-pane={compact ? (readerOpen ? 'document' : 'documents') : undefined}
       className="explorer-view library-view"
       style={{ gridTemplateColumns: `${listWidth}px minmax(0, 1fr)` }}
     >
       {/* Left pane: doc tree */}
-      <div className="explorer-tree">
+      <div className="explorer-tree" hidden={compact && readerOpen}>
         <div className="explorer-tree-header">
           <h3 className="explorer-tree-title">Documents</h3>
           <button
@@ -672,7 +673,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
       />
 
       {/* Right pane: preview */}
-      <div className="explorer-viewer library-viewer">
+      <div className="explorer-viewer library-viewer" hidden={compact && !readerOpen}>
         {!selectedDoc ? (
           <div className="explorer-viewer-empty">
             <p>Select a document to preview</p>
@@ -680,8 +681,14 @@ export function LibraryView({ project, deepLink = null }: Props) {
         ) : (
           <>
             <div className="explorer-viewer-header">
+              {compact && (
+                <button ref={backRef} type="button" className="library-mobile-back" onClick={backToDocuments}>
+                  <ArrowLeft size={18} aria-hidden="true" />
+                  <span>Back to documents</span>
+                </button>
+              )}
               <div className="explorer-viewer-path">
-                {selectedDoc.title}
+                <span className="library-document-title">{selectedDoc.title}</span>
                 <span className={`library-scope-badge ${selectedDoc.scope}`}>
                   {selectedDoc.scope === 'project' ? 'Project' : 'Global'}
                 </span>
@@ -706,6 +713,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
                 <button
                   type="button"
                   onClick={() => handleReveal(selectedDoc.scope ?? 'global', selectedDoc.scope === 'project' ? selectedDoc.projectId : undefined)}
+                  hidden={compact}
                   title="Reveal in Finder"
                 >
                   <ExternalLink size={14} />
@@ -723,6 +731,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
                       doc: selectedDoc
                     })
                   }
+                  hidden={compact}
                   title="Delete"
                   disabled={selectedDoc.id === ''}
                 >

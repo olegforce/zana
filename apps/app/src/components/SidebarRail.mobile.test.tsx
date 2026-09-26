@@ -30,7 +30,7 @@ it('runs action-only destinations and closes the mobile drawer without invoking 
   const close = vi.fn();
   const action = vi.fn((event: { preventDefault(): void }) => event.preventDefault());
   const items: SidebarRailItem[] = [
-    { kind: 'row', id: 'inbox', label: 'Inbox', icon: null, to: '/inbox', testId: 'inbox', active: true, splitContent: { kind: 'inbox' } },
+    { kind: 'row', id: 'agents', label: 'Agents', icon: null, to: '/agents', testId: 'agents', active: true, splitContent: { kind: 'agents' } },
     { kind: 'row', id: 'history', label: 'History', icon: null, to: '#', testId: 'history', active: false, onClick: action },
     { kind: 'section', id: 'projects', node: <div>Projects</div> }
   ];
@@ -40,7 +40,7 @@ it('runs action-only destinations and closes the mobile drawer without invoking 
   fireEvent.click(screen.getByRole('link', { name: 'History' }));
   expect(action).toHaveBeenCalledOnce();
   expect(close).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole('link', { name: 'Inbox' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Agents' }));
   expect(close).toHaveBeenCalledTimes(2);
   expect(h.split).not.toHaveBeenCalled();
   h.consume.mockReturnValueOnce(true);

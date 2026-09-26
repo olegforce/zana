@@ -4,14 +4,15 @@ import { useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, Star } from 'lucide-react';
 import { Sidebar } from './components/Sidebar.js';
+import { MobileAgentNavigation } from './components/MobileAgentNavigation.js';
 import {
   MobileNavDrawer,
-  MobileConnectionMenu,
   MobileShellReporter,
   useMobileNavigation
 } from './components/MobileShellChrome.js';
 import { SidebarTriggerOverlay } from './components/SidebarTriggerOverlay.js';
 import { MobileSettingsBack } from './components/MobileSettingsBack.js';
+import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_TITLE_ID } from './components/useMobileThreadTitleTarget.js';
 import { AgentLauncher } from './components/AgentLauncher.js';
 import { SettingsPane } from './components/listpane/SettingsPane.js';
 import { ExtensionsPane } from './components/listpane/ExtensionsPane.js';
@@ -719,6 +720,7 @@ export function App() {
     >
       <div className="titlebar">
         {mobileNavigation.isCompact && <MobileSettingsBack hidden={mobileNavigation.drawerOpen} />}
+        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_TITLE_ID} className="mobile-thread-title-slot" />}
         <span className="titlebar-title" title={titlebarProject?.path ?? undefined}>
           {titlebarLabel}
         </span>
@@ -756,7 +758,7 @@ export function App() {
             </span>
           )}
         </button>
-        {mobileNavigation.isCompact && <MobileConnectionMenu />}
+        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_ACTIONS_ID} className="mobile-thread-actions-slot" />}
       </div>
       {/* Full-width update banner, in its own grid row below the titlebar (the
           `has-update-banner` class above adds that row). Renders null when no
@@ -772,6 +774,10 @@ export function App() {
         onClose={() => mobileNavigation.setDrawerOpen(false)}
         headerStart={nav === 'settings' ? <MobileSettingsBack onNavigate={() => mobileNavigation.setDrawerOpen(false)} /> : undefined}
       >
+      <MobileAgentNavigation
+        enabled={mobileNavigation.isCompact && shellLayout.rail !== 'settings' && shellLayout.rail !== 'extensions'}
+        projectId={scopedProject?.id}
+      >
       {sidebarCollapsed ? null : scopedProject ? (
         <ProjectScopedNav project={scopedProject} variant="window" />
       ) : focusedProject && keepsProjectFocusRail(nav, focusedProjectId) ? (
@@ -786,6 +792,7 @@ export function App() {
       ) : (
         <Sidebar />
       )}
+      </MobileAgentNavigation>
       </MobileNavDrawer>
       <MobileShellReporter unread={unreadInbox} />
       {/* One persistent landmark. display:contents on .shell-main so route

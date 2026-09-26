@@ -1,3 +1,5 @@
+import { MobileTaskRow } from "./mobile-row.js";
+import { useIsMobileTasks } from "../../shell/mobile.js";
 import { useState } from "react";
 import type {
   Label,
@@ -92,7 +94,7 @@ function LabelChips({
   );
 }
 
-interface TaskRowProps {
+export interface TaskRowProps {
   task: Task;
   meta: TaskRowMeta | undefined;
   project: Project | undefined;
@@ -115,7 +117,10 @@ export function TaskRow({
   onOpen,
   pending,
 }: TaskRowProps) {
+  const compact = useIsMobileTasks();
   const [openMenu, setOpenMenu] = useState<"status" | "priority" | null>(null);
+
+  if (compact) return <MobileTaskRow task={task} project={project} showProject={showProject} meta={meta} onOpen={onOpen} pending={pending} />;
 
   return (
     <TaskContextMenu task={task} onEdit={onEdit} projectLabels={projectLabels}>

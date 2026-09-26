@@ -123,7 +123,7 @@ function PriorityMenu({
           {PRIORITY_LABELS[task.priority]}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent align="start" mobileTitle="Set priority">
         {TASK_PRIORITIES.map((priority) => (
           <DropdownMenuItem
             key={priority}
