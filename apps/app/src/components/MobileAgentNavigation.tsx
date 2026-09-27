@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ArrowLeft, Ellipsis, Folder, Inbox, MessageSquare, Search, SquarePen, X } from 'lucide-react';
+import { ArrowLeft, Ellipsis, Folder, Inbox, LayoutGrid, MessageSquare, Search, SquarePen, X } from 'lucide-react';
 import { useAgentStatus, useData, useUnreadInboxCount } from '../store';
 import { useThreads } from '../thread-store';
 import { useEnsureThreads } from '../hooks/useEnsureThreads';
-import { getInboxRoutePath, getNewThreadRoutePath, sessionIdFromPath, threadIdFromPath } from '../lib/route-paths';
+import { getAgentsRoutePath, getInboxRoutePath, getNewThreadRoutePath, sessionIdFromPath, threadIdFromPath } from '../lib/route-paths';
 import { useMobileNavDismiss } from './mobile-nav-context';
 import { filterMobileAgents, mobileAgentItems } from './mobile-agent-items';
 import '../styles/mobile-agent-navigation.css';
@@ -28,6 +28,8 @@ function AgentNavigation({ projectId, children }: { projectId?: string; children
   const dismiss = useMobileNavDismiss();
   const { pathname } = useLocation();
   const unreadInbox = useUnreadInboxCount();
+  const agentsPath = getAgentsRoutePath();
+  const agentsActive = pathname === agentsPath || pathname.startsWith(`${agentsPath}/`);
   const inboxPath = getInboxRoutePath();
   const inboxActive = pathname === inboxPath || pathname.startsWith(`${inboxPath}/`);
   const activeThreadId = threadIdFromPath(pathname);
@@ -66,6 +68,11 @@ function AgentNavigation({ projectId, children }: { projectId?: string; children
           <SquarePen size={20} aria-hidden="true" /> New agent
         </Link>
         <div className="mobile-agent-shortcuts">
+          <Link className="mobile-agent-shortcut" to={agentsPath} data-testid="mobile-nav-agents"
+            title="Agents overview: kanban, list and canvas"
+            aria-current={agentsActive ? 'page' : undefined} onClick={() => dismiss?.()}>
+            <LayoutGrid size={20} aria-hidden="true" /><span>Agents</span>
+          </Link>
           <Link className="mobile-agent-shortcut" to={inboxPath} data-testid="mobile-nav-inbox"
             aria-current={inboxActive ? 'page' : undefined} onClick={() => dismiss?.()}>
             <Inbox size={20} aria-hidden="true" /><span>Inbox</span>

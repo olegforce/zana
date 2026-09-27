@@ -26,17 +26,20 @@
 }
 .mobile-agent-shortcuts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 10px;
 }
 .mobile-agent-shortcut {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 4px;
   min-width: 0;
-  min-height: 48px;
-  padding: 10px 12px;
+  min-height: 60px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-input);
@@ -44,7 +47,7 @@
   font: inherit;
   font-size: 14px;
   font-weight: 500;
-  text-align: left;
+  text-align: center;
   text-decoration: none;
   cursor: pointer;
 }
@@ -56,12 +59,14 @@
 }
 .mobile-agent-shortcut[aria-current='page'] > svg { color: inherit; }
 .mobile-agent-inbox-count {
-  margin-left: auto;
-  padding: 2px 5px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 4px;
   border-radius: 6px;
   color: var(--accent-blue);
   background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
 }
 .mobile-agent-search {

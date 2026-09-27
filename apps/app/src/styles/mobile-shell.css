@@ -89,37 +89,51 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
   gap: 10px;
   font-size: 14px;
 }
-.mobile-device-actions {
-  display: flex;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  gap: 8px;
-  margin: 0 16px;
-  padding: 10px 0 max(10px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
-}
-.mobile-device-actions > button {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 44px;
-  min-height: 56px;
-  padding: 8px;
+.mobile-nav-header-actions { display: flex; align-items: center; gap: 8px; }
+.mobile-device-actions { position: relative; flex-shrink: 0; }
+.mobile-device-options {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text-muted);
   background: transparent;
-  font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
-.mobile-device-actions > button:is(:hover, :active) { background: var(--bg-hover); color: var(--text-primary); }
-.mobile-device-actions > button:disabled { opacity: .5; cursor: default; }
-.mobile-device-actions > button:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-.mobile-device-actions > p { flex-basis: 100%; margin: 0; color: var(--danger); font-size: 12px; }
+.mobile-device-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  width: min(224px, calc(100vw - 88px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 16%);
+}
+.mobile-device-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.mobile-device-actions button:is(:hover, :active) { background: var(--bg-hover); color: var(--text-primary); }
+.mobile-device-actions button:disabled { opacity: .5; cursor: default; }
+.mobile-device-actions button:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.mobile-device-menu > p { margin: 6px 12px; color: var(--danger); font-size: 12px; }
 .app-shell[data-mobile='true'] .sidebar-trigger-overlay {
   height: 48px;
   padding-left: 4px;
@@ -482,7 +496,10 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
 }
 .app-shell[data-mobile='true'] .thread-detail-view.is-secondary-open .thread-secondary-panel,
 .app-shell[data-mobile='true'] .split-workspace-host > .thread-secondary-panel {
-  position: static;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  height: var(--mobile-viewport-height, 100dvh);
   flex: 1 1 0;
   width: 100%;
   max-width: 100%;
@@ -858,7 +875,16 @@ body:has(.app-shell[data-mobile='true'])
   min-width: 44px;
   border-radius: 10px;
 }
-.app-shell[data-mobile='true'] .agents-board-toolbar .agents-board-new { margin-left: auto; }
+.app-shell[data-mobile='true'] .agents-board-toolbar .agents-board-new {
+  margin-left: auto;
+  min-height: 48px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.app-shell[data-mobile='true'] .agents-board-new .agents-board-btn-label { display: inline; }
+.app-shell[data-mobile='true'] .agents-board-new > svg { display: none; }
 .app-shell[data-mobile='true'] .agents-board .agents-board-filter {
   flex: 1 0 100%;
   width: 100%;

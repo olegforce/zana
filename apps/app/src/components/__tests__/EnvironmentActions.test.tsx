@@ -164,6 +164,13 @@ describe('EnvironmentActionsView', () => {
     expect(html).not.toContain('environment-create-pr');
   });
 
+  it.each(['MERGED', 'CLOSED'])('keeps a %s PR link on desktop without merge or draft actions', (state) => {
+    const html = render({ status: status({ branchName: 'main' }), pr: pr({ state }) });
+    expect(html).toContain('PR #12');
+    expect(html).not.toContain('Merge squash');
+    expect(html).not.toContain('Convert to draft');
+  });
+
   it('caps the file list and notes remaining or truncated changes', () => {
     const files = Array.from({ length: 14 }, (_, i) => ({
       path: `file-${i}.ts`,

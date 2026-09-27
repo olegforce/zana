@@ -93,15 +93,15 @@ it('traps drawer focus, closes on Escape and restores focus', () => {
       <button style={{ visibility: 'hidden' }}>Invisible action</button>
     </MobileNavDrawer>
   );
-  const first = screen.getAllByRole('button', { name: 'Close navigation' })[1]!;
+  const first = screen.getByRole('button', { name: 'Device options' });
   expect(document.activeElement).toBe(first);
   fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'This device' }));
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Last item' }));
   fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
   expect(document.activeElement).toBe(first);
   fireEvent.keyDown(first, { key: 'Escape' });
   expect(close).toHaveBeenCalledOnce();
-  fireEvent.click(first);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Close navigation' })[1]!);
   expect(close).toHaveBeenCalledTimes(2);
   rerender(
     <MobileNavDrawer enabled open={false} onClose={close}>
@@ -136,7 +136,23 @@ it('uses the settings return action in the drawer header and keeps it in the foc
   expect(screen.queryByText('Zana')).toBeNull();
   expect(document.activeElement).toBe(back);
   fireEvent.keyDown(back, { key: 'Tab', shiftKey: true });
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'This device' }));
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Preferences' }));
   fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
   expect(document.activeElement).toBe(back);
+});
+
+
+it('places device options in the header and closes only its menu on Escape', () => {
+  const close = vi.fn();
+  render(<MobileNavDrawer enabled open onClose={close}><button>Agent</button></MobileNavDrawer>);
+  const trigger = screen.getByRole('button', { name: 'Device options' });
+  expect(trigger.closest('.mobile-nav-header')).toBeTruthy();
+  expect(screen.queryByRole('menu')).toBeNull();
+  fireEvent.click(trigger);
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Reload' }), { key: 'Escape' });
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(close).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.keyDown(trigger, { key: 'Escape' });
+  expect(close).toHaveBeenCalledOnce();
 });

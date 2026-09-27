@@ -79,6 +79,25 @@ it('keeps new-agent navigation scoped in a dedicated project window', () => {
   expect(screen.getByRole('link', { name: 'New agent' }).getAttribute('href')).toBe('/projects/p/threads/new');
 });
 
+it.each([undefined, 'p'])('opens the global Agents overview and closes the menu (project=%s)', (projectId) => {
+  mount({ projectId });
+  const agents = screen.getByRole('link', { name: 'Agents', exact: true });
+  expect(agents.getAttribute('href')).toBe('/agents');
+  expect(agents.getAttribute('aria-current')).toBeNull();
+  expect(agents.parentElement).toBe(screen.getByTestId('mobile-nav-inbox').parentElement);
+  expect(agents.parentElement).toBe(screen.getByRole('button', { name: 'More' }).parentElement);
+  fireEvent.click(agents);
+  expect(screen.getByTestId('location').textContent).toBe('/agents');
+  expect(agents.getAttribute('aria-current')).toBe('page');
+  expect(h.dismiss).toHaveBeenCalledOnce();
+});
+
+it.each(['/agents/', '/agents/team'])('marks the overview shortcut active at %s', (path) => {
+  mount({ path });
+  expect(screen.getByTestId('mobile-nav-agents').getAttribute('aria-current')).toBe('page');
+  expect(screen.getByTestId('mobile-nav-inbox').getAttribute('aria-current')).toBeNull();
+});
+
 it.each([[0, null], [12, '12'], [120, '99+']] as const)('opens Inbox and presents %s unread items', (unread, badge) => {
   h.unread = unread;
   mount();

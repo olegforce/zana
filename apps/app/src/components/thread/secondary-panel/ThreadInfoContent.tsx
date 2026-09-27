@@ -89,6 +89,7 @@ export function ThreadInfoRows({
   return (
     <div className="thread-info-content" data-testid="thread-info-tab">
       {gitHeader}
+      <h2 className="thread-info-section-title">Agent details</h2>
       <InfoRow icon={<Box size={14} />} label="Environment" testId="thread-info-environment">
         {threadInfoEnvironmentLabel(isWorktree, environmentName, remoteToolProxy)}
       </InfoRow>

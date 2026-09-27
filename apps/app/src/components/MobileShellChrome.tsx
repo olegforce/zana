@@ -131,12 +131,14 @@ export function MobileNavDrawer({
       >
         <header className="mobile-nav-header">
           {headerStart ?? <span className="mobile-nav-brand"><img src={zanaIcon} width={28} height={28} alt="" draggable={false} />Zana</span>}
-          <button type="button" className="mobile-nav-close" aria-label="Close navigation" onClick={onClose}>
-            <X size={20} aria-hidden="true" />
-          </button>
+          <div className="mobile-nav-header-actions">
+            <MobileDeviceActions />
+            <button type="button" className="mobile-nav-close" aria-label="Close navigation" onClick={onClose}>
+              <X size={20} aria-hidden="true" />
+            </button>
+          </div>
         </header>
         <MobileNavDismiss.Provider value={onClose}>{children}</MobileNavDismiss.Provider>
-        <MobileDeviceActions />
       </div>
     </>
   );

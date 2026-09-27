@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
+  ChevronDown,
+  FileDiff,
+  SlidersHorizontal,
   ExternalLink,
   GitBranch,
   GitCommit,
@@ -14,6 +17,7 @@ import type {
   WorkspaceFileStatus,
   WorkspaceStatus
 } from '@zana-ai/zcc-domain';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { product } from '../lib/product-client.js';
 import { subscribeProductEvent } from '../lib/product-ws.js';
 
@@ -59,21 +63,36 @@ export function EnvironmentActions({ environmentId }: Props) {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [pr, setPr] = useState<GitHostPullRequest | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pullRequestLoading, setPullRequestLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<ProvisioningTranscriptEntry[]>([]);
 
   useEffect(() => {
     if (!environmentId) return;
     let cancelled = false;
+    let statusPending = false;
+    let prPending = false;
+    setStatus(null);
+    setPr(null);
+    setPullRequestLoading(true);
     const refresh = () => {
-      void Promise.all([
-        product.environments.status(environmentId).catch(() => null),
-        product.environments.pullRequest(environmentId).catch(() => ({ pullRequest: null }))
-      ]).then(([nextStatus, nextPr]) => {
-        if (cancelled) return;
-        setStatus(nextStatus);
-        setPr(nextPr?.pullRequest ?? null);
-      });
+      // Git status should not wait for a slower optional PR lookup. Keep one
+      // request of each kind in flight when the polling interval fires again.
+      if (!statusPending) {
+        statusPending = true;
+        void product.environments.status(environmentId).catch(() => null).then((nextStatus) => {
+          if (!cancelled) setStatus(nextStatus);
+        }).finally(() => { statusPending = false; });
+      }
+      if (!prPending) {
+        prPending = true;
+        void product.environments.pullRequest(environmentId).catch(() => ({ pullRequest: null })).then((nextPr) => {
+          if (!cancelled) {
+            setPr(nextPr?.pullRequest ?? null);
+            setPullRequestLoading(false);
+          }
+        }).finally(() => { prPending = false; });
+      }
     };
     refresh();
     const timer = window.setInterval(refresh, 3000);
@@ -115,6 +134,7 @@ export function EnvironmentActions({ environmentId }: Props) {
       status={status}
       pr={pr}
       busy={busy}
+      pullRequestLoading={pullRequestLoading}
       message={message}
       transcript={transcript}
       onCancelProvision={() => {
@@ -134,6 +154,7 @@ export function EnvironmentActionsView({
   status,
   pr,
   busy,
+  pullRequestLoading = false,
   message,
   transcript,
   onCancelProvision,
@@ -142,11 +163,13 @@ export function EnvironmentActionsView({
   status: WorkspaceStatus | null;
   pr: GitHostPullRequest | null;
   busy: boolean;
+  pullRequestLoading?: boolean;
   message: string | null;
   transcript: ProvisioningTranscriptEntry[];
   onCancelProvision: () => void;
   onAction: (action: EnvironmentAction) => void;
 }) {
+  const compact = useCompactLayout();
   const provisioning = !status && transcript.length > 0;
   const presentation = workspaceStatusPresentation(status, provisioning);
   const branchName = status?.branchName;
@@ -157,6 +180,17 @@ export function EnvironmentActionsView({
   const extraCount = files.length - shownFiles.length;
   const offDefault =
     !!status?.defaultBranch && !!status.branchName && status.branchName !== status.defaultBranch;
+
+  const pullRequestLink = pr ? (
+    <a className="environment-pr-link" href={pr.url} target="_blank" rel="noreferrer" title={pr.title}>
+      <GitPullRequest size={13} aria-hidden="true" />
+      <span className="environment-pr-title">PR #{pr.number}</span>
+      <span className={`environment-pr-state${pr.isDraft ? ' is-draft' : ''}`}>
+        {pr.isDraft ? 'Draft' : pr.state}
+      </span>
+      <ExternalLink size={11} aria-hidden="true" />
+    </a>
+  ) : null;
 
   return (
     <section className="environment-actions" aria-label="Workspace git" data-testid="environment-actions">
@@ -190,6 +224,8 @@ export function EnvironmentActionsView({
       )}
 
       {shownFiles.length > 0 && (
+        <WorkspaceDisclosure compact={compact} icon={<FileDiff size={18} aria-hidden="true" />}
+          title={`${files.length}${status?.filesTruncated ? '+' : ''} changed ${files.length === 1 && !status?.filesTruncated ? 'file' : 'files'}`}>
         <ul className="environment-changes">
           {shownFiles.map((file) => (
             <li
@@ -207,9 +243,12 @@ export function EnvironmentActionsView({
             </li>
           )}
         </ul>
+        </WorkspaceDisclosure>
       )}
 
-      {(provisioning || status) && (
+      {compact && status ? pullRequestLink : null}
+      {(provisioning || (status && (status.dirty || offDefault || !pr || pr.state.toLowerCase() === 'open' || !compact))) && (
+        <WorkspaceDisclosure compact={compact} title="Workspace actions" icon={<SlidersHorizontal size={18} aria-hidden="true" />}>
         <div className="environment-action-row">
           {provisioning && (
             <button
@@ -249,24 +288,12 @@ export function EnvironmentActionsView({
           )}
           {status && (pr ? (
             <>
-              <a
-                className="environment-pr-link"
-                href={pr.url}
-                target="_blank"
-                rel="noreferrer"
-                title={pr.title}
-              >
-                <GitPullRequest size={13} aria-hidden="true" />
-                <span className="environment-pr-title">PR #{pr.number}</span>
-                <span className={`environment-pr-state${pr.isDraft ? ' is-draft' : ''}`}>
-                  {pr.isDraft ? 'Draft' : pr.state}
-                </span>
-                <ExternalLink size={11} aria-hidden="true" />
-              </a>
+              {!compact ? pullRequestLink : null}
+              {pr.state.toLowerCase() === 'open' && <>
               <button
                 type="button"
                 className="agent-monitor-action"
-                disabled={busy}
+                disabled={busy || pullRequestLoading}
                 onClick={() => onAction({ action: pr.isDraft ? 'pull_request_ready' : 'pull_request_draft' })}
               >
                 <GitPullRequest size={13} /> {pr.isDraft ? 'Mark ready' : 'Convert to draft'}
@@ -274,27 +301,39 @@ export function EnvironmentActionsView({
               <button
                 type="button"
                 className="agent-monitor-action"
-                disabled={busy}
+                disabled={busy || pullRequestLoading}
                 onClick={() => onAction({ action: 'pull_request_merge', method: 'squash' })}
               >
                 <GitMerge size={13} /> Merge squash
               </button>
+              </>}
             </>
           ) : (
             <button
               type="button"
               className="agent-monitor-action"
-              disabled={busy}
+              disabled={busy || pullRequestLoading}
               data-testid="environment-create-pr"
               title="Open a pull request for this branch"
               onClick={() => onAction({ action: 'pull_request_create', title: status.branchName ?? 'Worktree' })}
             >
-              <GitPullRequest size={13} /> Open pull request
+              <GitPullRequest size={13} /> {pullRequestLoading ? 'Checking pull request…' : 'Open pull request'}
             </button>
           ))}
         </div>
+        </WorkspaceDisclosure>
       )}
       {message && <p className="environment-action-message">{message}</p>}
     </section>
   );
+}
+
+function WorkspaceDisclosure({ compact, title, icon, children }: {
+  compact: boolean; title: string; icon: ReactNode; children: ReactNode;
+}) {
+  if (!compact) return <>{children}</>;
+  return <details className="mobile-workspace-disclosure">
+    <summary>{icon}<span>{title}</span><ChevronDown size={18} aria-hidden="true" /></summary>
+    <div>{children}</div>
+  </details>;
 }

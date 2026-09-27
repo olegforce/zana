@@ -17,8 +17,8 @@ afterEach(() => {
 });
 
 describe('ThreadSecondaryPanel chrome', () => {
-  it.each([false, true])('reveals the active tab and keeps panel actions reachable (compact=%s)', (compact) => {
-    layout.compact = compact;
+  it('reveals the desktop active tab and keeps panel actions reachable', () => {
+    const compact = false;
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
     const handlers = {
       onSelectInfo: vi.fn(), onSelectDiff: vi.fn(), onSelectPlan: vi.fn(),

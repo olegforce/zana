@@ -712,6 +712,18 @@ export function ThreadDetail({
     });
   }, [displayRows, threadId]);
 
+  const overflow = (
+    <ThreadDetailOverflow
+      threadId={threadId}
+      title={title}
+      status={status}
+      inFlightRetry={inFlightRetry}
+      projectId={projectId}
+      onRenamed={setTitle}
+      onUnread={() => setLastReadSeq(0)}
+    />
+  );
+
   return (
     <section
       ref={viewRef}
@@ -733,17 +745,7 @@ export function ThreadDetail({
                 ? (event) => pane.beginPaneDrag?.(event, title)
                 : undefined
             }
-            overflow={
-              <ThreadDetailOverflow
-                threadId={threadId}
-                title={title}
-                status={status}
-                inFlightRetry={inFlightRetry}
-                projectId={projectId}
-                onRenamed={setTitle}
-                onUnread={() => setLastReadSeq(0)}
-              />
-            }
+            overflow={mobileControlsTarget ? null : overflow}
           />
           <ThreadDetailActions target={mobileControlsTarget}>
             <ThreadDetailSearch
@@ -778,6 +780,7 @@ export function ThreadDetail({
                 <X size={14} />
               </button>
             ) : null}
+            {mobileControlsTarget ? overflow : null}
             {!panel.state.isOpen && !embedded ? (
               <button
                 type="button"
