@@ -42,3 +42,8 @@
 .phone-install-guide .settings-action-row {
   flex-wrap: wrap;
 }
+
+.phone-connection-settings { margin: 20px 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.phone-connection-settings label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.phone-connection-settings input, .phone-connection-settings select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; color: var(--text-primary); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.phone-connection-command { display: block; padding: 10px; overflow-wrap: anywhere; background: var(--bg-elevated); border-radius: 8px; }

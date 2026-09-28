@@ -6,6 +6,7 @@ import { Section, CheckboxField, SettingsActionRow } from '@/components/settings
 import { AgentLauncher } from '../../components/AgentLauncher.js';
 import { MOBILE_INSTALL_PROMPT } from './mobile-install-prompt.js';
 import './phone-settings.css';
+import { PhoneConnectionSettings } from './PhoneConnectionSettings.js';
 
 interface PhoneViewProps {
   config: AppConfig;
@@ -153,7 +154,7 @@ export function PhoneView({ config, onUpdate }: PhoneViewProps) {
         <ol className="phone-install-steps" aria-label="Mobile installation steps">
           <li><strong>Connect your phone.</strong> Plug it into this computer with a USB cable and unlock it.</li>
           <li><strong>Install with AI.</strong> Open the prepared prompt above and press Send. The agent handles the build and installation, and guides you through any phone confirmations.</li>
-          <li><strong>Pair and connect.</strong> Keep both devices on the same Wi-Fi. Enable phone access below and show the pairing QR. In Zana on your phone, choose Add server → Scan pairing QR, then Connect. Allow local-network access if asked and keep Zana running on this computer.</li>
+          <li><strong>Pair and connect.</strong> Choose a connection method below. For Local network, keep both devices on the same Wi-Fi. Enable phone access and show the pairing QR. In Zana on your phone, choose Add server → Scan pairing QR, then Connect. Allow local-network access if asked and keep Zana running on this computer.</li>
         </ol>
         <details className="phone-install-device-help">
           <summary>iPhone and Android setup</summary>
@@ -162,6 +163,11 @@ export function PhoneView({ config, onUpdate }: PhoneViewProps) {
         </details>
       </div>
 
+      <PhoneConnectionSettings
+        key={`${status?.connection?.mode ?? 'local'}:${status?.connection?.publicUrl ?? ''}`}
+        status={status}
+        onSaved={async () => { setPayload(null); setError(null); await refreshStatus(); }}
+      />
       <CheckboxField
         label="Enable phone access"
         help="Start a local, authenticated gateway so the Zana Mobile app can connect to this computer. Off by default. Each phone pairs with a one-time code and its own credential; you can revoke a phone at any time below."
@@ -182,7 +188,7 @@ export function PhoneView({ config, onUpdate }: PhoneViewProps) {
           required).
         </div>
       )}
-      {enabled && running && status && !status.boundLan && (
+      {enabled && running && status && !status.boundLan && (!status.connection || status.connection.mode === 'local') && (
         <div className="settings-help" role="note">
           No private network address was found, so the gateway is bound to <code>{status.publicUrl}</code>{' '}
           (loopback). A physical phone cannot reach it — connect the simulator or a reverse proxy.
@@ -194,7 +200,7 @@ export function PhoneView({ config, onUpdate }: PhoneViewProps) {
           label="Pairing QR code"
           help="Generates a fresh, short-lived pairing code. In the Zana Mobile app tap “Scan pairing QR” and point the camera at this code."
         >
-          <button type="button" className="btn" disabled={!running || pairing} onClick={() => void showQr()}>
+          <button type="button" className="btn" disabled={!running || pairing || (status?.connection?.mode === 'relay' && status.relayState !== 'connected')} onClick={() => void showQr()}>
             {pairing ? 'Generating…' : payload ? 'Regenerate' : 'Show pairing QR'}
           </button>
         </SettingsActionRow>

@@ -10,6 +10,7 @@ import {
   writeServerHandshake
 } from './ws-raw.mjs';
 import { nextOriginFromEnv, proxyToNext, shouldSpawnNext, spawnNextServer, waitForHttp } from './next-proxy.mjs';
+import { createMobileRouting } from './mobile-routing.mjs';
 
 function isWebSocketUpgrade(request) {
   return String(request.headers.upgrade ?? '').toLowerCase() === 'websocket';
@@ -42,6 +43,7 @@ export async function startFrontDoor(options = {}) {
   let spawned = null;
   // Bind $PORT before Next is ready — Heroku kills dynos that do not listen in time.
   let nextReady = !spawn;
+  const mobile = createMobileRouting(env);
 
   const hub = createPairingHub({
     env,
@@ -50,6 +52,7 @@ export async function startFrontDoor(options = {}) {
     maxSessions: options.maxSessions
   });
   const server = createServer((request, response) => {
+    if (mobile?.matches(request)) { mobile.handleHttp(request, response); return; }
     const pathname = normalizePairingPath(new URL(request.url ?? '/', 'http://127.0.0.1').pathname);
     if (pathname === '/_zcc/relay') {
       sendJson(response, 400, { error: 'websocket_required' });
@@ -62,8 +65,12 @@ export async function startFrontDoor(options = {}) {
     }
     proxyToNext(request, response, nextOrigin);
   });
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 30_000;
+  server.maxConnections = 160;
 
   server.on('upgrade', (request, socket, head) => {
+    if (mobile?.matches(request)) { mobile.handleUpgrade(request, socket, head); return; }
     const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
     const pathname = normalizePairingPath(requestUrl.pathname);
     if (!isWebSocketUpgrade(request)) {
@@ -141,7 +148,9 @@ export async function startFrontDoor(options = {}) {
       return hub.sessionCount();
     },
     close: async () => {
+      mobile?.close();
       hub.dispose();
+      server.closeAllConnections();
       await new Promise((resolveClose, rejectClose) => {
         server.close((error) => (error ? rejectClose(error) : resolveClose()));
       });

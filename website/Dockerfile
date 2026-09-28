@@ -32,7 +32,7 @@ RUN npm install --no-audit --no-fund
 ARG NEXT_PUBLIC_REGISTRY_URL=""
 ARG NEXT_PUBLIC_UPDATE_FEED_URL=""
 ARG NEXT_PUBLIC_APP_VERSION="2.2.1"
-ARG PUBLIC_BASE_URL=""
+ARG PUBLIC_BASE_URL="http://localhost:4321"
 ENV NEXT_PUBLIC_REGISTRY_URL=$NEXT_PUBLIC_REGISTRY_URL \
     NEXT_PUBLIC_UPDATE_FEED_URL=$NEXT_PUBLIC_UPDATE_FEED_URL \
     NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION \
@@ -51,11 +51,12 @@ ENV NODE_ENV=production \
 # Next's standalone output is self-contained (its own pruned node_modules), but
 # static assets and public/ are NOT copied into it automatically — copy them
 # alongside per Next's standalone docs. The pairing front door is vanilla Node
-# (no extra runtime npm deps).
+# (ws is explicitly copied because Next's tracing cannot see the front door).
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/relay ./relay
+COPY --from=build /app/node_modules/ws ./node_modules/ws
 
 # Run as the built-in non-root user.
 USER node

@@ -55,6 +55,7 @@ export const IPC = {
     pairingOnExit: 'hosts:pairingOnExit'
   },
   mobile: {
+    configure: 'mobile:configure',
     status: 'mobile:status',
     pair: 'mobile:pair',
     devices: 'mobile:devices',

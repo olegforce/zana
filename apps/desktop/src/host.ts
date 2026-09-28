@@ -202,6 +202,7 @@ import { createBoundsStateController, restoreWindowState } from './window/bounds
 import type { LibraryDoc, LibraryAddInput, LibraryScope } from '@zana-ai/zcc-domain/product';
 import { startMcpServer, type McpServerHandle } from '@zana-ai/zcc-server/services/mcp/mcp-server';
 import { MobileGatewayManager } from '@zana-ai/zcc-server/mobile/manager';
+import { MobileConnectionStore } from '@zana-ai/zcc-server/mobile/connection';
 import { MobileDeviceStore } from '@zana-ai/zcc-server/mobile/device-store';
 import { readMcpPort, writeMcpPort } from '@zana-ai/zcc-server';
 import { startControlPlane, type ControlPlaneHandle } from './control/control-plane.js';
@@ -2806,6 +2807,11 @@ let controlPlane: ControlPlaneHandle | null = null;
 // reactor, closed on quit. File-backed device store shares the `mobile:serve`
 // CLI's path convention so devices paired either way are visible to both.
 const mobileGateway = new MobileGatewayManager({
+  // Private E2E launches must not compete with the installed app's phone port.
+  ...(E2E_LAUNCH && /^\d+$/.test(process.env.ZCC_E2E_MOBILE_PORT ?? '') &&
+    Number(process.env.ZCC_E2E_MOBILE_PORT) > 0 && Number(process.env.ZCC_E2E_MOBILE_PORT) <= 65535
+    ? { port: Number(process.env.ZCC_E2E_MOBILE_PORT) } : {}),
+  connectionStore: new MobileConnectionStore(join(electronZccDataDir(), 'mobile', 'connection.json')),
   devices: new MobileDeviceStore(join(electronZccDataDir(), 'mobile', 'devices.json')),
   upstream: productServerUrl()
 });

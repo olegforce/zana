@@ -1254,6 +1254,7 @@ export const product: CcApi = new Proxy({} as CcApi, {
       if (hasDesktopBridge()) return (window.cc as unknown as CcApi).mobile;
       return {
         status: async () => ({ running: false, publicUrl: null, host: null, port: null, boundLan: false, error: null }),
+        configure: async () => { throw new Error('Configure phone connections in the desktop app'); },
         pair: async () => { throw new Error('mobile.pair requires the desktop app'); },
         devices: async () => [],
         revoke: async () => false

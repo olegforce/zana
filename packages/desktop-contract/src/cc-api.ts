@@ -416,6 +416,7 @@ export interface CcApi {
    * toggle; these calls read status and mint/read/revoke pairing state.
    */
   mobile: {
+    configure(input: { mode: 'local' | 'tailscale' | 'relay'; publicUrl?: string; relayToken?: string }): Promise<void>;
     status(): Promise<{
       running: boolean;
       publicUrl: string | null;
@@ -425,6 +426,8 @@ export interface CcApi {
       boundLan: boolean;
       /** Last start failure (e.g. port in use), else null. */
       error: string | null;
+      connection?: { mode: 'local' | 'tailscale' | 'relay'; publicUrl?: string; hasRelayToken: boolean };
+      relayState?: 'connecting' | 'connected' | 'reconnecting' | 'stopped';
     }>;
     pair(): Promise<{ version: number; serverUrl: string; code: string; expiresAt: number }>;
     devices(): Promise<Array<{ id: string; label: string; createdAt: number; expiresAt: number }>>;

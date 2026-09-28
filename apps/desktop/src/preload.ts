@@ -406,6 +406,7 @@ const api: CcApi = {
     }
   },
   mobile: {
+    configure: (input) => ipcRenderer.invoke(IPC.mobile.configure, input),
     status: () => ipcRenderer.invoke(IPC.mobile.status),
     pair: () => ipcRenderer.invoke(IPC.mobile.pair),
     devices: () => ipcRenderer.invoke(IPC.mobile.devices),

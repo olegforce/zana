@@ -2,6 +2,7 @@ import { test, expect, launchApp } from './fixtures/app.js';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { phonePortEnv } from './fixtures/phone-port.js';
 
 test('Settings → Phone prepares an editable mobile installation composer', async ({ app }, testInfo) => {
   const win = app.window;
@@ -65,7 +66,7 @@ test('Settings → Phone enables the gateway, renders a pairing QR, and revokes 
     ])
   );
 
-  const app = await launchApp(home);
+  const app = await launchApp(home, { env: await phonePortEnv() });
   try {
     const win = app.window;
     await win.getByRole('link', { name: 'Settings', exact: true }).click();

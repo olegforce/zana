@@ -1,6 +1,8 @@
 import { networkInterfaces } from 'node:os';
 import { startMobileGateway } from './gateway.js';
 import type { MobileDeviceStore } from './device-store.js';
+import { MobileConnectionStore, validateMobileConnection, type MobileConnectionView } from './connection.js';
+import { connectRelay, type RelayState } from '../../../../services/mobile-relay/client.mjs';
 
 /** Fixed port the phone and the `mobile:serve` CLI both expect. */
 export const MOBILE_GATEWAY_PORT = 8785;
@@ -22,6 +24,8 @@ export interface MobileGatewayStatus {
   boundLan: boolean;
   /** Last start failure (e.g. port in use), cleared on a successful start. */
   error: string | null;
+  connection?: MobileConnectionView;
+  relayState?: RelayState;
 }
 
 export interface MobilePairingPayload {
@@ -65,6 +69,8 @@ export interface MobileGatewayManagerDeps {
   port?: number;
   startGateway?: typeof startMobileGateway;
   resolveBinding?: (port: number) => MobileBinding;
+  connectionStore?: MobileConnectionStore;
+  connectRelay?: typeof connectRelay;
 }
 
 /**
@@ -76,7 +82,9 @@ export interface MobileGatewayManagerDeps {
 export class MobileGatewayManager {
   private handle: GatewayHandle | null = null;
   private binding: MobileBinding | null = null;
-  private starting: Promise<void> | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
+  private relay: ReturnType<typeof connectRelay> | null = null;
+  private readonly connections: MobileConnectionStore;
   private lastError: string | null = null;
   private readonly port: number;
   private readonly startGateway: typeof startMobileGateway;
@@ -84,49 +92,52 @@ export class MobileGatewayManager {
 
   constructor(private readonly deps: MobileGatewayManagerDeps) {
     this.port = deps.port ?? MOBILE_GATEWAY_PORT;
+    this.connections = deps.connectionStore ?? new MobileConnectionStore();
     this.startGateway = deps.startGateway ?? startMobileGateway;
     this.resolveBinding = deps.resolveBinding ?? resolveMobileBinding;
   }
 
-  async start(): Promise<MobileGatewayStatus> {
+  private serialize<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(run);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  start(): Promise<MobileGatewayStatus> { return this.serialize(() => this.startNow()); }
+
+  private async startNow(): Promise<MobileGatewayStatus> {
     if (this.handle) return this.status();
-    if (this.starting) {
-      await this.starting;
-      return this.status();
+    try {
+      const connection = this.connections.read();
+      const binding = connection.mode === 'local' ? this.resolveBinding(this.port) : {
+        host: '127.0.0.1', publicUrl: connection.publicUrl!, boundLan: false
+      };
+      this.handle = await this.startGateway({
+        upstream: this.deps.upstream, publicUrl: binding.publicUrl,
+        host: binding.host, port: this.port, devices: this.deps.devices
+      });
+      this.binding = binding;
+      this.lastError = null;
+      if (connection.mode === 'relay') this.relay = (this.deps.connectRelay ?? connectRelay)({
+        publicUrl: connection.publicUrl!, token: connection.relayToken!, gatewayPort: this.handle.port
+      });
+    } catch (error) {
+      if (this.handle) await this.handle.close();
+      this.handle = null;
+      this.binding = null;
+      this.lastError = (error as NodeJS.ErrnoException)?.code === 'EADDRINUSE'
+        ? `Port ${this.port} is already in use — is \`pnpm mobile:serve\` running? Stop it, then enable phone access again.`
+        : error instanceof Error ? error.message : 'Failed to start the mobile gateway';
+      throw new Error(this.lastError);
     }
-    const binding = this.resolveBinding(this.port);
-    this.starting = (async () => {
-      try {
-        this.handle = await this.startGateway({
-          upstream: this.deps.upstream,
-          publicUrl: binding.publicUrl,
-          host: binding.host,
-          port: this.port,
-          devices: this.deps.devices
-        });
-        this.binding = binding;
-        this.lastError = null;
-      } catch (error) {
-        this.handle = null;
-        this.binding = null;
-        const message =
-          (error as NodeJS.ErrnoException)?.code === 'EADDRINUSE'
-            ? `Port ${this.port} is already in use — is \`pnpm mobile:serve\` running? Stop it, then enable phone access again.`
-            : error instanceof Error
-              ? error.message
-              : 'Failed to start the mobile gateway';
-        this.lastError = message;
-        throw new Error(message);
-      } finally {
-        this.starting = null;
-      }
-    })();
-    await this.starting;
     return this.status();
   }
 
-  async stop(): Promise<MobileGatewayStatus> {
-    if (this.starting) await this.starting.catch(() => {});
+  stop(): Promise<MobileGatewayStatus> { return this.serialize(() => this.stopNow()); }
+
+  private async stopNow(): Promise<MobileGatewayStatus> {
+    this.relay?.close();
+    this.relay = null;
     const handle = this.handle;
     this.handle = null;
     this.binding = null;
@@ -135,19 +146,36 @@ export class MobileGatewayManager {
     return this.status();
   }
 
+  configure(input: unknown, enabled: boolean): Promise<MobileGatewayStatus> {
+    return this.serialize(async () => {
+      // A damaged file must not prevent saving a fresh, fully validated setup.
+      let previous;
+      try { previous = this.connections.read(); } catch { /* no secret to preserve */ }
+      const next = validateMobileConnection(input, previous);
+      await this.connections.write(next);
+      await this.stopNow();
+      return enabled ? this.startNow() : this.status();
+    });
+  }
+
   status(): MobileGatewayStatus {
+    let connection: MobileConnectionView | undefined;
+    try { connection = this.connections.view(); } catch { this.lastError = 'Could not read phone connection configuration'; }
     return {
       running: !!this.handle,
       publicUrl: this.binding?.publicUrl ?? null,
       host: this.binding?.host ?? null,
       port: this.handle?.port ?? null,
       boundLan: this.binding?.boundLan ?? false,
-      error: this.lastError
+      error: this.lastError,
+      connection,
+      ...(this.relay ? { relayState: this.relay.state() } : {})
     };
   }
 
   pair(): MobilePairingPayload {
     if (!this.handle) throw new Error('Enable phone access before pairing a device');
+    if (this.relay && this.relay.state() !== 'connected') throw new Error('Wait for the relay connection before pairing');
     return this.handle.pair();
   }
 
