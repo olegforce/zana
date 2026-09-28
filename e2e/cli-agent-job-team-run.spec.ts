@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
-test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true } });
+test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true, sponsorPromptDismissed: true } });
 test.setTimeout(120_000);
 
 test('CLI Agent starts a durable Job Team, surfaces its question, and completes', async ({ app }) => {
@@ -59,6 +59,12 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     await window.getByRole('button', { name: `New agent in ${projectName}` }).click();
     const modal = window.getByTestId('launch-modal');
     await modal.getByRole('button', { name: 'CLI Agent' }).click();
+    // The composer remembers its provider independently of defaultHarness.
+    // Select the fixture's provider explicitly so this remains model-free.
+    const provider = modal.getByTestId('model-reasoning-picker-trigger');
+    await provider.click();
+    await window.getByTestId('model-reasoning-provider-claude-code').click();
+    await provider.click();
     const instruction = modal.getByTestId('legacy-agent-command-input');
     await instruction.click();
     await instruction.fill('E2E start Job Team');

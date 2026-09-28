@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from './fixtures/app.js';
 
@@ -7,12 +7,11 @@ test.use({ launchEnv: { ZCC_FAKE_PROVIDER: '1' } });
 test('a Docs card opens inside its thread inspector when the URL has no thread', async ({ app }) => {
   const { window, home } = app;
   const projectPath = join(home, 'docs-inspector-project');
-  mkdirSync(projectPath);
+  mkdirSync(join(projectPath, '.zcc', 'library'), { recursive: true });
+  writeFileSync(join(projectPath, '.zcc', 'library', 'inspector.md'), '# Inspector document\n\nOwned by the visible conversation.');
   const threadId = await window.evaluate(async (path) => {
     const project = await window.cc.projects.add(path);
     if (!project.ok) throw new Error(project.message);
-    const saved = await window.cc.library.write('project', 'inspector.md', '# Inspector document\n\nOwned by the visible conversation.', project.value.id);
-    if (!saved.ok) throw new Error(saved.message);
     const response = await fetch('/api/v1/threads', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ projectId: project.value.id, providerId: 'fake', title: 'Docs inspector regression', input: 'Hello' })

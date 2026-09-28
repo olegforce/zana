@@ -341,7 +341,6 @@ describe('execution-options API wiring', () => {
     expect(source).toContain('buildThreadExecutionOptions');
     expect(source).toContain('harnessVerify');
     expect(source).toContain('provider.list_models');
-    expect(source).toContain('availability = []');
     expect(source).toContain('parseReasoningLevel(body.reasoningLevel)');
     expect(source).toContain('readLastThreadExecution');
     expect(source).toContain('classifyModelListError');

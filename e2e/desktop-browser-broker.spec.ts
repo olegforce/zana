@@ -166,7 +166,9 @@ test('equivalent previews reuse their page without crossing browser profiles', a
   });
   try {
     await create('personal', { kind: 'personal' });
-    await expect.poll(() => requests).toBeGreaterThan(0);
+    await expect.poll(async () => (await execute({ type: 'desktop.browser.list_tabs' })).tabs).toEqual([
+      expect.objectContaining({ tabId: 'personal', url })
+    ]);
     // The same local server with a different host spelling and route keeps its
     // existing page. In particular, this must not reload and lose hot-reload state.
     const duplicateUrl = `http://localhost:${address.port}/client-route`;

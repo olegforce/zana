@@ -152,7 +152,10 @@ describe('composer host cache subscriptions', () => {
     expect(remote.result.current.model).toBe('remote-model');
     expect(fetcher).not.toHaveBeenCalled();
     await act(async () => local.result.current.refreshAcpModeOptions());
-    expect(fetcher).toHaveBeenCalledWith({ providerId: 'codex', hostId: 'local-model' });
+    expect(fetcher).toHaveBeenCalledWith(
+      { providerId: 'codex', hostId: 'local-model' },
+      { signal: expect.objectContaining({ aborted: false }) }
+    );
   });
 
   it('does not start discovery before the host roster is ready', async () => {
