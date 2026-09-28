@@ -170,7 +170,8 @@ export async function invokeHostInboxTool(
         docs,
         comments,
         ...(fields.report === true ? { report: true } : {}),
-        sessionId: threadId
+        sessionId: threadId,
+        origin: { threadId }
       };
       const entry = await ctx.inbox.append(payload);
       return pluginToolResultToResponse(name, { ok: true, id: entry.id, ts: entry.ts });

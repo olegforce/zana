@@ -611,7 +611,7 @@ export function ProjectHarnessSettings({
 
   return (
     <Section
-      title="Code harnesses"
+      title="AI harnesses"
       help="Project settings apply after Global defaults and before Persona and Agent choices: Global → Project → Persona → Agent. Later choices take priority when a setting cannot be combined."
     >
       <Field label="Default harness">

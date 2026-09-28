@@ -4,8 +4,13 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  dompurify: 3.4.16
+  uuid@<11.1.1: 11.1.1
+
 patchedDependencies:
   '@react-native-cookies/cookies@6.2.1': da4435a0bcb7116870ab28b0d53e6f2d286220a2eca88e919cdbc705a59f4a95
+  decode-uri-component@0.2.2: 880ccc0ad34d9585d90ba346a5b8a738b5c835036afa963adf31a7e291bcb5b3
 
 importers:
 
@@ -396,6 +401,9 @@ importers:
       smol-toml:
         specifier: ^1.7.0
         version: 1.8.0
+      tar:
+        specifier: 7.5.22
+        version: 7.5.22
       ws:
         specifier: ^8.21.3
         version: 8.21.3
@@ -530,6 +538,9 @@ importers:
       '@zana-ai/zcc-plugin-templates':
         specifier: workspace:*
         version: link:../../packages/plugin-templates
+      '@zana-ai/zcc-process-utils':
+        specifier: workspace:*
+        version: link:../../packages/process-utils
       '@zana-ai/zcc-secret-storage':
         specifier: workspace:*
         version: link:../../packages/secret-storage
@@ -6754,14 +6765,8 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
-  dompurify@3.1.7:
-    resolution: {integrity: sha512-VaTstWtsneJY8xzy7DekmYWEOZcmzIe3Qb3zPd4STve1OBTa+e+WmS1ITQec1fZYXI3HCsOZZiSMpG6oxoWMWQ==}
-
-  dompurify@3.4.15:
-    resolution: {integrity: sha512-EUBjM+B+lkDE41iE82DDSCfkoPGfXx8IxFxPMjNzm/Uk4xDet77rTN9wqlxlVg71kK7XGuUMv6wUxJUwwv+Xyw==}
-
-  dompurify@3.4.8:
-    resolution: {integrity: sha512-yb1cEmaOum7wFvOCSQxyfgVlv5D47Rc30iZWoMpbDIWTnJ6grDDQyu2KFJzB2k7u0pMuJcQ1zphH//fFnw2tjQ==}
+  dompurify@3.4.16:
+    resolution: {integrity: sha512-sqo+pNp3qRhCIpbgRi1y8Tgk27Bo2Ry7w0dC1NBeNTdZChWjz9Xb/KOoZbRP/R6pQZ80Qw8YhXw13hWWBbMRnQ==}
 
   dotenv-expand@11.0.7:
     resolution: {integrity: sha512-zIHwmZPRshsCdpMDyVsqGmgyP0yT8GAgXUnkdAoJisxvf33k7yO6OuoKmcTGuXPWSsm8Oh88nZicRLA9Y0rUeA==}
@@ -10281,13 +10286,8 @@ packages:
     resolution: {integrity: sha512-pMZTvIkT1d+TFGvDOqodOclx0QWkkgi6Tdoa8gC8ffGAAqz9pzPTZWAybbsHHoED/ztMtkv/VoYTYyShUn81hA==}
     engines: {node: '>= 0.4.0'}
 
-  uuid@14.0.2:
-    resolution: {integrity: sha512-xZe/16rV4aa+HGSOCiY2YeLT1OybRLrrkL/Rqaq7p7GMVXjFh+6wN4oMYgjFmnSnhY8t6Xpdl2l9qmnHYuMHwQ==}
-    hasBin: true
-
-  uuid@7.0.3:
-    resolution: {integrity: sha512-DPSke0pXhTZgoF/d+WSt2QaKMCFSfx7QegxEWT+JOuHF5aWrKEn0G+ztjuJg/gG8/ItK+rbPCD/yNv8yyih6Cg==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+  uuid@11.1.1:
+    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
   validate-npm-package-name@5.0.1:
@@ -16051,7 +16051,7 @@ snapshots:
     dependencies:
       character-entities: 2.0.2
 
-  decode-uri-component@0.2.2: {}
+  decode-uri-component@0.2.2(patch_hash=880ccc0ad34d9585d90ba346a5b8a738b5c835036afa963adf31a7e291bcb5b3): {}
 
   decompress-response@6.0.0:
     dependencies:
@@ -16129,13 +16129,7 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  dompurify@3.1.7: {}
-
-  dompurify@3.4.15:
-    optionalDependencies:
-      '@types/trusted-types': 2.0.7
-
-  dompurify@3.4.8:
+  dompurify@3.4.16:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -17954,7 +17948,7 @@ snapshots:
       d3-sankey: 0.12.3
       dagre-d3-es: 7.0.14
       dayjs: 1.11.23
-      dompurify: 3.4.15
+      dompurify: 3.4.16
       es-toolkit: 1.52.0
       fastdom: 1.0.12
       katex: 0.16.47
@@ -17963,7 +17957,7 @@ snapshots:
       roughjs: 4.6.6
       stylis: 4.4.0
       ts-dedent: 2.3.0
-      uuid: 14.0.2
+      uuid: 11.1.1
 
   metro-babel-transformer@0.84.5(supports-color@8.1.1):
     dependencies:
@@ -18756,12 +18750,12 @@ snapshots:
 
   monaco-editor@0.54.0:
     dependencies:
-      dompurify: 3.1.7
+      dompurify: 3.4.16
       marked: 14.0.0
 
   monaco-editor@0.56.0:
     dependencies:
-      dompurify: 3.4.8
+      dompurify: 3.4.16
       marked: 14.0.0
 
   ms@2.0.0: {}
@@ -19370,7 +19364,7 @@ snapshots:
 
   query-string@7.1.3:
     dependencies:
-      decode-uri-component: 0.2.2
+      decode-uri-component: 0.2.2(patch_hash=880ccc0ad34d9585d90ba346a5b8a738b5c835036afa963adf31a7e291bcb5b3)
       filter-obj: 1.1.0
       split-on-first: 1.1.0
       strict-uri-encode: 2.0.0
@@ -20627,9 +20621,7 @@ snapshots:
 
   utils-merge@1.0.1: {}
 
-  uuid@14.0.2: {}
-
-  uuid@7.0.3: {}
+  uuid@11.1.1: {}
 
   validate-npm-package-name@5.0.1: {}
 
@@ -20977,7 +20969,7 @@ snapshots:
   xcode@3.0.1:
     dependencies:
       simple-plist: 1.3.1
-      uuid: 7.0.3
+      uuid: 11.1.1
 
   xml-name-validator@5.0.0: {}
 

@@ -1,3 +1,4 @@
+import { recoverStaleModelCatalogs } from './components/thread/pickers/thread-model-catalog.js';
 import { ConversationHistoryDialog } from './components/history/ConversationHistoryDialog.js';
 import '@/lib/monacoSetup';
 import { useEffect, useRef } from 'react';
@@ -453,6 +454,7 @@ export function App() {
       scheduleGitRefresh(owningProjectId);
     });
     const onFocus = () => {
+      recoverStaleModelCatalogs();
       useData.getState().refreshAllGitStatus();
     };
     window.addEventListener('focus', onFocus);

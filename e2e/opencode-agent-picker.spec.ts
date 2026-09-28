@@ -124,7 +124,7 @@ test.describe('OpenCode native-role picker (ACP mode parity)', () => {
         opencodeBinary: undefined
       }));
       await window.getByRole('link', { name: 'Settings' }).click();
-      await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+      await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
       const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
       await expect(openCodeSettings.locator('.opener-row-status--ok').first()).toHaveAttribute('title', /1\.18\.10/);
 
@@ -174,7 +174,7 @@ test('real OpenCode CLI agents become selectable through Electron UI', async ({ 
       opencodeBinary: undefined
     }));
     await window.getByRole('link', { name: 'Settings' }).click();
-    await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+    await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
     const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
     await expect(openCodeSettings.locator('.opener-row-status')).toHaveClass(/opener-row-status--ok/);
 
@@ -220,7 +220,7 @@ test.describe('real OpenCode home integration', () => {
         opencodeBinary: undefined
       }));
       await window.getByRole('link', { name: 'Settings' }).click();
-      await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+      await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
       const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
       await expect(openCodeSettings.locator('.opener-row-status').first()).toHaveClass(/opener-row-status--ok/);
 

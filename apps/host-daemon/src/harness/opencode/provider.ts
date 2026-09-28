@@ -1,3 +1,4 @@
+import { ModelDiscoveryCache } from '../model-discovery-cache.js';
 /**
  * OpenCodeProvider — launching the OpenCode CLI (`opencode`, npm `opencode-ai`),
  * for the profiles it serves: `opencode`, `opencode-resume`, and `opencode-yolo`.
@@ -482,40 +483,8 @@ export function parseOpenCodeModelIds(output: string): string[] {
   return ids;
 }
 
-/**
- * Live model-id inventory cache — the model twin of {@link agentDiscoveryCache}.
- * Success is retained until an explicit refresh (a launch shouldn't re-probe the
- * CLI on every spawn); failures are NOT cached (return `undefined` and re-probe
- * next time), so a transient offline blip can't pin an empty inventory. In-flight
- * loads are de-duped per (command, cwd). Bounded by `maxEntries` (oldest-evicted).
- */
-class OpenCodeModelDiscoveryCache {
-  private readonly entries = new Map<string, { value?: readonly string[]; inFlight?: Promise<readonly string[]> }>();
-
-  constructor(private readonly maxEntries = 64) {}
-
-  discover(command: string, cwd: string, load: () => Promise<readonly string[]>): Promise<readonly string[]> {
-    const key = JSON.stringify([command, cwd]);
-    const existing = this.entries.get(key);
-    if (existing?.value) return Promise.resolve(existing.value);
-    if (existing?.inFlight) return existing.inFlight;
-    const inFlight = load()
-      .then((value) => {
-        this.entries.delete(key);
-        this.entries.set(key, { value });
-        while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value!);
-        return value;
-      })
-      .catch((error) => {
-        if (this.entries.get(key)?.inFlight === inFlight) this.entries.delete(key);
-        throw error;
-      });
-    this.entries.set(key, { inFlight });
-    return inFlight;
-  }
-}
-
-const modelDiscoveryCache = new OpenCodeModelDiscoveryCache();
+const modelDiscoveryCache = new ModelDiscoveryCache<string>();
+export const invalidateOpenCodeModels = () => modelDiscoveryCache.clear();
 
 function runOpenCodeModelDiscovery(command: string, cwd: string): Promise<readonly string[]> {
   return runOpenCodeCaptured(command, ['models'], cwd).then(parseOpenCodeModelIds);
@@ -523,7 +492,7 @@ function runOpenCodeModelDiscovery(command: string, cwd: string): Promise<readon
 
 function discoverOpenCodeModels(context: { cwd: string; config: AppConfig }): Promise<readonly string[]> {
   const command = opencodeBinary(context.config);
-  return modelDiscoveryCache.discover(command, context.cwd, () => runOpenCodeModelDiscovery(command, context.cwd));
+  return modelDiscoveryCache.discover(JSON.stringify([command, context.cwd]), () => runOpenCodeModelDiscovery(command, context.cwd));
 }
 
 /**

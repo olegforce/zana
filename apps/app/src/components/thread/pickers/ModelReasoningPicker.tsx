@@ -397,6 +397,11 @@ export function ModelReasoningPicker({
           ) : null}
           <div ref={sectionRef} className="model-reasoning-picker-section">
             <div className="model-reasoning-picker-section-label">Model</div>
+            {modelLoadError && !hasNoModels && !modelLockedLabel ? (
+              <div role="status" className="model-reasoning-picker-hint">
+                Showing previously loaded models. {emptyModelsHint(selectedProviderId, modelLoadError, modelLoadErrorDetail)}
+              </div>
+            ) : null}
             {modelLockedLabel ? (
               <div className="model-reasoning-picker-hint" data-testid="model-reasoning-locked">
                 {modelLockedLabel}

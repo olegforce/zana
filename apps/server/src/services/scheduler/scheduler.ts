@@ -880,7 +880,9 @@ export class SchedulerManager extends EventEmitter {
       // `injectsClaudeMcpConfig`) on a non-`silent` schedule, an exit-0 run that
       // never filed one is stamped `incomplete` rather than `success` — silence
       // must never look like success. `silent` schedules are exempt: nothing
-      // reads their report either way.
+      // reads their report either way. A finished turn (`finishedAt`) does not
+      // change that: skipping `schedule_report` still means we have no record of
+      // what the run did, so it stays `incomplete` and still notifies.
       const expectsReport =
         (live.task.inboxLevel ?? 'quiet') !== 'silent' &&
         providerCapabilities(effectiveProfile).injectsClaudeMcpConfig;

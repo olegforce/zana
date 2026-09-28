@@ -400,7 +400,10 @@ export function createBridgeProtocolAdapter(
             params: {
               threadId: command.threadId,
               providerThreadId: command.providerThreadId,
-              expectedTurnId: command.expectedTurnId,
+              // Events carry assembled ids; provider commands need the native
+              // turn identity that produced those events.
+              expectedTurnId: deltaAssembler.getProviderTurnId(command.threadId, command.expectedTurnId)
+                ?? command.expectedTurnId,
               input: command.input,
               clientRequestId: command.clientRequestId,
               options: toBridgeWireOptions(
@@ -421,7 +424,9 @@ export function createBridgeProtocolAdapter(
               // a release. Phase 2a threads the daemon's explicit intent
               // through instead.
               intent: command.activeTurnId !== null ? "interrupt" : "release",
-              activeTurnId: command.activeTurnId,
+              activeTurnId: command.activeTurnId === null ? null
+                : deltaAssembler.getProviderTurnId(command.threadId, command.activeTurnId)
+                  ?? command.activeTurnId,
             },
           };
         case "thread/discard":

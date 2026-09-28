@@ -64,6 +64,7 @@ export function QuestionBlock({
   prompt,
   sessionId,
   sessionTitle,
+  onReply,
   onAnswerDeadSession,
   deadSessionBusy = false
 }: {
@@ -82,6 +83,8 @@ export function QuestionBlock({
    *  by reopening the agent (resume / fresh) with it as the first turn. */
   sessionId?: string;
   sessionTitle: string;
+  /** Delivery to a conversation thread, retaining its history and settings. */
+  onReply?: (answer: string) => Promise<boolean>;
   /** Dead-session delivery: reopen the agent with the answer as its first turn.
    *  Set (with no `sessionId`) when the originating session has ended. */
   onAnswerDeadSession?: (answer: string) => Promise<boolean>;
@@ -144,7 +147,7 @@ export function QuestionBlock({
       if (entry.executionId && entry.blockerId) {
         ok = await respondToInboxBlocker(entry, buildReply());
       } else {
-        ok = dead
+        ok = onReply ? await onReply(buildReply()) : dead
           ? await onAnswerDeadSession!(buildReply())
           : await replyToInboxEntry(entry.id, sessionId!, buildReply());
       }

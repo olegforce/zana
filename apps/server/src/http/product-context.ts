@@ -216,11 +216,17 @@ export function createProductHttpContext(
   const promptRegistry = new PromptRegistry({ userDir: join(dataDir, 'llm-prompts') });
   promptRegistry.start();
   const llmService = new LlmService(new Map());
+  const configuredClaudeProvider = (): ClaudeCliProvider => {
+    const current = config.getConfig();
+    // Desktop migration removes the legacy field from disk. The server's
+    // config store does not project it back from the canonical harness entry.
+    return new ClaudeCliProvider(current.harnesses?.byId?.claude?.binary || current.claudeBinary || 'claude');
+  };
   const threadTitleNamer = createThreadTitleNamer({
     autoRenameEnabled: () => config.getConfig().autoRenameTabs !== false,
     getEntry: (id) => promptRegistry.get(id),
     run: (entry, vars, dedupeKey) => {
-      llmService.setProvider(new ClaudeCliProvider(config.getConfig().claudeBinary || 'claude'));
+      llmService.setProvider(configuredClaudeProvider());
       return llmService.run(entry, vars, dedupeKey);
     },
     applyTitle: (threadId, title) => {
@@ -246,7 +252,7 @@ export function createProductHttpContext(
           ms: 0
         });
       }
-      llmService.setProvider(new ClaudeCliProvider(config.getConfig().claudeBinary || 'claude'));
+      llmService.setProvider(configuredClaudeProvider());
       return llmService.run(entry, { lastTurn }, dedupeKey);
     },
     runTurnSummary: async () => ({ ok: false, text: '', error: 'unused', provider: 'claude-cli', ms: 0 }),

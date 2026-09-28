@@ -50,6 +50,7 @@ export type {
   DesktopBrowserViewBounds,
   DesktopBrowserViewportBounds
 } from './browser.js';
+export { browserPreviewIdentity, sameBrowserDocument } from './browser-preview.js';
 export {
   DESKTOP_BROWSER_IMPORT_FAILURE_COPY,
   DESKTOP_BROWSER_IMPORT_SOURCE_IDS,

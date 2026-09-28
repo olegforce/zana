@@ -158,6 +158,12 @@ describe('product HTTP', () => {
     const listed = await fetch(`${server.url}api/v1/threads`).then((response) => response.json());
     expect(listed).toEqual({ threads: [] });
 
+    // Discovery requires a connected host; test default projections with a healthy probe.
+    const originalResolve = server.ctx.hostHub.resolveHostId;
+    const originalRpc = server.ctx.hostHub.callHostOnlineRpc;
+    server.ctx.hostHub.resolveHostId = () => 'test-host';
+    server.ctx.hostHub.callHostOnlineRpc = async ({ command }) => command.type === 'provider.status'
+      ? { providers: [] } : { models: [], selectedOnlyModels: [] };
     const execution = await fetch(`${server.url}api/v1/system/execution-options?providerId=claude-code`);
     expect(execution.status).toBe(200);
     const options = await execution.json() as {
@@ -180,6 +186,9 @@ describe('product HTTP', () => {
       'Sonnet Alias (Legacy)',
       'Haiku Alias (Legacy)'
     ]));
+
+    server.ctx.hostHub.resolveHostId = originalResolve;
+    server.ctx.hostHub.callHostOnlineRpc = originalRpc;
 
     const providers = await fetch(`${server.url}api/v1/threads/providers`).then((response) => response.json());
     expect(providers.providers.map((row: { id: string }) => row.id)).toEqual(
@@ -272,6 +281,19 @@ describe('product HTTP', () => {
     const options = await execution.json() as { providers: Array<{ id: string }> };
     expect(options.providers.map((row) => row.id)).toContain('claude-code');
     expect(options.providers.map((row) => row.id)).toContain('acp-opencode');
+  });
+
+  it('reports unavailable hosts as a retryable discovery failure instead of an empty successful roster', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-options-offline-'));
+    server = await startTestProductServer({ dataDir, port: 0, bindAddress: '127.0.0.1' });
+    server.ctx.hostHub.resolveHostId = () => 'local';
+    server.ctx.hostHub.callHostOnlineRpc = async () => { throw new HostUnavailableError(); };
+    const offline = await fetch(`${server.url}api/v1/system/execution-options`);
+    expect(offline.status).toBe(503);
+    expect(await offline.json()).toMatchObject({ code: 'host-unavailable' });
+    server.ctx.hostHub.callHostOnlineRpc = async () => ({ providers: [] });
+    const online = await fetch(`${server.url}api/v1/system/execution-options`);
+    expect(online.status).toBe(200);
   });
 
   it('resolves execution-option discovery cwd from the registered project', async () => {

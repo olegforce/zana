@@ -28,6 +28,105 @@ export function inspectorViewport(
   };
 }
 
+export function scaleInspectorFrame(
+  frame: InspectorFrame,
+  from: InspectorViewport,
+  to: InspectorViewport
+): InspectorFrame {
+  if (from.width === to.width && from.height === to.height) return clampInspectorFrame(frame, to);
+  return clampInspectorFrame(
+    {
+      ...frame,
+      width: frame.width * (to.width / from.width),
+      height: frame.height * (to.height / from.height)
+    },
+    to
+  );
+}
+
+export const INSPECTOR_SIZE_STORAGE_KEY = 'zcc.inspectorWindow.size';
+
+type ChosenInspectorSize = { frame: InspectorFrame; viewport: InspectorViewport };
+
+// Cache of the size the user chose, plus the app window it was chosen in.
+// localStorage is the source of truth so closing one agent inspector and
+// opening another (a remount, or a duplicate module copy) keeps the size.
+let chosenInspectorSize: ChosenInspectorSize | null | undefined;
+
+function isPositiveSize(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function parseChosenInspectorSize(raw: unknown): ChosenInspectorSize | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as { frame?: unknown; viewport?: unknown };
+  if (!row.frame || typeof row.frame !== 'object' || !row.viewport || typeof row.viewport !== 'object') {
+    return null;
+  }
+  const frame = row.frame as InspectorFrame;
+  const viewport = row.viewport as InspectorViewport;
+  if (
+    !isPositiveSize(frame.width) ||
+    !isPositiveSize(frame.height) ||
+    !Number.isFinite(frame.left) ||
+    !Number.isFinite(frame.top) ||
+    !isPositiveSize(viewport.width) ||
+    !isPositiveSize(viewport.height)
+  ) {
+    return null;
+  }
+  return {
+    frame: { left: frame.left, top: frame.top, width: frame.width, height: frame.height },
+    viewport: { width: viewport.width, height: viewport.height }
+  };
+}
+
+function readStoredInspectorSize(): ChosenInspectorSize | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(INSPECTOR_SIZE_STORAGE_KEY);
+    if (!raw) return null;
+    return parseChosenInspectorSize(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredInspectorSize(value: ChosenInspectorSize | null): void {
+  chosenInspectorSize = value;
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (!value) localStorage.removeItem(INSPECTOR_SIZE_STORAGE_KEY);
+    else localStorage.setItem(INSPECTOR_SIZE_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function resolvedInspectorSize(): ChosenInspectorSize | null {
+  if (typeof localStorage === 'undefined') return chosenInspectorSize ?? null;
+  const stored = readStoredInspectorSize();
+  chosenInspectorSize = stored;
+  return stored;
+}
+
+export function rememberInspectorSize(frame: InspectorFrame, viewport: InspectorViewport): void {
+  writeStoredInspectorSize({
+    frame: { left: frame.left, top: frame.top, width: frame.width, height: frame.height },
+    viewport: { width: viewport.width, height: viewport.height }
+  });
+}
+
+export function clearInspectorSize(): void {
+  writeStoredInspectorSize(null);
+}
+
+export function currentInspectorFrame(viewport: InspectorViewport): InspectorFrame | null {
+  const chosen = resolvedInspectorSize();
+  if (!chosen) return null;
+  return scaleInspectorFrame(chosen.frame, chosen.viewport, viewport);
+}
+
 export function clampInspectorFrame(
   frame: InspectorFrame,
   viewport: InspectorViewport
@@ -128,7 +227,7 @@ export function inspectorModalClassName(fullScreen: boolean, resizing = false): 
 export function inspectorFrameStyle(
   frame: InspectorFrame | null,
   fullScreen: boolean
-): { position: 'absolute'; left: number; top: number; width: number; height: number; maxHeight: number; margin: number } | undefined {
+): { position: 'absolute'; left: number; top: number; width: number; height: number; minWidth: number; minHeight: number; maxHeight: number; maxWidth: number; margin: number } | undefined {
   if (fullScreen || !frame) return undefined;
   return {
     position: 'absolute',
@@ -136,6 +235,11 @@ export function inspectorFrameStyle(
     top: frame.top,
     width: frame.width,
     height: frame.height,
+    // Override the stylesheet's 94vw/94vh min/max lock. Width/height alone
+    // cannot shrink below that floor, so a remount looks like a reset.
+    minWidth: frame.width,
+    minHeight: frame.height,
+    maxWidth: frame.width,
     maxHeight: frame.height,
     margin: 0
   };

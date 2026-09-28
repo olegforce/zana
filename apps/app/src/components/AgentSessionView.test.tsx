@@ -19,7 +19,9 @@ vi.mock('./thread/secondary-panel/ThreadFilePreviewTab.js', () => ({
   ThreadFilePreviewTab: () => <div data-testid="thread-file-preview" />
 }));
 vi.mock('./thread/secondary-panel/BrowserTabDeck.js', () => ({
-  BrowserTabDeck: () => <div data-testid="thread-browser-tab" />
+  BrowserTabDeck: ({ canShowNativeBrowserView }: { canShowNativeBrowserView: boolean }) => (
+    <div data-testid="thread-browser-tab" data-browser-allowed={String(canShowNativeBrowserView)} />
+  )
 }));
 vi.mock('./thread/secondary-panel/ThreadPluginTab.js', () => ({
   ThreadPluginTab: ({ threadId }: { threadId?: string }) => (
@@ -82,6 +84,21 @@ function installMemoryStorage(): void {
 describe('AgentSessionView', () => {
   afterEach(() => {
     if (typeof localStorage !== 'undefined') localStorage.clear();
+  });
+  it.each([
+    { modal: true, isFocused: false, allowed: true },
+    { modal: false, isFocused: true, allowed: true },
+    { modal: false, isFocused: false, allowed: false }
+  ])('browser eligibility follows its host: $modal / $isFocused', ({ modal, isFocused, allowed }) => {
+    installMemoryStorage();
+    persistPanel(modal ? 's1:modal' : 's1', { activeId: 'preview', tabs: [{ id: 'preview', kind: 'browser', title: 'Preview', url: 'http://localhost:3003/' }] });
+    const html = renderToStaticMarkup(
+      <PaneContextProvider value={{ paneId: 'pane-1', isFocused, isSplitPane: true, secondaryPanelHost: null,
+        onRequestClose: null, isMaximized: false, onToggleMaximize: null, isBoundedPane: false, navigateInPane: () => undefined }}>
+        <AgentSessionView session={session()} projectId="p1" projectName="demo" state="idle" terminalAnchorId="a" modal={modal} />
+      </PaneContextProvider>
+    );
+    expect(html).toContain(`data-browser-allowed="${allowed}"`);
   });
   it('keeps the secondary panel closed by default in the inspector modal', () => {
     const html = renderToStaticMarkup(

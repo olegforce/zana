@@ -1,3 +1,4 @@
+import { invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
 import { assertPlanRevision, planImplementationMode, planImplementationPrompt } from '../services/threads/conversation-plan-implementation.js';
 import { readPluginHttpBody, PluginHttpBodyTooLarge } from './plugin-http-body.js';
 import { conversationHistory } from '../services/threads/conversation-history.js';
@@ -3298,9 +3299,9 @@ export async function handleProductHttp(
             artifacts: ctx.pluginHostArtifacts
           })
         );
-      } catch {
-        availability = [];
-        extraInstalled = {};
+      } catch (error) {
+        sendHostFailure(response, error);
+        return true;
       }
       let listed: ProviderListModelsResult | null = null;
       let listError: ThreadModelLoadErrorCode | null = null;
@@ -3322,6 +3323,10 @@ export async function handleProductHttp(
               ...(scope.cwd ? { cwd: scope.cwd } : {})
             }
           });
+          invalidateHarnessModelCatalog(providerId);
+          // Desktop owns an independent preflight cache. Complete its invalidation
+          // before returning so a launch immediately after Refresh uses fresh ids.
+          await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
         } catch (error) {
           listed = null;
           listError = classifyModelListError(error);

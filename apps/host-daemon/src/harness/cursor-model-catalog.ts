@@ -1,3 +1,4 @@
+import { ModelDiscoveryCache } from './model-discovery-cache.js';
 import { spawn } from 'node:child_process';
 import type { HarnessModelTarget } from '@zana-ai/zcc-domain/harness-adapter';
 import { CURSOR_EVIDENCE_VERSION } from './cursor/provider.js';
@@ -15,7 +16,8 @@ const EFFORT_TOKENS = [
 ] as const;
 const FAST_TAIL = '-fast';
 const THINKING_TOKEN = 'thinking';
-const cache = new Map<string, readonly HarnessModelTarget[]>();
+const cache = new ModelDiscoveryCache<HarnessModelTarget>();
+export const invalidateCursorModels = () => cache.clear();
 
 export function cursorModelsFromListOutput(stdout: string): readonly HarnessModelTarget[] {
   const families = new Map<string, Array<{ id: string; label: string; effort: string | undefined }>>();
@@ -45,28 +47,27 @@ export function cursorModelsFromListOutput(stdout: string): readonly HarnessMode
 }
 
 export async function discoverCursorModels(binary: string, cacheKey = binary): Promise<readonly HarnessModelTarget[]> {
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
-  const models = await new Promise<readonly HarnessModelTarget[]>((resolve) => {
-    const child = spawn(binary, ['--list-models'], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let stdout = '';
-    let settled = false;
-    const finish = (value: readonly HarnessModelTarget[]) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      child.kill();
-      resolve(value);
-    };
-    const timeout = setTimeout(() => finish([]), REQUEST_TIMEOUT_MS);
-    child.once('error', () => finish([]));
-    child.once('exit', () => finish(cursorModelsFromListOutput(stdout)));
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+  return cache.discover(cacheKey, async () => {
+    const models = await new Promise<readonly HarnessModelTarget[]>((resolve) => {
+      const child = spawn(binary, ['--list-models'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let stdout = '';
+      let settled = false;
+      const finish = (value: readonly HarnessModelTarget[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        child.kill();
+        resolve(value);
+      };
+      const timeout = setTimeout(() => finish([]), REQUEST_TIMEOUT_MS);
+      child.once('error', () => finish([]));
+      child.once('exit', () => finish(cursorModelsFromListOutput(stdout)));
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
     });
+    return models;
   });
-  if (models.length) cache.set(cacheKey, models);
-  return models;
 }
 
 function splitCursorVariant(id: string): { familyKey: string; effort: string | undefined } {

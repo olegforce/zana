@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { HostHub } from '../../http/host-hub.js';
 import type { ProviderHealthResult } from '@zana-ai/zcc-contracts/host-rpc';
 import { registerThreadProvider } from './thread-provider-catalog.js';
@@ -79,6 +79,22 @@ describe('probeInstalledProviderHealth', () => {
   afterEach(() => {
     for (const handle of handles) handle.unregister();
     handles.length = 0;
+  });
+
+  it('coalesces concurrent health probes without caching later authentication/config changes', async () => {
+    handles.push(registerThreadProvider('provider-acp', { id: FIXTURE_ID, displayName: 'Fixture', visibility: 'installed', capabilities }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const call = vi.fn(async () => { await gate; return healthResult('ready'); });
+    const input = { hub: hub(call), artifacts };
+    const first = probeInstalledProviderHealth(input);
+    const count = call.mock.calls.length;
+    const duplicate = probeInstalledProviderHealth(input);
+    expect(call.mock.calls.length).toBe(count);
+    release();
+    expect(await first).toEqual(await duplicate);
+    await probeInstalledProviderHealth(input);
+    expect(call.mock.calls.length).toBe(count * 2);
   });
 
   it('returns an empty map when the host cannot be resolved', async () => {

@@ -198,7 +198,7 @@ export const IPC = {
     set: 'harnessAuth:set'
   },
   /**
-   * Code-harness verification (Settings → Code Harness): probe each harness
+   * Code-harness verification (Settings → AI Harness): probe each harness
    * family's `<binary> --version` on demand. Read-only detection; main owns the
    * truth (resolves the binary, runs the probe best-effort), the renderer just
    * displays the enabled × installed matrix and gates the profile picker on it.

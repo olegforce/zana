@@ -51,6 +51,7 @@ import { ThreadPluginTab } from '../../components/thread/secondary-panel/ThreadP
 import { ThreadExplorerTab } from '../../components/thread/secondary-panel/ThreadExplorerTab.js';
 import { ThreadInboxTab } from '../../components/thread/secondary-panel/ThreadInboxTab.js';
 import { PluginThreadHeaderActions } from '../../plugins/PluginThreadHeaderActions.js';
+import { ThreadPanelOwnerProvider } from '../../plugins/thread-panel-owner.js';
 import type { ThreadChatMessageAction } from '@zana-ai/zcc-plugin-sdk/app';
 import { copyText } from '../../components/thread/secondary-panel/threadSecondaryPanelLogic.js';
 import { useThreadSecondaryPanel } from '../../components/thread/secondary-panel/useThreadSecondaryPanel.js';
@@ -83,6 +84,7 @@ import {
   type TimelineSearchHit
 } from '../../components/thread/timeline/thread-search.js';
 import {
+  loadThreadDetailProgressively,
   resolveThreadDetailStatus,
   resolveTimelinePollRows,
   shouldClearPlaceholderStartingStatus,
@@ -407,26 +409,33 @@ export function ThreadDetail({
         setTimelineLoading(true);
         setLoadError(null);
       }
-      const [detailOutcome, timelineOutcome] = await Promise.allSettled([
+      const [detailOutcome, timelineOutcome] = await loadThreadDetailProgressively(
         product.threads.get(threadId),
-        loadTimeline(false)
-      ]);
+        loadTimeline(false),
+        {
+          onDetail: (detail, result) => {
+            if (!cancelled) applyThreadRecord(detail, result?.timeline ?? null);
+          },
+          onTimeline: (result, detail) => {
+            if (cancelled) return;
+            setTimelineLoading(false);
+            applyTimeline(result.timeline, result.nextRows);
+            if (detail) {
+              applyThreadRecord(detail, result.timeline);
+            } else if (result.timeline.status) {
+              setStatus(result.timeline.status);
+            }
+          },
+          onTimelineError: (error) => {
+            if (cancelled) return;
+            setTimelineLoading(false);
+            setLoadError(threadDetailLoadError(error));
+          }
+        }
+      );
       if (cancelled) return;
-      setTimelineLoading(false);
       const detailFailed = detailOutcome.status === 'rejected';
       const timelineFailed = timelineOutcome.status === 'rejected';
-      if (timelineOutcome.status === 'fulfilled') {
-        applyTimeline(timelineOutcome.value.timeline, timelineOutcome.value.nextRows);
-      }
-      if (detailOutcome.status === 'fulfilled') {
-        applyThreadRecord(
-          detailOutcome.value,
-          timelineOutcome.status === 'fulfilled' ? timelineOutcome.value.timeline : null
-        );
-      } else if (timelineOutcome.status === 'fulfilled') {
-        const timelineStatus = timelineOutcome.value.timeline.status;
-        if (typeof timelineStatus === 'string' && timelineStatus) setStatus(timelineStatus);
-      }
       if (detailFailed || timelineFailed) {
         const reason = timelineFailed
           ? (timelineOutcome as PromiseRejectedResult).reason
@@ -655,7 +664,7 @@ export function ThreadDetail({
           <BrowserTabDeck
             browserTabs={panel.state.tabs.filter((tab) => tab.kind === 'browser')}
             activeBrowserTabId={closable?.kind === 'browser' ? closable.id : null}
-            canShowNativeBrowserView={panel.state.isOpen && !modal && (hostedSecondary || pane?.isFocused !== false)}
+            canShowNativeBrowserView={panel.state.isOpen && (modal || hostedSecondary || pane?.isFocused !== false)}
             threadId={threadId}
             onUpdate={({ tabId, url, title: nextTitle }) => {
               const resolvedTitle = nextTitle && nextTitle.length > 0 ? nextTitle : getBrowserUrlHost(url) || 'Browser';
@@ -725,6 +734,7 @@ export function ThreadDetail({
   );
 
   return (
+    <ThreadPanelOwnerProvider ownerId={threadId}>
     <section
       ref={viewRef}
       className={viewClass}
@@ -915,5 +925,6 @@ export function ThreadDetail({
       {hostedSecondary || embedded ? null : secondaryPanelNode}
       </div>
     </section>
+    </ThreadPanelOwnerProvider>
   );
 }

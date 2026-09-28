@@ -1,3 +1,4 @@
+import { installRuntimeLog } from '@zana-ai/zcc-process-utils';
 import { startStaticHost } from './static-host.js';
 import { toBrowserProjectSummaries } from './browser-bootstrap.js';
 import { createProductHttpContext } from './http/product-context.js';
@@ -67,6 +68,7 @@ parentPort.on('message', async ({ data }) => {
   const message = parsed.data;
   if (message.type === 'start' && message.rendererRoot && !close) {
     try {
+      installRuntimeLog(message.dataDir, 'server', import.meta.url);
       version = message.version ?? '';
       projects = createProjectStore({
         projectsFile: join(message.dataDir, 'projects.json'),

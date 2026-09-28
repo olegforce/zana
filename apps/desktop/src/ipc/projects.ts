@@ -15,7 +15,7 @@ export function registerProjectsIpc(): void {
   ctx.safeHandle(IPC.projects.list, async () => {
     const projects = await ctx.runtimeSupervisor?.listProjects();
     return ctx.runtimeSupervisor ? projects as Project[] : store.listProjects();
-  }, () => []);
+  }, (error) => { throw error; });
   ipcMain.handle(IPC.projects.add, async (_e, path: string): Promise<Result<Project>> => {
     try {
       // Once the runtime is active, the server is the only local-project writer.

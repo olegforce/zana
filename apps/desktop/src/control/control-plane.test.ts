@@ -160,7 +160,7 @@ describe('authorizeRequest', () => {
     if (!r.ok) expect(r.message).toContain('agent-class');
   });
 
-  it.each(['term.create', 'term.reply', 'term.close', 'term.list', 'term.get', 'session.status'])(
+  it.each(['term.create', 'term.reply', 'term.close', 'term.list', 'term.get', 'session.status', 'harness.models.invalidate'])(
     'allows a verified product-server caller the unattended op %s',
     (op) => {
       const verify = (credential: unknown) => credential === 'product-secret';

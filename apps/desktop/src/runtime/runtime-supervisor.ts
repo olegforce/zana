@@ -112,6 +112,7 @@ export interface StartRuntimeSupervisorOptions {
   version?: string;
   /** Env vars for the product-server utility only — never the host-daemon, never process.env. */
   extraEnv?: Record<string, string>;
+  onUnexpectedExit?: (service: string) => void;
 }
 
 function persistentHostId(dataDir?: string): string {
@@ -401,6 +402,7 @@ function enrollHostUtility(
 async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { token: string; signingKey: string; hostId: string }): Promise<RuntimeSupervisor> {
   const runtimeDir = options.runtimeDir!;
   const host = await startUtility(join(runtimeDir, 'host-runtime.js'), {
+    dataDir: options.dataDir,
     type: 'start',
     protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION,
     token: options.token,
@@ -433,13 +435,23 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     renderer.child.kill();
     throw new Error('runtime dataDir is required to enroll the host daemon');
   }
+  let closing = false;
+  let failed = false;
   let enrollRetry: NodeJS.Timeout | null = null;
+  const unexpectedExit = (service: string) => {
+    if (closing || failed) return;
+    failed = true;
+    if (enrollRetry) { clearInterval(enrollRetry); enrollRetry = null; }
+    options.onUnexpectedExit?.(service);
+  };
+  const server = createUtilityRuntime(renderer, () => unexpectedExit('server'));
+  const hostRuntime = createUtilityRuntime(host, () => unexpectedExit('daemon'));
   const enrollInput = {
     serverUrl: renderer.url,
     token: readEnrollToken(options.dataDir!),
     dataDir: options.dataDir!
   };
-  const enrollOnce = () => enrollHostUtility(host.child, enrollInput);
+  const enrollOnce = () => failed || closing ? Promise.reject(new Error('Background service unavailable')) : enrollHostUtility(host.child, enrollInput);
   try {
     await enrollOnce();
   } catch (error) {
@@ -448,7 +460,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     // E2E hang in firstWindow() with no diagnostic. Keep retrying so this
     // machine is not stuck Offline after a transient enroll failure.
     console.error('host daemon enroll failed', error);
-    enrollRetry = setInterval(() => {
+    if (!failed && !closing) enrollRetry = setInterval(() => {
       void enrollOnce().then(() => {
         if (enrollRetry) {
           clearInterval(enrollRetry);
@@ -457,8 +469,6 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
       }).catch(() => undefined);
     }, 5_000);
   }
-  const server = createUtilityRuntime(renderer);
-  const hostRuntime = createUtilityRuntime(host);
   const terminalListeners = new Set<(event: TerminalHostEvent) => void>();
   const projectSettingsListeners = new Set<(projectId: string) => void>();
   const pluginCapabilitiesListeners = new Set<(contributors: RuntimePluginContribution[]) => void>();
@@ -606,6 +616,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     getPluginSettings: (pluginId) => server.request('plugins-settings-get', pluginId),
     setPluginSettings: (pluginId, values) => server.request('plugins-settings-set', pluginId, values),
     async relaunchEnrolledHost() {
+      if (failed || closing) return { ok: false as const, message: 'Background service stopped. Restart Zana to reconnect.' };
       if (enrollRetry) {
         clearInterval(enrollRetry);
         enrollRetry = null;
@@ -614,7 +625,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
         await enrollHostUtility(host.child, enrollInput, 'relaunch');
         return { ok: true as const };
       } catch (error) {
-        enrollRetry = setInterval(() => {
+        if (!failed && !closing) enrollRetry = setInterval(() => {
           void enrollOnce().then(() => {
             if (enrollRetry) {
               clearInterval(enrollRetry);
@@ -629,6 +640,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
       }
     },
     async close(): Promise<void> {
+      closing = true;
       if (enrollRetry) {
         clearInterval(enrollRetry);
         enrollRetry = null;
@@ -638,9 +650,10 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
   };
 }
 
-function createUtilityRuntime(runtime: { child: UtilityChild; url: string }): UtilityRuntime {
+export function createUtilityRuntime(runtime: { child: UtilityChild; url: string }, onUnexpectedExit?: () => void): UtilityRuntime {
   const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: NodeJS.Timeout }>();
   let stopped = false;
+  let stopping = false;
   let resolveStopped: (() => void) | null = null;
   const stoppedPromise = new Promise<void>((resolve) => { resolveStopped = resolve; });
   runtime.child.on('message', (message: unknown) => {
@@ -667,6 +680,7 @@ function createUtilityRuntime(runtime: { child: UtilityChild; url: string }): Ut
       request.reject(new Error('server utility process exited'));
     }
     pending.clear();
+    if (!stopping) onUnexpectedExit?.();
   });
   return {
     ...runtime,
@@ -674,6 +688,7 @@ function createUtilityRuntime(runtime: { child: UtilityChild; url: string }): Ut
       operation: 'app-version' | 'thread-live' | 'menubar-threads-list' | 'menubar-thread-open' | 'projects-list' | 'projects-add' | 'projects-update' | 'projects-reorder' | 'projects-touch' | 'projects-remove' | 'project-settings-get' | 'project-settings-set' | 'terminal-execute' | 'terminal-record' | 'terminal-events-since' | 'plugins-snapshot' | 'plugins-install' | 'plugins-enable' | 'plugins-disable' | 'plugins-remove' | 'plugins-reload' | 'plugins-logs' | 'plugins-search' | 'plugins-outdated' | 'plugins-update' | 'plugins-call-rpc' | 'plugins-settings-get' | 'plugins-settings-set' | 'plugins-cli-contributions' | 'plugins-cli-run' | 'marketplace-list' | 'marketplace-add' | 'marketplace-refresh' | 'marketplace-remove',
        ...args: [number] | [TerminalRequestCommand] | [TerminalHostEvent] | [string] | [string[]] | [string, number?] | [string, RuntimeProjectPatch] | [string, RuntimeProjectSettings] | [string, string, unknown?] | [string, Record<string, string | number | boolean | null>] | [string, string[]] | [string, string[], { projectId?: string; threadId?: string; cwd?: string }?] | []
     ) {
+      if (stopped || stopping) return Promise.reject(new Error('Background service stopped. Restart Zana to reconnect.'));
       const id = randomUUID();
       return new Promise<unknown>((resolveResult, rejectResult) => {
         const timer = setTimeout(() => {
@@ -681,7 +696,7 @@ function createUtilityRuntime(runtime: { child: UtilityChild; url: string }): Ut
           rejectResult(new Error(`server ${operation} request timed out`));
         }, 20_000);
         pending.set(id, { resolve: resolveResult, reject: rejectResult, timer });
-        runtime.child.postMessage({
+        try { runtime.child.postMessage({
           type: 'request', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id, operation, deadlineAt: new Date(Date.now() + 20_000).toISOString(),
           ...(operation === 'thread-live' ? { threadId: args[0] as string, projectId: args[1] as string } : {}),
           ...(operation === 'menubar-threads-list' ? { limit: args[0] as number } : {}),
@@ -725,17 +740,24 @@ function createUtilityRuntime(runtime: { child: UtilityChild; url: string }): Ut
               : {})
           } : {}),
           ...(operation === 'marketplace-add' || operation === 'marketplace-refresh' || operation === 'marketplace-remove' ? { url: args[0] as string } : {})
-        });
+        }); } catch (error) {
+          clearTimeout(timer);
+          pending.delete(id);
+          rejectResult(error);
+        }
       });
     },
     async stop() {
       if (stopped) return;
-      runtime.child.postMessage({ type: 'stop', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION });
-      await Promise.race([
-        stoppedPromise,
-        new Promise<void>((resolve) => setTimeout(resolve, 3_000))
-      ]);
-      if (!stopped) runtime.child.kill();
+      stopping = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        runtime.child.postMessage({ type: 'stop', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION });
+        await Promise.race([stoppedPromise, new Promise<void>(resolve => { timer = setTimeout(resolve, 3_000); })]);
+      } finally {
+        clearTimeout(timer);
+        if (!stopped) runtime.child.kill();
+      }
     }
   };
 }

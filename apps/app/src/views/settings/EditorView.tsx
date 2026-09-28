@@ -16,7 +16,7 @@ import { Section, Field, ToggleSwitch } from '@/components/settings/FormFields';
  *
  * NOTE: these editors are the GUI-launch targets (`cursor`/`code`/`idea`) —
  * DISTINCT from the coding-CLI harnesses (`cursor-agent`/`codex`/`pi`) under the
- * Code Harness tab.
+ * AI Harness tab.
  */
 
 const GLYPHS: Record<OpenTarget, (size: number) => React.ReactElement> = {

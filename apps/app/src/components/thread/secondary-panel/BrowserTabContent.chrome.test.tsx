@@ -11,6 +11,7 @@ import {
   type DesktopBrowserState
 } from '@zana-ai/zcc-desktop-contract';
 import { BrowserTabContent } from './BrowserTabContent.js';
+import { createBrowserViewVisibilityCoordinator } from './browserViewVisibilityCoordinator.js';
 
 beforeEach(() => {
   class ResizeObserverStub {
@@ -166,5 +167,125 @@ describe('BrowserTabContent chrome', () => {
       });
     });
     expect(screen.getByTestId('browser-find-match-count').textContent).toBe('2/5');
+  });
+});
+
+describe('BrowserTabContent visibility', () => {
+  function setup(initialUrl = 'http://127.0.0.1:3003/') {
+    const harness = createHarness();
+    vi.stubGlobal('cc', { browser: harness.api });
+    const coordinator = createBrowserViewVisibilityCoordinator(harness.api);
+    const browser = (
+      <BrowserTabContent
+        tabId="browser:test"
+        initialUrl={initialUrl}
+        canShowNativeBrowserView
+        visibilityCoordinator={coordinator}
+        threadId="thread-visibility"
+        onUpdate={() => undefined}
+      />
+    );
+    return { ...harness, browser };
+  }
+
+  it('displays and reloads a page inside its inspector, then hides it on unmount', async () => {
+    const h = setup();
+    const { unmount } = render(<div className="modal-backdrop"><div role="dialog" aria-modal="true">{h.browser}</div></div>);
+    await act(async () => h.emitState(browserState({ url: 'http://127.0.0.1:3003/' })));
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+    expect(screen.queryByTestId('thread-browser-newtab')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload', exact: true }));
+    expect(h.api.reload).toHaveBeenCalledWith('browser:test');
+    await act(async () => h.emitState(browserState({ isLoading: true })));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop loading' }));
+    expect(h.api.stop).toHaveBeenCalledWith('browser:test');
+    unmount();
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: false });
+  });
+
+  it.each(['modal-backdrop', 'consent-overlay'])('hides behind a %s and restores without loading again', async (className) => {
+    const h = setup();
+    render(<div className="modal-backdrop">{h.browser}</div>);
+    const overlay = document.createElement('div');
+    overlay.className = className;
+    await act(async () => { document.body.append(overlay); });
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: false });
+    expect(screen.queryByTestId('thread-browser-newtab')).toBeNull();
+    await act(async () => { overlay.remove(); });
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+    expect(h.api.attach).toHaveBeenCalledTimes(1);
+    expect(h.api.reload).not.toHaveBeenCalled();
+  });
+
+  it('hides for a nested modal dialog and restores when it becomes hidden', async () => {
+    const h = setup();
+    const { container } = render(<div className="modal-backdrop">{h.browser}<div data-testid="nested" /></div>);
+    const nested = screen.getByTestId('nested');
+    await act(async () => { nested.setAttribute('role', 'dialog'); nested.setAttribute('aria-modal', 'true'); });
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: false });
+    await act(async () => { nested.hidden = true; });
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+    expect(container.querySelector('.thread-browser-newtab')).toBeNull();
+  });
+
+  it.each(['display:none', 'visibility:hidden'])('ignores a backdrop inside a %s ancestor', async (style) => {
+    const h = setup();
+    const hiddenParent = document.createElement('div');
+    hiddenParent.setAttribute('style', style);
+    hiddenParent.innerHTML = '<div class="modal-backdrop"></div>';
+    document.body.append(hiddenParent);
+    try {
+      render(h.browser);
+      await act(async () => {});
+      expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+      await act(async () => { hiddenParent.removeAttribute('style'); });
+      expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: false });
+    } finally { hiddenParent.remove(); }
+  });
+
+  it('keeps a shared tab visible in the inspector when its background host becomes occluded', async () => {
+    const h = setup();
+    const second = createBrowserViewVisibilityCoordinator(h.api);
+    const inspectorBrowser = <BrowserTabContent tabId="browser:test" initialUrl="http://127.0.0.1:3003/"
+      canShowNativeBrowserView visibilityCoordinator={second} threadId="thread-visibility" onUpdate={() => undefined} />;
+    const { rerender } = render(<main>{h.browser}</main>);
+    await act(async () => {});
+    rerender(<main>{h.browser}<div className="modal-backdrop">{inspectorBrowser}</div></main>);
+    await act(async () => {});
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+    const contents = screen.getAllByTestId('thread-browser-tab').map((node) => node.querySelector('.thread-browser-view')!);
+    vi.spyOn(contents[0]!, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 200, 300));
+    vi.spyOn(contents[1]!, 'getBoundingClientRect').mockReturnValue(new DOMRect(300, 20, 200, 300));
+    vi.mocked(h.api.setBounds).mockClear();
+    fireEvent(window, new Event('resize'));
+    expect(h.api.setBounds).toHaveBeenCalledTimes(1);
+    expect(h.api.setBounds).toHaveBeenCalledWith({ tabId: 'browser:test', bounds: { x: 300, y: 20, width: 200, height: 300 } });
+    rerender(<main>{h.browser}</main>);
+    await act(async () => {});
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: true });
+  });
+
+  it('shows history only for an empty tab and keeps load errors distinct', async () => {
+    const h = setup('');
+    render(h.browser);
+    expect(screen.getByTestId('thread-browser-newtab')).toBeTruthy();
+    await act(async () => h.emitState(browserState({ errorText: 'ERR_CONNECTION_REFUSED' })));
+    expect(screen.queryByTestId('thread-browser-newtab')).toBeNull();
+    expect(screen.getByTestId('thread-browser-error')).toBeTruthy();
+    expect(h.api.setVisible).toHaveBeenLastCalledWith({ tabId: 'browser:test', visible: false });
+  });
+
+  it('reloads an explicitly resubmitted address and navigates a different one', async () => {
+    const h = setup();
+    render(h.browser);
+    const address = screen.getByTestId('thread-browser-address');
+    fireEvent.focus(address);
+    fireEvent.submit(address.closest('form')!);
+    expect(h.api.reload).toHaveBeenCalledWith('browser:test');
+    expect(h.api.navigate).not.toHaveBeenCalled();
+    fireEvent.focus(address);
+    fireEvent.change(address, { target: { value: 'http://127.0.0.1:3003/next' } });
+    fireEvent.submit(address.closest('form')!);
+    expect(h.api.navigate).toHaveBeenCalledWith({ tabId: 'browser:test', url: 'http://127.0.0.1:3003/next' });
   });
 });

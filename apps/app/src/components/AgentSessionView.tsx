@@ -30,6 +30,7 @@ import {
 import { getDesktopBrowserApi } from '../lib/desktop-browser.js';
 import { getBrowserUrlHost } from '../lib/browser-url.js';
 import { useOptionalPaneContext } from '../views/thread-detail/PaneContext.js';
+import { agentSessionPanelOwnerId, ThreadPanelOwnerProvider } from '../plugins/thread-panel-owner.js';
 
 /**
  * CLI-agent inspector split: live PTY on the left, the same secondary-panel
@@ -179,12 +180,13 @@ export function AgentSessionView({
 }) {
   const pane = useOptionalPaneContext();
   const viewRef = useRef<HTMLElement>(null);
-  const panel = useSecondaryPanel(modal ? `${session.id}:modal` : session.id, {
+  const panelOwnerId = agentSessionPanelOwnerId(session.id, modal);
+  const panel = useSecondaryPanel(panelOwnerId, {
     defaultOpen: !modal,
     modal,
     getContainerWidthPx: () => viewRef.current?.clientWidth ?? 0
   });
-  useInAppBrowserPanel(modal ? `${session.id}:modal` : session.id, panel);
+  useInAppBrowserPanel(panelOwnerId, panel);
   useDesktopBrowserReveal({
     threadId: session.id,
     isFocused: !modal || pane?.isFocused !== false,
@@ -342,6 +344,7 @@ export function AgentSessionView({
   }
 
   return (
+    <ThreadPanelOwnerProvider ownerId={panelOwnerId}>
     <section
       ref={viewRef}
       className={viewClass}
@@ -413,7 +416,7 @@ export function AgentSessionView({
           <BrowserTabDeck
             browserTabs={panel.state.tabs.filter((tab) => tab.kind === 'browser')}
             activeBrowserTabId={closable?.kind === 'browser' ? closable.id : null}
-            canShowNativeBrowserView={panelOpen && !modal}
+            canShowNativeBrowserView={panelOpen && (modal || pane?.isFocused !== false)}
             threadId={session.id}
             onUpdate={({ tabId, url, title }) => {
               const nextTitle = title && title.length > 0 ? title : getBrowserUrlHost(url) || 'Browser';
@@ -433,5 +436,6 @@ export function AgentSessionView({
       ) : null}
       </div>
     </section>
+    </ThreadPanelOwnerProvider>
   );
 }

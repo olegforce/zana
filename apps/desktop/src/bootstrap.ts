@@ -1,5 +1,6 @@
 import { app } from 'electron';
 import { join } from 'node:path';
+import { installRuntimeLog } from '@zana-ai/zcc-process-utils';
 
 // Electron ignores HOME for app.getPath('home') on macOS. Set the app path
 // before loading the main module, whose storage modules resolve it at import time.
@@ -24,4 +25,5 @@ if (!e2eHome && dataDir && !app.isPackaged) {
   app.setPath('userData', join(dataDir, 'electron-user-data'));
 }
 
+installRuntimeLog(dataDir || join(app.getPath('home'), '.zcc'), 'desktop', new URL('./main.js', import.meta.url));
 void import('./main.js');

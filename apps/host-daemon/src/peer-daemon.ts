@@ -209,6 +209,26 @@ export function peerUnpackCommand(serverHost: string): string {
   ].join('\n');
 }
 
+/** Never signal a PID file alone: it can outlive the process it named. */
+export function safeStopStandaloneDaemonLines(): string[] {
+  return [
+    'if [ -f "$data_dir/host-daemon.pid" ]; then',
+    '  old_pid=$(cat "$data_dir/host-daemon.pid")',
+    '  case "$old_pid" in ""|*[!0-9]*|0|1) old_pid= ;; esac',
+    '  old_command=""; old_started=""',
+    '  if [ -n "$old_pid" ]; then old_command=$(ps -p "$old_pid" -o command= 2>/dev/null || true); old_started=$(ps -p "$old_pid" -o lstart= 2>/dev/null || true); fi',
+    '  case "$old_command" in "$node_bin $join_bin join "*|"$node_bin $package_dir/join.cjs join "*)',
+    '    if [ -n "$old_started" ] && [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ] && [ "$(ps -p "$old_pid" -o command= 2>/dev/null || true)" = "$old_command" ]; then',
+    '      kill "$old_pid" 2>/dev/null || true',
+    '      i=0; while [ "$i" -lt 10 ] && [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ]; do i=$((i + 1)); sleep 1; done',
+    '      if [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ] && [ "$(ps -p "$old_pid" -o command= 2>/dev/null || true)" = "$old_command" ]; then kill -9 "$old_pid" 2>/dev/null || true; fi',
+    '    fi ;;',
+    '  esac',
+    '  rm -f "$data_dir/host-daemon.pid"',
+    'fi'
+  ];
+}
+
 export function peerInstallServiceCommand(input: {
   serverHost: string;
   joinCode: string;
@@ -221,8 +241,8 @@ export function peerInstallServiceCommand(input: {
   return [
     `data_dir="$HOME/.zcc-machines/${host}"`,
     'package_dir="$data_dir/runtime"',
-    'join_bin="$package_dir/join.cjs"',
-    'if [ ! -f "$join_bin" ]; then join_bin="$package_dir/join.mjs"; fi',
+    'join_bin="$package_dir/join.mjs"',
+    'if [ ! -f "$join_bin" ]; then join_bin="$package_dir/join.cjs"; fi',
     'port_dir="$HOME/.zcc-machines/host-daemon-ports"',
     'port_file="$data_dir/host-daemon.port"',
     'mkdir -p "$port_dir"',
@@ -239,7 +259,9 @@ export function peerInstallServiceCommand(input: {
     '[ -n "$node_bin" ] && [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -ge 22 ] || { echo "Node.js >= 22 is required" >&2; exit 1; }',
     'export PATH="$(dirname "$node_bin"):$PATH"',
     '[ -f "$join_bin" ] || { echo "join CLI missing from artifact" >&2; exit 1; }',
-    'if [ -f "$data_dir/host-daemon.pid" ]; then old_pid=$(cat "$data_dir/host-daemon.pid"); kill "$old_pid" 2>/dev/null || true; i=0; while [ "$i" -lt 10 ] && kill -0 "$old_pid" 2>/dev/null; do i=$((i + 1)); sleep 1; done; kill -9 "$old_pid" 2>/dev/null || true; fi',
+    // Stop the service first so it cannot race the replacement background daemon.
+    `if [ "$(uname -s)" = Darwin ]; then launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true; elif command -v systemctl >/dev/null 2>&1; then systemctl --user stop ${shQuote(unit)} 2>/dev/null || true; fi`,
+    ...safeStopStandaloneDaemonLines(),
     'if [ -f "$port_file" ]; then port=$(cat "$port_file"); else port=38888; while [ -e "$port_dir/$port" ]; do port=$((port + 1)); done; fi',
     'printf "%s\\n" "$port" > "$port_file"',
     'printf "%s\\n" "$data_dir" > "$port_dir/$port"',
@@ -261,6 +283,7 @@ export function peerInstallServiceCommand(input: {
     'if [ "$uname_s" = Darwin ]; then',
     '  kill "$join_pid" 2>/dev/null || true',
     '  sleep 1',
+    '  rm -f "$data_dir/host-daemon.pid"',
     `  plist="$HOME/Library/LaunchAgents/${label}.plist"`,
     '  mkdir -p "$HOME/Library/LaunchAgents"',
     '  printf "%s\\n" "<?xml version=\\"1.0\\" encoding=\\"UTF-8\\"?>" > "$plist"',
@@ -278,12 +301,14 @@ export function peerInstallServiceCommand(input: {
     '  printf "%s\\n" "<key>EnvironmentVariables</key><dict>" >> "$plist"',
     '  printf "%s\\n" "<key>ZCC_DATA_DIR</key><string>$data_dir</string>" >> "$plist"',
     '  printf "%s\\n" "<key>ZCC_SERVER_URL</key><string>$server_url</string>" >> "$plist"',
+    '  printf "%s\\n" "<key>ZCC_HOST_SERVICE_MANAGED</key><string>1</string>" >> "$plist"',
     '  printf "%s\\n" "</dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>" >> "$plist"',
     '  launchctl unload "$plist" 2>/dev/null || true',
     '  launchctl load "$plist"',
     'elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then',
     '  kill "$join_pid" 2>/dev/null || true',
     '  sleep 1',
+    '  rm -f "$data_dir/host-daemon.pid"',
     '  unit_dir="$HOME/.config/systemd/user"',
     '  mkdir -p "$unit_dir"',
     `  unit="$unit_dir/${unit}"`,
@@ -294,6 +319,7 @@ export function peerInstallServiceCommand(input: {
     '  printf "%s\\n" "ExecStart=$node_bin $join_bin join --host-id $host_id --server-url $server_url --host-daemon-port $port --auto-update" >> "$unit"',
     '  printf "%s\\n" "Environment=ZCC_DATA_DIR=$data_dir" >> "$unit"',
     '  printf "%s\\n" "Environment=ZCC_SERVER_URL=$server_url" >> "$unit"',
+    '  printf "%s\\n" "Environment=ZCC_HOST_SERVICE_MANAGED=1" >> "$unit"',
     '  printf "%s\\n" "Restart=always" >> "$unit"',
     '  printf "%s\\n" "RestartSec=3" >> "$unit"',
     '  printf "%s\\n" "[Install]" >> "$unit"',

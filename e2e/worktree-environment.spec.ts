@@ -183,7 +183,7 @@ async function prepareClaudeAndProject(
   }), agentPath);
   await ensureSidebarExpanded(window);
   await window.getByRole('link', { name: 'Settings' }).click();
-  await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+  await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
   const claudeSettings = window.locator('#settings-anchor-harness-claude');
   await expect(claudeSettings.locator('.opener-row-status')).toHaveClass(/opener-row-status--ok/);
   await window.locator('.settings-app-back').click();

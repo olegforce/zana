@@ -52,4 +52,36 @@ describe('browserViewVisibilityCoordinator', () => {
     expect(desktop.visible.gone).toBe(false);
     expect(detach).toHaveBeenCalledWith('gone');
   });
+
+  it('lets an inspector take ownership before syncing bounds and ignores background cleanup', () => {
+    const desktop = fakeBrowser();
+    const pane = createBrowserViewVisibilityCoordinator(desktop);
+    const inspector = createBrowserViewVisibilityCoordinator(desktop);
+    pane.show('a', () => expect(pane.owns('a')).toBe(true));
+    inspector.show('a', () => expect(inspector.owns('a')).toBe(true));
+    expect(pane.owns('a')).toBe(false);
+    pane.hide('a');
+    pane.release('a');
+    expect(desktop.visible.a).toBe(true);
+    expect(inspector.owns('a')).toBe(true);
+    inspector.hide('a');
+    expect(desktop.visible.a).toBe(false);
+    expect(inspector.owns('a')).toBe(false);
+    pane.show('a', () => {});
+    pane.release('a');
+    expect(pane.owns('a')).toBe(false);
+  });
+
+  it('does not hide a transferred tab when its former host switches tabs', () => {
+    const desktop = fakeBrowser();
+    const pane = createBrowserViewVisibilityCoordinator(desktop);
+    const inspector = createBrowserViewVisibilityCoordinator(desktop);
+    pane.show('a', () => {});
+    inspector.show('a', () => {});
+    pane.show('b', () => {});
+    expect(desktop.visible).toEqual({ a: true, b: true });
+    destroyPersistedBrowserView({ desktopBrowser: desktop, tabId: 'a' });
+    expect(inspector.owns('a')).toBe(false);
+    expect(desktop.visible.a).toBe(false);
+  });
 });

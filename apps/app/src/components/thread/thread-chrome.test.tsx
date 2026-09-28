@@ -745,7 +745,7 @@ describe('expandable row and chips', () => {
     expect(source).toContain('createCoalescedRunner');
     expect(source).toContain('<ThreadDetail key={threadId} threadId={threadId} />');
     expect(source).toContain('resolveTimelinePollRows');
-    expect(source).toContain('Promise.allSettled');
+    expect(source).toContain('loadThreadDetailProgressively');
     expect(source).not.toContain('/* keep last */');
     const load = readFileSync(fileURLToPath(new URL('../../views/threads/thread-detail-load.ts', import.meta.url)), 'utf8');
     expect(load).toContain('applyTimelineDelta');

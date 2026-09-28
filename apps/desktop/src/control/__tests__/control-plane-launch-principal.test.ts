@@ -55,3 +55,18 @@ describe('control-plane launch principal', () => {
     });
   });
 });
+
+
+it('authorizes model invalidation only through the existing product-server/operator boundary', async () => {
+  const d = deps();
+  d.invalidateModelCatalog = vi.fn();
+  expect(authorizeRequest({ token: 't', nonce: 'n', op: 'harness.models.invalidate', callerSessionId: 'agent' },
+    { token: 't', nonce: 'n' })).toMatchObject({ ok: false, code: 'FORBIDDEN_AGENT' });
+  expect(await dispatchOp('harness.models.invalidate', { providerId: 'acp-opencode' }, d, { class: 'product-server' }))
+    .toMatchObject({ ok: true });
+  expect(d.invalidateModelCatalog).toHaveBeenCalledWith('acp-opencode');
+  for (const providerId of [undefined, '', 42, 'x'.repeat(257)]) {
+    expect(await dispatchOp('harness.models.invalidate', { providerId }, d)).toMatchObject({ ok: false, code: 'BAD_ARGS' });
+  }
+  expect(await dispatchOp('harness.models.invalidate', { providerId: 'codex' }, deps())).toMatchObject({ ok: false, code: 'UNAVAILABLE' });
+});

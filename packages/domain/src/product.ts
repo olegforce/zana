@@ -424,17 +424,19 @@ export interface InboxQuestion {
 
 /**
  * Resume/reopen coordinates for an inbox entry's originating agent, captured at
- * push time from the live pty. This is what lets the inbox reopen an agent's
- * work AFTER its tab is gone: `claudeSessionId` resumes the exact conversation
+ * push time from the live thread or pty. This lets the inbox reopen work after
+ * its tab is gone: threadId identifies a thread; `claudeSessionId` resumes a terminal conversation
  * (`claude --resume <id>`), and `profile`/`personaId`/`cwd` reconstruct the
  * launch. All fields are host-resolved, never agent-supplied (Rule 1).
  */
 export interface InboxOrigin {
+  /** Host-stamped conversation thread; reopen/reply continues this thread. */
+  threadId?: string;
   /**
    * The originating agent's Claude transcript id. When present, the entry is
    * resumable — reopening spawns `claude --resume <claudeSessionId>` and gets
-   * the full prior conversation back. Absent ⇒ not resumable (a fresh, seeded
-   * agent is spawned instead).
+   * the full prior conversation back. For terminal origins without this field,
+   * a fresh, seeded agent is spawned instead. Thread origins use threadId.
    */
   claudeSessionId?: string;
   /** Launch profile of the originating session (claude / claude-yolo / …). */
@@ -547,21 +549,20 @@ export interface InboxEntry {
    */
   report?: boolean;
   /**
-   * Originating terminal session, when the creation path knows it. Set by
-   * the scheduler when a notify-on-exit run completes. Absent for legacy
+   * Originating thread or terminal session, when the creation path knows it.
+   * Also set by the scheduler when a notify-on-exit run completes. Absent for legacy
    * entries on disk and for paths that don't track session identity —
    * readers must treat undefined as "no preferred tab; fall back to the
    * project's last active tab."
    */
   sessionId?: string;
   /**
-   * Enough about the originating agent to REOPEN its work when the live
-   * {@link sessionId} pty is gone (the common case — the agent pushed, then its
-   * tab was closed). Resolved server-side from the live pty at push time (never
-   * trusted from the agent) and persisted, so the inbox "Open" action can
-   * `--resume` the exact conversation, or — for legacy/non-resumable entries —
-   * spawn a fresh agent seeded with this report. Absent for entries pushed
-   * before this field existed and for non-claude sessions (nothing to resume).
+   * Host-resolved identity for reopening the originating agent's work.
+   * threadId continues the original thread, including archived conversations.
+   * Terminal coordinates let Open resume the transcript after its pty exits,
+   * or seed a fresh agent with this report when no transcript is available.
+   * Absent for entries pushed before this field existed or when the origin
+   * was unavailable. Never trusted from agent-supplied input.
    * See {@link InboxOrigin}.
    */
   origin?: InboxOrigin;

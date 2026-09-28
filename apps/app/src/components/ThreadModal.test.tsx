@@ -84,6 +84,9 @@ describe('ThreadModal', () => {
       css.indexOf('.agent-terminal-modal.is-fullscreen {')
     );
     expect(inspectorModal).toContain('background: var(--bg-panel);');
+    expect(inspectorModal).toContain('min-width: min(1080px, 94vw);');
+    expect(inspectorModal).toContain('max-width: min(1080px, 94vw);');
+    expect(inspectorModal).toContain('min-height: 94vh;');
     expect(css).toContain('.thread-detail-view--modal .thread-timeline-current-turn > .thread-timeline-item.is-user {\n  background: var(--bg-panel);\n}');
   });
 

@@ -54,6 +54,12 @@ export function ExpandableTimelineRow({
       terminalLatch,
       manualOverride: manualExpansionOverride
     });
+  // Hidden bodies can fetch full output and parse large documents. Mount them
+  // only on first expansion, then retain their state across subsequent toggles.
+  const [hasExpanded, setHasExpanded] = useState(isExpanded);
+  useEffect(() => {
+    if (isExpanded) setHasExpanded(true);
+  }, [isExpanded]);
 
   const className = [
     'thread-timeline-work',
@@ -104,7 +110,7 @@ export function ExpandableTimelineRow({
       </button>
       {children != null ? (
         <div className="thread-timeline-work-detail" hidden={!isExpanded}>
-          {children}
+          {isExpanded || hasExpanded ? children : null}
         </div>
       ) : null}
     </article>

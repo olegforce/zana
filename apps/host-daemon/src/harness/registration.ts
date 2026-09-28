@@ -25,6 +25,8 @@ export interface RestoreProjection extends NativeConversationResume {
 export interface HarnessRegistration extends SdkHarnessRegistration<LaunchProfileId, LaunchProvider> {
   readonly id: HarnessFamily | 'shell';
   readonly verification?: HarnessVerificationDefinition;
+  /** Picker discovery invalidates the corresponding native launch inventory. */
+  readonly modelCatalog?: { readonly providerId: string; readonly invalidate: () => void };
   /** Refresh dynamic descriptor targets only after a successful binary probe. */
   readonly refreshCatalog?: (input: {
     readonly binary: string;

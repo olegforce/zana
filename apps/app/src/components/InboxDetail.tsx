@@ -4,6 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Bookmark, BookmarkCheck, BotMessageSquare, Code2, Copy, CornerDownLeft, Download, ExternalLink, FileText, FolderOpen, Send, Sparkles, Star, Trash2 } from 'lucide-react';
 import './inbox-detail.css';
 import { useCompactLayout } from '../hooks/useCompactLayout.js';
+import { useInboxThread } from '../hooks/useInboxThread.js';
+import { reopenInboxThread, sendInboxThreadReply } from '../lib/inbox-thread.js';
+import { getThreadRoutePath } from '../lib/route-paths.js';
 import { InboxMobileActions } from './InboxMobileActions.js';
 import { InboxMobileDocument } from './InboxMobileDocument.js';
 import { inboxQuestions } from '@zana-ai/zcc-domain/product';
@@ -165,6 +168,8 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
     aliveProject?.name ?? entry.projectLabel ?? entry.projectId;
 
   const projectTerminals = terminals[entry.projectId] ?? [];
+  const threadLookup = useInboxThread(entry, projectTerminals.some((t) => t.id === entry.sessionId));
+  const originatingThread = threadLookup.thread;
   // Resolve the originating session, when one was recorded and is still
   // alive. An EXITED tombstone still lingers in the terminal list (see
   // store.ts's onExit), but its pty is dead — a reply would be dropped and
@@ -179,7 +184,8 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
     ? projectTerminals.find((t) => t.id === reopenedSessionId) ?? null
     : null;
   const aliveSession = originalSession ?? reopenedSession;
-  const sessionTombstoned = !!entry.sessionId && originalSession === null && !reopenedSession;
+  const sessionTombstoned = !!entry.sessionId && originalSession === null && !reopenedSession
+    && !originatingThread && !threadLookup.loading && !threadLookup.error;
 
   // Can we resume the EXACT prior conversation? Only when the origin captured a
   // claude transcript id and a claude-family profile to relaunch on.
@@ -236,9 +242,13 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
   // In reopen mode a plain report shows a quiet "Reply…" button first; expanding
   // it (or an actual question) reveals the dead-session box.
   const showReopenBox = showBox || replyExpanded;
+  const openLabel = originatingThread
+    ? reopening ? 'Opening…' : originatingThread.archived ? 'Reopen' : 'Open'
+    : openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned });
 
   /**
-   * Open the entry's agent. Three-way, best-to-worst:
+   * Open a thread in its original conversation, restoring it when archived.
+   * Terminal origins use the existing three-way fallback:
    *  1. The originating tab is still live → focus it (resume via restore for a
    *     headless/background session, else just select the tab).
    *  2. The tab is gone but we captured a resumable conversation → spawn
@@ -250,7 +260,19 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
    * In every case navigate to the project first so the user lands on the agent.
    */
   const handleOpen = async () => {
-    if (!aliveProject || reopening) return;
+    if (!aliveProject || reopening || threadLookup.loading || threadLookup.error) return;
+    if (originatingThread) {
+      setReopening(true);
+      try {
+        const thread = await reopenInboxThread(entry);
+        navigate(getThreadRoutePath(thread.id, aliveProject.id));
+      } catch (error) {
+        pushToast(error instanceof Error ? error.message : 'Could not reopen the conversation', 'error');
+      } finally {
+        setReopening(false);
+      }
+      return;
+    }
     useUi.getState().enterProjectFocus(aliveProject.id);
 
     // 1. Live originating tab (or one we already reopened) → focus it.
@@ -271,6 +293,19 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
       }
     } finally {
       setReopening(false);
+    }
+  };
+
+  const answerOnThread = async (answer: string): Promise<boolean> => {
+    try {
+      await sendInboxThreadReply(entry, answer);
+      useInboxAnswered.getState().markAnswered(entry.id);
+      if (originatingThread?.archived) threadLookup.retry();
+      pushToast('Reply sent', 'info');
+      return true;
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : 'Could not send your reply', 'error');
+      return false;
     }
   };
 
@@ -471,7 +506,26 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
                          shell first so every report doesn't sprout a textarea;
                          a real question auto-opens.
               • none   → project gone → honest disabled panel, never a blank node. */}
-          {deliveryMode === 'live' && aliveSession ? (
+          {threadLookup.loading ? (
+            <div className="inbox-reply" role="status">Loading conversation…</div>
+          ) : threadLookup.error ? (
+            <div className="inbox-reply" role="alert">
+              {threadLookup.error}
+              <button type="button" onClick={threadLookup.retry}>Retry</button>
+            </div>
+          ) : originatingThread && projectAlive ? (
+            questionSet.length > 0 ? (
+              <QuestionBlock
+                entry={entry}
+                questions={questionSet}
+                prompt={entry.comments}
+                sessionTitle={originatingThread.title}
+                onReply={answerOnThread}
+              />
+            ) : (
+              <ReplyBox entry={entry} sessionTitle={originatingThread.title} onReply={answerOnThread} />
+            )
+          ) : deliveryMode === 'live' && aliveSession ? (
             questionSet.length > 0 ? (
               <QuestionBlock
                 key={entry.id}
@@ -627,14 +681,18 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
       </div>
 
       <div className="inbox-detail-title">{inboxPrimaryTitle(entry)}</div>
-      {(compact || !projectAlive || aliveSession || sessionTombstoned) && (
+      {(compact || !projectAlive || aliveSession || sessionTombstoned || originatingThread) && (
         <div className="inbox-detail-meta">
           {compact && <time className="inbox-mobile-time" dateTime={new Date(entry.ts).toISOString()} title={formatAbsolute(entry.ts)}>{formatRelative(entry.ts)}</time>}
-          <SessionStatusPill
+          {originatingThread && projectAlive ? (
+            <span className="inbox-status-pill" title={originatingThread.title}>
+              {originatingThread.archived ? 'Archived' : 'Thread'}
+            </span>
+          ) : <SessionStatusPill
             projectAlive={projectAlive}
             live={!!aliveSession}
             ended={sessionTombstoned}
-          />
+          />}
           {aliveSession && aliveSession.title !== inboxPrimaryTitle(entry) && (
             <span className="inbox-detail-session-chip" title="Originating terminal">
               {aliveSession.title}
@@ -680,9 +738,9 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               type="button"
               onClick={() => void handleOpen()}
               className="inbox-detail-open"
-              disabled={reopening}
-              aria-label={`${openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned })}${compact ? ' agent' : ''}`}
-              title={openAgentTitle({
+              disabled={reopening || threadLookup.loading || !!threadLookup.error}
+              aria-label={`${openLabel}${compact ? ' agent' : ''}`}
+              title={originatingThread ? `Open ${originatingThread.title}` : openAgentTitle({
                 reopening,
                 resumable,
                 aliveSession,
@@ -690,7 +748,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
                 displayLabel
               })}
             >
-              {openAgentLabel({ reopening, resumable, alive: !!aliveSession, ended: sessionTombstoned })}
+              {openLabel}
               {compact ? ' agent' : null}
             </button>
           ) : (
@@ -861,6 +919,7 @@ function ReplyBox({
   entry,
   sessionId,
   sessionTitle,
+  onReply,
   onAnswerDeadSession,
   deadSessionBusy = false,
   autoFocus = false
@@ -871,6 +930,8 @@ function ReplyBox({
    *  carries the answer by reopening the agent. */
   sessionId?: string;
   sessionTitle: string;
+  /** Delivery to a conversation thread, retaining its history and settings. */
+  onReply?: (answer: string) => Promise<boolean>;
   /** Dead-session delivery: reopen the agent with the answer as its first turn.
    *  Set (with no `sessionId`) when the originating session has ended. */
   onAnswerDeadSession?: (answer: string) => Promise<boolean>;
@@ -897,7 +958,7 @@ function ReplyBox({
       if (entry.executionId && entry.blockerId) {
         ok = await respondToInboxBlocker(entry, text);
       } else {
-        ok = dead
+        ok = onReply ? await onReply(text) : dead
           ? await onAnswerDeadSession!(text)
           : await replyToInboxEntry(entry.id, sessionId!, text);
       }
@@ -948,7 +1009,7 @@ function ReplyBox({
         }}
         rows={2}
         placeholder="Leave a reply…"
-        aria-label="Reply to the originating terminal session"
+        aria-label="Reply to the originating agent"
       />
       <div className="inbox-reply-actions">
         <span className="inbox-reply-hint">⌘↵ to send</span>

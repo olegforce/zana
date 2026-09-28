@@ -799,13 +799,13 @@ function httpProduct(): Pick<
         }),
       onOpen: (cb) => subscribeProductEvent('threads:open', cb),
       events: async (threadId) => apiJson(`/threads/${encodeURIComponent(threadId)}/events`),
-      executionOptions: async (query) => {
+      executionOptions: async (query, options) => {
         const params = new URLSearchParams();
         if (query?.providerId) params.set('providerId', query.providerId);
         if (query?.hostId) params.set('hostId', query.hostId);
         if (query?.projectId) params.set('projectId', query.projectId);
         const suffix = params.size ? `?${params.toString()}` : '';
-        return apiJson(`/system/execution-options${suffix}`);
+        return apiJson(`/system/execution-options${suffix}`, { signal: options?.signal });
       },
       providers: async () => apiJson('/threads/providers'),
       commands: async (projectId) =>

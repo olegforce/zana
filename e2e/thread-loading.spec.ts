@@ -1,11 +1,12 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Page } from '@playwright/test';
+import type { TimelineRow } from '@zana-ai/zcc-server-contract';
 import { test, expect } from './fixtures/app.js';
 
 test.use({ launchEnv: { ZCC_FAKE_PROVIDER: '1' }, isolateBundledCatalog: true });
 
-test('thread loading is illustrated, motion-aware, and settles on success, failure, and retry', async ({ app }, testInfo) => {
-  const { window, home } = app;
+async function createLoadingThread(window: Page, home: string) {
   const projectPath = join(home, 'loading-project');
   mkdirSync(projectPath);
   const threadId = await window.evaluate(async (path) => {
@@ -22,6 +23,12 @@ test('thread loading is illustrated, motion-aware, and settles on success, failu
   await expect.poll(() => window.evaluate(async (id) => {
     return (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status;
   }, threadId)).toBe('idle');
+  return threadId;
+}
+
+test('thread loading is illustrated, motion-aware, and settles on success, failure, and retry', async ({ app }, testInfo) => {
+  const { window, home } = app;
+  const threadId = await createLoadingThread(window, home);
 
   let release = () => {};
   let gate = new Promise<void>((resolve) => { release = resolve; });
@@ -52,11 +59,17 @@ test('thread loading is illustrated, motion-aware, and settles on success, failu
     await expect(timeline.locator('.thread-working-indicator')).toHaveCount(0);
     await expect(loading.locator('.pane-empty-loading-lines span').first()).toHaveCSS('animation-name', 'pane-empty-loading-line');
 
+    // Metadata can update the surrounding layout during the entrance animation;
+    // measure both centers in the same frame and wait for that layout to settle.
+    await expect.poll(() => timeline.evaluate((node) => {
+      const pane = node.getBoundingClientRect();
+      const art = node.querySelector('.pane-empty-art')!.getBoundingClientRect();
+      return Math.abs(art.x + art.width / 2 - (pane.x + pane.width / 2));
+    })).toBeLessThan(4);
     const paneBox = await timeline.boundingBox();
     const artBox = await loading.locator('.pane-empty-art').boundingBox();
     expect(paneBox).not.toBeNull();
     expect(artBox).not.toBeNull();
-    expect(Math.abs(artBox!.x + artBox!.width / 2 - (paneBox!.x + paneBox!.width / 2))).toBeLessThan(4);
     expect(artBox!.y).toBeGreaterThan(paneBox!.y + paneBox!.height * 0.15);
 
     for (const theme of ['light', 'dark']) {
@@ -95,4 +108,102 @@ test('thread loading is illustrated, motion-aware, and settles on success, failu
   await expect(loading).toHaveCount(0);
   await expect(timeline).toContainText('Waiting for the first turn…');
   await expect(timeline).toHaveAttribute('aria-busy', 'false');
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`thread timeline ${outcome} is shown while metadata is still loading`, async ({ app }) => {
+    const { window, home } = app;
+    const threadId = await createLoadingThread(window, home);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let metadataRequested = false;
+    let metadataReleased = false;
+    await window.route((url) => url.pathname === `/api/v1/threads/${threadId}`, async (route) => {
+      metadataRequested = true;
+      const response = await route.fetch();
+      const body = await response.json();
+      await gate;
+      metadataReleased = true;
+      await route.fulfill({ response, json: { ...body, thread: { ...body.thread, title: 'Metadata arrived' } } });
+    });
+    if (outcome === 'failure') {
+      await window.route((url) => url.pathname === `/api/v1/threads/${threadId}/timeline`, (route) =>
+        route.fulfill({ status: 503, json: { error: 'Conversation temporarily unavailable' } }));
+    }
+    try {
+      await window.evaluate((id) => {
+        history.pushState({}, '', `/threads/${id}`);
+        dispatchEvent(new PopStateEvent('popstate'));
+      }, threadId);
+      await expect.poll(() => metadataRequested).toBe(true);
+      const timeline = window.getByTestId('thread-detail').getByTestId('thread-timeline');
+      if (outcome === 'success') {
+        await expect(timeline).toContainText('Response to: Hello from the loading test');
+      } else {
+        await expect(window.getByTestId('thread-detail').getByTestId('thread-timeline-load-error')).toBeVisible();
+      }
+      await expect(timeline).toHaveAttribute('aria-busy', 'false');
+      await expect(timeline.getByTestId('thread-loading')).toHaveCount(0);
+      expect(metadataReleased).toBe(false);
+    } finally {
+      release();
+    }
+    await expect(window.getByTestId('thread-detail').getByText('Metadata arrived', { exact: true })).toBeVisible();
+  });
+}
+
+test('opening a tool-heavy thread fetches output only for the expanded row', async ({ app }, testInfo) => {
+  const { window, home } = app;
+  const threadId = await createLoadingThread(window, home);
+  const outputCount = 80;
+  const rows: TimelineRow[] = Array.from({ length: outputCount }, (_, index) => ({
+    id: `command-${index}`, threadId, turnId: 'large-turn',
+    sourceSeqStart: index + 1, sourceSeqEnd: index + 1,
+    startedAt: index + 1, createdAt: index + 1, completedAt: index + 2,
+    kind: 'work', workKind: 'command', status: 'completed', callId: `call-${index}`,
+    command: `npm run check-${index}`, cwd: home, source: null,
+    output: 'Preview line\n'.repeat(400), outputPreview: { totalChars: 50_000 },
+    exitCode: 0, approvalStatus: null, activityIntents: []
+  }));
+  rows.push({
+    id: 'answer', threadId, turnId: 'large-turn', sourceSeqStart: outputCount + 1, sourceSeqEnd: outputCount + 1,
+    startedAt: outputCount + 1, createdAt: outputCount + 1,
+    kind: 'conversation', role: 'assistant', text: 'All checks are complete.', attachments: null, turnRequest: null
+  });
+  await window.route((url) => url.pathname === `/api/v1/threads/${threadId}/timeline`, (route) =>
+    route.fulfill({ json: { rows, maxSeq: outputCount + 1, status: 'idle', activeThinking: null } }));
+  const outputRequests: string[] = [];
+  await window.route((url) => url.pathname === `/api/v1/threads/${threadId}/timeline/turn-summary-details`, (route) => {
+    const seq = new URL(route.request().url()).searchParams.get('sourceSeqStart');
+    outputRequests.push(seq ?? '');
+    const row = rows.find((row) => String(row.sourceSeqStart) === seq);
+    return route.fulfill({ json: { rows: row ? [{ ...row, output: `Full output for ${row.id}\n${'Result line\n'.repeat(5_000)}\nOutput complete` }] : [] } });
+  });
+  await window.evaluate((id) => {
+    history.pushState({}, '', `/threads/${id}`);
+    dispatchEvent(new PopStateEvent('popstate'));
+  }, threadId);
+  const timeline = window.getByTestId('thread-detail').getByTestId('thread-timeline');
+  await expect(timeline).toContainText('All checks are complete.');
+  // React effects have flushed by the time the row is interactive. The hidden
+  // bundle and its 80 preview bodies must not start any detail requests.
+  const bundle = timeline.getByTestId('thread-work-row').first();
+  await expect(bundle.locator('> button')).toHaveAttribute('aria-expanded', 'false');
+  expect(outputRequests).toEqual([]);
+  await bundle.locator('> button').click();
+  const first = timeline.locator('[data-row-id="command-0"]');
+  await expect(first).toBeVisible();
+  expect(outputRequests).toEqual([]);
+  await first.locator('> button').click();
+  await expect(first).toContainText('Full output for command-0');
+  await expect(first).toContainText('Output complete');
+  expect(outputRequests).toEqual(['1']);
+  await first.locator('> button').click();
+  await expect(first.locator('> button')).toHaveAttribute('aria-expanded', 'false');
+  await first.locator('> button').click();
+  await expect(first).toContainText('Output complete');
+  expect(outputRequests).toEqual(['1']);
+  await testInfo.attach('thread-output-requests', {
+    contentType: 'application/json', body: JSON.stringify({ outputCount, requestsOnOpen: 0, requestsAfterExpansion: outputRequests.length })
+  });
 });

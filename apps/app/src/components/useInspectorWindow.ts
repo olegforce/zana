@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { product } from '../lib/product-client.js';
 import { suppressPostDragClick } from '../lib/suppress-post-drag-click.js';
 import {
-  clampInspectorFrame,
+  clearInspectorSize,
   cursorForInspectorEdge,
+  currentInspectorFrame,
   focusInspectorDialog,
   inspectorFrameFromKey,
   inspectorFrameFromPointer,
@@ -12,15 +13,22 @@ import {
   inspectorModalClassName,
   inspectorViewport,
   releaseInspectorFullScreen,
+  rememberInspectorSize,
   toggleInspectorFullScreen,
   type InspectorFrame,
   type InspectorResizeEdge
 } from './inspector-window.js';
 
+function sameFrame(a: InspectorFrame | null, b: InspectorFrame | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+}
+
 export function useInspectorWindow() {
   const ref = useRef<HTMLDivElement | null>(null);
   const [fullScreen, setFullScreen] = useState(false);
-  const [frame, setFrame] = useState<InspectorFrame | null>(null);
+  const [frame, setFrame] = useState<InspectorFrame | null>(() => currentInspectorFrame(inspectorViewport()));
   const [resizing, setResizing] = useState(false);
   const fullScreenRef = useRef(false);
   fullScreenRef.current = fullScreen;
@@ -43,11 +51,23 @@ export function useInspectorWindow() {
   }, []);
   useEffect(() => {
     const onWindowResize = () => {
-      setFrame((current) => (current ? clampInspectorFrame(current, inspectorViewport()) : current));
+      // A drag owns the size until pointerup. App-window changes scale the
+      // size the user chose; an unchanged viewport leaves it alone.
+      if (drag.current) return;
+      const next = currentInspectorFrame(inspectorViewport());
+      // A missing stored size must not wipe a live frame (opening another
+      // overlay can fire `resize` before hydrate). Reset stays explicit.
+      if (!next) return;
+      setFrame((current) => (sameFrame(current, next) ? current : next));
     };
     window.addEventListener('resize', onWindowResize);
     return () => window.removeEventListener('resize', onWindowResize);
   }, []);
+
+  const commitFrame = (next: InspectorFrame) => {
+    rememberInspectorSize(next, inspectorViewport());
+    setFrame(next);
+  };
 
   const measure = (): InspectorFrame | null => {
     const node = ref.current;
@@ -66,6 +86,9 @@ export function useInspectorWindow() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     suppressPostDragClick();
+    const next = currentInspectorFrame(inspectorViewport());
+    if (!next) return;
+    setFrame((current) => (sameFrame(current, next) ? current : next));
   };
 
   return {
@@ -95,12 +118,20 @@ export function useInspectorWindow() {
       document.body.style.cursor = cursorForInspectorEdge(edge);
       document.body.style.userSelect = 'none';
       setResizing(true);
-      setFrame(clampInspectorFrame(start, inspectorViewport()));
+      commitFrame(inspectorFrameFromPointer({
+        start,
+        originX: event.clientX,
+        originY: event.clientY,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        edge,
+        viewport: inspectorViewport()
+      }));
     },
     moveResize: (event: PointerEvent<HTMLDivElement>) => {
       const session = drag.current;
       if (!session || session.pointerId !== event.pointerId) return;
-      setFrame(
+      commitFrame(
         inspectorFrameFromPointer({
           start: session.start,
           originX: session.originX,
@@ -116,13 +147,14 @@ export function useInspectorWindow() {
     resetFrame: () => {
       drag.current = null;
       setResizing(false);
+      clearInspectorSize();
       setFrame(null);
     },
     keyResize: (key: string) => {
       const start = frame ?? measure();
       if (!start) return;
       const next = inspectorFrameFromKey(start, key, inspectorViewport());
-      if (next) setFrame(next);
+      if (next) commitFrame(next);
     }
   };
 }

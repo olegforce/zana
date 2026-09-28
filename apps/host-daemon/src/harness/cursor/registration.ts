@@ -1,7 +1,7 @@
 import { createCursorHistory } from './history.js';
 import type { HarnessRegistration } from '../registration.js';
 import { CursorProvider } from './provider.js';
-import { discoverCursorModels } from '../cursor-model-catalog.js';
+import { discoverCursorModels, invalidateCursorModels } from '../cursor-model-catalog.js';
 import { stripSessionResumeFlags } from '../argv-utils.js';
 import { cursorChatMinter } from './create-chat.js';
 
@@ -9,6 +9,7 @@ const implementation = new CursorProvider();
 
 export const cursorHarness: HarnessRegistration = {
   id: 'cursor',
+  modelCatalog: { providerId: 'acp-cursor', invalidate: invalidateCursorModels },
   createHistoryAdapter: createCursorHistory,
   historyIconId: 'acp-cursor',
   label: 'Cursor',

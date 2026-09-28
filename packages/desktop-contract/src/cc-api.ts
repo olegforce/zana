@@ -223,7 +223,7 @@ export interface CcApi {
     ): Promise<HarnessAuthStatusInfo[]>;
   };
   /**
-   * Code-harness verification (Settings → Code Harness). `verify` probes each
+   * Code-harness verification (Settings → AI Harness). `verify` probes each
    * harness family's `<binary> --version` on demand and returns the enabled ×
    * installed matrix the launcher gates the profile picker on. Best-effort in
    * main — never throws; a missing binary reports `installed: false`.
@@ -659,7 +659,7 @@ export interface CcApi {
     }): Promise<{ delivered: number }>;
     onOpen(cb: (payload: unknown) => void): () => void;
     events(threadId: string): Promise<{ events: unknown[] }>;
-    executionOptions(query?: { providerId?: string; hostId?: string; projectId?: string }): Promise<{
+    executionOptions(query?: { providerId?: string; hostId?: string; projectId?: string }, options?: { signal: AbortSignal }): Promise<{
       providers: Array<{
         id: string;
         displayName: string;

@@ -45,6 +45,7 @@ export function startEnrolledHostConnection(options: {
   runtime?: CommandRuntime;
   dataDir?: string;
   onSocketClose?: (code: number) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }): EnrolledHostConnection {
   const instanceId = options.instanceId ?? randomUUID();
   const wsUrl = joinServerWsUrl(options.serverUrl, '/internal/hosts/ws');
@@ -238,6 +239,7 @@ export function startEnrolledHostConnection(options: {
         const ack = HostHelloOkMessageSchema.safeParse(parsed);
         if (ack.success && ack.data.hostId === options.hostId) {
           desktopBrowserBroker?.setConnected(true);
+          options.onConnectionChange?.(true);
           markReady();
         }
         return;
@@ -255,6 +257,7 @@ export function startEnrolledHostConnection(options: {
         heartbeatTimer = null;
       }
       desktopBrowserBroker?.setConnected(false);
+      options.onConnectionChange?.(false);
       options.onSocketClose?.(event.code);
       if (!readySettled) {
         markReady(new Error('host websocket closed before hello'));
@@ -277,6 +280,7 @@ export function startEnrolledHostConnection(options: {
     ready,
     async close() {
       closed = true;
+      options.onConnectionChange?.(false);
       markReady(new Error('host connection closed before hello'));
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);

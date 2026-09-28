@@ -276,7 +276,21 @@ describe('thread secondary panel state', () => {
       url: 'https://example.com'
     });
     expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://example.com' }).tabs).toHaveLength(1);
+    expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://example.com/' }).tabs).toHaveLength(1);
     expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://zana.ai' }).tabs).toHaveLength(2);
+    const preview = addClosableTab(emptySecondaryPanelState(), {
+      kind: 'browser',
+      title: 'localhost',
+      url: 'http://localhost:5173/'
+    });
+    const focused = addClosableTab(preview, {
+      kind: 'browser',
+      title: 'localhost',
+      url: 'http://127.0.0.1:5173/dashboard'
+    });
+    expect(focused.tabs).toHaveLength(1);
+    expect(focused.activeId).toBe(preview.tabs[0]?.id);
+    expect(addClosableTab(preview, { kind: 'browser', title: 'localhost', url: 'http://localhost:5174' }).tabs).toHaveLength(2);
     const emptyBrowser = addClosableTab(emptySecondaryPanelState(), { kind: 'browser', title: 'Browser', url: '' });
     expect(addClosableTab(emptyBrowser, { kind: 'browser', title: 'Browser', url: '' }).tabs).toHaveLength(2);
     const explorer = addClosableTab(emptySecondaryPanelState(), { kind: 'explorer', title: 'Explorer' });

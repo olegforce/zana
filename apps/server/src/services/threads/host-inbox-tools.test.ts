@@ -58,9 +58,11 @@ describe('invokeHostInboxTool', () => {
     expect(failed.success).toBe(false);
     const ok = await invokeHostInboxTool(ctx({
       inbox: {
-        append: async (input: { docs?: unknown; report?: boolean }) => {
+        append: async (input: { docs?: unknown; report?: boolean; sessionId?: string; origin?: unknown }) => {
           expect(input.docs).toEqual([{ path: 'docs/a.md' }]);
           expect(input.report).toBe(true);
+          expect(input.sessionId).toBe('thr-1');
+          expect(input.origin).toEqual({ threadId: 'thr-1' });
           return { id: 'inb-2', ts: 3, projectId: 'proj-1' };
         },
         read: async () => ({ entries: [], hasMore: false })
@@ -69,7 +71,7 @@ describe('invokeHostInboxTool', () => {
       name: 'inbox_push',
       threadId: 'thr-1',
       projectId: 'proj-1',
-      input: { docs: [{ path: 'docs/a.md' }], report: true }
+      input: { docs: [{ path: 'docs/a.md' }], report: true, origin: { threadId: 'spoofed' }, sessionId: 'spoofed' }
     });
     expect(ok.success).toBe(true);
   });

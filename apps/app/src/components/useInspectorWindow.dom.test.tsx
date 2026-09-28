@@ -16,11 +16,13 @@ vi.mock('../lib/product-client.js', () => ({
   }
 }));
 
+import { clearInspectorSize } from './inspector-window.js';
 import { InspectorResizeHandles } from './InspectorResizeHandles.js';
 import { useInspectorWindow } from './useInspectorWindow.js';
 
 afterEach(() => {
   cleanup();
+  clearInspectorSize();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.style.cssText = '';
@@ -83,6 +85,40 @@ describe('inspector window resize', () => {
     expect(inspector.className).not.toContain('is-resizing');
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 1400, clientY: 900 });
     expect(inspector.style.width).toBe('960px');
+  });
+
+  it('keeps a resized modal the same size until the app window changes', () => {
+    mockRect();
+    const view = render(<Harness />);
+    const handle = screen.getByTestId('inspector-resize-se');
+    Object.assign(handle, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+      hasPointerCapture: () => true
+    });
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 1000, clientY: 680 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 1080, clientY: 760 });
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+    const inspector = screen.getByTestId('inspector');
+    expect(inspector.style.width).toBe('960px');
+    expect(inspector.style.maxWidth).toBe('960px');
+    expect(inspector.style.minWidth).toBe('960px');
+    expect(inspector.style.minHeight).toBe('760px');
+    fireEvent(window, new Event('resize'));
+    expect(inspector.style.width).toBe('960px');
+    view.unmount();
+    fireEvent(window, new Event('resize'));
+    render(<Harness />);
+    expect(screen.getByTestId('inspector').style.width).toBe('960px');
+    expect(screen.getByTestId('inspector').style.minWidth).toBe('960px');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1200 });
+    fireEvent(window, new Event('resize'));
+    const scaled = screen.getByTestId('inspector');
+    expect(scaled.style.width).toBe('1200px');
+    expect(scaled.style.height).toBe('912px');
+    expect(scaled.style.left).toBe('400px');
+    expect(scaled.style.top).toBe('144px');
   });
 
   it('clamps a custom frame when the viewport shrinks', () => {

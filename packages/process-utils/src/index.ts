@@ -55,3 +55,5 @@ export function buildChildEnv(source: NodeJS.ProcessEnv = process.env): Record<s
   }
   return env;
 }
+
+export { createRuntimeLog, installRuntimeLog, redactRuntimeLog } from './runtime-log.js';

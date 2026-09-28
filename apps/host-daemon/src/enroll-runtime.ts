@@ -61,6 +61,7 @@ async function openSession(options: {
   hostKey: string;
   instanceId: string;
   onSocketClose?: (code: number) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }): Promise<EnrolledHostConnection> {
   const connection = startEnrolledHostConnection({
     serverUrl: options.serverUrl,
@@ -68,6 +69,7 @@ async function openSession(options: {
     hostKey: options.hostKey,
     instanceId: options.instanceId,
     dataDir: options.dataDir,
+    onConnectionChange: options.onConnectionChange,
     onSocketClose: options.onSocketClose
   });
   void connection.ready.catch(() => {
@@ -91,6 +93,7 @@ export async function startEnrolledHostDaemon(options: {
   /** Desktop co-started daemon: replace another holder of this data dir. */
   stealLock?: boolean;
   onSocketClose?: (code: number) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }): Promise<EnrolledHostDaemon> {
   const releaseLock = acquireDaemonLock(options.dataDir, { steal: options.stealLock === true });
   try {
@@ -108,6 +111,7 @@ export async function startEnrolledHostDaemon(options: {
           hostId: existing.hostId,
           hostKey: existing.hostKey,
           instanceId,
+          onConnectionChange: options.onConnectionChange,
           onSocketClose: options.onSocketClose
         });
         hostId = existing.hostId;
@@ -128,6 +132,7 @@ export async function startEnrolledHostDaemon(options: {
           hostId: minted.hostId,
           hostKey: minted.hostKey,
           instanceId,
+          onConnectionChange: options.onConnectionChange,
           onSocketClose: options.onSocketClose
         });
       }
@@ -150,6 +155,7 @@ export async function startEnrolledHostDaemon(options: {
         hostId: minted.hostId,
         hostKey: minted.hostKey,
         instanceId,
+        onConnectionChange: options.onConnectionChange,
         onSocketClose: options.onSocketClose
       });
     }

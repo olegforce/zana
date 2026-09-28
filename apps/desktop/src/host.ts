@@ -1,4 +1,4 @@
-import { createHistoryProviders } from '@zana-ai/zcc-host-daemon/harness/registry';
+import { createHistoryProviders, invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
 import { RendererReadiness } from './window/renderer-readiness.js';
 import { runStartupDependencyDoctor } from './startup-dependency-doctor.js';
 /**
@@ -36,6 +36,7 @@ import { isTrustedRendererUrl, productServerUrl, rendererUrl, setProductionRende
 import { refreshRemoteStartPathHosts, stampedProjectRemote } from './remote-workspace.js';
 import { resolveIconPath } from './resolve-icon-path.js';
 import { startRuntimeSupervisor, type RuntimeSupervisor } from './runtime/runtime-supervisor.js';
+import { createRuntimeRecovery } from './runtime/runtime-recovery.js';
 import { createTeamProductOps } from './team-product-ops.js';
 import { jobCoordinatorPrompt } from './team-coordinator-prompt.js';
 import { MAX_HANDOFF_FILE_BYTES, TeamPlanHandoff, authoredPlanRelPath, cleanupHandoffFiles, readAuthoredPlan, writeSourceMirror } from './team-plan-handoff.js';
@@ -2921,6 +2922,20 @@ function resolvedAppVersion(): string {
     : version;
 }
 
+const runtimeRecovery = createRuntimeRecovery({
+  showDialog: async service => {
+    const result = await dialog.showMessageBox({
+      type: 'error', title: 'Background service stopped',
+      message: `Zana’s ${service} stopped unexpectedly.`,
+      detail: 'Restart Zana to reconnect. Your saved projects and conversations are still on disk. Restarting ends any remaining running agents and terminals.',
+      buttons: ['Restart Zana', 'Keep open'], defaultId: 0, cancelId: 1
+    });
+    return result.response === 0;
+  },
+  restart: () => { quitConfirmed = true; app.relaunch(); app.quit(); },
+  log: service => logMainError('runtime unavailable', service)
+});
+
 async function ensureRendererStaticHost(): Promise<void> {
   if (process.env.ELECTRON_RENDERER_URL || runtimeSupervisor) return;
   // electron-vite emits renderer assets beside the main bundle. Electron's asar
@@ -2932,7 +2947,8 @@ async function ensureRendererStaticHost(): Promise<void> {
     dataDir: resolveZccDataDir(process.env, app.getPath('home')),
     runtimeDir: __dirname,
     version: resolvedAppVersion(),
-    extraEnv: { ZCC_PRODUCT_SERVER_CREDENTIAL: ensureProductServerCredential() }
+    extraEnv: { ZCC_PRODUCT_SERVER_CREDENTIAL: ensureProductServerCredential() },
+    onUnexpectedExit: runtimeRecovery.notify
   });
   runtimeSupervisor.onProjectSettingsChanged((projectId) => {
     safeSend(IPC.projectSettings.onChanged, projectId);
@@ -8277,6 +8293,7 @@ async function bootstrapNormal() {
       ptys.getSession(sessionId)?.cohort?.role === 'orchestrator',
     verifySessionCredential: verifySessionControlCredential,
     verifyProductServerCredential,
+    invalidateModelCatalog: invalidateHarnessModelCatalog,
     authorizeOrchestratorMutation: (sessionId, op, args) => {
       const orchestrator = ptys.getSession(sessionId);
       if (!orchestrator || orchestrator.cohort?.role !== 'orchestrator') {
@@ -8435,6 +8452,7 @@ app.on('before-quit', (event) => {
     }
     quitConfirmed = true;
   }
+  runtimeRecovery.dispose();
   // Quit can bypass a usable per-window close transition. Clear native maximize
   // state here too, so macOS cannot restore a maximized window on next launch.
   for (const controller of boundsControllers.values()) controller.flushForClose();

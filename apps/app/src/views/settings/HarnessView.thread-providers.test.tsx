@@ -253,3 +253,20 @@ describe('HarnessSettingsTabs', () => {
     expect(html).toMatch(/aria-selected="true"[^>]*>\s*CLI Agent/);
   });
 });
+
+it('shows stale models, the error and the last success time after a failed refresh', async () => {
+  let fail = false;
+  resetThreadModelCatalog(async () => ({
+    providers: [providerRow('codex')], models: fail ? [] : [modelRow('working')], selectedOnlyModels: [],
+    permissionCeiling: 'full', modelLoadError: fail ? { providerId: 'codex', code: 'auth_required', detail: null } : null
+  }));
+  await prefetchThreadModelCatalog();
+  fail = true;
+  await reloadThreadProviderModels('codex');
+  render(<ThreadProviderCatalog providers={[catalog[1]]} />);
+  expect(screen.getByText('1 model · Refresh failed')).toBeTruthy();
+  fireEvent.click(screen.getByLabelText('Models for Codex'));
+  expect(screen.getByRole('status').textContent).toContain('Sign in with codex login');
+  expect(screen.getByText(/^Last loaded:/)).toBeTruthy();
+  expect(screen.getByText('working', { selector: 'code' })).toBeTruthy();
+});

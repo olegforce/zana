@@ -52,7 +52,7 @@
  *      the only remote→local channel is the queue the local side drains for it.
  */
 
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,6 +77,17 @@ import type { AppConfig, Project } from '@zana-ai/zcc-domain/product';
  * Any other stdin is left to the pty's own echo (which is what proves an
  * injected coordination line crossed the process boundary).
  */
+// Exercise the real remote PTY path with a local transport stand-in. Never
+// start an actual SSH connection to a nonexistent hostname in a unit worker.
+vi.mock('node-pty', async (load) => {
+  const actual = await load<typeof import('node-pty')>();
+  return { ...actual, spawn: (file: string, args: string[], options: import('node-pty').IPtyForkOptions) =>
+    file === 'ssh'
+      ? actual.spawn(process.execPath, ['-e', 'process.stdout.write("ssh-fixture-ready\\n"); setInterval(() => {}, 1000)'], options)
+      : actual.spawn(file, args, options)
+  };
+});
+
 const REMOTE_AGENT_SCRIPT = [
   '#!/usr/bin/env node',
   "process.stdin.setEncoding('utf8');",
@@ -134,7 +145,13 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
       }
     }
     if (ptys) {
+      const processIds = ptys.listAll().flatMap(session => session.pid ? [session.pid] : []);
       ptys.killAll();
+      // Keep the worker alive until the PTY hard-kill backstop has reaped SSH
+      // helpers. Exiting the worker earlier abandons its unref'ed timer.
+      await waitFor(() => processIds.every(pid => {
+        try { process.kill(pid, 0); return false; } catch { return true; }
+      }), 'test PTY processes to exit', 5000);
       ptys = null;
     }
     if (handle) {
@@ -267,7 +284,7 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
     expect((await inbox.read()).entries).toHaveLength(0);
   });
 
-  it('the remote agent has no MCP URL — coordination can only originate locally', () => {
+  it('the remote agent has no MCP URL — coordination can only originate locally', async () => {
     // This encodes the "coordination always comes from local" invariant as a
     // test: a remote `ssh -t` session is spawned WITHOUT ZCC_MCP_URL in its env
     // (createRemote/buildRemoteCmd deliberately skip MCP injection, pty.ts:792),
@@ -284,6 +301,7 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
       version: 1,
       theme: 'dark',
       shell: '/bin/sh',
+      tmuxScope: 'none',
       // stand in for the `claude` binary so create() runs without a real CLI;
       // for the remote path this is irrelevant (the command is shipped to ssh).
       claudeBinary: scriptPath,
@@ -303,11 +321,10 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
     const localEnv = ptys.getSession(localClaude.id);
     expect(localEnv).not.toBeNull();
 
-    // A REMOTE claude session is spawned via the ssh path. It is a real local
-    // `ssh` subprocess holding the pty; ssh will fail to resolve the bogus host
-    // in CI, but the proc is alive long enough to accept a reply() write — which
-    // is the ONLY way the local side reaches it. Crucially, createRemote never
-    // sets ZCC_MCP_URL, so the remote agent cannot call back.
+    // The SSH hop is a local stand-in; PTY creation, remote session setup,
+    // reply and teardown remain real. Wait for exec before testing teardown.
+    let remoteReady = false;
+    ptys.on('data', (_id, data) => { if (data.includes('ssh-fixture-ready')) remoteReady = true; });
     const remote = ptys.create({
       projectId,
       profile: 'claude',
@@ -317,6 +334,8 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
       config,
       remote: { host: 'example-devbox-that-will-not-resolve', user: 'svc' }
     });
+
+    await waitFor(() => remoteReady, 'remote transport to execute');
 
     // The remote session is addressable from local (registered like any other)
     // and reachable ONLY by the local-side inject primitive `reply()` …

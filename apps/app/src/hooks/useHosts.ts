@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
+import { updateModelCatalogHosts } from '../components/thread/pickers/thread-model-catalog.js';
 import { product } from '../lib/product-client.js';
 
 /** Last roster from a successful (or empty) fetch — survives composer remounts. */
 let cachedHosts: Host[] = [];
 
 function rememberHosts(rows: Host[]): Host[] {
+  updateModelCatalogHosts(rows);
   cachedHosts = rows;
   return rows;
 }

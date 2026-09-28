@@ -171,7 +171,7 @@ async function selectPermissionMode(
 
 async function probeHarness(window: Page, family: string, versionTitle: RegExp) {
   await window.getByRole('link', { name: 'Settings' }).click();
-  await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+  await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
   const settings = window.locator(`#settings-anchor-harness-${family}`);
   await expect(settings).not.toHaveClass(/opener-row--off/);
   // Status rows render a version chip and a login chip. Target the version --ok

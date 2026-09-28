@@ -59,6 +59,7 @@ describe('openDocFromCard', () => {
     expect(openDocFromCard({
       document: libraryDoc,
       projectId: 'p1',
+      threadId: 'thr_1',
       openWorkspaceFile: null,
       openThreadPanel: (options) => {
         panels.push(options);
@@ -71,6 +72,7 @@ describe('openDocFromCard', () => {
     expect(panels).toEqual([{
       actionId: 'document',
       title: 'Auth findings',
+      threadId: 'thr_1',
       params: {
         path: 'findings/auth.md',
         scope: 'project',

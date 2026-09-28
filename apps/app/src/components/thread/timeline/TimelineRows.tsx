@@ -235,6 +235,7 @@ function TimelineRowView({
           rowId={row.id}
           expandable
           autoExpanded={row.systemKind === 'reconnect'}
+          forceExpanded={forceExpandedRowIds?.has(row.id) === true}
           summary={
             <span className="thread-timeline-system-title">{row.title}</span>
           }

@@ -151,7 +151,10 @@ class FakePtyManager extends EventEmitter {
   }
 }
 
-function makeManager(extraTaskFields?: Record<string, unknown>): {
+function makeManager(
+  extraTaskFields?: Record<string, unknown>,
+  inbox?: { append: (entry: unknown) => Promise<void> }
+): {
   manager: SchedulerManager;
   ptys: FakePtyManager;
   task: ReturnType<SchedulerManager['create']>;
@@ -177,7 +180,8 @@ function makeManager(extraTaskFields?: Record<string, unknown>): {
     ptys: ptys as unknown as PtyManager,
     launchTerminal: (opts) => ptys.create(opts as unknown as Record<string, unknown>) as never,
     store: fakeStore as unknown as Parameters<SchedulerManager['setDeps']>[0]['store'],
-    getPendingSubagentCount: () => pendingSubagents.count
+    getPendingSubagentCount: () => pendingSubagents.count,
+    ...(inbox ? { inbox: inbox as unknown as Parameters<SchedulerManager['setDeps']>[0]['inbox'] } : {})
   });
   const task = manager.create({
     name: 't',
@@ -628,6 +632,24 @@ describe('SchedulerManager — incomplete (exit-0 with no schedule_report)', () 
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('error');
+  });
+
+  it('still notifies loudly when the turn finished without a schedule_report', () => {
+    const append = vi.fn(async () => undefined);
+    const { manager, ptys, task } = makeManager({ prompt: 'work', inboxLevel: 'quiet' }, { append });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    manager.onAgentFinished(sid);
+    ptys.simulateExit(sid, 0);
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.result).toBe('incomplete');
+    expect(run.finishedAt).toBeTruthy();
+    expect(append).toHaveBeenCalledTimes(1);
+    const notice = append.mock.calls[0][0] as { comments: string; notify: string };
+    expect(notice.notify).toBe('loud');
+    expect(notice.comments).toContain('incomplete');
   });
 });
 

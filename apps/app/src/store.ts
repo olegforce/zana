@@ -57,7 +57,7 @@ import {
 } from './lib/safe-local-storage.js';
 import { product } from './lib/product-client.js';
 import { subscribeProductEvent } from './lib/product-ws.js';
-import { prefetchThreadModelCatalog, reloadThreadModelCatalog } from './components/thread/pickers/thread-model-catalog.js';
+import { prefetchThreadModelCatalog, reloadThreadModelCatalog, modelDiscoveryConfigKey, invalidateModelCatalogs } from './components/thread/pickers/thread-model-catalog.js';
 import { decodeRoutePath } from './lib/decode-route.js';
 import {
   getExtensionsTabRoutePath,
@@ -1607,7 +1607,7 @@ interface DataState {
   harnessAfcodeEnabled: boolean;
   /** Mirror of AppConfig.nativeAgentDiscoveryEnabled. */
   nativeAgentDiscoveryEnabled: boolean;
-  /** Last code-harness verification snapshot (Settings → Code Harness). Empty
+  /** Last code-harness verification snapshot (Settings → AI Harness). Empty
    *  until `refreshHarnessStatus` runs; the launcher gates a harness profile on
    *  `enabled && installed`, showing an enabled-but-missing harness greyed-out. */
   harnessStatus: HarnessVerifyResult[];
@@ -2164,7 +2164,7 @@ export const useData = create<DataState>((set, get) => ({
     } catch {
       set({ harnessStatus: [] });
     }
-    void reloadThreadModelCatalog().catch(() => undefined);
+    await reloadThreadModelCatalog().catch(() => undefined);
   },
 
   async refreshEditorStatus() {
@@ -2350,7 +2350,13 @@ export const useData = create<DataState>((set, get) => ({
       // window (e.g. Follow-ups) flips this window's mirrored gate at once
       // instead of lingering until reload. Re-apply the same config→flag
       // mapping init uses, plus theme (the other visible cross-window setting).
+      let discoveryConfigKey = modelDiscoveryConfigKey(config);
       product.config.onChanged((next) => {
+        const nextDiscoveryKey = modelDiscoveryConfigKey(next);
+        if (nextDiscoveryKey !== discoveryConfigKey) {
+          discoveryConfigKey = nextDiscoveryKey;
+          invalidateModelCatalogs();
+        }
         set(mirroredConfigFlags(next));
         applyTheme(next.theme);
         if (typeof next.listPaneWidth === 'number') {

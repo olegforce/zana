@@ -94,6 +94,7 @@ function constantTimeEqual(a: string, b: string): boolean {
  * handlers use — main authorizes, the CLI just asks.
  */
 export interface ControlPlaneDeps {
+  invalidateModelCatalog?: (providerId: string) => void;
   /** List registered projects (read surface + name/id resolution). */
   listProjects: () => Array<{ id: string; name: string; tag?: string; path: string }>;
   /** Live terminal sessions for a project (or all when omitted). */
@@ -272,6 +273,7 @@ const AGENT_ALLOWED_OPS = new Set<string>([
  * and do not skip confirm based on a forgeable args.source field.
  */
 const PRODUCT_SERVER_ALLOWED_OPS = new Set<string>([
+  'harness.models.invalidate',
   'term.create',
   'term.reply',
   'term.close',
@@ -328,6 +330,7 @@ const ORCHESTRATOR_ALLOWED_OPS = new Set<string>([
 const KNOWN_OPS = new Set<string>([
   ...AGENT_ALLOWED_OPS,
   ...PLUGIN_CONTROL_OPS,
+  'harness.models.invalidate',
   'term.create',
   'term.close',
   'term.close-summary',
@@ -498,6 +501,15 @@ export async function dispatchOp(
   const dim = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), 1000) : fallback;
   switch (op) {
+    case 'harness.models.invalidate': {
+      const providerId = args.providerId;
+      if (typeof providerId !== 'string' || !providerId || providerId.length > 256) {
+        return { ok: false, code: 'BAD_ARGS', message: 'providerId required' };
+      }
+      if (!deps.invalidateModelCatalog) return { ok: false, code: 'UNAVAILABLE', message: 'Model cache is unavailable' };
+      deps.invalidateModelCatalog(providerId);
+      return { ok: true, value: null };
+    }
     case 'status': {
       const projects = deps.listProjects();
       const agents = deps.listAgents().map((a) => ({

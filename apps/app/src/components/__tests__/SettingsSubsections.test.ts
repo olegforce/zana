@@ -4,8 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { SETTINGS_GROUPS, SETTINGS_SECTIONS, SETTINGS_SUBSECTIONS } from '@/views/settings/SettingsView';
 
 describe('Settings subsection navigation', () => {
-  it('lists Install status, then Modern and CLI Agent', () => {
-    expect(SETTINGS_SUBSECTIONS.harness?.slice(0, 3)).toEqual([
+  it('lists Model lists, Install status, then Modern and CLI Agent', () => {
+    expect(SETTINGS_SECTIONS.find((section) => section.id === 'harness')).toMatchObject({
+      label: 'AI Harness'
+    });
+    expect(SETTINGS_SUBSECTIONS.harness?.slice(0, 4)).toEqual([
+      { id: 'harness-models', label: 'Model lists' },
       { id: 'harness-status', label: 'Install status' },
       { id: 'harness-thread', label: 'Modern' },
       { id: 'harness-legacy', label: 'CLI Agent' }

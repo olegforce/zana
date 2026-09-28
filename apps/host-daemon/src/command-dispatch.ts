@@ -44,7 +44,7 @@ import {
 } from '@zana-ai/zcc-host-workspace';
 import { probeExtraAcpAgents } from './extra-acp-agent-probes.js';
 import { verifyHarnesses } from './harness/harness-verify.js';
-import { registrationFor } from './harness/registry.js';
+import { registrationFor, invalidateHarnessModelCatalog } from './harness/registry.js';
 import { HostCommandError } from './host-command-error.js';
 import { readConfinedFileRange } from './read-file-range.js';
 import { watchWorkspacePath } from './workspace-fs-watch.js';
@@ -631,11 +631,13 @@ export async function dispatchHostCommand(
           throw new HostCommandError('invalid_request', 'model discovery cwd is unavailable');
         }
       }
-      return runtime.listModels({
+      const listed = await runtime.listModels({
         providerId: command.providerId,
         bridgeLaunch: command.bridgeLaunch,
         ...(cwd !== undefined ? { cwd } : {})
       });
+      invalidateHarnessModelCatalog(command.providerId);
+      return listed;
     }
     case 'provider.health': {
       if (!runtime.providerHealth) {

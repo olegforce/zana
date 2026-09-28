@@ -1,3 +1,4 @@
+import { browserPreviewIdentity } from '@zana-ai/zcc-desktop-contract';
 import type { JsonValue } from '@zana-ai/zcc-domain/thread-runtime';
 
 export const SECONDARY_PANEL_STORAGE_PREFIX = 'zcc.secondaryPanel.';
@@ -326,7 +327,10 @@ function matchExistingTab(
       }
       return tab.moduleId === input.moduleId && !tab.actionId;
     }
-    if (input.kind === 'browser') return tab.url === input.url && Boolean(input.url);
+    if (input.kind === 'browser') {
+      const next = browserPreviewIdentity(input.url ?? '');
+      return next !== null && browserPreviewIdentity(tab.url ?? '') === next;
+    }
     return false;
   });
 }

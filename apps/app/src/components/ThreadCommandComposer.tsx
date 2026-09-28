@@ -739,16 +739,17 @@ export function ThreadCommandComposer({
       {providerCli.error ? (
         <p className="thread-command-error" data-testid="provider-cli-install-error">{providerCli.error}</p>
       ) : null}
-      {uploadProgress != null ? (
-        <p className="thread-command-upload" data-testid="thread-command-upload-progress">
-          Uploading {Math.round(uploadProgress * 100)}%
-        </p>
-      ) : null}
       <CommandComposer
         className={`home-agent-command thread-command-card${field.dropOver ? ' is-drop-over' : ''}`}
         labelledBy="thread-command-label"
         aria-busy={busy}
       >
+        {uploadProgress != null ? (
+          <div className="thread-command-upload" role="status" data-testid="thread-command-upload-progress">
+            <Loader2 size={14} className="thread-command-send-spin" aria-hidden="true" />
+            <span>Uploading {Math.round(uploadProgress * 100)}%</span>
+          </div>
+        ) : null}
         <ComposerPromptField
           editor={field.editor}
           images={field.images}

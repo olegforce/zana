@@ -35,6 +35,7 @@ describe('DocDirectiveCard', () => {
       options: {
         actionId: 'document',
         title: 'Auth findings',
+        threadId: 't1',
         params: {
           path: 'findings/auth.md',
           scope: 'project',
