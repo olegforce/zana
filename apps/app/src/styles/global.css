@@ -36308,7 +36308,11 @@ textarea.thread-command-editor {
 .thread-secondary-tabs {
   flex: 1 1 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.thread-secondary-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .thread-secondary-pin {
