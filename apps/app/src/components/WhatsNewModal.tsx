@@ -1,5 +1,6 @@
 import { Modal } from './Modal.js';
 import { MarkdownContent } from './MarkdownContent.js';
+import { ReleaseNoteVideo } from './ReleaseNoteVideo.js';
 import { useWhatsNew } from '../store.js';
 
 /**
@@ -43,6 +44,7 @@ export function WhatsNewModal() {
             {notes.length > 1 && (
               <div className="whats-new-version-chip">v{note.version}</div>
             )}
+            <ReleaseNoteVideo version={note.version} />
             <MarkdownContent text={note.markdown} />
             {i < notes.length - 1 && <hr className="whats-new-divider" />}
           </section>

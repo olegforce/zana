@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,13 +9,74 @@ import { HOST_RPC_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/host-rpc';
 import { startStaticHost, type StaticHost } from './static-host.js';
 
 let host: StaticHost | null = null;
+const mediaRoots: string[] = [];
 
 afterEach(async () => {
   await host?.close();
   host = null;
+  for (const root of mediaRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('startStaticHost', () => {
+  it.each([
+    ['walkthrough.mp4', 'video/mp4'],
+    ['walkthrough.jpg', 'image/jpeg'],
+    ['walkthrough.en.vtt', 'text/vtt; charset=utf-8'],
+  ])('serves bundled release media %s with its browser MIME type', async (name, mime) => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-release-media-'));
+    mediaRoots.push(root);
+    writeFileSync(join(root, 'index.html'), '<main>Release notes</main>');
+    mkdirSync(join(root, 'assets'));
+    writeFileSync(join(root, 'assets', name), 'bundled media');
+    host = await startStaticHost({ rootDir: root });
+    const response = await fetch(`${host.url}assets/${name}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(mime);
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('content-length')).toBe('13');
+    expect(await response.text()).toBe('bundled media');
+  });
+
+  it.each([
+    ['bytes=2-5', 206, 'cdef', 'bytes 2-5/10'],
+    ['bytes=7-', 206, 'hij', 'bytes 7-9/10'],
+    ['bytes=-3', 206, 'hij', 'bytes 7-9/10'],
+    ['bytes=0-999', 206, 'abcdefghij', 'bytes 0-9/10'],
+    ['bytes=10-', 416, '', 'bytes */10'],
+    ['bytes=5-2', 416, '', 'bytes */10'],
+    ['bytes=0-1,4-5', 416, '', 'bytes */10'],
+  ])('supports seeking in bundled video: %s', async (range, status, body, contentRange) => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-release-media-'));
+    mediaRoots.push(root);
+    writeFileSync(join(root, 'index.html'), '<main>Release notes</main>');
+    writeFileSync(join(root, 'walkthrough.mp4'), 'abcdefghij');
+    host = await startStaticHost({ rootDir: root });
+    const response = await fetch(`${host.url}walkthrough.mp4`, { headers: { Range: range } });
+    expect(response.status).toBe(status);
+    expect(response.headers.get('content-range')).toBe(contentRange);
+    expect(response.headers.get('accept-ranges')).toBe('bytes');
+    expect(response.headers.get('content-length')).toBe(String(body.length));
+    expect(await response.text()).toBe(body);
+    const head = await fetch(`${host.url}walkthrough.mp4`, { method: 'HEAD', headers: { Range: range } });
+    expect(head.status).toBe(status);
+    expect(head.headers.get('content-range')).toBe(contentRange);
+    expect(await head.text()).toBe('');
+  });
+
+  it('keeps range requests confined to the trusted renderer root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-release-media-'));
+    mediaRoots.push(root);
+    const outside = mkdtempSync(join(tmpdir(), 'zcc-release-media-outside-'));
+    mediaRoots.push(outside);
+    writeFileSync(join(root, 'index.html'), '<main>Release notes</main>');
+    writeFileSync(join(outside, 'private.mp4'), 'private content');
+    symlinkSync(join(outside, 'private.mp4'), join(root, 'escape.mp4'));
+    host = await startStaticHost({ rootDir: root });
+    const response = await fetch(`${host.url}escape.mp4`, { headers: { Range: 'bytes=0-2' } });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain('private');
+  });
+
   it('serves the trusted renderer and does not expose paths outside its root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'zcc-static-host-'));
     writeFileSync(join(root, 'index.html'), '<main>zana</main>');

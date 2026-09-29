@@ -1,0 +1,31 @@
+.release-note-video {
+  margin: 0 0 24px;
+}
+.release-note-video h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+.release-note-video p {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.release-note-video video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  background: #101321;
+}
+.release-note-video-details {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.release-note-video-details a {
+  color: var(--accent);
+}

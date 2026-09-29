@@ -9,6 +9,7 @@ import { createHostDaemonWebSocketServer, handleHostInternalHttp, handleHostInte
 import { handleInstallHttp } from './http/install-http.js';
 import { attachPairingRelay } from './http/pairing-relay-controller.js';
 import { tryServePluginAsset } from './http/plugin-assets.js';
+import { videoByteRange } from './http/video-preview.js';
 
 export interface BrowserProjectSummary {
   id: string;
@@ -62,8 +63,11 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.ico': 'image/x-icon',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.jpg': 'image/jpeg',
   '.map': 'application/json; charset=utf-8',
+  '.mp4': 'video/mp4',
   '.svg': 'image/svg+xml',
+  '.vtt': 'text/vtt; charset=utf-8',
   '.woff2': 'font/woff2'
 };
 
@@ -192,6 +196,7 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
       return;
     }
     let file: string = requestedFile;
+    let fileSize = 0;
 
     try {
       // A renderer artifact tree is expected to contain no symlinks, but verify
@@ -204,6 +209,7 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
       }
       const metadata = await stat(file);
       if (!metadata.isFile()) throw new Error('not a file');
+      fileSize = metadata.size;
     } catch {
       // The shell has no server-side routes yet. Falling back only for paths
       // without an extension preserves future browser routing without treating
@@ -217,12 +223,25 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
 
     const immutable = file.includes(`${sep}assets${sep}`);
     const spaPage = file === indexPath;
-    response.writeHead(200, {
+    const mime = contentType(file);
+    const video = mime === 'video/mp4';
+    const range = video && request.headers.range ? videoByteRange(request.headers.range, fileSize) : undefined;
+    const headers = {
       'Cache-Control': spaPage ? 'no-store' : immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-      'Content-Type': contentType(file),
+      'Content-Type': mime,
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
-      'X-Frame-Options': 'DENY'
+      'X-Frame-Options': 'DENY',
+      ...(video ? { 'Accept-Ranges': 'bytes' } : {})
+    };
+    if (range === null) {
+      response.writeHead(416, { ...headers, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': '0' }).end();
+      return;
+    }
+    response.writeHead(range ? 206 : 200, {
+      ...headers,
+      ...(!spaPage ? { 'Content-Length': String(range ? range.end - range.start + 1 : fileSize) } : {}),
+      ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${fileSize}` } : {})
     });
     if (request.method === 'HEAD') {
       response.end();
@@ -236,7 +255,9 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
       }
       return;
     }
-    createReadStream(file).on('error', () => response.destroy()).pipe(response);
+    const stream = createReadStream(file, range);
+    response.once('close', () => stream.destroy());
+    stream.on('error', () => response.destroy()).pipe(response);
   });
 
   if (options.product && (productWss || hostWss)) {
