@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { openConnectDatabase } from './database.mjs';
 import { createRegistry, CODE_TTL, digest } from './registry.mjs';
@@ -166,4 +166,23 @@ it('permits repair and replacement of a pending code at the account limit', asyn
   const next = await limited.redeemMachineCode(repair.code, secret());
   expect(next.machineId).toBe(first.machineId);
   expect(await limited.authenticateMachine(server, first.credential)).toBeNull();
+});
+
+it.each([4, 8, 12, 13, 14, 15])('rejects a valid shortened %i-byte GCM tag without consuming the enrollment', async authTagLength => {
+  const input = enrollment(), issued = await registry.createMachineCode(server, input), attempt = secret();
+  const raw = issued.code.replaceAll('-', ''), hash = digest(raw);
+  const [original] = await db.query('SELECT enrollment FROM connect_machine_codes WHERE hash=$1', [hash]);
+  const key = createHash('sha256').update(`zana-host-enrollment:${raw}`).digest();
+  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength });
+  cipher.setAAD(Buffer.from(`${server.id}:${input.hostId}`));
+  // An empty ciphertext leaves only the shorter, cryptographically valid tag
+  // after the IV. Decryption must require the format's full 16-byte tag.
+  const data = cipher.final();
+  const shortened = Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64url');
+  await db.query('UPDATE connect_machine_codes SET enrollment=$1 WHERE hash=$2', [shortened, hash]);
+  await expect(registry.redeemMachineCode(issued.code, attempt)).rejects.toThrow('Invalid authentication tag length');
+  expect(await registry.listMachines('alice', server.id)).toEqual([]);
+  expect((await db.query('SELECT consumed_at FROM connect_machine_codes WHERE hash=$1', [hash]))[0].consumed_at).toBeNull();
+  await db.query('UPDATE connect_machine_codes SET enrollment=$1 WHERE hash=$2', [original.enrollment, hash]);
+  expect(await registry.redeemMachineCode(issued.code, attempt)).toMatchObject({ enrollToken: input.enrollToken });
 });

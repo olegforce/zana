@@ -14,14 +14,14 @@ const codeOf = value => {
 };
 const key = code => createHash('sha256').update(`zana-host-enrollment:${code}`).digest();
 function seal(code, value, scope) {
-  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(code), iv);
+  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(code), iv, { authTagLength: 16 });
   cipher.setAAD(Buffer.from(scope));
   const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64url');
 }
 function unseal(code, value, scope) {
   const bytes = Buffer.from(value, 'base64url');
-  const cipher = createDecipheriv('aes-256-gcm', key(code), bytes.subarray(0, 12));
+  const cipher = createDecipheriv('aes-256-gcm', key(code), bytes.subarray(0, 12), { authTagLength: 16 });
   cipher.setAuthTag(bytes.subarray(12, 28));
   cipher.setAAD(Buffer.from(scope));
   return Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8');
