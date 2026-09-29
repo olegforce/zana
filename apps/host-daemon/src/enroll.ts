@@ -10,14 +10,22 @@ import { joinServerUrl } from './server-url.js';
 export const HOST_ENROLL_TIMEOUT_MS = 15_000;
 export const HOST_ENROLL_MAX_RESPONSE_BYTES = 16 * 1024;
 
-async function readEnrollmentResponse(response: Response): Promise<string> {
+async function readEnrollmentResponse(response: Response, signal: AbortSignal): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Empty host enrollment response');
+  // Node 22 can leave a streamed body pending after fetch's signal is aborted.
+  // Cancel our reader directly; a stalled source's cancel promise must not
+  // prevent the pending read from closing and releasing the enrollment lock.
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
+    if (signal.aborted) abort();
     for (;;) {
+      signal.throwIfAborted();
       const { done, value } = await reader.read();
+      signal.throwIfAborted();
       if (done) return Buffer.concat(chunks).toString('utf8');
       size += value.byteLength;
       if (size > HOST_ENROLL_MAX_RESPONSE_BYTES) {
@@ -26,7 +34,10 @@ async function readEnrollmentResponse(response: Response): Promise<string> {
       }
       chunks.push(value);
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    signal.removeEventListener('abort', abort);
+    reader.releaseLock();
+  }
 }
 
 export async function enrollDaemonHost(input: {
@@ -59,7 +70,7 @@ export async function enrollDaemonHost(input: {
         ...(input.hostId ? { hostId: input.hostId } : {})
       }))
     });
-    const body = await readEnrollmentResponse(response);
+    const body = await readEnrollmentResponse(response, controller.signal);
     if (response.status !== 201) {
       // Remote error bodies can echo credentials. Status is sufficient for
       // the caller's protocol-upgrade detection (409), without logging them.

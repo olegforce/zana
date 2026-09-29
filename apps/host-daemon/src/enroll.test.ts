@@ -51,6 +51,35 @@ it.each(['headers', 'body'])('aborts a stalled %s and releases the deadline time
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it.each(['resolve', 'reject', 'stall'] as const)('cancels a body that ignores fetch abort even when source cancellation will %s', async outcome => {
+  vi.useFakeTimers();
+  const cancel = vi.fn(() => outcome === 'reject' ? Promise.reject(new Error('cancel failed')) :
+    outcome === 'stall' ? new Promise<void>(() => {}) : Promise.resolve());
+  const stream = new ReadableStream({ start: controller => controller.enqueue(Buffer.from('{')), cancel });
+  const result = expect(enrollDaemonHost({ ...input(), fetchFn: async () => new Response(stream, { status: 201 }) }))
+    .rejects.toThrow('Host enrollment timed out');
+  await vi.advanceTimersByTimeAsync(HOST_ENROLL_TIMEOUT_MS);
+  await result;
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(stream.locked).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('cancels a response delivered after the enrollment deadline', async () => {
+  vi.useFakeTimers();
+  let respond!: (response: Response) => void;
+  const cancel = vi.fn();
+  const stream = new ReadableStream({ cancel });
+  const result = expect(enrollDaemonHost({ ...input(), fetchFn: () => new Promise(resolve => { respond = resolve; }) }))
+    .rejects.toThrow('Host enrollment timed out');
+  await vi.advanceTimersByTimeAsync(HOST_ENROLL_TIMEOUT_MS);
+  respond(new Response(stream, { status: 201 }));
+  await result;
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(stream.locked).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('uses the real HTTP client without following a same-origin enrollment redirect', async () => {
   const options = input(); let redirectedRequests = 0, redirect = true;
   const server = createServer((req, res) => {
