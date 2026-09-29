@@ -10,7 +10,12 @@ afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await c
 async function setup(queueTimeoutMs = 2000) {
   const relay = createRelay({ token: 'x'.repeat(43), publicUrl: 'https://relay.test', queueTimeoutMs });
   let received = 0;
-  const server = createServer((req, res) => { received++; relay.handleHttp(req, res); });
+  const abandoned: string[] = [];
+  const server = createServer((req, res) => {
+    received++;
+    relay.handleHttp(req, res);
+    res.on('close', () => { if (!res.writableFinished) abandoned.push(req.url!); });
+  });
   server.on('upgrade', relay.handleUpgrade);
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const port = (server.address() as { port: number }).port;
@@ -39,7 +44,7 @@ async function setup(queueTimeoutMs = 2000) {
     });
     return { response, abort: () => req!.destroy() };
   };
-  return { call, active, paths, ws, relay, received: () => received, peak: () => peak,
+  return { call, active, paths, abandoned, ws, relay, received: () => received, peak: () => peak,
     release: () => { auto = true; for (const id of [...active]) finish(id); } };
 }
 it('queues a browser startup burst without exceeding the installed peer stream limit', async () => {
@@ -71,6 +76,9 @@ it('drops abandoned reads and frees a slot for the next waiting read', async () 
   const cancelled = env.call('/cancelled');
   await expect.poll(env.received).toBe(LIMITS.streams + 1);
   cancelled.abort(); expect(await cancelled.response).toBe('aborted');
+  // Client-side destruction does not acknowledge when the server sees the FIN.
+  // Observe that close before releasing a slot on a different TCP connection.
+  await expect.poll(() => env.abandoned.includes('/cancelled')).toBe(true);
   const next = env.call('/next', 'HEAD');
   active[0].abort(); expect(await active[0].response).toBe('aborted');
   await expect.poll(() => env.paths.includes('/next')).toBe(true);
