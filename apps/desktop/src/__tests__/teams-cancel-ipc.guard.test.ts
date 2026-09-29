@@ -14,7 +14,7 @@ describe('Team launch cancellation IPC', () => {
       /cancel: \(launchRequestId\) => ipcRenderer\.invoke\(IPC\.teams\.cancel, launchRequestId\)/
     );
     expect(mainSource).toMatch(
-      /IPC\.teams\.cancel,[\s\S]*async \(_e, launchRequestId: string\)[\s\S]*cancelTeamLaunch\('interactive:local', launchRequestId\)/
+      /IPC\.teams\.cancel,[\s\S]*async \(launchRequestId: string\)[\s\S]*cancelTeamLaunch\('interactive:local', launchRequestId\)/
     );
   });
 });

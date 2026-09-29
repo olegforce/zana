@@ -81,7 +81,7 @@ describe('ensureCachedNodeArtifact', () => {
 });
 
 describe('ensureCachedPluginHostArtifact', () => {
-  it('caches under plugin-host-artifacts/<pluginId>/<digest>/host.js', async () => {
+  it('caches executable modules under plugin-host-artifacts/<pluginId>/<digest>/host.mjs', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'zcc-plugin-host-cache-'));
     tempDirs.push(dir);
     const bytes = new Uint8Array(Buffer.from('export const bridge = 1;\n'));
@@ -94,7 +94,7 @@ describe('ensureCachedPluginHostArtifact', () => {
       fetchArtifact: async () => bytes,
       logger: silentArtifactCacheLogger
     });
-    expect(path).toBe(join(dir, 'plugin-host-artifacts', 'provider-acp', digest, 'host.js'));
+    expect(path).toBe(join(dir, 'plugin-host-artifacts', 'provider-acp', digest, 'host.mjs'));
     expect(path).not.toMatch(/\/Users\/.*\/bridge\.ts/u);
   });
 

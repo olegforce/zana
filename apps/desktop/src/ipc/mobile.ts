@@ -23,11 +23,6 @@ export function registerMobileIpc(): void {
     (err) => { throw err; }
   );
   ctx.safeHandle(
-    IPC.mobile.configure,
-    async (input: unknown) => { await ctx.mobileGateway.configure(input, store.getConfig().mobileGatewayEnabled === true); },
-    (err) => { throw err; }
-  );
-  ctx.safeHandle(
     IPC.mobile.status,
     () => ctx.mobileGateway.status(),
     () => ({ running: false, publicUrl: null, host: null, port: null, boundLan: false, error: null })

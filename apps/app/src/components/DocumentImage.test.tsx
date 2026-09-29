@@ -20,14 +20,14 @@ afterEach(cleanup);
 describe('document images', () => {
   it('loads a linked local diagram from the document directory, without using attachments', async () => {
     mocks.readDataUrl.mockResolvedValue({ ok: true, dataUrl: 'data:image/svg+xml,%3Csvg/%3E' });
-    const view = render(<DocContent path="/project/README.md" projectId="p1" threadId="t1" exportable
+    const view = render(<DocContent path="/project/README.md" projectId="p1" exportable
       content="[![Architecture](docs/assets/architecture.svg)](docs/assets/architecture.svg)" />);
     const image = await view.findByRole('img', { name: 'Architecture' });
     expect(image.getAttribute('src')).toBe('data:image/svg+xml,%3Csvg/%3E');
     expect(mocks.readDataUrl).toHaveBeenCalledWith('/project/docs/assets/architecture.svg');
     expect(mocks.host).not.toHaveBeenCalled();
     expect(view.container.innerHTML).not.toContain('attachments/content');
-    view.rerender(<DocContent path="/project/README.md" projectId="p1" threadId="t1" exportable
+    view.rerender(<DocContent path="/project/README.md" projectId="p1" exportable
       content="[![Architecture](docs/assets/architecture.svg)](docs/assets/architecture.svg)" />);
     expect(mocks.readDataUrl).toHaveBeenCalledTimes(1);
   });
@@ -62,9 +62,10 @@ describe('document images', () => {
   it.each(['missing', 'invalid', 'not-image'])('keeps alt text when a read is %s', async (failure) => {
     if (failure === 'missing') mocks.host.mockRejectedValue(new Error('not found'));
     else if (failure === 'invalid') mocks.host.mockResolvedValue({ content: 'junk', contentType: 'text/plain' });
-    else mocks.readDataUrl.mockResolvedValue({ ok: true, dataUrl: 'data:text/html,unsafe' });
+    else mocks.host.mockResolvedValue({ content: '<html>unsafe</html>', contentType: 'text/html', encoding: 'utf8' });
     const view = render(<DocContent path="guide.md" threadId="t1" content="![Missing diagram](missing.svg)" />);
-    await waitFor(() => expect(mocks.readDataUrl).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.host).toHaveBeenCalled());
+    expect(mocks.readDataUrl).not.toHaveBeenCalled();
     expect(view.queryByRole('img')).toBeNull();
     expect(view.getByText('Missing diagram')).toBeTruthy();
   });

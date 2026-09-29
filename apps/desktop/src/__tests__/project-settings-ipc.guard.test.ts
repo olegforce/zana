@@ -6,8 +6,8 @@ const configIpc = readFileSync(new URL('../ipc/config.ts', import.meta.url), 'ut
 
 describe('project settings IPC failure handling', () => {
   it('keeps reads safe but lets mutation failures reject', () => {
-    expect(configIpc).toMatch(/safeHandle\(\s*IPC\.projectSettings\.get,[\s\S]*?\(\) => \(\{\} as ProjectSettings\)\s*\);/);
-    expect(configIpc).toMatch(/ipcMain\.handle\(IPC\.projectSettings\.set,[\s\S]*?ctx\.runtimeSupervisor\s*\?\s*ctx\.runtimeSupervisor\.setProjectSettings\(id, patch\)[\s\S]*?: \(\(\) => \{[\s\S]*?store\.setProjectSettings\(id, patch\)[\s\S]*?safeSend\(IPC\.projectSettings\.onChanged, id\)[\s\S]*?\}\)\(\)\s*\);/);
+    expect(configIpc).toMatch(/safeProductHandle\(\s*IPC\.projectSettings\.get,[\s\S]*?\(\) => \(\{\} as ProjectSettings\)\s*\);/);
+    expect(configIpc).toMatch(/productHandle\(IPC\.projectSettings\.set,[\s\S]*?ctx\.runtimeSupervisor\s*\?\s*ctx\.runtimeSupervisor\.setProjectSettings\(id, patch\)[\s\S]*?: \(\(\) => \{[\s\S]*?store\.setProjectSettings\(id, patch\)[\s\S]*?safeSend\(IPC\.projectSettings\.onChanged, id\)[\s\S]*?\}\)\(\)\s*\);/);
     expect(configIpc).not.toMatch(/safeHandle[^;]*IPC\.projectSettings\.set/);
   });
 

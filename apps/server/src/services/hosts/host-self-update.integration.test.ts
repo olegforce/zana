@@ -54,7 +54,7 @@ describe('real bundled host replacement', () => {
     const children: ChildProcess[] = [];
     let replacementPid: number | undefined;
     const launch = () => {
-      const child = spawn(process.execPath, [entry, 'join', '--join-code', 'test', '--server-url', serverUrl, '--host-daemon-port', String(port), '--auto-update'], {
+      const child = spawn(process.execPath, [entry, 'join', '--join-code', 'test', '--host-id', hostId, '--server-url', serverUrl, '--host-daemon-port', String(port), '--auto-update'], {
         cwd: root, stdio: 'ignore', env: { ...process.env, HOME: root, ZCC_DATA_DIR: dataDir, ZCC_HOST_SERVICE_MANAGED: managed ? '1' : '0' }
       }); children.push(child); return child;
     };

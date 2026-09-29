@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 
 /**
@@ -71,7 +71,10 @@ const BASE_CONFIG: AppConfig = {
 describe('OpenCode MCP-via-file hardening (OPENCODE_CONFIG)', () => {
   beforeEach(() => {
     spawns.length = 0;
+    vi.stubEnv('OPENCODE_CONFIG', undefined);
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it('writes a per-session config file, points OPENCODE_CONFIG at it, and keeps the env channel too', () => {
     const mgr = new PtyManager();
