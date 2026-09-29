@@ -29,6 +29,41 @@ const ProjectColorSchema = z.enum([
 ]);
 const PluginIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(128);
 
+const MenubarAgentBaseSchema = z.object({
+  agentId: z.string().min(1).max(256),
+  projectId: ProjectIdSchema,
+  rowKey: z.string().min(1).max(512),
+  projectName: ProjectNameSchema,
+  projectColor: z.string().max(32).optional(),
+  title: z.string().max(4096),
+  state: z.enum(['working', 'blocked', 'done', 'idle', 'unknown', 'waiting']),
+  favorite: z.boolean(),
+  canFavorite: z.boolean(),
+  canReply: z.boolean(),
+  createdAt: z.number().int().nonnegative(),
+  question: z.string().max(4096).optional(),
+  resolution: z.enum(['awaiting-reply', 'done', 'paused', 'unknown']).optional()
+});
+export const MenubarAgentSchema = z.discriminatedUnion('kind', [
+  MenubarAgentBaseSchema.extend({
+    kind: z.literal('cli'),
+    sessionId: z.string().min(1).max(256),
+    repliable: z.boolean()
+  }).strict(),
+  MenubarAgentBaseSchema.extend({
+    kind: z.literal('thread'),
+    threadId: z.string().min(1).max(256),
+    status: z.string().max(128),
+    hasPendingInteraction: z.boolean()
+  }).strict()
+]);
+export const MenubarThreadsListResultSchema = z.object({
+  agents: z.array(MenubarAgentSchema).max(100),
+  needsYou: z.number().int().nonnegative(),
+  working: z.number().int().nonnegative()
+}).strict();
+export const MenubarThreadOpenResultSchema = z.object({ ok: z.boolean(), reason: z.string().optional() }).strict();
+
 export const ProjectMutationPatchSchema = z.object({
   name: ProjectNameSchema.optional(),
   color: ProjectColorSchema.optional(),
@@ -85,6 +120,15 @@ export const ServerRuntimeRequestSchema = z.discriminatedUnion('operation', [
   ServerRuntimeRequestBaseSchema.extend({
     operation: z.literal('projects-add'),
     path: ProjectPathSchema
+  }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({
+    operation: z.literal('menubar-threads-list'),
+    limit: z.number().int().min(1).max(100)
+  }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({
+    operation: z.literal('menubar-thread-open'),
+    threadId: z.string().min(1).max(256),
+    projectId: ProjectIdSchema
   }).strict(),
   ServerRuntimeRequestBaseSchema.extend({
     operation: z.literal('projects-update'),
@@ -284,6 +328,10 @@ export const ProjectSettingsChangedMessageSchema = z.object({
   protocolVersion: ServerRuntimeProtocolVersionSchema,
   projectId: ProjectIdSchema
 }).strict();
+export const MenubarThreadsChangedMessageSchema = z.object({
+  type: z.literal('menubar-threads-changed'),
+  protocolVersion: ServerRuntimeProtocolVersionSchema
+}).strict();
 
 const PluginCapabilityMcpServerSchema = z.object({
   name: z.string().min(1).max(64),
@@ -352,6 +400,7 @@ export const RuntimeOutboundSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('library-changed'), protocolVersion: ServerRuntimeProtocolVersionSchema }).strict(),
   z.object({ type: z.literal('projects-changed'), protocolVersion: ServerRuntimeProtocolVersionSchema }).strict(),
   ProjectSettingsChangedMessageSchema,
+  MenubarThreadsChangedMessageSchema,
   PluginCapabilitiesChangedMessageSchema,
   PluginAppsChangedMessageSchema
 ]);

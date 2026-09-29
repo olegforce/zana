@@ -67,6 +67,40 @@ Native saved profiles are retained so users can identify and forget them. Legacy
 
 Heroku terminates HTTPS and is a trusted operator, not an end-to-end encrypted transport. Agents and files stay on the computer. Local tests do not establish a live Heroku deployment or physical-phone internet access.
 
+## Connection methods across networks
+
+Desktop **Settings → Phone → Connection method** now offers three paths. Saving a method restarts only the phone gateway if enabled and clears the displayed pairing QR. It does not restart desktop agents. Phone access remains off by default.
+
+| Method | Setup | Reachability |
+| --- | --- | --- |
+| Local network (default) | Enable phone access and scan the QR on the same trusted Wi-Fi | Current private LAN address |
+| Tailscale | Install/sign in on both devices; configure Serve; save its HTTPS `.ts.net` origin | Your private Tailscale network, including across Wi-Fi/mobile data |
+| Heroku relay | Deploy `services/mobile-relay`; save the app's HTTPS origin and relay secret | Internet access without a phone VPN; the computer maintains an outbound tunnel |
+
+All methods use the same one-use QR pairing and revocable phone credentials. Tailscale and relay keep the gateway bound to `127.0.0.1`; the underlying product server remains loopback-only. The connection secret is saved in a main-owned, atomically replaced `0600` file under the desktop data directory (`mobile/connection.json`), never in the renderer's AppConfig or status response. Changing to a different method/address requires connecting the phone to that address with a fresh QR. Existing profiles remain available; automatic selection between multiple origins is not implemented.
+
+### Tailscale
+
+After checking existing Serve mappings, configure a dedicated HTTPS endpoint:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:8785
+```
+
+Paste its exact `https://computer.network.ts.net` URL into Phone settings, save, enable access, and scan the QR. HTTPS must be enabled in the tailnet. If port 443 is already used by another Serve service, choose another supported HTTPS port and include it in the URL. Zana does not run or reset Tailscale commands automatically.
+
+CLI equivalent: `pnpm mobile:serve --connection tailscale --public-url https://computer.network.ts.net` (use an alternate `--upstream` when necessary). The same profile works on changing networks while Tailscale is connected.
+
+### Heroku relay
+
+Use [the existing website Docker app](../website/README.md#mobile-relay-in-this-docker-app), or see [the standalone relay deployment guide](../services/mobile-relay/README.md) for a separate service. The initial deployment supports **one computer and one always-on web dyno per Heroku app**. The relay operator is trusted: HTTPS terminates there, so this is not end-to-end encryption. Pairing and session storage stay on the computer; Heroku's ephemeral filesystem needs no database.
+
+The tunnel sends heartbeats, uses bounded transfer buffers, and reconnects after relay/dyno restarts. A relay restart preserves the desktop gateway's sessions. Interrupted actions fail without automatic replay, preventing a transport retry from duplicating sends. A desktop restart preserves paired devices; the phone renews its session through Reload/foreground renewal.
+
+CLI equivalent: set `MOBILE_RELAY_TOKEN` securely in the environment, then run `pnpm mobile:serve --connection relay --public-url https://your-assigned-app.herokuapp.com`. Never put the secret in a URL or command-line argument. The relay server also needs that secret and `MOBILE_RELAY_PUBLIC_URL`; it listens on Heroku's `$PORT`.
+
+Both remote methods still require the computer to be awake and Zana to be running. This feature does not move agents or files to Heroku. Real Tailscale account setup and live Heroku deployment are separate from the local automated verification.
+
 ## Notifications and device features
 
 The navigation menu header has a **…** button beside Close for **Share**, **Reload**, and **This device**. In an agent, the header keeps the side-panel button at the far right, with the agent’s **…** actions beside it. Older native bridge versions use a connection action sheet for the device actions. Reload renews the native session and restores the current page. If the desktop serves an older interface, or the page cannot load, a compact native header keeps these actions accessible. The integrated menu requires mobile bridge v3 on the phone and the updated desktop renderer.

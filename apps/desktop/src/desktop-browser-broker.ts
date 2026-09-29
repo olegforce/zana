@@ -91,11 +91,21 @@ export function createDesktopBrowserBroker(args: {
     instance: InstanceEntry,
     threadId: string,
     url: string,
+    profile: DesktopBrowserNativeTab["profile"],
+    lease?: ControlLease,
   ): DesktopBrowserNativeTab | undefined {
     const identity = browserPreviewIdentity(url);
     if (identity === null) return undefined;
     return tabsFor(instance, threadId).find(
-      (tab) => browserPreviewIdentity(tab.url) === identity,
+      // Reuse only inside the requested storage partition. A URL match must
+      // never turn an automation request into control of a personal tab.
+      (tab) => {
+        if (tab.profile.kind !== profile.kind ||
+          (profile.kind === "automation" && (tab.profile.kind !== "automation" || tab.profile.id !== profile.id)) ||
+          browserPreviewIdentity(tab.url) !== identity) return false;
+        const control = controlFor(instance, tab.tabId);
+        return !lease || !control || control === lease;
+      },
     );
   }
 
@@ -250,7 +260,7 @@ export function createDesktopBrowserBroker(args: {
           throw new Error("Create automation pages in a dedicated profile");
         if (lease.tabs.size >= 100)
           throw new Error("Browser lease tab limit reached");
-        const open = openPreviewTab(lease.instance, lease.threadId, url);
+        const open = openPreviewTab(lease.instance, lease.threadId, url, profile, lease);
         if (open) {
           lease.tabs.set(open.tabId, open.generation);
           publish(lease.instance, lease.threadId);
@@ -441,7 +451,7 @@ export function createDesktopBrowserBroker(args: {
             ),
           };
         case "desktop.browser.create_tab": {
-          const open = openPreviewTab(instance, command.threadId, command.url);
+          const open = openPreviewTab(instance, command.threadId, command.url, command.profile);
           if (open) {
             if (command.presentation === "reveal")
               reveal(instance, command.threadId, open.tabId);

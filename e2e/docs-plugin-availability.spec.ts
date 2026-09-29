@@ -75,11 +75,10 @@ test('Docs availability follows plugin enabled state', async ({ app, home }) => 
   await expect(
     win.getByTestId('plugin-row-docs').getByRole('switch', { name: /^Disable Docs/ })
   ).toBeEnabled();
-  await win.getByRole('link', { name: 'Back to app' }).click();
-  // Server running precedes renderer bundle registration. Wait for the actual
-  // navigation affordance before exercising its deep link after re-enabling.
+  // Server activation precedes renderer registration of the compiled panel.
+  await win.getByRole('link', { name: 'Back to app', exact: true }).click();
   await expect(win.getByTestId('nav-docs')).toBeVisible();
-  await route(win, '/plugins/docs/panel');
+  await win.getByTestId('nav-docs').click();
   await expect(win.locator('.library-panel')).toBeVisible();
 
   await route(win, `/projects/${projectId}`);

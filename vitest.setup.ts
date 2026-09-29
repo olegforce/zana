@@ -31,6 +31,6 @@ if (!globalThis.localStorage) {
     removeItem: (key: string) => storage.delete(key),
     clear: () => storage.clear(),
     key: (index: number) => Array.from(storage.keys())[index] ?? null,
-    length: 0,
+    get length() { return storage.size; },
   } as Storage;
 }

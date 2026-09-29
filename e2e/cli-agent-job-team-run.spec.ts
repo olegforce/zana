@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
-test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true } });
+test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true, sponsorPromptDismissed: true } });
 test.setTimeout(120_000);
 
 test('CLI Agent starts a durable Job Team, surfaces its question, and completes', async ({ app }) => {

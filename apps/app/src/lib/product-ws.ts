@@ -8,6 +8,7 @@ let openingTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
 let lastFrame = 0;
 const listeners = new Set<Listener>();
+const openWaiters = new Set<() => void>();
 function dispatch(event: ProductWsEvent) {
   // A failed view must not prevent every other subscriber from receiving data.
   for (const listener of listeners) { try { listener(event); } catch {} }
@@ -42,6 +43,8 @@ function connect(): void {
     lastFrame = Date.now();
     const reconnected = connected;
     connected = true;
+    for (const resolve of openWaiters) resolve();
+    openWaiters.clear();
     clearHeartbeat();
     heartbeat = setInterval(() => {
       if (socket !== current) return;
@@ -76,6 +79,7 @@ export function subscribeProductWs(listener: Listener): () => void {
     clearHeartbeat(); clearOpening();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null; connected = false;
+    openWaiters.clear();
   };
 }
 /** Reconcile using reads only. Never replay a launch, keystroke, or mutation. */
@@ -97,4 +101,10 @@ export function subscribeProductReconnect(callback: () => void | Promise<void>):
 }
 export function subscribeProductEvent<T>(type: string, callback: (payload: T) => void): () => void {
   return subscribeProductWs(event => { if (event.type === type) callback(event.payload as T); });
+}
+
+export function waitForProductWsOpen(): Promise<void> {
+  connect();
+  if (socket?.readyState === WebSocket.OPEN) return Promise.resolve();
+  return new Promise((resolve) => openWaiters.add(resolve));
 }

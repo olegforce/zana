@@ -46,6 +46,7 @@ export interface ProductEvent {
 export function createProductHub(onLibraryChanged?: () => void, onProjectsChanged?: () => void) {
   const clients = new Map<WebSocket, ReturnType<typeof boundedSocketSender>>();
   const budget = { bytes: 0, limit: 32 * 1024 * 1024 };
+  const listeners = new Map<ProductEventType, Set<(payload: unknown) => void>>();
   return {
     add(socket: WebSocket): void {
       if (clients.has(socket)) return;
@@ -58,12 +59,22 @@ export function createProductHub(onLibraryChanged?: () => void, onProjectsChange
       });
     },
     emit(type: ProductEventType, payload: unknown): void {
+      for (const listener of listeners.get(type) ?? []) listener(payload);
       const msg = JSON.stringify({ type, payload } satisfies ProductEvent);
       for (const sender of clients.values()) sender.send(msg);
       if (type === 'library:changed' || type === 'hosts:changed') { try { onLibraryChanged?.(); } catch { /* Parent shutdown must not fail an acknowledged mutation. */ } }
       if (type === 'projects:changed') { try { onProjectsChanged?.(); } catch { /* The registry commit has already succeeded. */ } }
     },
     pong(socket: WebSocket): void { clients.get(socket)?.send('{"type":"pong"}'); },
+    subscribe(type: ProductEventType, listener: (payload: unknown) => void): () => void {
+      const set = listeners.get(type) ?? new Set<(payload: unknown) => void>();
+      set.add(listener);
+      listeners.set(type, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(type);
+      };
+    },
     size(): number {
       return clients.size;
     }

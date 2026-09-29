@@ -153,3 +153,41 @@ describe("desktop browser broker window cleanup", () => {
     },
   );
 });
+
+describe("desktop browser preview reuse", () => {
+  it("reuses equivalent URLs only inside the requested thread and profile", async () => {
+    const personal = { ...nativeTab("personal", THREAD_ID), url: "http://localhost:5173/" };
+    const automation = { ...nativeTab("automation", THREAD_ID), url: personal.url, profile: { kind: "automation" as const, id: "run-a" } };
+    const otherThread = { ...automation, tabId: "other-thread", threadId: "thr_abcdefghij" };
+    const tabs = [personal, automation, otherThread];
+    const createTab = vi.fn((request) => {
+      const tab = { ...nativeTab(request.tabId, request.threadId), url: request.url, profile: request.profile };
+      tabs.push(tab);
+      return tab;
+    });
+    const manager = {
+      listTabs: ({ threadId }: { threadId: string | null }) => tabs.filter(tab => threadId === null || tab.threadId === threadId),
+      createTab,
+      subscribeAutomationTabs: () => () => undefined,
+      profileSession: () => ({}) as Session,
+      destroyAll: () => undefined,
+    };
+    const broker = createDesktopBrowserBroker({ manager: manager as unknown as DesktopBrowserViewManager, product: "Chrome/1" });
+    const window = createFakeWindow();
+    broker.registerWindow(window as never);
+    broker.setHostId("host_local");
+    const target = broker.getTarget(window.webContents.id)!;
+    const create = (tabId: string, profile: DesktopBrowserNativeTab["profile"], url = "http://127.0.0.1:5173/another-route") => broker.execute({
+      type: "desktop.browser.create_tab", ...target, threadId: THREAD_ID, tabId, url, profile, presentation: "hidden"
+    });
+    try {
+      await expect(create("duplicate", automation.profile)).resolves.toMatchObject({ tab: { tabId: "automation" } });
+      await expect(create("personal-duplicate", personal.profile)).resolves.toMatchObject({ tab: { tabId: "personal" } });
+      expect(createTab).not.toHaveBeenCalled();
+      await expect(create("new-profile", { kind: "automation", id: "run-b" })).resolves.toMatchObject({ tab: { tabId: "new-profile" } });
+      await expect(create("blank", automation.profile, "about:blank")).resolves.toMatchObject({ tab: { tabId: "blank" } });
+      await expect(create("other-port", automation.profile, "http://localhost:5174/")).resolves.toMatchObject({ tab: { tabId: "other-port" } });
+      expect(createTab).toHaveBeenCalledTimes(3);
+    } finally { broker.dispose(); }
+  });
+});

@@ -75,6 +75,7 @@ export {
   listLiveConversationThreadsForHost,
   listConversationThreadsForHost,
   listVisibleConversationThreads,
+  listMenubarConversationThreads,
   queryConversationThreads,
   updateConversationThreadStatus,
   applyConversationThreadLifecycleEvent,

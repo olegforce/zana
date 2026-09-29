@@ -8,6 +8,8 @@ import { cliHostProblem, teamHostProblem } from './ipc/cli-host-guard.js';
 import { SHARED_PRODUCT_EVENTS } from '@zana-ai/zcc-contracts/shared-product';
 import { SharedClient, allowsSharedNavigation } from './window/shared-client.js';
 import { createHistoryProviders, invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
+import { RendererReadiness } from './window/renderer-readiness.js';
+import { runStartupDependencyDoctor } from './startup-dependency-doctor.js';
 /**
  * Compatibility IPC host. Window/tray/updater/preload live alongside this file
  * in `apps/desktop`; Electron-free helpers live in workspace packages and
@@ -51,6 +53,7 @@ import { finalSessionStats } from './session-stats-cache.js';
 import { applyPluginAgentCapabilities } from '@zana-ai/zcc-server/services/extensions/plugin-agent-sync';
 import { runtimeHostAvailable, setRuntimeHostSupervisor } from '@zana-ai/zcc-host-daemon/harness/execution-environment';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
+import { MenubarThreadOpenResultSchema, MenubarThreadsListResultSchema } from '@zana-ai/zcc-contracts/runtime';
 import { createDesktopBrowserViewManager } from './desktop-browser-view.js';
 import { registerDesktopBrowserIpc } from './desktop-browser-main-ipc.js';
 import {
@@ -66,7 +69,7 @@ import { setDesktopBrowserBroker } from '@zana-ai/zcc-server/services/threads/de
 import { registerIpcFamilies } from './ipc/register.js';
 import type { IpcCtx } from './ipc/ctx.js';
 import { sanitizeExtraArgs } from '@zana-ai/zcc-domain/launch-sanitize';
-import { titleFromObjective, MANAGED_WORKTREE_DIR_NAME, PERSONAL_WORKSPACE_DIR_NAME } from '@zana-ai/zcc-domain';
+import { titleFromObjective, MANAGED_WORKTREE_DIR_NAME, PERSONAL_WORKSPACE_DIR_NAME, type MenubarThreadAgent } from '@zana-ai/zcc-domain';
 import { providerCapabilities, isClaudeProfile, isCodexProfile, isOpenCodeProfile, seedPromptArgs } from '@zana-ai/zcc-domain/launch-provider';
 import { EXTENSION_PROJECT_CATEGORY, store, scratchWorkspaceRoot, worktreeRoot, worktreeTargetDir } from '@zana-ai/zcc-server/services/projects/store';
 import { electronZccDataDir } from '@zana-ai/zcc-server/electron-data-dir';
@@ -824,6 +827,13 @@ function setActiveProjectSkillsWatcher(
  */
 const windows = new Map<number, { win: BrowserWindow; projectId?: string }>();
 const boundsControllers = new Map<number, ReturnType<typeof createBoundsStateController>>();
+const rendererReadiness = new RendererReadiness();
+
+function markRendererReady(win: BrowserWindow): void {
+  const registered = windows.get(win.id);
+  if (!registered || registered.win !== win || registered.projectId) return;
+  rendererReadiness.markReady(win.id);
+}
 /**
  * The unscoped "main" window, kept as a hint for the dock-reactivate and
  * tray "show window" paths (which want *a* window, preferring the full shell).
@@ -2911,6 +2921,55 @@ async function probeConversationThreadLive(threadId: string, projectId: string):
   }
 }
 
+const MENUBAR_THREAD_FETCH_TIMEOUT_MS = 2_000;
+const MAIN_RENDERER_READY_TIMEOUT_MS = 15_000;
+
+async function listMenubarThreads(): Promise<MenubarThreadAgent[]> {
+  if (runtimeSupervisor) return (await runtimeSupervisor.listMenubarThreads(100)).agents;
+  try {
+    const response = await fetch(new URL('api/v1/menubar/threads?limit=100', productServerUrl()), {
+      signal: AbortSignal.timeout(MENUBAR_THREAD_FETCH_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      logMainError('listMenubarThreads dev fallback', `HTTP ${response.status}`);
+      return [];
+    }
+    const parsed = MenubarThreadsListResultSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      logMainError('listMenubarThreads dev fallback', parsed.error);
+      return [];
+    }
+    return parsed.data.agents.filter((agent) => agent.kind === 'thread');
+  } catch (error) {
+    logMainError('listMenubarThreads dev fallback', error);
+    return [];
+  }
+}
+
+async function openMenubarThread(threadId: string, projectId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (runtimeSupervisor) return runtimeSupervisor.openMenubarThread(threadId, projectId);
+  try {
+    const response = await fetch(
+      new URL(`api/v1/menubar/threads/${encodeURIComponent(threadId)}/open`, productServerUrl()),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+        signal: AbortSignal.timeout(MENUBAR_THREAD_FETCH_TIMEOUT_MS)
+      }
+    );
+    const parsed = MenubarThreadOpenResultSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      logMainError('openMenubarThread dev fallback', parsed.error);
+      return { ok: false, reason: 'invalid thread response' };
+    }
+    return parsed.data;
+  } catch (error) {
+    logMainError('openMenubarThread dev fallback', error);
+    return { ok: false, reason: 'thread service unavailable' };
+  }
+}
+
 function resolvedAppVersion(): string {
   const version = app.getVersion();
   const e2eVersion = process.env.ZCC_E2E_APP_VERSION;
@@ -3096,6 +3155,16 @@ function showMainWindow() {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+}
+
+async function ensureMainWindowReady(): Promise<boolean> {
+  let win = unscopedWindow();
+  if (!win) {
+    createWindow(undefined, startupState.mode === 'repair-required');
+    win = unscopedWindow();
+  }
+  if (!win || win.webContents.isDestroyed()) return false;
+  return rendererReadiness.wait(win.id, MAIN_RENDERER_READY_TIMEOUT_MS);
 }
 
 /**
@@ -4487,7 +4556,7 @@ export function jobWorkerPrompt(input: {
   return [
     `Team worker standby. You are ${input.label} (${input.personaName}), slot \`${input.slotId}\`${input.executionId ? ` in execution \`${input.executionId}\`` : ''}.`,
     'Your working directory is the trusted project workspace. Wait for an assignment for this slot; each assignment carries a fully-specified work unit — its task is the complete instruction. When it arrives, EXECUTE it: do the task using the file scope, the upstream results included in the assignment, and your own reading of the project workspace. Do the work yourself; do not wait for extra "source context" to be pushed to you and do not ask the coordinator to re-explain a task you can carry out. Do not, however, start the overall job or units not assigned to this slot.',
-    'Do not poll `agent_inbox`. Execute only bounded work assigned to this slot. Close every unit through exactly one structured outcome: `execution.work.complete`, `execution.work.fail`, `execution.work.block`, or `execution.work.release`. Do not use `agent_send` for routine progress or results.',
+    'Do not poll `agent_inbox`. Execute only bounded work assigned to this slot. Close every unit through exactly one structured outcome: `execution.work.complete`, `execution.work.fail`, `execution.work.block`, or `execution.work.release`. Call the ZCC execution MCP tool exposed in your own tool list, not an AI Suite Python bridge or a colon-form tool name. On OpenCode, `execution.work.complete` is exposed as `zcc-inbox_execution_work_complete`. Do not use `agent_send` for routine progress or results.',
     'Use `execution.work.block` ONLY when you genuinely cannot proceed, and pick the audience: `audience: "coordinator"` when you need ONE specific, decidable plan/spec choice from the coordinator (e.g. which of two interfaces to target, an ambiguous path) — phrase it as a single concrete question the coordinator can answer, and the worker resumes automatically once answered; `audience: "human"` (the default) only when a real human decision or credential is required. Do not block just because a task looks large or under-detailed — attempt it. Do not use AskUserQuestion. While blocked, do not poll `execution.delivery.pull`. Responses inject when idle. Call `execution.delivery.pull` only after an injected notification. Delivery is at-least-once and may repeat after a crash: use the stable deliveryId as an idempotency key, apply side effects idempotently or transactionally where possible, and persist a completed-application marker only after successful application (or atomically with it). If that completed marker already exists, do not apply the payload again. A crash before that marker may replay delivery, so do not claim exactly-once processing. Then call `execution.delivery.ack` with the deliveryId and leaseId: set `delivered: true` once you have applied the response in this session, and set `delivered: false` with an error ONLY when applying the payload genuinely failed. Pulling then acking IS the entire way to consume a response — never call `execution.resume` or `execution.respond` to accept your own delivered answer. Those are owner-only control tools; a worker or coordinator calling them fails with "execution not found for caller", and that authorization denial is NOT an application failure — do not report it as a delivery `error` or you will loop the response forever.'
   ].join('\n\n');
 }
@@ -5533,6 +5602,7 @@ const squadExecutionService = new SquadExecutionService({
     const owners = new Set(ownerPrincipalIds);
     return ptys.list(projectId).some((session) => session.status !== 'exited' && owners.has(session.id));
   },
+  isRegisteredProject: (projectId) => store.listProjects().some((project) => project.id === projectId),
   clearResumeToken: (projectId, executionId) => executionResumeTokens.clear(projectId, executionId),
   cacheResumeToken: (projectId, executionId, token, expiresAt) => executionResumeTokens.set({ projectId, executionId, token, expiresAt }),
   preflightWorkflow: (teamId, workflow) => {
@@ -6010,6 +6080,14 @@ function createWindow(projectId?: string, repairOnly = false) {
   });
 
   windows.set(win.id, { win, projectId });
+  rendererReadiness.reset(win.id);
+  win.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
+    if (isMainFrame) rendererReadiness.reset(win.id);
+  });
+  win.webContents.on('render-process-gone', () => rendererReadiness.remove(win.id));
+  win.webContents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
+    if (isMainFrame) rendererReadiness.remove(win.id);
+  });
   desktopBrowserBroker.registerWindow(win);
   // E2E hard guarantee: never let a window become visible or take focus during a
   // local Playwright run, no matter which code path (boot maximize, native
@@ -6046,6 +6124,7 @@ function createWindow(projectId?: string, repairOnly = false) {
     desktopBrowserBroker.releaseWindow(hostWebContentsId);
     desktopBrowserViewManager.releaseWindow(hostWebContentsId);
     conversationHistory.releaseWindow(win.id);
+    rendererReadiness.remove(win.id);
     windows.delete(win.id);
     boundsControllers.delete(win.id);
   });
@@ -6194,7 +6273,10 @@ function wireBridgeListeners() {
         logMainError(`launch ledger exit ${sessionId}`, error)
       );
     }
-    const exitedSession = ptys.getSession(sessionId);
+    // PTY finalization removes the live entry before this listener runs. The
+    // bounded tombstone preserves the cohort stamp needed to recover a stopped
+    // worker's fresh durable claim.
+    const exitedSession = ptys.getRememberedSession(sessionId);
     // Capture final counters before lifecycle reconciliation can make execution
     // terminal. Then forward exit detail so FAILED settlement includes provider cause.
     void (async () => {
@@ -6208,6 +6290,13 @@ function wireBridgeListeners() {
         signal: typeof signal === 'number' ? signal : undefined,
         reason: typeof reason === 'string' && reason.length > 0 ? reason : undefined
       }).catch((error) => logMainError(`team lifecycle exit ${sessionId}`, error));
+      if (exitedSession?.cohort?.executionId && exitedSession.cohort.role === 'worker' && exitedSession.cohort.slotId) {
+        // Target this terminal worker directly. A generic sweep may already be in
+        // flight and skip, stranding a fresh claim until its next timer tick.
+        await squadExecutionService.recoverExitedWorker(exitedSession.cohort.executionId, exitedSession.cohort.slotId).catch((error) =>
+          logMainError(`execution worker-exit recovery ${sessionId}`, error)
+        );
+      }
       if (exitedSession?.cohort?.executionId && exitedSession.cohort.role === 'orchestrator') {
         await squadExecutionService.handleCoordinatorExit(exitedSession.projectId, exitedSession.cohort.executionId, sessionId).catch((error) =>
           logMainError(`execution coordinator exit ${sessionId}`, error)
@@ -6652,8 +6741,10 @@ function registerIpc() {
     get llmService() { return llmService; },
     get logMainError() { return logMainError; },
     get mainWindow() { return mainWindow; },
+    get markRendererReady() { return markRendererReady; },
     get menubar() { return menubar; },
     get menubarPopoverEnabled() { return menubarPopoverEnabled; },
+    get openMenubarThread() { return openMenubarThread; },
     get mobileGateway() { return mobileGateway; },
     get moduleRouter() { return moduleRouter; },
     get offLoudInboxAppended() { return offLoudInboxAppended; },
@@ -6680,6 +6771,7 @@ function registerIpc() {
     get restorePrincipal() { return restorePrincipal; },
     get runDiskSync() { return runDiskSync; },
     get runtimeSupervisor() { return runtimeSupervisor; },
+    ensureMainWindowReady,
     get safeHandle() { return safeHandle; },
     get safeHandleFromWindow() { return safeHandleFromWindow; },
     get safeSend() { return safeSend; },
@@ -7231,6 +7323,8 @@ async function bootstrapNormal() {
       // agent is waiting for), for the popover's light-interaction rows. No LLM/
       // fs cost on the hot snapshot path (Rule 5).
       triage: (sessionId) => lastTriageBySession.get(sessionId) ?? null,
+      listThreads: listMenubarThreads,
+      onThreadsChanged: (listener) => runtimeSupervisor?.onMenubarThreadsChanged(listener) ?? (() => {}),
       theme: () => resolveTheme(),
       preloadPath: join(__dirname, '../preload/index.js'),
       logger: logMainError
@@ -8287,16 +8381,23 @@ async function bootstrapNormal() {
   // never blocks boot. The check runs once here; the periodic poll lives in
   // the updater, not here, since dependency state only changes on explicit
   // user action.
-  doctor = createDoctor({
+  const startupDoctor = createDoctor({
     safeSend,
     log: logMainError,
     setDismissed: (dismissed) => {
       store.setConfig({ setupDismissed: dismissed });
     }
   });
-  doctor
-    .check()
-    .catch((err) => logMainError('dependencyDoctor.check', err));
+  doctor = startupDoctor;
+  // Startup discovery executes installed provider CLIs. Claude's `doctor`
+  // invokes `/usr/bin/security -i` on macOS, which escapes the isolated HOME
+  // and raises a real login-Keychain prompt. Keep manual dependency checks
+  // available, but never probe host credentials during an isolated E2E boot.
+  runStartupDependencyDoctor(
+    E2E_LAUNCH,
+    () => startupDoctor.check(),
+    (err) => logMainError('dependencyDoctor.check', err)
+  );
   // Boot the CLI control plane (UDS at ~/.zcc/control.sock). Errors are logged
   // but non-fatal — the GUI works without the CLI. Started once here (CLAUDE.md
   // #3), torn down in before-quit. All op handlers reuse main's existing

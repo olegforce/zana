@@ -54,6 +54,11 @@ export function registerAppIpc(): void {
     () => ({ ok: false })
   );
   ctx.safeHandle(IPC.app.microVmSupported, () => microVmPlatformSupported(), () => false);
+  ctx.safeHandleFromWindow(
+    IPC.app.rendererReady,
+    (win) => ctx.markRendererReady(win),
+    () => undefined
+  );
   // Renderer-driven fullscreen targets its sender window, never whichever window
   // happened to gain focus before main handles the request.
   ctx.safeHandleFromWindow<[boolean], void>(

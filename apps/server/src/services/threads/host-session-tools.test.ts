@@ -1,11 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { HostRpcCommandSchema } from '@zana-ai/zcc-contracts/host-rpc';
+import { createCommandRuntime, dispatchHostCommand } from '../../../../host-daemon/src/command-dispatch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { invokeHostSessionTool, isHostSessionTool, mergeHostSessionTooling, HOST_SHARE_TOOL_NAMES } from './host-session-tools.js';
 import { HOST_SESSION_INSTRUCTION } from './host-session-tools.js';
 import { HOST_PREVIEW_FILE_TOOL_NAME } from './host-preview-file-tool.js';
+
+const roots: string[] = [];
+afterEach(() => { roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 
 function hub() {
   const events: Array<{ type: string; payload: unknown }> = [];
@@ -65,8 +70,19 @@ describe('invokeHostSessionTool', () => {
 
   it('lists and writes library docs under the owning project', async () => {
     const root = mkdtempSync(join(tmpdir(), 'zcc-lib-'));
+    roots.push(root);
+    const runtime = createCommandRuntime({ dataDir: root });
     const product = ctx({
-      toProjects: () => [{ id: 'proj-1', name: 'Demo', path: root }]
+      dataDir: root,
+      toProjects: () => [{ id: 'proj-1', name: 'Demo', path: root, hostId: 'owner' }],
+      hostHub: {
+        resolveHostId: () => 'owner',
+        ensureHostSessionReady: vi.fn(),
+        callHostOnlineRpc: vi.fn(async ({ hostId, command }) => {
+          expect(hostId).toBe('owner');
+          return dispatchHostCommand(runtime, HostRpcCommandSchema.parse(command));
+        })
+      } as unknown as ProductHttpContext['hostHub']
     });
     const written = await invokeHostSessionTool(product, {
       name: 'library_write',

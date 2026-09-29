@@ -101,6 +101,10 @@ export async function launchJobTeamCliOwner(ctx: JobTeamContext, opts: { workerQ
   await window.getByRole('button', { name: `New agent in ${projectName}` }).click();
   const modal = window.getByTestId('launch-modal');
   await modal.getByRole('button', { name: 'CLI Agent' }).click();
+  const provider = modal.getByTestId('model-reasoning-picker-trigger');
+  await provider.click();
+  await window.getByTestId('model-reasoning-provider-claude-code').click();
+  await provider.click();
   const instruction = modal.getByTestId('legacy-agent-command-input');
   await instruction.click();
   await instruction.fill('E2E start Job Team');

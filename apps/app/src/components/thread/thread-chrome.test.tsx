@@ -800,8 +800,8 @@ describe('expandable row and chips', () => {
     expect(source).not.toContain('Rewind');
     expect(source).not.toContain('side-chat');
     expect(source).not.toContain('ThreadConversationToc');
-    expect(source).toContain('TIMELINE_SEGMENT_LIMIT = 10_000');
-    expect(source).not.toContain('onLoadOlder');
+    expect(source).toContain('TIMELINE_SEGMENT_LIMIT = 20');
+    expect(source).toContain('onLoadOlder');
     expect(source).not.toContain('thread-load-older');
     const column = source.slice(columnAt);
     expect(column).toContain('<ThreadTimeline');

@@ -7,6 +7,7 @@
  * `apps/desktop/src/browser-import/browser-import.test.ts`.
  */
 import { WebSocket } from 'ws';
+import { createServer } from 'node:http';
 import { test, expect } from './fixtures/app.js';
 
 test.use({ e2e: true });
@@ -137,5 +138,84 @@ test('desktop browser broker leases loopback CDP and reveals a focused thread', 
     expect(JSON.stringify(source)).not.toMatch(/encrypted_value|cookieValue|"value":"[^"]{8,}"/);
     expect(typeof source.name).toBe('string');
     expect(typeof source.id).toBe('string');
+  }
+});
+
+test('equivalent previews reuse their page without crossing browser profiles', async ({ app }) => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<html><body>Persistent preview</body></html>');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing server port');
+  const url = `http://127.0.0.1:${address.port}/`;
+  const execute = (command: Record<string, unknown>) => app.electron.evaluate(async (_electron, command) => {
+    const broker = (globalThis as { __zccDesktopBrowserBroker?: {
+      listInstances: () => Array<{ instanceId: string; generation: string }>;
+      execute: (command: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    } }).__zccDesktopBrowserBroker;
+    if (!broker) throw new Error('Missing desktop broker');
+    const [instance] = broker.listInstances();
+    return broker.execute({ ...instance, ...command });
+  }, { threadId: THREAD_ID, ...command });
+  const create = (tabId: string, profile: { kind: 'personal' } | { kind: 'automation'; id: string }, nextUrl = url) => execute({
+    type: 'desktop.browser.create_tab', tabId, profile, url: nextUrl, presentation: 'hidden'
+  });
+  try {
+    await create('personal', { kind: 'personal' });
+    await expect.poll(async () => (await execute({ type: 'desktop.browser.list_tabs' })).tabs).toEqual([
+      expect.objectContaining({ tabId: 'personal', url })
+    ]);
+    // The same local server with a different host spelling and route keeps its
+    // existing page. In particular, this must not reload and lose hot-reload state.
+    const duplicateUrl = `http://localhost:${address.port}/client-route`;
+    await expect(create('duplicate', { kind: 'personal' }, duplicateUrl)).resolves.toMatchObject({ tab: { tabId: 'personal', url } });
+    await expect(create('automation-a', { kind: 'automation', id: 'run-a' })).resolves.toMatchObject({ tab: { tabId: 'automation-a' } });
+    await expect(create('automation-b', { kind: 'automation', id: 'run-b' })).resolves.toMatchObject({ tab: { tabId: 'automation-b' } });
+    const pages = () => app.electron.evaluate(({ webContents }, url) => webContents.getAllWebContents()
+      .filter(contents => contents.getURL() === url)
+      .map(contents => ({ id: contents.id, loading: contents.isLoading() })), url);
+    await expect.poll(pages).toEqual([
+      expect.objectContaining({ loading: false }), expect.objectContaining({ loading: false }), expect.objectContaining({ loading: false })
+    ]);
+    const before = await pages();
+    const requestsBefore = requests;
+    await execute({ type: 'desktop.browser.acquire_control', leaseId: 'preview-lease', tabIds: ['automation-a'], controllerLabel: 'Preview regression', expiresAt: Date.now() + 60_000 });
+    const connection = await execute({ type: 'desktop.browser.open_connection', leaseId: 'preview-lease', tabIds: ['automation-a'] });
+    const createTarget = (endpoint: unknown) => new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(String(endpoint));
+      const timer = setTimeout(() => { ws.terminate(); reject(new Error('CDP create target timed out')); }, 10_000);
+      ws.once('error', error => { clearTimeout(timer); reject(error); });
+      ws.once('open', () => ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url: duplicateUrl } })));
+      ws.once('message', data => {
+        clearTimeout(timer);
+        ws.close();
+        const body = JSON.parse(String(data));
+        if (body.error) reject(new Error(JSON.stringify(body.error)));
+        else resolve();
+      });
+    });
+    await createTarget(connection.wsEndpoint);
+    const listed = await execute({ type: 'desktop.browser.list_tabs' });
+    expect(listed.tabs).toHaveLength(3);
+    expect(await pages()).toEqual(before);
+    expect(requests).toBe(requestsBefore);
+
+    // A second controller of the SAME automation profile must also get its
+    // own page; URL reuse cannot silently steal a tab from an existing lease.
+    await create('second-controller', { kind: 'automation', id: 'run-a' }, 'about:blank');
+    await execute({ type: 'desktop.browser.acquire_control', leaseId: 'other-lease', tabIds: ['second-controller'], controllerLabel: 'Other controller', expiresAt: Date.now() + 60_000 });
+    const other = await execute({ type: 'desktop.browser.open_connection', leaseId: 'other-lease', tabIds: ['second-controller'] });
+    await createTarget(other.wsEndpoint);
+    const controlled = (await execute({ type: 'desktop.browser.list_tabs' })).tabs as Array<{ tabId: string; control: { leaseId: string } | null }>;
+    expect(controlled).toHaveLength(5);
+    expect(controlled.find(tab => tab.tabId === 'automation-a')?.control?.leaseId).toBe('preview-lease');
+    expect(controlled.filter(tab => tab.control?.leaseId === 'other-lease')).toHaveLength(2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });

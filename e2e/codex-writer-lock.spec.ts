@@ -8,6 +8,7 @@ import { test, expect } from './fixtures/app.js';
 const REPLY = `Codex output start ${'x'.repeat(20_000)} Codex output end`;
 
 test.use({
+  initialConfig: { sponsorPromptDismissed: true },
   launchEnv: async ({ home }, use) => {
     const bin = join(home, 'fixture-bin');
     mkdirSync(bin);
@@ -120,7 +121,8 @@ test('Codex Send now and Stop translate the active turn id through the built bri
   const queued = detail.getByTestId('thread-queued-messages');
   for (const message of ['Keep this queued', 'Send this into the active Codex turn']) {
     await composer.getByTestId('thread-command-input').fill(message);
-    await composer.getByTestId('thread-command-input').press('Enter');
+    await expect(composer.getByTestId('thread-command-input')).toHaveText(message);
+    await composer.getByTestId('thread-command-send').click();
     await expect(queued).toContainText(message);
   }
   const selected = queued.locator('.thread-queued-ghost').filter({ hasText: 'Send this into the active Codex turn' });

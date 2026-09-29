@@ -17,6 +17,28 @@ class Socket {
 let stops: Array<() => void>;
 beforeEach(() => { vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('WebSocket', Socket); Socket.instances = []; Socket.failConstruct = false; stops = []; });
 afterEach(() => { stops.forEach(stop => stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('acknowledges renderer readiness only after the current product socket opens', async () => {
+  const { subscribeProductWs, waitForProductWsOpen } = await import('./product-ws.js');
+  stops.push(subscribeProductWs(() => {}));
+  const ready = vi.fn();
+  const waiting = waitForProductWsOpen().then(ready);
+  await Promise.resolve(); expect(ready).not.toHaveBeenCalled();
+  const old = Socket.instances[0]!;
+  old.close(); await vi.advanceTimersByTimeAsync(1500);
+  old.open(); await Promise.resolve(); expect(ready).not.toHaveBeenCalled();
+  Socket.instances[1]!.open(); await waiting;
+  expect(ready).toHaveBeenCalledOnce();
+  await expect(waitForProductWsOpen()).resolves.toBeUndefined();
+});
+it('releases readiness waiters when the last product subscriber leaves', async () => {
+  const { subscribeProductWs, waitForProductWsOpen } = await import('./product-ws.js');
+  const stop = subscribeProductWs(() => {});
+  const ready = vi.fn(); void waitForProductWsOpen().then(ready);
+  stop();
+  stops.push(subscribeProductWs(() => {}));
+  Socket.instances[1]!.open(); await Promise.resolve();
+  expect(ready).not.toHaveBeenCalled();
+});
 it('shares a socket, filters malformed frames and isolates subscriber failures', async () => {
   const { subscribeProductWs, subscribeProductEvent } = await import('./product-ws.js');
   const listener = vi.fn();

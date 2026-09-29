@@ -912,6 +912,58 @@ describe('product HTTP', () => {
     ]);
   });
 
+  it('serves and authorizes menubar threads for the dev Electron client', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-menubar-'));
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-product-project-'));
+    writeFileSync(join(dataDir, 'projects.json'), JSON.stringify({
+      version: 1,
+      projects: [{ id: 'proj-1', name: 'Alpha', path: projectRoot, createdAt: 1, lastActiveAt: 1 }]
+    }));
+    server = await startTestProductServer({
+      dataDir,
+      origins: { serverPort: 0, devAppPort: 5173 }
+    });
+    const host = upsertHost(server.ctx.db, { name: 'laptop', hostKeyHash: 'h'.repeat(64) });
+    const environment = createEnvironment(server.ctx.db, {
+      projectId: 'proj-1',
+      hostId: host.id,
+      path: projectRoot
+    });
+    const thread = createConversationThread(server.ctx.db, {
+      projectId: 'proj-1',
+      hostId: host.id,
+      environmentId: environment.id,
+      providerId: 'claude-code',
+      title: 'Dev popover agent'
+    });
+    updateConversationThreadStatus(server.ctx.db, thread.id, 'active');
+
+    const list = await fetch(`${server.url}api/v1/menubar/threads`).then((response) => response.json()) as {
+      agents: Array<{ agentId: string; projectName: string }>;
+      working: number;
+    };
+    expect(list).toMatchObject({ working: 1 });
+    expect(list.agents).toEqual([
+      expect.objectContaining({ agentId: thread.id, projectName: 'Alpha' })
+    ]);
+    const invalidLimit = await fetch(`${server.url}api/v1/menubar/threads?limit=1.5`);
+    expect(invalidLimit.status).toBe(400);
+    await expect(invalidLimit.json()).resolves.toEqual({ error: 'limit must be an integer' });
+
+    const opened: unknown[] = [];
+    const dispose = server.ctx.hub.subscribe('threads:open', (payload) => opened.push(payload));
+    const forged = await fetch(`${server.url}api/v1/menubar/threads/${thread.id}/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: 'wrong' })
+    });
+    expect(forged.status).toBe(404);
+    const valid = await fetch(`${server.url}api/v1/menubar/threads/${thread.id}/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: 'proj-1' })
+    });
+    expect(valid.status).toBe(200);
+    expect(opened).toEqual([expect.objectContaining({ threadId: thread.id, projectId: 'proj-1' })]);
+    dispose();
+  });
+
   it('reports Modern/ACP owner-session liveness via /threads/:id/live', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-thread-live-'));
     server = await startTestProductServer({
@@ -2324,6 +2376,46 @@ describe('product HTTP plugins', () => {
     const listed = await fetch(`${server.url}api/v1/marketplaces`);
     expect(listed.status).toBe(200);
     await expect(listed.json()).resolves.toEqual({ catalogs: [] });
+  });
+
+  it('projects marketplace errors without credentials or command output', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-mp-errors-'));
+    server = await startTestProductServer({
+      dataDir,
+      origins: { serverPort: 0, devAppPort: 5173 }
+    });
+    const secret = 'super-secret-token';
+    const rawStderr = `fatal: authentication failed for https://user:${secret}@example.test/private.git\ntrace`;
+    server.ctx.plugins = {
+      addMarketplace: async () => {
+        throw new Error('invalid marketplace URL: credentials, query strings, and fragments are refused');
+      },
+      refreshMarketplace: async () => {
+        throw new Error('git clone timed out after 30000ms');
+      },
+      removeMarketplace: async () => {
+        throw new Error(rawStderr);
+      }
+    } as never;
+
+    for (const [path, expected] of [
+      ['/api/v1/marketplaces', 'invalid marketplace source'],
+      ['/api/v1/marketplaces/refresh', 'git clone timed out'],
+      ['/api/v1/marketplaces/remove', 'marketplace operation failed; check source and try again']
+    ] as const) {
+      const response = await fetch(`${server.url.slice(0, -1)}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: 'git:https://example.test/community.git' })
+      });
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).toContain(expected);
+      expect(body).not.toContain(secret);
+      expect(body).not.toContain('authentication failed');
+      expect(body).not.toContain('example.test/private.git');
+      expect(body).not.toContain('trace');
+    }
   });
 });
 
