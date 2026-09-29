@@ -65,6 +65,7 @@ test('Phone access rejects LAN setup and keeps the Heroku relay on loopback', as
     await win.getByTestId('settings-nav-phone').click();
     await expect(win.getByLabel('Connection method')).toHaveCount(0);
     await expect(win.getByRole('button', { name: 'Show pairing QR' })).toHaveCount(0);
+    await win.getByRole('link', { name: 'Set up my domain' }).click();
     await expect(win.getByRole('link', { name: 'Get a connect code' })).toBeVisible();
     for (const mode of ['local', 'tailscale']) {
       expect(await win.evaluate(async mode => {

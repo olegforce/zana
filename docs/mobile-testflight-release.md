@@ -68,9 +68,11 @@ Before requesting external review, fill in TestFlight test information, privacy/
 
 The mobile app now includes **Try a demo without connecting** on Add server. This opens a local sample conversation with explicitly scripted replies, no server profile, and no requests or agent execution. The demo is intentionally limited; it does not prove the connected desktop features. [Draft beta description, test instructions and reviewer notes](mobile-beta-review-notes.md) disclose that limitation. Rehearse them on the exact signed release; Apple may still require access to the connected features. The isolated-simulator Maestro flow is `apps/mobile/e2e/flows/demo.yaml` (it clears test state, so never run it against a user's installed app).
 
+Native distribution is currently deferred: Settings → Mobile shows **Coming soon** and directs users to their personal domain in a mobile browser. The invitation controls must be restored deliberately when native onboarding resumes.
+
 After approval, enable the beta group’s public invitation and verify that a fresh invited iPhone can install and open Zana. Set `RELEASE_TESTFLIGHT_URL` in `apps/server/src/mobile/distribution.ts` to the actual `https://testflight.apple.com/join/XXXXXXXX` invitation when preparing the desktop release. Operators can override it with `ZANA_MOBILE_TESTFLIGHT_URL`; only exact Apple join URLs are accepted. Do not substitute an App Store URL or a desktop pairing URL. TestFlight invitation QR codes contain no desktop credentials.
 
-TestFlight builds expire after 90 days. Release owners must keep an approved build available, maintain the group’s invitation, and disable the shipped invitation in a later desktop release if beta distribution is withdrawn. Users can always bypass installation with **I already have Zana installed**.
+TestFlight builds expire after 90 days. Release owners must keep an approved build available, maintain the group’s invitation, and disable the shipped invitation in a later desktop release if beta distribution is withdrawn. For current onboarding, users should follow the mobile browser setup in Settings → Mobile.
 
 ## Regression and verification
 

@@ -1,73 +1,41 @@
-.phone-install-guide {
-  margin-bottom: 20px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--border);
+.phone-app-notice,
+.phone-browser-guide {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
 }
 
-.phone-install-steps {
+.phone-app-notice { background: var(--bg-elevated); }
+.phone-app-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.phone-app-heading h2,
+.phone-browser-guide h2 { margin: 0; font-size: 15px; }
+.phone-coming-soon {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.phone-browser-steps {
   display: grid;
-  gap: 12px;
-  margin: 16px 0;
-  padding-left: 22px;
+  gap: 24px;
+  margin: 24px 0;
+  padding-left: 24px;
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-muted);
 }
-
-.phone-install-steps li::marker {
-  color: var(--accent-blue);
-  font-weight: 600;
-}
-
-.phone-install-steps strong {
-  color: var(--text-primary);
-}
-
-.phone-install-notice {
-  padding: 12px 14px;
-  border-left: 3px solid var(--accent-blue);
-  border-radius: 4px;
-  background: var(--bg-elevated);
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-
-.phone-install-alternative {
-  margin-top: 16px;
+.phone-browser-steps li::marker { color: var(--accent-blue); font-weight: 600; }
+.phone-browser-steps h3 { margin: 0 0 8px; font-size: 14px; color: var(--text-primary); }
+.phone-browser-steps p { margin: 8px 0; }
+.phone-browser-steps code { overflow-wrap: anywhere; }
+.phone-browser-steps .btn { margin-top: 4px; }
+.phone-browser-note {
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.phone-install-device-help {
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-muted);
 }
-
-.phone-install-device-help summary {
-  cursor: pointer;
-  color: var(--text-primary);
-}
-
-.phone-install-device-help summary:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 4px;
-}
-
-.phone-install-guide .settings-action-row {
-  flex-wrap: wrap;
-}
-
-
-.phone-setup-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; list-style: none; padding: 0; margin: 0 0 20px; font-size: 12px; }
-.phone-setup-progress li { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 2px solid var(--border); color: var(--text-muted); }
-.phone-setup-progress li[aria-current] { color: var(--text-primary); border-color: var(--accent-blue); font-weight: 600; }
-.phone-setup-progress span { font-weight: 700; }
-.phone-setup-stage { border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin: 16px 0; }
-.phone-setup-stage h2 { font-size: 15px; margin: 0 0 12px; }
-.phone-setup-stage .btn { margin: 4px 8px 4px 0; }
-.phone-install-qr { display: block; margin: 12px 0; border-radius: 8px; }
-.phone-ready-session { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; font-size: 13px; }
-.phone-setup-success { font-weight: 600; color: var(--text-primary); }
-@media (max-width: 600px) { .phone-setup-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

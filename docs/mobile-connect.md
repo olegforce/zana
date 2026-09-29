@@ -36,14 +36,14 @@ cannot authorize a session. Local Wi-Fi, manual server URLs and native QR pairin
    `mobile/connection.json` with mode `0600` using atomic secret storage.
 3. Successful pairing enables remote access. Use the header switch to turn access
    off or on. For browser access, choose an address as described below. For a
-   phone, open Zana Mobile, choose **Continue with GitHub**, approve the phone
-   with the same account and return to choose your computer.
-4. On the phone, **This device → Computers on this account** lists online/offline
+   phone, use **Settings → Mobile → Set up my domain**, then open the claimed
+   address in your mobile browser, sign in with the same GitHub account, and
+   choose **Open Zana**. The native app is marked **Coming soon** in Settings.
+4. For existing native development builds, **This device → Computers on this account** lists online/offline
    computers. Selecting one creates a session for that computer using the same
    account device credential. Discovery still works if the originally paired
    computer is offline or revoked.
-5. Revoke a phone or computer at `/connect/`. Phone revocation is also available
-   in desktop Phone settings. Disconnecting a computer revokes its tunnel
+5. Revoke a phone or computer at `/connect/`. Disconnecting a computer revokes its tunnel
    credential. The Remote access panel stops the shared gateway before forgetting
    the account and leaves an unconfigured, offline state. It never starts a LAN listener.
 

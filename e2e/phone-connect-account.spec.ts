@@ -147,7 +147,8 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     expect(result).toEqual({ status: 200, body: { accepted: true, echo: envelope } });
     await expect(gateway.dispatchPlugin({ accountId: 'another-owner', serverId: privateConfig.serverId, pluginId: 'connect-probe', payload: envelope })).rejects.toThrow('computer_offline');
     await win.getByRole('link', { name: 'Add a phone', exact: true }).click();
-    await expect(win.getByText('3. Sign in on your phone', { exact: true })).toBeVisible();
+    await expect(win.getByRole('region', { name: 'Zana mobile app' }).getByText('Coming soon', { exact: true })).toBeVisible();
+    await expect(win.getByRole('region', { name: 'Use Zana in your mobile browser' })).toBeVisible();
     await expect(win.getByRole('button', { name: 'Show pairing QR', exact: true })).not.toBeVisible();
     await win.screenshot({ path: testInfo.outputPath('connect-phone-sign-in-desktop.png') });
     // Native GitHub flow: the browser's existing authenticated account approves

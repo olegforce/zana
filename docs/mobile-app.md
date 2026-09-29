@@ -22,22 +22,19 @@ BB's **current implementation** is its WebView shell (#2515). Its older `plans/b
 | Push | Expo push registration and backend plugin | Connect background push is not available; notification route handling remains for compatibility |
 | Builds | EAS and native Xcode/Android builds | Local native commands and EAS development, preview and production profiles |
 
-The host-tunnel status plugin is separate from **Zana Connect** phone accounts. The BB-style account flow now lives in the website front door and Phone settings; see [Zana Connect](mobile-connect.md) for architecture and deployment. It uses Zana's own service and signing identities.
+The host-tunnel status plugin is separate from **Zana Connect** phone accounts. The BB-style account flow lives in the website front door and Remote access settings; see [Zana Connect](mobile-connect.md) for architecture and deployment. It uses Zana's own service and signing identities.
 
-## Guided installation in Settings → Phone
+## Mobile browser setup in Settings → Mobile
 
-The desktop presents four stages:
+The native mobile app is marked **Coming soon**. Settings does not offer TestFlight invitations, installation QR codes, USB installation, or native-app readiness verification while distribution is deferred, even if a TestFlight URL was previously configured.
 
-1. **Install Zana.** Settings explains the two apps to install on iPhone: first get **TestFlight by Apple** from the phone’s App Store, then scan Zana’s invitation QR with the Camera app, accept the invitation in TestFlight, and tap **Install** for Zana. Tap **Open** or the Zana Home Screen icon, then return to the desktop and choose **I already have Zana installed**. TestFlight needs neither USB nor Developer Mode. If the release has no invitation, Settings explicitly says that TestFlight alone will not install Zana and points to the USB fallback in this same step; it never invents an install URL.
-2. **Connect this computer.** Sign in with GitHub on the account page, then paste its connect code in Settings → Remote access (also available in Phone setup). Choose your permanent `your-name.zana-ide.com` address. Keep the computer awake and Zana running.
-3. **Sign in on your phone.** Open Zana Mobile → Continue with GitHub, use the same account, approve the phone in the browser, then return to Zana Mobile and choose your computer. Its domain appears in the list. Wi-Fi or cellular internet works; shared Wi-Fi and local-network permission are not required. Local Wi-Fi, manual server URLs and QR pairing have been removed.
-4. **Verify the connection.** A mounted native shell reports readiness through its authenticated gateway session every ten seconds while visible. Evidence expires after thirty seconds. The desktop shows the phone label, platform and native app version; confirm that your projects are visible on that phone. A saved pairing, successful installation, or running gateway alone cannot finish setup. Older mobile builds need an update to report readiness.
+Use the mobile browser flow now:
 
-**Something isn’t working** opens recovery advice; **Ask AI for help** prepares an editable diagnostic prompt containing only bounded status facts. No automatic agent starts, pairing codes, credentials, private URLs or raw errors enter that prompt.
+1. **Set up your domain.** Choose **Set up my domain** to open **Settings → Remote access** on the desktop. Get a connect code from the account page, sign in with GitHub, and paste the code into Zana. Choose a personal address such as `my-domain.zana-ide.com` on the account page. An existing address can be copied from Remote access.
+2. **Open your domain on your phone.** Enter your chosen address in Safari, Chrome, or another mobile browser. `my-domain` is an example; use the address you claimed.
+3. **Sign in and start working.** Use the same GitHub account and choose **Open Zana** to access projects and agents. Bookmark the address for later.
 
-**Install with a USB cable (iPhone or Android)** sits inside the installation step. Its numbered instructions cover preparing the computer, connecting and unlocking the phone, enabling development apps, running the helper, and opening Zana. Choose **Development install with AI**, select an agent, review the request, and click **Send**. The agent identifies USB, wireless and simulated devices, checks signing and exact signed native metadata, preserves app data, installs and verifies the intended phone. iPhone requires macOS, Xcode and an Apple signing account; trust the Mac and enable **Settings → Privacy & Security → Developer Mode**, restart, then confirm **Turn On**. Android requires SDK tools and **Developer options → USB debugging** plus the phone’s authorization prompt. Never paste passwords or signing credentials into chat.
-
-Platform references: [Apple’s TestFlight installation instructions](https://testflight.apple.com/), [TestFlight in the App Store](https://apps.apple.com/app/testflight/id899247664), [Apple Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device), [Android USB debugging](https://developer.android.com/studio/debug/dev-options). Release-owner setup: [TestFlight release guide](mobile-testflight-release.md).
+Keep the computer awake, Zana running, and Remote access enabled. Wi-Fi and cellular internet are supported. Browser access needs no native app installation. See [personal browser addresses](mobile-connect.md#personal-browser-addresses) for authentication and domain details. Native development and release tooling remain available for future work; see the [TestFlight release guide](mobile-testflight-release.md).
 
 ## Development and phone connection
 
@@ -67,9 +64,9 @@ Native saved profiles are retained so users can identify and forget them. Legacy
 
 Heroku terminates HTTPS and is a trusted operator, not an end-to-end encrypted transport. Agents and files stay on the computer. Local tests do not establish a live Heroku deployment or physical-phone internet access.
 
-## Connection methods across networks
+## Retired connection methods (historical)
 
-Desktop **Settings → Phone → Connection method** now offers three paths. Saving a method restarts only the phone gateway if enabled and clears the displayed pairing QR. It does not restart desktop agents. Phone access remains off by default.
+The following records the retired connection setup for older builds. Current Settings → Mobile uses the browser flow above; Local network, Tailscale and native QR pairing are no longer offered. Older desktop builds offered three paths under **Settings → Phone → Connection method**. Saving a method restarted only the phone gateway if enabled and cleared the displayed pairing QR without restarting desktop agents. Phone access was off by default.
 
 | Method | Setup | Reachability |
 | --- | --- | --- |
@@ -122,7 +119,7 @@ pnpm typecheck
 pnpm test:e2e -- e2e/mobile-shell.spec.ts e2e/sidebar-shell.spec.ts
 ```
 
-`e2e/phone-connect-account.spec.ts` verifies account enrollment, authenticated HTTP/WebSocket traffic, live readiness and revocation against the built Electron app and an isolated HTTPS service. `e2e/phone-network-connections.spec.ts` rejects LAN configuration and verifies the retained relay transport binds only to loopback. `e2e/phone-settings-pairing.spec.ts` checks the installation helper and online-only setup UI.
+`e2e/phone-connect-account.spec.ts` verifies account enrollment, authenticated HTTP/WebSocket traffic, live readiness and revocation against the built Electron app and an isolated HTTPS service. `e2e/phone-network-connections.spec.ts` rejects LAN configuration and verifies the retained relay transport binds only to loopback. `e2e/phone-settings-pairing.spec.ts` checks the coming-soon notice and the mobile browser guide’s link to Remote access.
 
 `e2e/mobile-shell.spec.ts` uses a test-only loopback gateway to verify the shared renderer at phone sizes, sends a deterministic fake-provider message and checks navigation and revocation. This browser fixture does not provide a native direct-connection mode. `e2e/mobile-views.spec.ts` checks the main views at 320, 390 and 820 pixels. Gateway integration tests use real HTTP and WebSocket sockets.
 

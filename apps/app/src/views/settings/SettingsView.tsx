@@ -93,7 +93,7 @@ export const SETTINGS_SECTIONS: Array<{
   { id: 'prompts', label: 'Prompts', icon: Sparkles, desc: 'LLM micro-call prompts', group: 'config' },
   { id: 'machines', label: 'Machines', icon: Laptop, desc: 'Pair remote host daemons', group: 'remote' },
   { id: 'connectivity', label: 'Connectivity', icon: Network, desc: 'Unpaired SSH fallback', group: 'remote' },
-  { id: 'phone', label: 'Phone', icon: Smartphone, desc: 'Pair a mobile device', group: 'remote' },
+  { id: 'phone', label: 'Mobile', icon: Smartphone, desc: 'Use Zana from your mobile browser', group: 'remote' },
   { id: 'remote-access', label: 'Remote access', icon: Globe, desc: 'Open this computer from any browser', group: 'remote' },
   { id: 'agents', label: 'Agents', icon: Bot, desc: 'Attention, automation, heartbeat & Overseer', group: 'agents' },
   { id: 'personas', label: 'Personas', icon: Drama, desc: 'Reusable launch profiles', group: 'agents' },
@@ -177,7 +177,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<SettingsTab, Array<{ id: strin
     { id: 'connectivity-remote', label: 'Remote SSH' }
   ],
   phone: [
-    { id: 'phone', label: 'Phone' }
+    { id: 'phone', label: 'Mobile' }
   ],
   inbox: [
     { id: 'inbox-general', label: 'Inbox' }
@@ -468,11 +468,7 @@ export function SettingsView() {
         ) : tab === 'remote-access' ? (
           <RemoteAccessView config={config} onConfigDraft={setConfig} />
         ) : tab === 'phone' ? (
-          <PhoneTab
-            config={config}
-            onConfigDraft={setConfig}
-            onUpdate={update}
-          />
+          <PhoneTab />
         ) : tab === 'inbox' ? (
           <InboxSettingsTab
             config={config}

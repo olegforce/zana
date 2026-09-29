@@ -1,42 +1,28 @@
 import { test, expect } from './fixtures/app.js';
-test('Settings → Phone prepares an editable mobile installation composer', async ({ app }, testInfo) => {
+
+// Even a previously configured TestFlight link must not surface the deferred app.
+test.use({ launchEnv: { ZANA_MOBILE_TESTFLIGHT_URL: 'https://testflight.apple.com/join/Abcd1234' } });
+
+test('Settings → Mobile directs users to domain setup and mobile browser access', async ({ app }, testInfo) => {
   const win = app.window;
-  const threadsBefore = await win.evaluate(() => window.cc.threads.list());
   await win.getByRole('link', { name: 'Settings', exact: true }).click();
   await win.getByTestId('settings-nav-phone').click();
+  await expect(win.getByTestId('settings-nav-phone')).toContainText('Mobile');
+  const nativeApp = win.getByRole('region', { name: 'Zana mobile app' });
+  await expect(nativeApp.getByText('Coming soon', { exact: true })).toBeVisible();
+  const guide = win.getByRole('region', { name: 'Use Zana in your mobile browser' });
+  await expect(guide.getByRole('list', { name: 'Mobile browser setup' }).getByRole('listitem')).toHaveCount(3);
+  await expect(guide).toContainText('my-domain.zana-ide.com');
+  await expect(guide).toContainText('same GitHub account');
+  await expect(guide).toContainText('Keep this computer awake');
   const panel = win.locator('.settings-panel--preferences');
-  await expect(panel.getByRole('list', { name: 'Phone setup steps' }).getByRole('listitem')).toHaveCount(4);
-  const installation = panel.getByRole('region', { name: '1. Install Zana' });
-  await expect(installation.getByRole('list', { name: 'Install Zana on iPhone' }).getByRole('listitem')).toHaveCount(3);
-  await expect(installation.getByRole('status')).toContainText('Installing TestFlight alone will not install Zana');
-  await expect(installation.getByRole('link', { name: 'View TestFlight in the App Store' })).toHaveAttribute('href', 'https://apps.apple.com/app/testflight/id899247664');
-  await expect(installation.getByRole('link', { name: 'Get Zana on TestFlight' })).toHaveCount(0);
-  await installation.getByText('Install with a USB cable (iPhone or Android)', { exact: true }).click();
-  await expect(installation.getByRole('list', { name: 'Install Zana with a USB cable' })).toBeVisible();
-  await expect(installation.getByText(/choose an agent, review the request, and click Send/)).toBeVisible();
-  await expect(panel.getByText(/Developer Mode, turn it on, restart/)).toBeVisible();
-  await expect(panel.getByText(/enable USB debugging/)).toBeVisible();
-  await win.screenshot({ path: testInfo.outputPath('phone-installation-guide.png') });
-
-  await panel.getByRole('button', { name: 'Development install with AI', exact: true }).click();
-  const composer = win.getByTestId('launch-modal');
-  await expect(composer).toBeVisible();
-  const prompt = composer.locator('[contenteditable="true"]');
-  await expect(prompt).toContainText('Install or update the Zana mobile app on my connected physical phone');
-  await expect(prompt).toContainText('existing Apple signing account');
-  await expect(prompt).toContainText('authenticated online gateway');
-  await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
-  await win.screenshot({ path: testInfo.outputPath('phone-installation-composer.png') });
-  await prompt.fill('Install Zana on my connected iPhone.');
-  await expect(prompt).toHaveText('Install Zana on my connected iPhone.');
-  await win.keyboard.press('Escape');
-  await expect(composer).toHaveCount(0);
-  await expect(panel.getByRole('switch', { name: 'Enable phone access' })).toHaveCount(0);
-  await expect(panel.getByRole('link', { name: 'Get a connect code' })).toBeVisible();
-  await expect(panel.getByLabel('Connection method')).toHaveCount(0);
-  await expect(panel.getByRole('button', { name: 'Show pairing QR' })).toHaveCount(0);
-  await panel.getByRole('button', { name: 'Development install with AI', exact: true }).click();
-  await expect(prompt).toContainText('Install or update the Zana mobile app');
-  await win.keyboard.press('Escape');
-  expect(await win.evaluate(() => window.cc.threads.list())).toEqual(threadsBefore);
+  await expect(panel.getByRole('img')).toHaveCount(0);
+  await expect(panel.getByText(/TestFlight|USB|Waiting for Zana to open/)).toHaveCount(0);
+  await win.screenshot({ path: testInfo.outputPath('mobile-browser-setup.png') });
+  await guide.getByRole('link', { name: 'Set up my domain' }).click();
+  await expect(win.getByRole('region', { name: 'Remote access setup' })).toBeVisible();
+  await expect(win.getByRole('link', { name: 'Get a connect code' })).toBeVisible();
+  await expect(win.getByRole('textbox', { name: 'Connect code', exact: true })).toBeVisible();
+  await expect(win.getByRole('switch', { name: 'Remote access' })).toBeDisabled();
+  await expect(win.getByTestId('launch-modal')).toHaveCount(0);
 });
