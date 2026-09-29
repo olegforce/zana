@@ -83,17 +83,20 @@ test('desktop and browser resolve durable no-spawn and exit evidence without lau
     const browser = await opened; await browser.waitForLoadState('domcontentloaded');
     const project = (await app.window.evaluate(() => window.cc.projects.list())).find(row => row.id === projectId)!;
     const userData = await app.electron.evaluate(({ app }) => app.getPath('userData'));
-    writeFileSync(join(userData, 'launch-ledger.json'), JSON.stringify({ version: 1, revision: 1, entries: records.map(record => ({
-      id: randomUUID(), idempotencyKey: record.id, launchDigest: 'fixture', authorizationId: randomUUID(), sessionId: record.sessionId,
-      principal: { kind: record.kind === 'goal' ? 'automation' : 'schedule', id: `${record.kind}:${record.id}` },
-      binding: { consumerKind: 'terminal', scope: 'local', initialTaskDigest: 'fixture', storeRevision: 'fixture', projectIdentityDigest: projectIdentityDigest(project), autonomous: false },
-      state: record.state, revision: 1, createdAt: Date.now(), updatedAt: Date.now()
-    })) }));
     for (const [i, record] of records.entries()) {
       const page = i < 2 ? app.window : browser;
       const path = record.kind === 'goal' ? '/goals' : `/schedules/${record.id}`;
       await page.evaluate(path => { history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')); }, path);
       const controls = record.kind === 'goal' ? page.locator('.scheduler-card').filter({ hasText: `Recovery ${record.id}` }) : page.getByTestId('schedule-info-panel');
+      await expect(controls.getByTestId('pending-worker-recovery')).toBeVisible();
+      // Recovering one goal refreshes the goal catalog. Reveal only this worker's
+      // evidence so that refresh cannot resolve later fixtures before their click.
+      writeFileSync(join(userData, 'launch-ledger.json'), JSON.stringify({ version: 1, revision: i + 1, entries: [{
+        id: randomUUID(), idempotencyKey: record.id, launchDigest: 'fixture', authorizationId: randomUUID(), sessionId: record.sessionId,
+        principal: { kind: record.kind === 'goal' ? 'automation' : 'schedule', id: `${record.kind}:${record.id}` },
+        binding: { consumerKind: 'terminal', scope: 'local', initialTaskDigest: 'fixture', storeRevision: 'fixture', projectIdentityDigest: projectIdentityDigest(project), autonomous: false },
+        state: record.state, revision: 1, createdAt: Date.now(), updatedAt: Date.now()
+      }] }));
       await controls.getByRole('button', { name: 'Check worker' }).click();
       await expect(controls.getByTestId('pending-worker-recovery')).toHaveCount(0);
       await expect(controls.getByRole('button', { name: 'Run now', exact: true })).toBeEnabled();

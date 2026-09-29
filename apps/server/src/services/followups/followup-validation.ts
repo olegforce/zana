@@ -85,4 +85,3 @@ export function validateFollowUpFile(raw: unknown): FollowUp | { error: string }
   };
   return followUp;
 }
-

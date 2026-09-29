@@ -35,7 +35,7 @@ it('discovers CLI versions, roles and complete model output on each actual packe
       const home = join(base, name), dataDir = join(home, '.zcc'), root = join(home, 'project');
       mkdirSync(dataDir, { recursive: true }); mkdirSync(root);
       const binary = join(home, 'opencode'), audit = join(home, 'audit.jsonl');
-      writeFileSync(binary, `#!/usr/bin/env node
+      writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(audit)}, JSON.stringify({ args, home: process.env.HOME, cwd: process.cwd() }) + '\\n');
@@ -58,7 +58,7 @@ else process.exitCode = 2;
       const query = (query: string, patch: object = {}) => discoverProjectCli(server.ctx, { ...input, query, ...patch }, Date.now() + 20_000);
       expect(await query('version')).toEqual({ query: 'version', version: '1.18.10' });
       const roles = await query('roles');
-      expect(roles.query === 'roles' && roles.roles.some(role => role.id === `${name}-reviewer`)).toBe(true);
+      expect(roles.query === 'roles' && roles.roles).toContainEqual(expect.objectContaining({ id: `${name}-reviewer` }));
       expect(roles.query === 'roles' && roles.roles.some(role => role.id === 'helper')).toBe(false);
       const models = await query('models');
       expect(models.query === 'models' && models.models?.length).toBe(1800);

@@ -109,4 +109,3 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
   };
   return task;
 }
-
