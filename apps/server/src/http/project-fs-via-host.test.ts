@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { Project } from '@zana-ai/zcc-domain/product';
-import { authorizeProjectRelPath, isDeniedProjectRelPath, listProjectDir, listProjectPaths, readProjectFile } from './project-fs-via-host.js';
+import { authorizeProjectRelPath, parseProjectFileScope, isDeniedProjectRelPath, listProjectDir, listProjectPaths, readProjectFile } from './project-fs-via-host.js';
+import { HostUnavailableError, AmbiguousHostError } from './host-hub.js';
 import type { ProductHttpContext } from './product-context.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openDatabase, upsertHost, createEnvironment } from '@zana-ai/zcc-db';
+import { projectFileRoot, readProjectImage } from './project-fs-via-host.js';
+
+const primaryDir = mkdtempSync(join(tmpdir(), 'project-primary-'));
+const primaryDb = openDatabase(join(primaryDir, 'test.sqlite'));
+upsertHost(primaryDb, { id: 'host-1', name: 'Primary', hostKeyHash: 'a'.repeat(64) });
+afterAll(() => { primaryDb.close(); rmSync(primaryDir, { recursive: true, force: true }); });
 
 function project(overrides: Partial<Project> & Pick<Project, 'id' | 'name' | 'path'>): Project {
   return {
@@ -54,6 +65,7 @@ describe('listProjectDir / readProjectFile', () => {
   it('RPCs host.list_dir after confinement and reads through host.read_file', async () => {
     const commands: unknown[] = [];
     const ctx = {
+      db: primaryDb,
       toProjects: () => [project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' })],
       hostHub: {
         resolveHostId: () => 'host-1',
@@ -83,6 +95,7 @@ describe('listProjectDir / readProjectFile', () => {
 
   it('marks host base64 image reads as binary without exposing bytes as text', async () => {
     const ctx = {
+      db: primaryDb,
       toProjects: () => [project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' })],
       hostHub: {
         resolveHostId: () => 'host-1',
@@ -92,12 +105,14 @@ describe('listProjectDir / readProjectFile', () => {
     await expect(readProjectFile(ctx, '/tmp/proj/shot.png')).resolves.toEqual({
       ok: true,
       binary: true,
-      bytes: Buffer.byteLength('iVBORw0KGgo=', 'base64')
+      bytes: Buffer.byteLength('iVBORw0KGgo=', 'base64'),
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/)
     });
   });
 
   it('does not RPC when the path escapes every project', async () => {
     const ctx = {
+      db: primaryDb,
       toProjects: () => [project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' })],
       hostHub: {
         resolveHostId: () => 'host-1',
@@ -115,6 +130,7 @@ describe('listProjectPaths', () => {
   it('authorizes by project id, confines the host walk, and filters deny names', async () => {
     const commands: unknown[] = [];
     const ctx = {
+      db: primaryDb,
       toProjects: () => [project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' })],
       hostHub: {
         resolveHostId: () => 'host-1',
@@ -165,6 +181,7 @@ describe('listProjectPaths', () => {
 
   it('does not RPC for an unknown project id', async () => {
     const ctx = {
+      db: primaryDb,
       toProjects: () => [project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' })],
       hostHub: {
         resolveHostId: () => 'host-1',
@@ -181,6 +198,7 @@ describe('listProjectPaths', () => {
 
   it('returns empty when both kinds are excluded and rejects a pathless project', async () => {
     const ctx = {
+      db: primaryDb,
       toProjects: () => [
         project({ id: 'zcc', name: 'zcc', path: '/tmp/proj' }),
         project({ id: 'empty', name: 'empty', path: '' })
@@ -207,4 +225,102 @@ describe('listProjectPaths', () => {
     expect(isDeniedProjectRelPath('.git/config')).toBe(true);
     expect(isDeniedProjectRelPath('src/foo.ts')).toBe(false);
   });
+});
+
+describe('explicit project source routing', () => {
+  const scope = { projectId: 'p', hostId: 'remote' };
+  const projects = [project({ id: 'p', name: 'Shared', path: '/primary/repo', hostId: 'primary', sources: [{ id: 's', hostId: 'remote', path: '/remote/repo', createdAt: 1 }] })];
+  it('reads and searches the selected source and rejects any root fallback', async () => {
+    const calls: Array<{ hostId: string; command: any }> = [];
+    const ctx = { db: primaryDb, toProjects: () => projects, hostHub: {
+      resolveHostId: (id: string) => id,
+      callHostOnlineRpc: async (call: any) => {
+        calls.push(call);
+        if (call.command.type === 'host.list_dir') return { entries: [] };
+        if (call.command.type === 'host.list_paths') return { paths: [], truncated: false };
+        return { content: 'remote', encoding: 'utf8' };
+      }
+    } } as unknown as ProductHttpContext;
+    expect(await readProjectFile(ctx, '/remote/repo/a', scope)).toMatchObject({ content: 'remote' });
+    await listProjectDir(ctx, '/remote/repo', scope);
+    await listProjectPaths(ctx, 'p', { hostId: 'remote', limit: 1000 });
+    expect(calls.map(call => call.hostId)).toEqual(['remote', 'remote', 'remote']);
+    expect(calls[0]!.command).toEqual({ type: 'host.read_file', root: '/remote/repo', relPath: 'a' });
+    expect(calls[2]!.command).toMatchObject({ path: '/remote/repo', limit: 200 });
+    expect(await readProjectFile(ctx, '/primary/repo/a', scope)).toMatchObject({ ok: false });
+    expect(await readProjectFile(ctx, '/remote/repo/../secret', scope)).toMatchObject({ ok: false });
+    await expect(listProjectDir(ctx, '/remote/repo', { ...scope, hostId: 'other' })).rejects.toMatchObject({ status: 409 });
+    await expect(listProjectDir(ctx, '/remote/repo', { ...scope, projectId: 'missing' })).rejects.toMatchObject({ status: 404 });
+    expect(calls).toHaveLength(3);
+  });
+  it('refuses ambiguous legacy paths on different hosts', () => {
+    const samePaths = [project({ id: 'a', name: 'A', hostId: 'a', path: '/repo' }), project({ id: 'b', name: 'B', hostId: 'b', path: '/repo/nested' })];
+    expect(() => authorizeProjectRelPath(samePaths, '/repo/nested/file')).toThrow('Choose the project and machine');
+  });
+});
+
+it('validates the complete source scope and rejects forged roots', () => {
+  expect(parseProjectFileScope(undefined)).toBeUndefined();
+  expect(parseProjectFileScope({ projectId: 'p', hostId: 'h', environmentId: 'e' })).toEqual({ projectId: 'p', hostId: 'h', environmentId: 'e' });
+  for (const value of [null, [], false, {}, { projectId: '', hostId: 'h' }, { projectId: 'p'.repeat(257), hostId: 'h' }, { projectId: 'p', hostId: '' }, { projectId: 'p', hostId: 'h'.repeat(129) }, { projectId: 'p', hostId: 'h', environmentId: 3 }, { projectId: 'p', hostId: 'h', environmentId: '' }, { projectId: 'p', hostId: 'h', root: '/etc' }]) {
+    expect(() => parseProjectFileScope(value)).toThrow('Invalid project file scope');
+  }
+});
+
+it('pins environment paths to their project and host, including historical sources', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'source-environment-'));
+  const db = openDatabase(join(dir, 'test.sqlite'));
+  try {
+    const primary = upsertHost(db, { name: 'Primary', hostKeyHash: 'a'.repeat(64) });
+    const remote = upsertHost(db, { name: 'Remote', hostKeyHash: 'b'.repeat(64), isPrimary: false });
+    const ctx = { db, toProjects: () => [project({ id: 'p', name: 'Shared', path: '/primary/repo' })] } as ProductHttpContext;
+    expect(projectFileRoot(ctx, { projectId: 'p', hostId: primary.id })).toEqual({ root: '/primary/repo', hostId: primary.id });
+    const scope = { projectId: 'p', hostId: remote.id };
+    expect(() => projectFileRoot(ctx, scope)).toThrow('no checkout');
+    const ready = createEnvironment(db, { projectId: 'p', hostId: remote.id, path: '/historical/worktree', status: 'ready' });
+    expect(projectFileRoot(ctx, { ...scope, environmentId: ready.id })).toEqual({ root: '/historical/worktree', hostId: remote.id });
+    const invalid = [
+      { ...scope, environmentId: 'missing' },
+      { projectId: 'p', hostId: primary.id, environmentId: ready.id },
+      ...[
+        { projectId: 'other', path: '/other', status: 'ready' as const },
+        { projectId: 'p', path: null, status: 'ready' as const },
+        { projectId: 'p', path: '/worktree', status: 'provisioning' as const }
+      ].map(fields => ({ ...scope, environmentId: createEnvironment(db, { hostId: remote.id, ...fields }).id }))
+    ];
+    for (const input of invalid) expect(() => projectFileRoot(ctx, input)).toThrow('does not belong');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+it('surfaces host loss and ambiguous ownership without falling back to local files', async () => {
+  let failure: unknown;
+  const ctx = { db: primaryDb, toProjects: () => [project({ id: 'p', name: 'P', path: '/repo', hostId: 'h' })], hostHub: { resolveHostId: () => 'h', callHostOnlineRpc: async () => { throw failure; } } } as unknown as ProductHttpContext;
+  for (const error of [new HostUnavailableError(), new AmbiguousHostError(), new Error('Unexpected read failure')]) {
+    failure = error;
+    await expect(listProjectDir(ctx, '/repo')).rejects.toThrow(error.message);
+    await expect(readProjectFile(ctx, '/repo/a')).rejects.toThrow(error.message);
+    await expect(listProjectPaths(ctx, 'p')).rejects.toThrow(error.message);
+  }
+  failure = { code: 'path_not_found' };
+  expect(await listProjectDir(ctx, '/repo')).toEqual([]);
+  expect(await readProjectFile(ctx, '/repo/a')).toEqual({ ok: false, message: 'file not found' });
+  failure = { code: 'too_large' };
+  expect(await readProjectFile(ctx, '/repo/a')).toEqual({ ok: false, message: 'file exceeds the read cap' });
+  await expect(listProjectDir(ctx, '/repo/../secret')).rejects.toMatchObject({ code: 'path-escape' });
+  expect(await readProjectFile(ctx, '/repo')).toMatchObject({ ok: false });
+  expect(authorizeProjectRelPath(ctx.toProjects(), 'relative')).toBeNull();
+  expect(authorizeProjectRelPath([project({ id: 'r', name: 'SSH', path: '/repo', remote: { host: 'remote' } as any })], '/repo/a')).toBeNull();
+});
+
+it('previews images on the selected host with bounded data URLs and no path fallback', async () => {
+  let content = 'iVBORw0KGgo=', encoding = 'base64'; const calls: any[] = [];
+  const ctx = { db: primaryDb, toProjects: () => [project({ id: 'p', name: 'P', path: '/primary', hostId: 'primary', sources: [{ id: 's', hostId: 'h', path: '/repo', createdAt: 1 }] })], hostHub: { resolveHostId: (id: string) => id, callHostOnlineRpc: async (call: any) => { calls.push(call); return { content, encoding }; } } } as unknown as ProductHttpContext;
+  const scope = { projectId: 'p', hostId: 'h' };
+  expect(await readProjectImage(ctx, '/repo/shot.PNG', scope)).toEqual({ ok: true, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' });
+  expect(calls[0]).toEqual({ hostId: 'h', command: { type: 'host.read_file', root: '/repo', relPath: 'shot.PNG' } });
+  content = '<svg/>'; encoding = 'utf8';
+  expect((await readProjectImage(ctx, '/repo/shot.svg', scope)).dataUrl).toBe('data:image/svg+xml;base64,' + Buffer.from(content).toString('base64'));
+  for (const path of ['/primary/shot.png', '/repo/../shot.png', '/repo/file.txt']) await expect(readProjectImage(ctx, path, scope)).rejects.toMatchObject({ status: 403 });
+  expect(calls).toHaveLength(2);
+  content = 'x'.repeat(10 * 1024 * 1024 + 1);
+  await expect(readProjectImage(ctx, '/repo/huge.svg', scope)).rejects.toMatchObject({ status: 413 });
 });

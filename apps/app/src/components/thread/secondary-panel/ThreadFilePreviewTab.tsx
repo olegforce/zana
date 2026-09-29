@@ -203,7 +203,8 @@ export function ThreadFilePreviewTab({
   livePlan = null,
   planDocument = null,
   todos = null,
-  lineNumber = null
+  lineNumber = null,
+  previewRevision = 0
 }: {
   threadId?: string;
   path: string;
@@ -214,8 +215,13 @@ export function ThreadFilePreviewTab({
   planDocument?: ThreadPlanDocument | null;
   todos?: ThreadTimelinePendingTodos | null;
   lineNumber?: number | null;
+  previewRevision?: number;
 }) {
-  const [override, setOverride] = useState<string | null>(openerKey ?? null);
+  const openerScope = JSON.stringify([path, threadId, projectId, storage, openerKey]);
+  const [selection, setSelection] = useState({ scope: openerScope, key: openerKey ?? null });
+  // This component is reused across tabs. Only this file's local selection can
+  // override its explicit opener or the saved preference for its extension.
+  const override = selection.scope === openerScope ? selection.key : openerKey ?? null;
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const openers = useSyncExternalStore(subscribePluginSlots, listFileOpeners, listFileOpeners);
@@ -244,6 +250,8 @@ export function ThreadFilePreviewTab({
 
   useEffect(() => {
     if (livePlan || videoSrc) return;
+    setError(null);
+    setContent(null);
     let cancelled = false;
     const hostReader = storage
       ? product.threads.storageContent
@@ -265,7 +273,7 @@ export function ThreadFilePreviewTab({
       applyPreviewResult(cancelled, result, setError, setContent);
     });
     return () => { cancelled = true; };
-  }, [path, storage, threadId, projectId, livePlan, videoSrc]);
+  }, [path, storage, threadId, projectId, livePlan, videoSrc, previewRevision]);
 
   const chrome = (
     <ThreadFilePreviewChrome
@@ -275,7 +283,7 @@ export function ThreadFilePreviewTab({
       statusBadge={liveBadge}
       documentContent={error ? null : liveDocument?.markdown ?? content}
       onSelect={(next) => {
-        setOverride(next);
+        setSelection({ scope: openerScope, key: next });
         const extension = fileExtensionOf(path);
         if (extension) writeFileOpenerPin(extension, next);
       }}
@@ -295,7 +303,7 @@ export function ThreadFilePreviewTab({
     );
   }
   const hostPreview = videoSrc ? (
-    <ThreadVideoPreview key={videoSrc} src={videoSrc} path={path} />
+    <ThreadVideoPreview key={`${videoSrc}:${previewRevision}`} src={videoSrc} path={path} />
   ) : (
     <ThreadFilePreviewView
       path={path}
@@ -318,6 +326,7 @@ export function ThreadFilePreviewTab({
       <PluginSlotBoundary pluginId={opener.pluginId} generation={opener.generation}>
         <HostPreviewContext.Provider value={hostPreview}>
           <OpenerComponent
+            key={`${threadId ?? ''}:${storage}:${path}:${previewRevision}`}
             pluginId={opener.pluginId}
             path={path}
             source={{

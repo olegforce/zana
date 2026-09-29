@@ -27,8 +27,8 @@ import type { ScheduledTask } from '@zana-ai/zcc-domain/product';
  */
 export interface ScheduleAgentApi {
   list(): ScheduledTask[];
-  runNow(id: string): ScheduledTask;
-  setEnabled(id: string, enabled: boolean): ScheduledTask | null;
+  runNow(id: string): ScheduledTask | Promise<ScheduledTask>;
+  setEnabled(id: string, enabled: boolean): ScheduledTask | null | Promise<ScheduledTask | null>;
 }
 
 export const SCHEDULE_LIST_DESCRIPTION = [
@@ -261,7 +261,7 @@ export function registerScheduleManageTools(
       try {
         const found = lookupInScope(scheduleAgentApi, projectId, id, allProjects === true);
         if (!found.ok) return fail('schedule_run_now', formatResolveError(found, id));
-        const task = scheduleAgentApi.runNow(found.task.id);
+        const task = await scheduleAgentApi.runNow(found.task.id);
         return okJson({ ok: true, action: 'run-now', schedule: projectSchedule(task) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -280,7 +280,7 @@ export function registerScheduleManageTools(
       try {
         const found = lookupInScope(scheduleAgentApi, projectId, id, allProjects === true);
         if (!found.ok) return fail('schedule_set_enabled', formatResolveError(found, id));
-        const task = scheduleAgentApi.setEnabled(found.task.id, enabled);
+        const task = await scheduleAgentApi.setEnabled(found.task.id, enabled);
         if (!task) return fail('schedule_set_enabled', `schedule not found: ${id}`);
         return okJson({
           ok: true,

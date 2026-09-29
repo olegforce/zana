@@ -14,6 +14,7 @@ type SafeHandleFromWindow = <TArgs extends unknown[], TResult>(
 
 /** Compatibility IPC host bindings. Bound once by apps/desktop/src/host.ts before family registration. */
 export interface IpcCtx {
+  invalidateLibrary: () => Promise<void>;
   E2E_TAP_ENABLED: any;
   MENUBAR_REPLY_MAX_CHARS: any;
   activeForegroundSessionId: any;
@@ -71,6 +72,7 @@ export interface IpcCtx {
   launchAutonomousTeam: any;
   launchTeam: any;
   libraryStore: any;
+  localProjects: () => import('@zana-ai/zcc-domain/product').Project[];
   llmService: any;
   logMainError: any;
   mainWindow: any;

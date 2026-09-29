@@ -1,5 +1,6 @@
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
+import { store } from '@zana-ai/zcc-server/services/projects/store';
 
 /**
  * Zana Mobile gateway IPC. The gateway is a live main-process object
@@ -10,6 +11,17 @@ import { ctx } from './ctx.js';
  * enable phone access first.
  */
 export function registerMobileIpc(): void {
+  ctx.safeHandle(IPC.mobile.enroll, (address: unknown) => ctx.mobileGateway.enroll(address), err => { throw err; });
+  ctx.safeHandle(IPC.mobile.pollEnrollment, () => ctx.mobileGateway.pollEnrollment(store.getConfig().mobileGatewayEnabled === true), err => { throw err; });
+  ctx.safeHandle(IPC.mobile.cancelEnrollment, () => ctx.mobileGateway.cancelEnrollment(), err => { throw err; });
+  ctx.safeHandle(IPC.mobile.disconnectAccount, () => ctx.mobileGateway.disconnectAccount(store.getConfig().mobileGatewayEnabled === true), err => { throw err; });
+  ctx.safeHandle(IPC.mobile.browserAddress, () => ctx.mobileGateway.browserAddress(), err => { throw err; });
+  ctx.safeHandle(IPC.mobile.redeemComputerCode, (address: unknown, code: unknown) => ctx.mobileGateway.redeemComputerCode(address, code), err => { throw err; });
+  ctx.safeHandle(
+    IPC.mobile.configure,
+    async (input: unknown) => { await ctx.mobileGateway.configure(input, store.getConfig().mobileGatewayEnabled === true); },
+    (err) => { throw err; }
+  );
   ctx.safeHandle(
     IPC.mobile.status,
     () => ctx.mobileGateway.status(),

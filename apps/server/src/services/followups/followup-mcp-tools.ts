@@ -29,14 +29,14 @@ export interface FollowUpAgentApi {
   /** Follow-ups for one project (the route's projectId). */
   agentList(projectId: string): FollowUp[];
   /** Create a follow-up under one project. `scope`/`origin` forced by the wiring. */
-  agentCreate(projectId: string, input: FollowUpCreateInput): FollowUp;
+  agentCreate(projectId: string, input: FollowUpCreateInput): FollowUp | Promise<FollowUp>;
   /** Resolve / dismiss a follow-up the agent owns within its project. */
   agentSetStatus(
     projectId: string,
     id: string,
     status: FollowUpStatus,
     resolution?: string
-  ): FollowUp | null;
+  ): FollowUp | null | Promise<FollowUp | null>;
 }
 
 export const FOLLOWUP_CREATE_DESCRIPTION = [
@@ -163,7 +163,7 @@ export function registerFollowUpTools(server: McpServer, opts: RegisterFollowUpT
     { description: FOLLOWUP_CREATE_DESCRIPTION, inputSchema: followupCreateInputSchema },
     async ({ title, detail, options, kind }) => {
       try {
-        const followUp = followupAgentApi.agentCreate(projectId, {
+        const followUp = await followupAgentApi.agentCreate(projectId, {
           // projectId + scope + origin are forced by the wiring to the route's
           // project/session — the agent cannot target another project or spoof
           // provenance.
@@ -208,7 +208,7 @@ export function registerFollowUpTools(server: McpServer, opts: RegisterFollowUpT
     { description: FOLLOWUP_RESOLVE_DESCRIPTION, inputSchema: followupResolveInputSchema },
     async ({ id, status, resolution }) => {
       try {
-        const updated = followupAgentApi.agentSetStatus(
+        const updated = await followupAgentApi.agentSetStatus(
           projectId,
           id,
           status as FollowUpStatus,

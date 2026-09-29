@@ -19,6 +19,22 @@ const threadId = randomUUID();
 const environmentId = randomUUID();
 
 describe('host-rpc contract', () => {
+  it('bounds read-only checkout history commands and validates returned rows', () => {
+    const command = { type: 'host.git_history', root: '/project', limit: 50 };
+    expect(HostRpcCommandSchema.safeParse(command).success).toBe(true);
+    for (const patch of [{ limit: 0 }, { limit: 101 }, { limit: 1.2 }, { root: undefined }, { args: ['--all'] }]) expect(HostRpcCommandSchema.safeParse({ ...command, ...patch }).success).toBe(false);
+    expect(parseHostRpcResult('host.git_history', [])).toEqual([]);
+    const row = { hash: 'a'.repeat(40), shortHash: 'aaaaaaa', author: 'Author', ts: 1, subject: 'Commit' };
+    expect(parseHostRpcResult('host.git_history', [row])).toEqual([row]);
+    for (const rows of [Array(101).fill(row), [{ ...row, path: '/private' }], [{ ...row, ts: Infinity }]]) expect(() => parseHostRpcResult('host.git_history', rows)).toThrow();
+  });
+  it('requires both confinement roots for complete tree snapshots and validates bounded results', () => {
+    const command = { type: 'host.snapshot_path', path: '/project/.zcc/library/tree', rootPath: '/project', boundaryPath: '/project/.zcc/library' };
+    expect(HostRpcCommandSchema.safeParse(command).success).toBe(true);
+    for (const patch of [{ rootPath: undefined }, { boundaryPath: undefined }, { recursive: true }]) expect(HostRpcCommandSchema.safeParse({ ...command, ...patch }).success).toBe(false);
+    expect(parseHostRpcResult('host.snapshot_path', { entries: [{ kind: 'dir', relPath: '' }] })).toEqual({ entries: [{ kind: 'dir', relPath: '' }] });
+    expect(() => parseHostRpcResult('host.snapshot_path', { entries: [{ kind: 'file', relPath: '', sizeBytes: 26 * 1024 * 1024, sha256: 'a'.repeat(64) }] })).toThrow();
+  });
   it('accepts enroll request and response at the current protocol version', () => {
     expect(HostEnrollRequestSchema.parse({
       protocolVersion: HOST_RPC_PROTOCOL_VERSION,
@@ -37,7 +53,8 @@ describe('host-rpc contract', () => {
     })).toEqual({
       type: 'host.hello-ok',
       protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-      hostId
+      hostId,
+      pluginHostGenerations: []
     });
   });
 
@@ -579,19 +596,19 @@ describe('host-rpc contract', () => {
     expect(HostRpcCommandSchema.parse({
       type: 'peer_daemon.status',
       remote: { host: 'devbox', user: 'me' },
-      serverHost: 'box.tailnet.ts.net'
+      serverHost: 'machine.example.com'
     }).type).toBe('peer_daemon.status');
     expect(HostRpcCommandSchema.parse({
       type: 'peer_daemon.restart',
       remote: { host: 'devbox' },
-      serverHost: 'box.tailnet.ts.net'
+      serverHost: 'machine.example.com'
     }).type).toBe('peer_daemon.restart');
     expect(HostRpcCommandSchema.parse({
       type: 'peer_daemon.install',
       remote: { host: 'devbox' },
       joinCode: 'zcde_x',
       hostId,
-      serverUrl: 'https://box.tailnet.ts.net',
+      serverUrl: 'https://machine.example.com',
       artifactPath: '/tmp/zcc-host.tgz'
     }).type).toBe('peer_daemon.install');
     expect(parseHostRpcResult('peer_daemon.status', { state: 'not_installed' })).toEqual({
@@ -615,7 +632,7 @@ describe('host-rpc contract', () => {
     expect(HostRpcCommandSchema.parse({
       type: 'peer_daemon.logs',
       remote: { host: 'devbox' },
-      serverHost: 'box.tailnet.ts.net'
+      serverHost: 'machine.example.com'
     }).type).toBe('peer_daemon.logs');
     expect(parseHostRpcResult('peer_daemon.logs', { log: '--- host-daemon.log ---\njoined' })).toEqual({
       log: '--- host-daemon.log ---\njoined'
@@ -772,7 +789,7 @@ describe('host-rpc contract', () => {
   });
 
   it('parses desktop.browser commands, results, and a non-UUID thread payload', () => {
-    expect(HOST_RPC_PROTOCOL_VERSION).toBe(28);
+    expect(HOST_RPC_PROTOCOL_VERSION).toBe(38);
     expect(HostRpcCommandSchema.parse({
       type: 'desktop.browser.list_instances'
     }).type).toBe('desktop.browser.list_instances');

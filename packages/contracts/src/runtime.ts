@@ -1,13 +1,21 @@
+import { CliDiscoveryRequestSchema } from './cli-discovery.js';
+import { CliCallbackControlSchema } from './cli-callbacks.js';
+import { ProjectFeedRequestSchema } from './project-feed.js';
+import { LibraryAgentRequestSchema } from './library-agent.js';
+import { LibraryDocumentRequestSchema } from './library-documents.js';
+import { SHARED_PRODUCT_EVENTS } from './shared-product.js';
 import { z } from 'zod';
 import { ProjectIdSchema, SessionIdSchema, PROJECT_ICONS } from '@zana-ai/zcc-domain';
 import { TerminalRequestCommandSchema, TerminalHostEventSchema } from './terminal-execution.js';
 import { ProjectSettingsPatchSchema } from './project-settings.js';
+import { ProjectMetadataRequestSchema, ProjectCatalogRequestSchema } from './project-metadata-records.js';
+import { ProjectHistoryRequestSchema } from './project-history.js';
 
 /**
  * Bump when any desktop-to-server utility-process message changes shape or
  * meaning. Both endpoints reject a mismatched version before dispatching it.
  */
-export const SERVER_RUNTIME_PROTOCOL_VERSION = 1;
+export const SERVER_RUNTIME_PROTOCOL_VERSION = 13;
 const ServerRuntimeProtocolVersionSchema = z.literal(SERVER_RUNTIME_PROTOCOL_VERSION);
 const RequestIdSchema = z.string().uuid();
 const DeadlineSchema = z.string().datetime();
@@ -64,6 +72,14 @@ const ServerRuntimeRequestBaseSchema = z.object({
 }).strict();
 
 export const ServerRuntimeRequestSchema = z.discriminatedUnion('operation', [
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('project-metadata'), request: ProjectMetadataRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('project-catalogs'), request: ProjectCatalogRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('project-feed'), request: ProjectFeedRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('cli-discovery'), request: CliDiscoveryRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('cli-callback-grant'), request: CliCallbackControlSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('project-history'), request: ProjectHistoryRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('library-agent'), request: LibraryAgentRequestSchema }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('library-document'), request: LibraryDocumentRequestSchema }).strict(),
   ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('app-version') }).strict(),
   ServerRuntimeRequestBaseSchema.extend({ operation: z.literal('projects-list') }).strict(),
   ServerRuntimeRequestBaseSchema.extend({
@@ -87,6 +103,11 @@ export const ServerRuntimeRequestSchema = z.discriminatedUnion('operation', [
     operation: z.literal('projects-remove'),
     projectId: ProjectIdSchema
   }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({
+    operation: z.literal('product-event'),
+    channel: z.string().refine(value => value === 'product:reset' || value === 'library:changed' || [...SHARED_PRODUCT_EVENTS.values()].includes(value)),
+    args: z.array(z.unknown()).max(8).refine(value => JSON.stringify(value).length <= 128 * 1024)
+  }).strict().refine(value => !['product:reset', 'library:changed'].includes(value.channel) || value.args.length === 0, 'Invalidations cannot contain snapshots'),
   ServerRuntimeRequestBaseSchema.extend({
     operation: z.literal('project-settings-get'),
     projectId: ProjectIdSchema
@@ -328,6 +349,8 @@ export const RuntimeOutboundSchema = z.discriminatedUnion('type', [
   RuntimeErrorSchema,
   RuntimeStoppedSchema,
   HostTerminalEventMessageSchema,
+  z.object({ type: z.literal('library-changed'), protocolVersion: ServerRuntimeProtocolVersionSchema }).strict(),
+  z.object({ type: z.literal('projects-changed'), protocolVersion: ServerRuntimeProtocolVersionSchema }).strict(),
   ProjectSettingsChangedMessageSchema,
   PluginCapabilitiesChangedMessageSchema,
   PluginAppsChangedMessageSchema

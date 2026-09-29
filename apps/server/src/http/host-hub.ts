@@ -11,7 +11,7 @@ import {
   HostRpcRequestMessageSchema,
   HostRpcResponseMessageSchema,
   parseHostRpcResult,
-  type HostEventEnvelope,
+  type HostEventBatchMessage,
   type HostRpcCommand,
   type HostRpcCommandType,
   type HostRpcResponseMessage
@@ -31,6 +31,7 @@ import {
   openHostSession,
   applyConversationThreadLifecycleEvent,
   updateThreadStatus,
+  type ApplyConversationThreadLifecycleEventOutcome,
   type ZccDatabase
 } from '@zana-ai/zcc-db';
 import {
@@ -52,14 +53,18 @@ import type { ThreadLifecycleEvent } from '@zana-ai/zcc-domain/thread-runtime';
 import { appendBoundedTerminalOutput } from './terminal-output-buffer.js';
 import { desktopBrowserChangedSchema } from '@zana-ai/zcc-host-daemon-contract';
 import { DesktopBrowserError, syncDesktopBrowserTabs } from '../services/desktop-browsers.js';
+import { commitHostEventBatch } from './host-event-commit.js';
+import { readHostEventReceipt, writeHostEventReceipt } from './host-event-receipts.js';
 
 export interface HostTerminalSessionRecord {
   hostId: string;
+  daemonInstanceId?: string;
   status: 'starting' | 'running' | 'exited';
   exitCode?: number;
   finishedAt?: number;
   outputText?: string;
   outputTruncated?: boolean;
+  outputEndOffset?: number;
 }
 
 export class HostUnavailableError extends Error {
@@ -103,6 +108,8 @@ export interface ConnectedHostSession {
   hostId: string;
   instanceId: string;
   socket: WebSocket;
+  connectedAt: number;
+  lastHeartbeatAt: number | null;
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
@@ -116,6 +123,7 @@ export function createHostHub(
   options?: {
     onNewHostInstance?: (hostId: string) => void;
     onHostConnected?: (hostId: string) => void;
+    pluginHostGenerations?: () => Array<{ pluginId: string; generation: string }>;
     onConversationEvent?: (input: {
       threadId: string;
       type: string;
@@ -124,7 +132,9 @@ export function createHostHub(
     onConversationLifecycle?: (input: {
       threadId: string;
       event: ThreadLifecycleEvent;
+      outcome: ApplyConversationThreadLifecycleEventOutcome;
     }) => void;
+    onPluginHostEvent?: (event: import('../plugins/plugin-api.js').PluginHostEvent) => void;
     onHostDisconnected?: (hostId: string) => void;
   }
 ) {
@@ -182,8 +192,11 @@ export function createHostHub(
   function attach(socket: WebSocket, hostId: string, instanceId: string): void {
     const previousLive = sessions.get(hostId);
     const previousPersisted = getLatestSessionForHost(db, hostId);
-    if (previousLive && previousLive.instanceId !== instanceId) {
-      previousLive.socket.close();
+    if (previousLive && previousLive.socket !== socket) {
+      // Pending RPCs belong to the old socket even when a daemon reconnects
+      // with the same lifetime id. They cannot be settled by its replacement.
+      detach(hostId, 'connection-replaced');
+      previousLive.socket.close(4003, 'Host connection replaced');
     }
     if (shouldInterruptLiveThreadsOnNewHostInstance(
       previousPersisted?.instanceId ?? previousLive?.instanceId ?? null,
@@ -193,9 +206,21 @@ export function createHostHub(
       interruptLiveConversationThreadsForHost(db, hub, { hostId, reason: 'host-daemon-restarted' });
       options?.onNewHostInstance?.(hostId);
     }
+    for (const [id, terminal] of terminalSessions) {
+      if (terminal.hostId !== hostId || terminal.status === 'exited') continue;
+      if (terminal.daemonInstanceId === instanceId) continue;
+      // No replayed launch: the old daemon no longer owns this process. Missing
+      // lifetime identity (legacy records) also cannot authorize a replacement.
+      terminal.status = 'exited';
+      terminal.finishedAt = Date.now();
+      terminal.exitCode = -1;
+      terminalSessions.set(id, terminal);
+      hub.emit('terminals:exit', { sessionId: id, code: -1 });
+      hub.emit('terminals:updated', { sessionId: id });
+    }
     openHostSession(db, { hostId, instanceId, hostName: getHost(db, hostId)?.name ?? 'host' });
     markHostSeen(db, hostId);
-    sessions.set(hostId, { hostId, instanceId, socket });
+    sessions.set(hostId, { hostId, instanceId, socket, connectedAt: Date.now(), lastHeartbeatAt: null });
     hub.emit('hosts:changed', undefined);
     options?.onHostConnected?.(hostId);
     const waiters = connectWaiters.get(hostId);
@@ -211,6 +236,7 @@ export function createHostHub(
       if (current?.socket === socket) detach(hostId, 'socket-closed');
     });
     socket.on('message', (raw) => {
+      if (sessions.get(hostId)?.socket !== socket) return;
       void handleInbound(hostId, raw.toString());
     });
   }
@@ -225,6 +251,11 @@ export function createHostHub(
     const session = sessions.get(hostId);
     if (!session) return;
 
+    if (parsed && typeof parsed === 'object' && 'type' in parsed && parsed.type === 'heartbeat') {
+      session.lastHeartbeatAt = Date.now();
+      return;
+    }
+
     const response = HostRpcResponseMessageSchema.safeParse(parsed);
     if (response.success) {
       settleRpc(hostId, response.data);
@@ -232,7 +263,8 @@ export function createHostHub(
     }
     const batch = HostEventBatchMessageSchema.safeParse(parsed);
     if (batch.success) {
-      ingestEvents(session, batch.data);
+      try { ingestEvents(session, batch.data); }
+      catch { session.socket.close(1011, 'Host event batch could not be committed'); }
     }
   }
 
@@ -254,12 +286,13 @@ export function createHostHub(
 
   function ingestEvents(
     session: ConnectedHostSession,
-    batch: { hostId: string; instanceId: string; events: HostEventEnvelope[] }
+    batch: HostEventBatchMessage
   ): void {
     if (batch.hostId !== session.hostId || batch.instanceId !== session.instanceId) {
       const ack = HostEventAckMessageSchema.parse({
         type: 'host.event-ack',
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+        ...(batch.batchId ? { batchId: batch.batchId } : {}),
         accepted: 0,
         rejected: batch.events.map((_, index) => ({ index, reason: 'stale_instance' }))
       });
@@ -269,13 +302,32 @@ export function createHostHub(
       return;
     }
 
+    const previousAck = readHostEventReceipt(db, batch);
+    if (previousAck) {
+      if (session.socket.readyState === session.socket.OPEN) session.socket.send(JSON.stringify(previousAck));
+      return;
+    }
+
     const rejected: Array<{ index: number; reason: string }> = [];
     let accepted = 0;
-    db.transaction(() => {
+    const afterCommit: Array<() => void> = [];
+    const committedHub: ProductHub = { ...hub, emit: (type, payload) => { afterCommit.push(() => hub.emit(type, payload)); } };
+    commitHostEventBatch(db, terminalSessions, () => {
       batch.events.forEach((event, index) => {
+        if (event.kind === 'plugin.host.signal' || event.kind === 'plugin.host.worker-exited') {
+          const payload = event.payload as Record<string, unknown> | null;
+          if (!payload || typeof payload !== 'object' || typeof payload.pluginId !== 'string' || typeof payload.generation !== 'string'
+            || (event.kind === 'plugin.host.signal' && typeof payload.signal !== 'string')) {
+            rejected.push({ index, reason: 'invalid_payload' }); return;
+          }
+          const notice = { kind: event.kind, hostId: session.hostId, pluginId: payload.pluginId, generation: payload.generation,
+            ...(typeof payload.signal === 'string' ? { signal: payload.signal } : {}), payload: payload.payload };
+          afterCommit.push(() => options?.onPluginHostEvent?.(notice));
+          accepted++; return;
+        }
         if (event.kind === 'project.clone.progress') {
           accepted += 1;
-          hub.emit('projects:cloneProgress', event.payload);
+          committedHub.emit('projects:cloneProgress', event.payload);
           return;
         }
         if (event.kind === 'desktop.browser.changed') {
@@ -286,7 +338,7 @@ export function createHostHub(
           }
           try {
             syncDesktopBrowserTabs(
-              { db, hub },
+              { db, hub: committedHub },
               {
                 hostId: session.hostId,
                 instanceId: parsed.data.instanceId,
@@ -311,6 +363,11 @@ export function createHostHub(
             rejected.push({ index, reason: 'unknown_terminal' });
             return;
           }
+          const terminal = terminalSessions.get(event.terminalId);
+          if (!terminal || terminal.hostId !== session.hostId || (terminal.daemonInstanceId && terminal.daemonInstanceId !== session.instanceId)) {
+            rejected.push({ index, reason: 'unknown_terminal' });
+            return;
+          }
           accepted += 1;
           if (event.kind === 'terminal.output') {
             const data = event.payload && typeof event.payload === 'object' && 'data' in event.payload
@@ -318,6 +375,7 @@ export function createHostHub(
               : '';
             const record = terminalSessions.get(event.terminalId);
             if (record) {
+              const startOffset = record.outputEndOffset ?? record.outputText?.length ?? 0;
               const next = appendBoundedTerminalOutput(
                 record.outputText !== undefined
                   ? { text: record.outputText, truncated: record.outputTruncated ?? false }
@@ -326,8 +384,10 @@ export function createHostHub(
               );
               record.outputText = next.text;
               record.outputTruncated = next.truncated;
+              record.outputEndOffset = startOffset + data.length;
+              terminalSessions.set(event.terminalId, record);
+              committedHub.emit('terminals:data', { sessionId: event.terminalId, data, startOffset, endOffset: record.outputEndOffset });
             }
-            hub.emit('terminals:data', { sessionId: event.terminalId, data });
           } else {
             const exitCode = event.payload && typeof event.payload === 'object' && 'exitCode' in event.payload
               ? Number((event.payload as { exitCode: unknown }).exitCode)
@@ -337,12 +397,13 @@ export function createHostHub(
               record.status = 'exited';
               record.exitCode = Number.isFinite(exitCode) ? exitCode : 0;
               record.finishedAt = Date.now();
+              terminalSessions.set(event.terminalId, record);
             }
-            hub.emit('terminals:exit', {
+            committedHub.emit('terminals:exit', {
               sessionId: event.terminalId,
               code: Number.isFinite(exitCode) ? exitCode : 0
             });
-            hub.emit('terminals:updated', { sessionId: event.terminalId });
+            committedHub.emit('terminals:updated', { sessionId: event.terminalId });
           }
           return;
         }
@@ -358,6 +419,12 @@ export function createHostHub(
             && 'type' in event.payload
             ? String((event.payload as { type: unknown }).type)
             : event.kind;
+          // Workspace-wide snapshots are redundant with completed file-change
+          // items. Acknowledge delivery without allocating a history sequence.
+          if (eventType === 'turn/diff/updated') {
+            accepted += 1;
+            return;
+          }
           const stored = appendConversationThreadEvent(db, {
             threadId: event.threadId,
             type: eventType,
@@ -377,24 +444,16 @@ export function createHostHub(
             )
           });
           if (lifecycleEvent) {
-            if (options?.onConversationLifecycle) {
-              options.onConversationLifecycle({
-                threadId: event.threadId,
-                event: lifecycleEvent
-              });
-            } else {
-              applyConversationThreadLifecycleEvent(db, {
-                threadId: event.threadId,
-                event: lifecycleEvent
-              });
-            }
+            const outcome = applyConversationThreadLifecycleEvent(db, { threadId: event.threadId, event: lifecycleEvent });
+            const threadId = event.threadId;
+            afterCommit.push(() => options?.onConversationLifecycle?.({ threadId, event: lifecycleEvent, outcome }));
           }
-          hub.emit('threads:event', {
+          committedHub.emit('threads:event', {
             threadId: event.threadId,
             sequence: stored.sequence,
             kind: event.kind,
             type: eventType,
-            payload: event.payload
+            payload: stored.payload
           });
           try {
             syncPlanFromLatestEvents(db, event.threadId);
@@ -402,11 +461,12 @@ export function createHostHub(
             /* plan import is advisory */
           }
           if (isBackgroundTaskLifecyclePayload(eventType, event.payload)) {
-            options?.onConversationEvent?.({
-              threadId: event.threadId,
+            const threadId = event.threadId;
+            afterCommit.push(() => options?.onConversationEvent?.({
+              threadId,
               type: eventType,
               payload: event.payload
-            });
+            }));
           }
           return;
         }
@@ -423,17 +483,25 @@ export function createHostHub(
         accepted += 1;
         if (event.kind === 'thread.started') updateThreadStatus(db, event.threadId, 'running');
         if (event.kind === 'turn.failed') updateThreadStatus(db, event.threadId, 'failed');
-        hub.emit('threads:event', {
+        committedHub.emit('threads:event', {
           threadId: event.threadId,
           sequence: stored.sequence,
           kind: event.kind,
           payload: event.payload
         });
       });
+      writeHostEventReceipt(db, batch, {
+        type: 'host.event-ack', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+        ...(batch.batchId ? { batchId: batch.batchId } : {}), accepted, rejected
+      });
     });
+    for (const publish of afterCommit) {
+      try { publish(); } catch (error) { console.error('Host event notification failed after commit', error); }
+    }
     const ack = HostEventAckMessageSchema.parse({
       type: 'host.event-ack',
       protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+      ...(batch.batchId ? { batchId: batch.batchId } : {}),
       accepted,
       rejected
     });
@@ -442,7 +510,9 @@ export function createHostHub(
     }
     if (accepted > 0) {
       const statusChanged = batch.events.some((event, index) => (
-        event.kind !== 'terminal.output'
+        event.kind !== 'plugin.host.signal'
+        && event.kind !== 'plugin.host.worker-exited'
+        && event.kind !== 'terminal.output'
         && event.kind !== 'terminal.exited'
         && event.kind !== 'project.clone.progress'
         && event.kind !== 'desktop.browser.changed'
@@ -521,7 +591,8 @@ export function createHostHub(
       socket.send(JSON.stringify(HostHelloOkMessageSchema.parse({
         type: 'host.hello-ok',
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-        hostId
+        hostId,
+        pluginHostGenerations: options?.pluginHostGenerations?.() ?? []
       })));
     }
     return true;

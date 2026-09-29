@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ThreadTimeline } from './ThreadTimeline.js';
 import { dispatchOptimisticUserMessage, dispatchThreadMessageSent, THREAD_MESSAGE_SENT_EVENT } from './timeline/thread-optimistic-events.js';
 
-vi.mock('./timeline/TimelineRows.js', () => ({ TimelineRows: () => <div>Conversation</div> }));
+vi.mock('./timeline/TimelineRows.js', () => ({ TimelineRows: ({ onMessageExpand }: { onMessageExpand: () => void }) => <div>Conversation<button onClick={onMessageExpand}>Show more</button></div> }));
 vi.mock('./timeline/ThreadBanners.js', () => ({
   ThreadGoalBanner: () => null,
   ThreadHostDisconnectedBanner: () => null,
@@ -55,6 +55,24 @@ it('keeps the newest message visible when keyboard/options resize the timeline',
   expect(pane.scrollTop).toBe(1100);
   unmount();
   expect(observer.disconnect).toHaveBeenCalled();
+});
+
+it('releases automatic following while the user reads an expanded prompt', () => {
+  const { pane, observers, rerender } = fixture();
+  // Give the timeline a row so it renders its conversation instead of the empty state.
+  rerender(<ThreadTimeline threadId="thread-1" rows={[{
+    id: 'message', kind: 'conversation', role: 'user', text: 'Long prompt',
+    threadId: 'thread-1', turnId: 'turn-1', sourceSeqStart: 1, sourceSeqEnd: 1,
+    createdAt: 1, startedAt: 1, attachments: null, initiator: 'user',
+    senderThreadId: null, systemMessageKind: 'unlabeled', systemMessageSubject: null,
+    turnRequest: { isGrouped: false, kind: 'message', status: 'accepted' }, mentions: []
+  }]} status="idle" thinking={null} />);
+  const observer = observers.at(-1)!;
+  const previousTop = pane.scrollTop;
+  fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+  expect(observer.disconnect).toHaveBeenCalled();
+  expect(pane.scrollTop).toBe(previousTop);
+  expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
 });
 
 it('preserves scrollback until a local send, then follows the new reply', () => {

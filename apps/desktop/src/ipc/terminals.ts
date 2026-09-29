@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { ipcMain } from 'electron';
+import { productHandle, safeProductHandle } from './shared-product-registration.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { store } from '@zana-ai/zcc-server/services/projects/store';
@@ -32,13 +32,13 @@ export function registerTerminalsIpc(): void {
   });
   ctx.ptys.on('exit', (sessionId) => cliPlanWatcher.onSessionExit(sessionId));
 
-  ctx.safeHandle(IPC.terminals.list, (projectId: string) => ctx.ptys.list(projectId), () => []);
-  ctx.safeHandle(
+  safeProductHandle(IPC.terminals.list, (projectId: string) => ctx.ptys.list(projectId), () => []);
+  safeProductHandle(
     IPC.terminals.verifyTmux,
     () => verifyTmux(),
     () => ({ installed: false, installHint: 'brew install tmux' })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.listTmuxRestoreCandidates,
     async () => {
       const liveTmuxIds = new Set(await listLocalTmuxSessionIds());
@@ -51,7 +51,7 @@ export function registerTerminalsIpc(): void {
     },
     () => []
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.listRememberedSessions,
     async () => {
       const liveTmuxIds = new Set(await listLocalTmuxSessionIds());
@@ -65,20 +65,20 @@ export function registerTerminalsIpc(): void {
     },
     () => []
   );
-  ipcMain.handle(
+  productHandle(
     IPC.terminals.create,
     // Async: an isolated-worktree launch mints its checkout first (git is async),
     // then the resolved request flows through the SAME synchronous confined-create
     // gate. A non-worktree launch skips the git step entirely (resolver returns the
     // request unchanged), so the common path is unchanged.
-    async (_e, req: CreateTerminalRequest): Promise<Result<unknown>> => {
+    async (req: CreateTerminalRequest): Promise<Result<unknown>> => {
       const resolved = await ctx.resolveWorktreeForRequest(ctx.sanitizeRendererTerminalRequest(req));
       return resolved.ok ? ctx.createInteractiveTerminal(resolved.value) : resolved;
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.terminals.restore,
-    async (_e, input: { capabilityId?: string; legacyRequest?: CreateTerminalRequest }): Promise<Result<TerminalSession>> => {
+    async (input: { capabilityId?: string; legacyRequest?: CreateTerminalRequest }): Promise<Result<TerminalSession>> => {
       const reserved = input.capabilityId ? ctx.restoreCapabilities.reserve(input.capabilityId) : undefined;
       if (reserved) {
         const { capability, reservationId } = reserved;
@@ -125,9 +125,9 @@ export function registerTerminalsIpc(): void {
   // only ids; main confirms the project exists AND is remote) and spawns a fresh
   // local pty that RE-ATTACHES the still-live `cc-<oldSessionId>` tmux session on
   // the box (attach-or-create), resuming the transcript if that session is gone.
-  ipcMain.handle(
+  productHandle(
     IPC.terminals.reconnectRemote,
-    async (_e, input: {
+    async (input: {
       capabilityId?: string;
       legacy?: { projectId: string; profile: LaunchProfileId; sessionId: string };
     }): Promise<Result<TerminalSession>> => {
@@ -182,12 +182,12 @@ export function registerTerminalsIpc(): void {
       }
     }
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.write,
     (id: string, data: string) => ctx.ptys.write(id, data),
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.reply,
     // Surface the delivery verdict to the renderer: `ctx.ptys.reply` returns false
     // when no live pty matches (the agent already exited), so the inbox reply
@@ -195,18 +195,18 @@ export function registerTerminalsIpc(): void {
     (id: string, text: string) => ctx.ptys.reply(id, text),
     () => false
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.resize,
     (id: string, cols: number, rows: number) => ctx.ptys.resize(id, cols, rows),
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.close,
     (id: string) => ctx.terminateSession(id),
     () => false
   );
-  ctx.safeHandle(IPC.terminals.backlog, (id: string) => ctx.ptys.getBacklog(id), () => '');
-  ctx.safeHandle(
+  safeProductHandle(IPC.terminals.backlog, (id: string) => ctx.ptys.getBacklog(id), () => '');
+  safeProductHandle(
     IPC.terminals.summarizeIdle,
     // Read-only "Summarize" board action: the agents stay RUNNING, so the digest
     // reads "Caught up on N agents", not "Closed N idle agents".
@@ -214,21 +214,21 @@ export function registerTerminalsIpc(): void {
       ctx.closeSummary.summarize(projectId, sessionIds, { closing: false }),
     () => ({ summarized: 0 })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.closeFollowup,
     (projectId: string, sessionIds: string[]) =>
       ctx.closeSummary.summarizeAndFollowUp(projectId, sessionIds),
     // A failed summary/follow-up must not block the close the renderer does next.
     () => ({ summarized: 0, followedUp: 0 })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.summarizeSession,
     (projectId: string, sessionId: string) => ctx.closeSummary.summarizeOne(projectId, sessionId),
     // Mirror the renderer's other failure reasons so a thrown handler still
     // toasts something sensible rather than a generic IPC error.
     () => ({ ok: false as const, reason: 'summary-failed' as const })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.sessionStats,
     async (projectId: string, sessionId: string): Promise<SessionStats | null> => {
       // Rule 1: authorize from main's OWN session record, never renderer input.
@@ -244,7 +244,7 @@ export function registerTerminalsIpc(): void {
     },
     () => null
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.generateCatchUpSummary,
     async (projectId: string, sessionId: string): Promise<CatchUpSummaryResult> => {
       // Re-validate that sessionId belongs to projectId (CLAUDE.md #1) before
@@ -278,7 +278,7 @@ export function registerTerminalsIpc(): void {
       trigger: 'idle'
     })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.clearAgentBlocked,
     (projectId: string, sessionId: string): boolean => {
       // Rule 1: authorize from main's OWN session record, never renderer input.
@@ -293,12 +293,12 @@ export function registerTerminalsIpc(): void {
     },
     () => false
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.setHeadless,
     (id: string, headless: boolean) => ctx.ptys.setHeadless(id, headless),
     () => null
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.setHeartbeat,
     (id: string, on: boolean) => {
       // Cancel any armed nudge immediately when turning OFF, so "off" takes
@@ -316,7 +316,7 @@ export function registerTerminalsIpc(): void {
     },
     () => null
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.setActiveSession,
     (id: string | null) => {
       // Advisory only — record which tab is foreground so auto-close-idle can
@@ -327,7 +327,7 @@ export function registerTerminalsIpc(): void {
     },
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.setFavorites,
     (keys: string[]) => {
       // Advisory only — record which agents the user has starred so
@@ -350,7 +350,7 @@ export function registerTerminalsIpc(): void {
   // mount and calls these action verbs, each authorized from main's own state
   // (Rule 1). A no-op-shaped result keeps every call safe if the controller
   // failed to construct.
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.request,
     () =>
       ctx.menubar?.buildSnapshot() ?? {
@@ -370,7 +370,7 @@ export function registerTerminalsIpc(): void {
       theme: 'dark' as const
     })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.focusSession,
     (sessionId: string, projectId: string) => {
       // Authorize from main's OWN session record — a forged pair that doesn't
@@ -383,7 +383,7 @@ export function registerTerminalsIpc(): void {
     },
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.setFavorite,
     (sessionId: string, favorite: boolean) => {
       // Toggle the pin using the SAME favorite-key scheme the sidebar star uses
@@ -401,7 +401,7 @@ export function registerTerminalsIpc(): void {
     },
     () => undefined
   );
-  ctx.safeHandle<[string, string], MenubarReplyResult>(
+  safeProductHandle<[string, string], MenubarReplyResult>(
     IPC.menubar.reply,
     (sessionId: string, text: string) => {
       // Light-interaction WRITE path. Every gate is re-checked here from main's
@@ -427,7 +427,7 @@ export function registerTerminalsIpc(): void {
     },
     () => ({ ok: false, reason: 'ended' })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.open,
     (view: 'dashboard' | 'agents' | 'settings' | 'scheduler') => {
       ctx.menubar?.hide();
@@ -439,17 +439,17 @@ export function registerTerminalsIpc(): void {
     },
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.hide,
     () => ctx.menubar?.hide(),
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.menubar.quit,
     () => app.quit(),
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.agentStatusSnapshot,
     // Seed the renderer with the DISPLAY state (an unreliable remote worker's
     // resting guess decays to `unknown`), matching the live `onAgentStatus`
@@ -457,7 +457,7 @@ export function registerTerminalsIpc(): void {
     () => ctx.agentStatus.snapshot().map(([id, state]: [string, string]) => [id, ctx.displayAgentState(id, state)]),
     () => []
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.agentStatusSince,
     (sinceSeq: number) => {
       // Validate sinceSeq in main (Rule 1) — coerce junk to 0 for a full replay/snapshot.
@@ -478,17 +478,17 @@ export function registerTerminalsIpc(): void {
     },
     () => ({ mode: 'snapshot' as const, snapshot: [], headSeq: 0 })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.subagentSnapshot,
     () => ctx.agentStatus.subagentSnapshot(),
     () => []
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.subagentChildrenSnapshot,
     () => ctx.agentStatus.subagentChildSnapshot(),
     () => []
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.cliPlan,
     (sessionId: unknown) => {
       const id = cliPlanSessionId(sessionId);
@@ -496,7 +496,7 @@ export function registerTerminalsIpc(): void {
     },
     () => null
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.cliPlanWatch,
     (sessionId: unknown) => {
       const id = cliPlanSessionId(sessionId);
@@ -504,7 +504,7 @@ export function registerTerminalsIpc(): void {
     },
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.terminals.cliPlanUnwatch,
     (sessionId: unknown) => {
       const id = cliPlanSessionId(sessionId);

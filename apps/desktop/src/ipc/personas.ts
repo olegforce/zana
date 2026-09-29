@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { ipcMain } from 'electron';
+import { productHandle, safeProductHandle } from './shared-product-registration.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { buildSquadBundle, validateSquadBundle } from '@zana-ai/zcc-server/services/agents/squad-bundle';
@@ -10,8 +10,8 @@ import type { CancelTeamLaunchResult, LaunchTeamResult, LlmPromptEntry, LlmProvi
 export function registerPersonasIpc(): void {
   
 
-  ctx.safeHandle(IPC.personas.list, () => ctx.personas.list(), () => []);
-  ctx.safeHandle(
+  safeProductHandle(IPC.personas.list, () => ctx.personas.list(), () => []);
+  safeProductHandle(
     IPC.personas.revealDir,
     () => ctx.personas.revealDir(),
     () => ({ ok: false, path: '', message: 'Failed to reveal ctx.personas directory' })
@@ -20,9 +20,9 @@ export function registerPersonasIpc(): void {
   // user shadow; an absent id mints a new slug. Validation lives in the store
   // (shared with the disk loader) — the renderer is untrusted, so a bad payload
   // comes back as a clean Result error rather than a thrown handler.
-  ipcMain.handle(
+  productHandle(
     IPC.personas.save,
-    async (_e, input: PersonaInput): Promise<Result<Persona>> => {
+    async (input: PersonaInput): Promise<Result<Persona>> => {
       try {
         if (!input || typeof input.name !== 'string' || !input.name.trim()) {
           return { ok: false, code: 'INVALID', message: 'name is required' };
@@ -33,9 +33,9 @@ export function registerPersonasIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.personas.duplicate,
-    async (_e, id: string): Promise<Result<Persona>> => {
+    async (id: string): Promise<Result<Persona>> => {
       try {
         if (typeof id !== 'string' || !id.trim()) {
           return { ok: false, code: 'INVALID', message: 'id is required' };
@@ -49,9 +49,9 @@ export function registerPersonasIpc(): void {
   // Delete a user persona file. For a shadowed built-in this resets it to the
   // shipped default; for a user persona it removes it. Project ctx.personas are
   // read-only here (their files live under the repo, not the user dir).
-  ipcMain.handle(
+  productHandle(
     IPC.personas.delete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       try {
         if (typeof id !== 'string' || !id.trim()) {
           return { ok: false, code: 'INVALID', message: 'id is required' };
@@ -70,17 +70,17 @@ export function registerPersonasIpc(): void {
     ctx.safeSend(IPC.personas.onChanged, ctx.personas.list());
   });
 
-  ctx.safeHandle(IPC.teams.list, () => ctx.teams.list(), () => []);
-  ctx.safeHandle(
+  safeProductHandle(IPC.teams.list, () => ctx.teams.list(), () => []);
+  safeProductHandle(
     IPC.teams.revealDir,
     () => ctx.teams.revealDir(),
     () => ({ ok: false, path: '', message: 'Failed to reveal ctx.teams directory' })
   );
   // Create / overwrite a user team. Validation lives in the store (shared with
   // the disk loader); a bad payload comes back as a clean Result error.
-  ipcMain.handle(
+  productHandle(
     IPC.teams.save,
-    async (_e, input: TeamInput): Promise<Result<Team>> => {
+    async (input: TeamInput): Promise<Result<Team>> => {
       try {
         if (!input || typeof input.name !== 'string' || !input.name.trim()) {
           return { ok: false, code: 'INVALID', message: 'name is required' };
@@ -91,9 +91,9 @@ export function registerPersonasIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.teams.duplicate,
-    async (_e, id: string): Promise<Result<Team>> => {
+    async (id: string): Promise<Result<Team>> => {
       try {
         if (typeof id !== 'string' || !id.trim()) {
           return { ok: false, code: 'INVALID', message: 'id is required' };
@@ -104,9 +104,9 @@ export function registerPersonasIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.teams.delete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       try {
         if (typeof id !== 'string' || !id.trim()) {
           return { ok: false, code: 'INVALID', message: 'id is required' };
@@ -123,10 +123,9 @@ export function registerPersonasIpc(): void {
   );
   // Launch a team into a project. main authorizes (team + project + personaId
   // existence are all re-checked main-side); unknown persona slots are skipped.
-  ipcMain.handle(
+  productHandle(
     IPC.teams.launch,
     async (
-      _e,
       teamId: string,
       projectId?: string
     ): Promise<Result<LaunchTeamResult>> => {
@@ -144,9 +143,9 @@ export function registerPersonasIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.teams.cancel,
-    async (_e, launchRequestId: string): Promise<Result<CancelTeamLaunchResult>> => {
+    async (launchRequestId: string): Promise<Result<CancelTeamLaunchResult>> => {
       if (typeof launchRequestId !== 'string' || !launchRequestId.trim()) {
         return { ok: false, code: 'INVALID', message: 'launchRequestId is required' };
       }
@@ -155,22 +154,22 @@ export function registerPersonasIpc(): void {
   );
   // Launch a team as an autonomous run / stop one. Bodies live in the exported
   // ctx.launchAutonomousTeam / ctx.stopAutonomousRun functions (unit-tested end-to-end).
-  ipcMain.handle(
+  productHandle(
     IPC.teams.launchAutonomous,
-    async (_e, teamId: string, projectId: string, goal: string): Promise<Result<{ runId: string }>> =>
+    async (teamId: string, projectId: string, goal: string): Promise<Result<{ runId: string }>> =>
       ctx.launchAutonomousTeam(teamId, projectId, goal)
   );
-  ipcMain.handle(
+  productHandle(
     IPC.teams.stopAutonomous,
-    async (_e, runId: string): Promise<Result<true>> => ctx.stopAutonomousRun(runId)
+    async (runId: string): Promise<Result<true>> => ctx.stopAutonomousRun(runId)
   );
-  ctx.safeHandle(IPC.autonomousRuns.list, () => ctx.autonomousRuns.list(), () => []);
+  safeProductHandle(IPC.autonomousRuns.list, () => ctx.autonomousRuns.list(), () => []);
   // Export a team + its referenced ctx.personas as one bundle file. Main owns the
   // save dialog (Rule 1 — never a renderer-supplied path); a dismissed dialog
   // resolves `canceled: true`, not an error.
-  ipcMain.handle(
+  productHandle(
     IPC.teams.exportBundle,
-    async (_e, teamId: string): Promise<Result<{ path: string; canceled?: boolean }>> => {
+    async (teamId: string): Promise<Result<{ path: string; canceled?: boolean }>> => {
       try {
         if (typeof teamId !== 'string' || !teamId.trim()) {
           return { ok: false, code: 'INVALID', message: 'teamId is required' };
@@ -199,7 +198,7 @@ export function registerPersonasIpc(): void {
   // Import a bundle file picked via a main-owned open dialog: each persona is
   // written through ctx.personas.saveUser, then the team through ctx.teams.saveUser —
   // the same validation gates a hand-edited persona/team file goes through.
-  ipcMain.handle(
+  productHandle(
     IPC.teams.importBundle,
     async (): Promise<Result<{ team?: Team; personaCount: number; canceled?: boolean }>> => {
       try {
@@ -235,11 +234,11 @@ export function registerPersonasIpc(): void {
     ctx.safeSend(IPC.teams.onChanged, ctx.teams.list());
   });
 
-  ctx.safeHandle(IPC.quickPrompts.list, () => ctx.quickPrompts.list(), () => []);
+  safeProductHandle(IPC.quickPrompts.list, () => ctx.quickPrompts.list(), () => []);
   // Editor write path (Agents launcher → "New / Edit quick prompt"). save
   // validates + persists a user file (shadows a builtin by id); delete removes
   // the user file (resetting a shadowed builtin to its shipped default).
-  ctx.safeHandle<[QuickPrompt], QuickPrompt>(
+  safeProductHandle<[QuickPrompt], QuickPrompt>(
     IPC.quickPrompts.save,
     (entry) => ctx.quickPrompts.saveUser(entry),
     // Re-throw so a write-time validation failure rejects the renderer's invoke
@@ -248,12 +247,12 @@ export function registerPersonasIpc(): void {
       throw err;
     }
   );
-  ctx.safeHandle<[string], void>(
+  safeProductHandle<[string], void>(
     IPC.quickPrompts.delete,
     (id) => ctx.quickPrompts.deleteUser(id),
     () => undefined
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.quickPrompts.revealDir,
     () => ctx.quickPrompts.revealUserDir(),
     () => ({ ok: false, path: '', message: 'Failed to reveal quick-prompts directory' })
@@ -264,8 +263,8 @@ export function registerPersonasIpc(): void {
 
   // LLM micro-call prompt registry (Settings → Prompts). list/save/delete back
   // the editor; test runs a prompt and returns the result.
-  ctx.safeHandle(IPC.llmPrompts.list, () => ctx.promptRegistry.list(), () => []);
-  ctx.safeHandle<[LlmPromptEntry], LlmPromptEntry>(
+  safeProductHandle(IPC.llmPrompts.list, () => ctx.promptRegistry.list(), () => []);
+  safeProductHandle<[LlmPromptEntry], LlmPromptEntry>(
     IPC.llmPrompts.save,
     (entry) => ctx.promptRegistry.saveUser(entry),
     // Re-throw so a write-time validation failure (e.g. an unusable model)
@@ -275,12 +274,12 @@ export function registerPersonasIpc(): void {
       throw err;
     }
   );
-  ctx.safeHandle<[string], void>(
+  safeProductHandle<[string], void>(
     IPC.llmPrompts.delete,
     (id) => ctx.promptRegistry.deleteUser(id),
     () => undefined
   );
-  ctx.safeHandle<[string, Record<string, string>], LlmRunResult>(
+  safeProductHandle<[string, Record<string, string>], LlmRunResult>(
     IPC.llmPrompts.test,
     async (id, vars) => {
       const entry = ctx.promptRegistry.get(id);
@@ -303,7 +302,7 @@ export function registerPersonasIpc(): void {
       ms: 0
     })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.llmPrompts.revealDir,
     () => ctx.promptRegistry.revealUserDir(),
     () => ({ ok: false, path: '', message: 'Failed to reveal llm-prompts directory' })
@@ -312,7 +311,7 @@ export function registerPersonasIpc(): void {
   // in place). The Prompts picker offers only these so a user can't select a
   // provider that would silently return `ok:false 'no API key'`. Degrades to the
   // always-available claude-cli on any failure.
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.llmPrompts.availableProviders,
     () => ctx.llmService.availableProviders(),
     () => ['claude-cli'] as LlmProviderId[]

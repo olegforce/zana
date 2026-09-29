@@ -1,6 +1,10 @@
 export { openDatabase, type ZccDatabase, type SqliteDatabase } from './connection.js';
 export { createSqliteDatabase } from './sqlite.js';
 export { migrate } from './migrate.js';
+export { conversationTimelineWindowStart, hasConversationEventsBefore, conversationEventCursorExists, conversationTimelineHeadEvents } from './data/conversation-events.js';
+export { hydrateConversationOutputs, maintainConversationHistory, CONVERSATION_OUTPUT_RETENTION_MS } from './data/conversation-output.js';
+export { maintainConversationEventHistory, CONVERSATION_PRUNING_POLICIES, CONVERSATION_PRUNING_BATCH_SIZE } from './data/conversation-pruning.js';
+export type { ConversationPruningPolicy } from './data/conversation-pruning.js';
 export {
   createHostId,
   createHostSessionId,
@@ -97,12 +101,18 @@ export {
   nextEventSequence,
   type ThreadEventRow
 } from './data/events.js';
+export { getConversationThreadActivityCounts, listConversationActiveTurnInputs, ACTIVE_PLAN_INPUT_PAGE_SIZE } from './data/conversation-activity.js';
+export { getLatestConversationCheckpoint } from './data/conversation-checkpoint.js';
 export {
   appendConversationThreadEvent,
   copyConversationThreadEvents,
   countConversationThreadEvents,
   deleteConversationThreadEventsAfter,
   getConversationTurnStart,
+  getConversationThreadEventAfter,
+  ConversationHistoryReadLimitError,
+  CONVERSATION_EVENT_READ_MAX_BYTES,
+  CONVERSATION_EVENT_READ_MAX_ROWS,
   listConversationThreadEvents,
   listConversationThreadEventsWindow,
   maxConversationEventSequenceByThreadIds,

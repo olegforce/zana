@@ -8,7 +8,7 @@
  * exact user gesture: open a card's project menu, click a project, and assert
  * the assignment sticks visibly (the folder trigger flips to "Assigned to …").
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ModuleHost, ProjectInfo } from './host.js';
@@ -901,3 +901,9 @@ describe('PrMonitorPanel nav-badge seeding (badgeMode honored without a toggle)'
     expect(pushInbox).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'proj-a' }));
   });
 });
+
+// These suites exercise the desktop board/toolbar; mobile has a separate flow.
+beforeEach(() => {
+  vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+});
+afterEach(() => vi.restoreAllMocks());

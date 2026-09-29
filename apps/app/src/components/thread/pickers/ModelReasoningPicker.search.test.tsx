@@ -36,3 +36,12 @@ describe('ModelReasoningPicker search', () => {
     expect(screen.queryByTestId('model-reasoning-model-openrouter/relace/relace-apply-3')).toBeNull();
   });
 });
+
+it('keeps cached models selectable while showing the latest refresh failure', () => {
+  render(<ModelReasoningPicker providerOptions={[{ value: 'codex', label: 'Codex' }]}
+    selectedProviderId="codex" modelValue="existing" modelOptions={[{ value: 'existing', label: 'Existing model' }]}
+    modelLoadError="auth_required" onModelChange={() => undefined} />);
+  fireEvent.click(screen.getByTestId('model-reasoning-picker-trigger'));
+  expect(screen.getByRole('status').textContent).toContain('Showing previously loaded models. Sign in with codex login');
+  expect(screen.getByTestId('model-reasoning-model-existing')).toBeTruthy();
+});

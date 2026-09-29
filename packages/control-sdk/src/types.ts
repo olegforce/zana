@@ -44,6 +44,8 @@ export interface ThreadLaunchSpec {
 export interface CliAgentLaunchSpec {
   surface: 'cli-agent';
   projectId: string;
+  /** Execution-machine intent. Unsupported hosts are rejected by the server. */
+  hostId?: string;
   prompt: string;
   profile: string;
   personaId?: string;
@@ -92,6 +94,7 @@ export interface ThreadRecord {
 export interface CliAgentRecord {
   id: string;
   projectId: string;
+  hostId?: string;
   profile: string;
   title?: string;
   status: string;

@@ -23,15 +23,16 @@ export function HostMachinePicker({
 }) {
   const connected = hosts.filter((host) => host.status === 'connected');
   const visible = includeDisconnected ? hosts : connected;
-  if (!alwaysShow && connected.length <= 1) return null;
+  const missingSelection = Boolean(value) && !visible.some((host) => host.id === value);
+  if (!alwaysShow && connected.length <= 1 && !missingSelection) return null;
   if (visible.length === 0) return null;
-  const selected = value && visible.some((host) => host.id === value)
-    ? value
-    : (visible.find((host) => host.status === 'connected') ?? visible[0])!.id;
+  // Never display another machine while the caller still targets the old id.
+  const selected = value ?? '';
   const selectedHost = visible.find((host) => host.id === selected);
   return (
     <PopoverPicklist
       value={selected}
+      placeholder={missingSelection ? 'Machine unavailable' : 'Choose machine'}
       ariaLabel={ariaLabel}
       searchable={visible.length > 5}
       minWidth={280}

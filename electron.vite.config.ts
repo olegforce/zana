@@ -152,9 +152,12 @@ const mainEntries = {
   main: resolve(__dirname, 'apps/desktop/src/main.ts'),
   'host-child': resolve(__dirname, 'apps/desktop/src/extensions/host-child.ts'),
   'server-runtime': resolve(__dirname, 'apps/server/src/utility-entry.ts'),
-  'host-runtime': resolve(__dirname, 'apps/host-daemon/src/utility-entry.ts')
+  'host-runtime': resolve(__dirname, 'apps/host-daemon/src/utility-entry.ts'),
+  'plugin-host-worker': resolve(__dirname, 'apps/host-daemon/src/plugin-host-worker.ts')
 };
+const bbLicenseBanner = `/*! BB-derived code: MIT license\n${readFileSync(resolve(__dirname, 'docs/third-party/BB-LICENSE'), 'utf8')}\n*/`;
 const mainOutput = {
+  banner: bbLicenseBanner,
   entryFileNames: '[name].js',
   chunkFileNames: 'chunks/[name]-[hash].js'
 };
@@ -222,6 +225,7 @@ export default defineConfig(({ command }) => {
         // output instead of the default `.mjs`. The path in apps/desktop/src/host.ts
         // must match (`../preload/index.js`).
         output: {
+          banner: bbLicenseBanner,
           format: 'cjs',
           entryFileNames: 'index.js'
         }
@@ -262,7 +266,8 @@ export default defineConfig(({ command }) => {
     build: {
       outDir: resolve(out, 'renderer'),
       rollupOptions: {
-        input: resolve(__dirname, 'apps/app/index.html')
+        input: resolve(__dirname, 'apps/app/index.html'),
+        output: { banner: bbLicenseBanner }
       }
     }
   }

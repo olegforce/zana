@@ -1,6 +1,8 @@
+import * as nativePty from 'node-pty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createEnrolledPty, type EnrolledPtyHandle } from './enrolled-pty.js';
+import { createEnrolledPty, resolveEnrolledShell, type EnrolledPtyHandle } from './enrolled-pty.js';
 import type { HostEventEnvelope } from '@zana-ai/zcc-contracts/host-rpc';
+vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 function fakeHandle(): EnrolledPtyHandle & {
   writes: string[];
@@ -31,6 +33,12 @@ function fakeHandle(): EnrolledPtyHandle & {
 }
 
 describe('enrolled pty', () => {
+  it('uses the host shell, then BB executable fallbacks for minimal Linux services', () => {
+    expect(resolveEnrolledShell({ SHELL: '/custom/fish' }, () => true)).toBe('/custom/fish');
+    expect(resolveEnrolledShell({ SHELL: '/missing' }, path => path === '/bin/bash')).toBe('/bin/bash');
+    expect(resolveEnrolledShell({}, () => false)).toBe('/bin/sh');
+    expect(resolveEnrolledShell({ SHELL: '/this-does-not-exist' })).toMatch(/^\/bin\/(zsh|bash|sh)$/);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -116,4 +124,55 @@ describe('enrolled pty', () => {
     expect(processKill).toHaveBeenCalledWith(-7, 'SIGTERM');
     expect(handle.signals).toEqual(['SIGTERM']);
   });
+});
+
+it('rejects duplicate live ids and fences callbacks from closed handles', async () => {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  try {
+    const events: HostEventEnvelope[] = [], handles = [fakeHandle(), fakeHandle()];
+    const spawn = vi.fn(() => handles[spawn.mock.calls.length - 1]!);
+    const pty = createEnrolledPty({ emit: event => events.push(event), spawn });
+    const input = { sessionId: 's', cwd: '/tmp', cols: 80, rows: 24 };
+    await pty.startTerminal(input);
+    await expect(pty.startTerminal(input)).rejects.toThrow('already');
+    expect(spawn).toHaveBeenCalledOnce();
+    await pty.stopTerminal(input);
+    await pty.stopTerminal(input);
+    await pty.startTerminal(input);
+    handles[0]!.data?.('stale'); handles[0]!.exit?.({ exitCode: 1 });
+    await pty.writeTerminal({ sessionId: 's', data: 'new' });
+    expect(handles[1]!.writes).toEqual(['new']); expect(events).toEqual([]);
+    pty.dispose();
+    await expect(pty.writeTerminal({ sessionId: 's', data: 'late' })).rejects.toThrow('unknown');
+  } finally { vi.restoreAllMocks(); }
+});
+it('bounds running processes and releases slots on natural exit', async () => {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  try {
+    const handles: ReturnType<typeof fakeHandle>[] = [];
+    const pty = createEnrolledPty({ emit: () => {}, spawn: () => { const handle = fakeHandle(); handles.push(handle); return handle; } });
+    for (let i = 0; i < 128; i++) await pty.startTerminal({ sessionId: String(i), cwd: '/tmp', cols: 80, rows: 24 });
+    await expect(pty.startTerminal({ sessionId: 'overflow', cwd: '/tmp', cols: 80, rows: 24 })).rejects.toThrow('capacity');
+    handles[0]!.exit?.({ exitCode: 0 });
+    await pty.startTerminal({ sessionId: 'after-exit', cwd: '/tmp', cols: 80, rows: 24 });
+    pty.dispose();
+    await expect(pty.resizeTerminal({ sessionId: 'after-exit', cols: 10, rows: 10 })).rejects.toThrow('unknown');
+  } finally { vi.restoreAllMocks(); }
+});
+
+it('adapts the native PTY callbacks and methods without changing their payloads', async () => {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  try {
+    const handle = fakeHandle(), emit = vi.fn();
+    vi.mocked(nativePty.spawn).mockReturnValue(handle as never);
+    const pty = createEnrolledPty({ emit, shell: '/bin/sh' });
+    await pty.startTerminal({ sessionId: 'native', cwd: '/tmp', cols: 80, rows: 24 });
+    await pty.writeTerminal({ sessionId: 'native', data: 'input' });
+    await pty.resizeTerminal({ sessionId: 'native', cols: 100, rows: 30 });
+    handle.data?.('output'); handle.exit?.({ exitCode: 3 });
+    expect(emit).toHaveBeenLastCalledWith({ terminalId: 'native', kind: 'terminal.exited', payload: { exitCode: 3 } });
+    expect(handle.writes).toEqual(['input']); expect(handle.resizes).toEqual([{ cols: 100, rows: 30 }]);
+    await pty.startTerminal({ sessionId: 'second', cwd: '/tmp', cols: 80, rows: 24 });
+    pty.dispose(); expect(handle.killed).toBe(true);
+  } finally { vi.restoreAllMocks(); }
 });

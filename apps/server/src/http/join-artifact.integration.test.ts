@@ -36,7 +36,7 @@ describe('packed join artifact RPC', () => {
       body: '{}'
     }).then((response) => response.json()) as { joinCode: string; hostId: string };
 
-    const artifact = resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' });
+    const artifact = await resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' });
     const unpack = mkdtempSync(join(tmpdir(), 'zcc-join-bundle-unpack-'));
     expect(spawnSync('tar', ['-xzf', artifact.tarballPath, '-C', unpack]).status).toBe(0);
 

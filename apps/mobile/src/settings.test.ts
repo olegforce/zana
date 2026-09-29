@@ -1,0 +1,76 @@
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import Settings from '../app/settings';
+import { EMPTY_STATE, type MobileState } from './lib/profiles';
+const f = vi.hoisted(() => ({ state: {} as MobileState, update: vi.fn(), clear: vi.fn(), discover: vi.fn(), alert: vi.fn(), push: vi.fn(), replace: vi.fn() }));
+vi.mock('react-native', () => ({ View: 'View', Switch: 'Switch', Platform: { OS: 'ios' }, Alert: { alert: f.alert } }));
+vi.mock('expo-constants', () => ({ default: { nativeAppVersion: '2.3.0' } }));
+vi.mock('@react-native-cookies/cookies', () => ({ default: {} }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: f.push, replace: f.replace }) }));
+vi.mock('./ui', () => ({ Screen: 'Screen', Heading: 'Heading', Label: 'Label', Action: 'Action' }));
+vi.mock('./state', () => ({ useProfiles: () => ({ state: f.state, update: f.update }) }));
+vi.mock('./lib/client', () => ({ discoverServers: f.discover }));
+vi.mock('./lib/session-controller', () => ({ clearNativeProfileSession: f.clear }));
+const legacy = { id: 'old', label: 'Old computer', serverUrl: 'http://192.168.1.2:8785', pushEnabled: true };
+const account = { credential: 'c'.repeat(43), deviceId: 'phone', connectDomain: 'connect.example.com', accountUrl: 'https://example.com' };
+const online = { id: 'new', label: 'Online computer', serverUrl: 'https://s-aaaaaaaaaaaaaaaaaaaaaaaa.connect.example.com', ...account };
+let renderer: ReactTestRenderer;
+const button = (title: string) => renderer.root.findByProps({ title });
+const press = async (title: string) => act(async () => { await button(title).props.onPress(); });
+beforeEach(async () => {
+  vi.resetAllMocks();
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  f.state = { ...EMPTY_STATE, account, activeId: 'old', profiles: [legacy] };
+  f.update.mockImplementation(async change => { f.state = change(f.state); renderer.update(createElement(Settings)); });
+  f.clear.mockResolvedValue(undefined);
+  await act(() => { renderer = create(createElement(Settings)); });
+});
+afterEach(async () => { await act(() => renderer.unmount()); });
+it('keeps old profiles visible but disabled, removes push controls and offers GitHub sign-in', async () => {
+  expect(button('✓ Old computer').props.disabled).toBe(true);
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Retired direct connection');
+  expect(text).not.toContain('Enable notifications');
+  expect(text).not.toContain('Computers on this account');
+  expect(f.discover).not.toHaveBeenCalled();
+  await press('Sign in with GitHub');
+  expect(f.push).toHaveBeenCalledWith('/connect');
+  expect(f.state.profiles).toEqual([legacy]);
+  await press('Connect a computer');
+  expect(f.push).toHaveBeenLastCalledWith('/connect');
+});
+it('forgets a retired record by clearing only its local cookies and keeps account access', async () => {
+  await press('Forget');
+  expect(f.clear).not.toHaveBeenCalled();
+  const buttons = f.alert.mock.calls[0]![2];
+  await act(async () => { await buttons.find((b: any) => b.text === 'Forget').onPress(); });
+  expect(f.clear).toHaveBeenCalledWith(legacy, expect.objectContaining({ platform: 'ios' }));
+  expect(f.state.profiles).toEqual([]);
+  expect(f.state.account).toEqual(account);
+  expect(f.discover).not.toHaveBeenCalled();
+});
+it('does not discard saved data if local cookie cleanup fails', async () => {
+  f.clear.mockRejectedValueOnce(new Error('Cookie store unavailable'));
+  await press('Forget');
+  await act(async () => { await f.alert.mock.calls[0]![2][1].onPress(); });
+  expect(f.state.profiles).toEqual([legacy]);
+  expect(f.alert).toHaveBeenLastCalledWith('Could not save settings', 'Cookie store unavailable');
+});
+it('selects an online saved profile and discovers another computer with the same account credential', async () => {
+  f.state = { ...f.state, profiles: [online], activeId: null };
+  await act(() => renderer.update(createElement(Settings)));
+  expect(button('Online computer').props.disabled).toBe(false);
+  await press('Online computer');
+  expect(f.state.activeId).toBe('new');
+  expect(f.replace).toHaveBeenCalledWith('/');
+  f.discover.mockResolvedValueOnce([{ id: 'second', name: 'Second computer', live: true, serverUrl: 'https://s-bbbbbbbbbbbbbbbbbbbbbbbb.connect.example.com' }]);
+  await press('Computers on this account');
+  await press('Second computer · Online');
+  expect(f.state.activeId).toBe('second');
+  expect(f.state.profiles[1]).toMatchObject(account);
+  f.discover.mockResolvedValueOnce([]);
+  // The original profile still offers its own account discovery control.
+  await act(async () => { await renderer.root.findAllByProps({ title: 'Computers on this account' })[0]!.props.onPress(); });
+  expect(JSON.stringify(renderer.toJSON())).toContain('No connected computers');
+});

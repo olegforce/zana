@@ -1,7 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface HostDaemonAuth {
+  serverUrl?: string;
+  enrollmentId?: string;
   hostId: string;
   hostKey: string;
   hostName: string;
@@ -23,8 +26,9 @@ export function readHostAuth(dataDir: string): HostDaemonAuth | null {
 
 export function writeHostAuth(dataDir: string, auth: HostDaemonAuth): void {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  writeFileSync(authPath(dataDir), `${JSON.stringify(auth, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600
-  });
+  const file = authPath(dataDir), temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(auth, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    renameSync(temporary, file);
+  } finally { rmSync(temporary, { force: true }); }
 }

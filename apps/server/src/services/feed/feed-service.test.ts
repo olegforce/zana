@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   FeedService,
+  FEED_GIT_LIMIT,
   deriveFromInbox,
   deriveFromFollowups,
   deriveFromGoals,
@@ -218,7 +219,7 @@ describe('FeedService.list', () => {
       readInbox: async () => [inbox({ id: 'r', comments: 'Report' })],
       listFollowups: () => [],
       listGoals: () => [],
-      listLibrary: () => [],
+      listLibrary: async () => [],
       getRecentCommits: async () => [],
       resolveProject: () => ({ path: '/tmp/p', name: 'P' }),
       ...over
@@ -229,6 +230,15 @@ describe('FeedService.list', () => {
     const svc = new FeedService(deps());
     const page = await svc.list('p1', { limit: 10 });
     expect(page.events.some((e) => e.id === 'inbox:r')).toBe(true);
+  });
+  it('awaits shared Library reads and isolates their failures from other feed sources', async () => {
+    const library = vi.fn(async () => [{ id: 'shared', relPath: 'note.md', title: 'Original owner', projectId: 'p1', source: { kind: 'agent' }, updatedAt: NOW, createdAt: NOW } as LibraryDoc]);
+    const svc = new FeedService(deps({ listLibrary: library }));
+    expect((await svc.list('p1', { limit: 10 })).events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'library-doc', title: 'Library doc written: Original owner' })]));
+    library.mockRejectedValueOnce(new Error('owner offline'));
+    const remaining = await svc.list('p1', { limit: 10 });
+    expect(remaining.events.some(event => event.id === 'inbox:r')).toBe(true);
+    expect(remaining.events.some(event => event.kind === 'library-doc')).toBe(false);
   });
 
   it('snapshots git only when refreshGit is set', async () => {
@@ -243,7 +253,7 @@ describe('FeedService.list', () => {
     expect(getRecentCommits).not.toHaveBeenCalled();
 
     await svc.list('p1', { limit: 10, refreshGit: true });
-    expect(getRecentCommits).toHaveBeenCalledOnce();
+    expect(getRecentCommits).toHaveBeenCalledExactlyOnceWith('p1', FEED_GIT_LIMIT);
     expect(appendMany).toHaveBeenCalledOnce();
   });
 

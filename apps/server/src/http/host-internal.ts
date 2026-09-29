@@ -1,4 +1,6 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { CliCallbackRequestSchema, CLI_CALLBACK_MAX_BODY_BYTES } from '@zana-ai/zcc-contracts/cli-callbacks';
+import { CliCallbackError } from '../services/launch/cli-callback-authority.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -78,6 +80,9 @@ export async function handleHostInternalHttp(
   if (pathname === '/internal/hosts/tool-call') {
     return handleHostToolCall(request, response, ctx);
   }
+  if (pathname === '/internal/hosts/cli-callback') {
+    return handleHostCliCallback(request, response, ctx);
+  }
   if (pathname.startsWith('/internal/plugins/')) {
     return handlePluginHostArtifact(request, response, ctx, pathname);
   }
@@ -100,8 +105,10 @@ async function handleHostEnroll(
 
   const token = bearerToken(request.headers);
   const joinPeek = token ? ctx.joinCodes.peek(token) : null;
+  const connectHost = headerValue(request.headers, 'x-zcc-connect-machine-host');
+  const recovered = token && connectHost ? ctx.joinCodes.recovered(token) : null;
   const loopback = Boolean(token && tokenMatches(token, ctx.enrollToken));
-  if (!joinPeek && !loopback) {
+  if (!joinPeek && !recovered && !loopback) {
     sendJson(response, 401, { error: 'unauthorized' });
     return true;
   }
@@ -132,26 +139,75 @@ async function handleHostEnroll(
     sendJson(response, 400, { error: 'invalid enroll request' });
     return true;
   }
-  if (joinPeek && parsed.data.hostId && parsed.data.hostId !== joinPeek.hostId) {
+  if (connectHost && (headerValue(request.headers, 'x-zcc-connect-machine-instance') !== ctx.productInstanceId || (joinPeek ?? recovered)?.hostId !== connectHost)) {
+    sendJson(response, 403, { error: 'machine enrollment does not belong to this instance and host' });
+    return true;
+  }
+  if ((joinPeek ?? recovered) && parsed.data.hostId && parsed.data.hostId !== (joinPeek ?? recovered)!.hostId) {
     sendJson(response, 400, { error: 'join code hostId mismatch' });
     return true;
   }
 
-  const join = token && joinPeek ? ctx.joinCodes.redeem(token) : null;
-  const hostKey = generateHostKey();
-  const host = upsertHost(ctx.db, {
-    id: join?.hostId ?? parsed.data.hostId,
-    name: parsed.data.hostName,
-    hostKeyHash: hashHostKey(hostKey),
-    isPrimary: join ? false : undefined,
-    homeDir: parsed.data.homeDir
-  });
+  const hostKey = connectHost && token ? createHmac('sha256', token).update(`connect-host:${ctx.productInstanceId}`).digest('base64url') : generateHostKey();
+  if (recovered) {
+    const host = getHost(ctx.db, recovered.hostId);
+    if (!host || host.destroyedAt || !hostKeyMatches(hostKey, host.hostKeyHash)) {
+      sendJson(response, 403, { error: 'enrollment no longer active' });
+      return true;
+    }
+    sendJson(response, 201, HostEnrollResponseSchema.parse({ protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: host.id, hostKey }));
+    return true;
+  }
+  const host = ctx.db.sqlite.transaction(() => {
+    const join = token && joinPeek ? ctx.joinCodes.redeem(token) : null;
+    if (joinPeek && !join) throw new Error('enrollment already consumed');
+    return upsertHost(ctx.db, {
+      id: join?.hostId ?? parsed.data.hostId,
+      name: parsed.data.hostName,
+      hostKeyHash: hashHostKey(hostKey),
+      isPrimary: join ? false : undefined,
+      homeDir: parsed.data.homeDir
+    });
+  })();
+  ctx.hostHub.getSession(host.id)?.socket.close(4003, 'host-credentials-rotated');
+  ctx.hostHub.detach(host.id, 'host-credentials-rotated');
   ctx.hub.emit('hosts:changed', undefined);
   sendJson(response, 201, HostEnrollResponseSchema.parse({
     protocolVersion: HOST_RPC_PROTOCOL_VERSION,
     hostId: host.id,
     hostKey
   }));
+  return true;
+}
+
+let activeCliCallbackRequests = 0;
+async function handleHostCliCallback(request: IncomingMessage, response: ServerResponse, ctx: ProductHttpContext): Promise<boolean> {
+  const auth = authenticateHostCall(request, new URL(request.url ?? '/', 'http://127.0.0.1'), ctx);
+  if ('error' in auth) { sendJson(response, auth.status, { error: auth.error }); return true; }
+  if (request.headers['sec-fetch-site'] !== undefined || request.headers.origin !== undefined) {
+    sendJson(response, 403, { error: 'CLI callback is not a browser route' }); return true;
+  }
+  if (request.method !== 'POST') { sendJson(response, 405, { error: 'method not allowed' }); return true; }
+  if (!ctx.cliCallbacks) { sendJson(response, 503, { error: 'CLI callback owner is unavailable' }); return true; }
+  if (activeCliCallbackRequests >= 8) { sendJson(response, 429, { error: 'CLI callback capacity reached' }); return true; }
+  activeCliCallbackRequests++;
+  const controller = new AbortController(), onClose = () => controller.abort();
+  response.once('close', onClose);
+  const bodyTimer = setTimeout(() => request.destroy(), 15_000);
+  try {
+    let body: unknown;
+    try { body = await readJsonBody(request, 4 * Math.ceil(CLI_CALLBACK_MAX_BODY_BYTES / 3) + 16_384); }
+    catch { if (!response.destroyed) sendJson(response, 400, { error: 'invalid callback request' }); return true; }
+    finally { clearTimeout(bodyTimer); }
+    const parsed = CliCallbackRequestSchema.safeParse(body);
+    if (!parsed.success) { sendJson(response, 400, { error: 'invalid callback request' }); return true; }
+    const result = await ctx.cliCallbacks.forward(auth.hostId, parsed.data, controller.signal);
+    if (!response.destroyed) sendJson(response, 200, result);
+  } catch (error) {
+    if (!response.destroyed) sendJson(response, error instanceof CliCallbackError ? error.status : 502, { error: 'CLI callback unavailable or not authorized' });
+  } finally {
+    clearTimeout(bodyTimer); response.off('close', onClose); controller.abort(); activeCliCallbackRequests--;
+  }
   return true;
 }
 
@@ -172,7 +228,7 @@ function authenticateHostCall(
     return { error: 'unauthorized', status: 401 };
   }
   const host = getHost(ctx.db, hostId);
-  if (!host || !hostKeyMatches(hostKey, host.hostKeyHash)) {
+  if (!host || host.destroyedAt || !hostKeyMatches(hostKey, host.hostKeyHash)) {
     return { error: 'unauthorized', status: 401 };
   }
   return { hostId };
@@ -408,7 +464,7 @@ export function handleHostInternalUpgrade(
     return true;
   }
   const host = getHost(ctx.db, hostId);
-  if (!host || !hostKeyMatches(hostKey, host.hostKeyHash)) {
+  if (!host || host.destroyedAt || !hostKeyMatches(hostKey, host.hostKeyHash)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return true;

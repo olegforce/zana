@@ -8,6 +8,8 @@ import {
   resetThreadModelCatalog,
   threadModelCatalogForHost,
   MODEL_CATALOG_TIMEOUT_MS,
+  MODEL_CATALOG_FRESH_MS,
+  recoverStaleModelCatalogs, updateModelCatalogHosts, invalidateModelCatalogs, modelDiscoveryConfigKey,
   type ThreadExecutionOptionsFetcher
 } from './thread-model-catalog.js';
 
@@ -53,6 +55,74 @@ afterEach(() => {
 });
 
 describe('thread model catalog', () => {
+  it('refreshes all scopes, shares concurrent recovery, and preserves rows while loading', async () => {
+    let version = 'old';
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    resetThreadModelCatalog(async (query) => {
+      if (version === 'new') await gate;
+      return optionsBody(['codex'], `${query?.projectId ?? 'default'}-${version}`);
+    });
+    const project = threadModelCatalogForHost('local', 'project');
+    await project.ensure();
+    await prefetchThreadModelCatalog();
+    const old = project.getSnapshot().byProvider.codex;
+    version = 'new';
+    const refresh = reloadThreadModelCatalog();
+    expect(reloadThreadModelCatalog()).toBe(refresh);
+    expect(project.getSnapshot().byProvider.codex).toBe(old);
+    release();
+    expect(await refresh).toEqual({ failedCatalogs: 0, failedProviders: [] });
+    expect(project.getSnapshot().byProvider.codex.models[0].model).toBe('project-new-model');
+    expect(getThreadModelCatalog().byProvider.codex.models[0].model).toBe('default-new-model');
+  });
+
+  it('reports unavailable scopes and failed providers instead of claiming refresh succeeded', async () => {
+    resetThreadModelCatalog(async (query) => {
+      if (query?.hostId === 'offline') throw new Error('offline');
+      const body = optionsBody(['codex'], 'loaded');
+      return query?.providerId ? { ...body, models: [],
+        modelLoadError: { providerId: 'codex', code: 'auth_required', detail: null } } : body;
+    });
+    threadModelCatalogForHost('offline');
+    expect(await reloadThreadModelCatalog()).toEqual({ failedCatalogs: 1, failedProviders: ['codex'] });
+  });
+
+  it('removes stale provider rows when a refreshed roster is empty', async () => {
+    let roster = ['codex'];
+    resetThreadModelCatalog(async () => optionsBody(roster, 'loaded'));
+    await prefetchThreadModelCatalog();
+    const seeded = threadModelCatalogForHost(undefined, 'empty-project');
+    roster = [];
+    await reloadThreadModelCatalog();
+    expect(getThreadModelCatalog().providers).toEqual([]);
+    expect(getThreadModelCatalog().byProvider).toEqual({});
+    expect(seeded.getSnapshot().byProvider).toEqual({});
+  });
+
+  it('refreshes one provider across affected projects without mixing roles or touching other hosts', async () => {
+    let version = 'old';
+    const fetcher = vi.fn(async (query?: { hostId?: string; projectId?: string; providerId?: string }) => ({
+      ...optionsBody(query?.hostId === 'other' ? ['pi'] : ['codex', 'pi'], `${query?.providerId}-${version}`),
+      acpMode: { options: [{ value: query?.projectId ?? 'default' }] }
+    }));
+    resetThreadModelCatalog(fetcher);
+    const a = threadModelCatalogForHost('local', 'a');
+    const b = threadModelCatalogForHost('local', 'b');
+    const other = threadModelCatalogForHost('other');
+    await Promise.all([a.ensure(), b.ensure(), other.ensure(), prefetchThreadModelCatalog()]);
+    const pi = a.getSnapshot().byProvider.pi;
+    fetcher.mockClear();
+    version = 'new';
+    await reloadThreadProviderModels('codex');
+    expect(a.getSnapshot().byProvider.codex.models[0].model).toBe('codex-new-model');
+    expect(b.getSnapshot().byProvider.codex.models[0].model).toBe('codex-new-model');
+    expect(a.getSnapshot().byProvider.codex.acpMode?.options).toEqual([{ value: 'a' }]);
+    expect(b.getSnapshot().byProvider.codex.acpMode?.options).toEqual([{ value: 'b' }]);
+    expect(a.getSnapshot().byProvider.pi).toBe(pi);
+    expect(fetcher.mock.calls.every(([query]) => query?.providerId === 'codex' && query.hostId !== 'other')).toBe(true);
+  });
+
   it('prefetches models for every offered harness and reuses the cache', async () => {
     const calls: Array<string | undefined> = [];
     const fetcher: ThreadExecutionOptionsFetcher = async (query) => {
@@ -388,7 +458,7 @@ describe('thread model catalog', () => {
     await vi.advanceTimersByTimeAsync(MODEL_CATALOG_TIMEOUT_MS);
     await waiting;
     expect(catalog.getSnapshot().inflight.size).toBe(0);
-    expect(catalog.getSnapshot().byProvider.codex?.modelLoadError).toBe('failed');
+    expect(catalog.getSnapshot().byProvider.codex?.modelLoadError).toBe('timeout');
     expect(vi.getTimerCount()).toBe(0);
     stalled = false;
     await catalog.reloadProvider('codex');
@@ -456,4 +526,186 @@ describe('thread model catalog', () => {
     expect(threadModelCatalogForHost('oldest')).not.toBe(oldest);
     unsubscribe();
   });
+});
+
+describe('automatic catalog recovery', () => {
+  it('retries temporary provider failures, keeps successful rows and clears the error on recovery', async () => {
+    vi.useFakeTimers();
+    let failed = false;
+    const fetcher = vi.fn(async () => {
+      if (failed) throw new Error('temporarily unavailable');
+      return optionsBody(['codex'], 'working');
+    });
+    resetThreadModelCatalog(fetcher);
+    const catalog = threadModelCatalogForHost();
+    const unsubscribe = catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    const success = catalog.getSnapshot().byProvider.codex;
+    failed = true;
+    await catalog.reloadProvider('codex');
+    expect(catalog.getSnapshot().byProvider.codex).toMatchObject({
+      models: success.models, lastSuccessAt: success.lastSuccessAt, modelLoadError: 'failed'
+    });
+    failed = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(catalog.getSnapshot().byProvider.codex.modelLoadError).toBeNull();
+    unsubscribe();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds automatic retries and does not poll authentication failures', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async () => { throw new Error('offline'); });
+    resetThreadModelCatalog(fetcher);
+    const catalog = threadModelCatalogForHost();
+    catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(catalog.getSnapshot().rosterError).toBe('offline');
+    expect(vi.getTimerCount()).toBe(0);
+    fetcher.mockImplementation(async () => { throw Object.assign(new Error('login'), { status: 401 }); });
+    await catalog.reload();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    recoverStaleModelCatalogs();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    recoverStaleModelCatalogs();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it('refreshes successful mounted catalogs after expiry and cancels work when idle', async () => {
+    vi.useFakeTimers();
+    let version = 'one';
+    const fetcher = vi.fn(async () => optionsBody(['codex'], version));
+    resetThreadModelCatalog(fetcher);
+    const catalog = threadModelCatalogForHost();
+    const unsubscribe = catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    version = 'two';
+    recoverStaleModelCatalogs();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(MODEL_CATALOG_FRESH_MS);
+    expect(catalog.getSnapshot().byProvider.codex.models[0].model).toBe('two-model');
+    unsubscribe();
+    const count = fetcher.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(MODEL_CATALOG_FRESH_MS * 2);
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    await catalog.ensure();
+    expect(fetcher).toHaveBeenCalledTimes(count + 2);
+  });
+
+  it('recovers only the reconnected host and invalidates idle scopes until they mount', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async () => optionsBody(['codex'], 'working'));
+    resetThreadModelCatalog(fetcher);
+    updateModelCatalogHosts([{ id: 'one', status: 'connected', isPrimary: true }, { id: 'two', status: 'connected' }]);
+    const mounted = threadModelCatalogForHost('one');
+    const idle = threadModelCatalogForHost('one', 'idle');
+    const other = threadModelCatalogForHost('two');
+    mounted.subscribe(() => undefined);
+    other.subscribe(() => undefined);
+    await Promise.all([mounted.ensure(), idle.ensure(), other.ensure()]);
+    fetcher.mockClear();
+    updateModelCatalogHosts([{ id: 'one', status: 'disconnected', isPrimary: true }, { id: 'two', status: 'connected' }]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetcher).not.toHaveBeenCalled();
+    updateModelCatalogHosts([{ id: 'one', status: 'connected', isPrimary: true }, { id: 'two', status: 'connected' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher.mock.calls.map(([query]) => query)).toEqual([{ hostId: 'one' }, { hostId: 'one', providerId: 'codex' }]);
+    await idle.ensure();
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    updateModelCatalogHosts([{ id: 'one', status: 'connected', isPrimary: true }, { id: 'two', status: 'connected' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not start automatic discovery for a newly mounted offline host', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async () => optionsBody(['codex'], 'working'));
+    resetThreadModelCatalog(fetcher);
+    updateModelCatalogHosts([{ id: 'one', status: 'disconnected' }]);
+    const catalog = threadModelCatalogForHost('one');
+    catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    invalidateModelCatalogs();
+    expect(fetcher).not.toHaveBeenCalled();
+    updateModelCatalogHosts([{ id: 'one', status: 'connected' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the roster on a temporary roster failure and retries it', async () => {
+    vi.useFakeTimers();
+    let failed = false;
+    resetThreadModelCatalog(async () => {
+      if (failed) throw Object.assign(new Error('Host disconnected'), { code: 'host-unavailable' });
+      return optionsBody(['codex'], 'working');
+    });
+    const catalog = threadModelCatalogForHost();
+    catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    failed = true;
+    await catalog.reload();
+    expect(catalog.getSnapshot().providers.map(p => p.id)).toEqual(['codex']);
+    expect(catalog.getSnapshot().byProvider.codex.models).toHaveLength(1);
+    failed = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(catalog.getSnapshot().rosterError).toBeNull();
+  });
+
+  it('aborts hung transport work on timeout and on invalidation', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    resetThreadModelCatalog((_query, options) => {
+      signals.push(options!.signal);
+      return new Promise(() => undefined);
+    });
+    const catalog = threadModelCatalogForHost();
+    const first = catalog.ensure();
+    const second = catalog.reload();
+    await first;
+    expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(MODEL_CATALOG_TIMEOUT_MS);
+    await second;
+    expect(signals[1].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not retry invalid requests and shows their bounded diagnostic', async () => {
+    vi.useFakeTimers();
+    resetThreadModelCatalog(async () => { throw Object.assign(new Error('bad project'.repeat(100)), { status: 404 }); });
+    const catalog = threadModelCatalogForHost();
+    catalog.subscribe(() => undefined);
+    await catalog.ensureProvider('codex');
+    expect(catalog.getSnapshot().byProvider.codex.modelLoadError).toBe('invalid_request');
+    expect(catalog.getSnapshot().byProvider.codex.modelLoadErrorDetail).toHaveLength(300);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ignores cosmetic config changes but invalidates model discovery settings', () => {
+    const initial = { theme: 'light', codexBinary: 'codex', harnessCodexEnabled: true };
+    expect(modelDiscoveryConfigKey(initial)).toBe(modelDiscoveryConfigKey({ ...initial, theme: 'dark' }));
+    expect(modelDiscoveryConfigKey(initial)).not.toBe(modelDiscoveryConfigKey({ ...initial, codexBinary: 'new' }));
+    expect(modelDiscoveryConfigKey(initial)).not.toBe(modelDiscoveryConfigKey({ ...initial, harnessCodexEnabled: false }));
+  });
+});
+
+it('retries an old authentication failure when the picker remounts, with a cooldown', async () => {
+  vi.useFakeTimers();
+  let failed = true;
+  const fetcher = vi.fn<ThreadExecutionOptionsFetcher>(async () => ({ ...optionsBody(['codex'], 'working'),
+    modelLoadError: failed ? { providerId: 'codex', code: 'auth_required', detail: null } : null }));
+  resetThreadModelCatalog(fetcher);
+  const catalog = threadModelCatalogForHost();
+  await catalog.ensure();
+  await catalog.ensure();
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  failed = false;
+  await vi.advanceTimersByTimeAsync(60_000);
+  await catalog.ensure();
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  expect(catalog.getSnapshot().byProvider.codex.modelLoadError).toBeNull();
 });

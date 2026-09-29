@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures/app.js';
 import type { Locator, Page } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,7 +91,7 @@ async function enableOpenCode(window: Page) {
     });
   }, fixtureOpenCode);
   await window.getByRole('link', { name: 'Settings' }).click();
-  await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+  await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
   const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
   // Status rows render a version chip and a login chip. The PATH fixture
   // answers `--version` as `opencode 1.18.10` — wait for that, not a real CLI.
@@ -184,6 +184,50 @@ test('rejects a non-directly-launchable OpenCode role at the preflight boundary'
   } finally {
     if (projectId) await window.evaluate((id) => window.cc.projects.remove(id), projectId);
     await window.evaluate(() => window.cc.config.set({ defaultHarness: undefined, opencodeBinary: undefined }));
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+
+test('model refresh invalidates the launch inventory and preserves large CLI discovery output', async ({ app }) => {
+  const { window } = app;
+  const projectDir = mkdtempSync(join(tmpdir(), 'zcc-opencode-model-refresh-'));
+  let projectId: string | undefined;
+  const sessions: string[] = [];
+  // > 32 KiB and the selected id is LAST: a truncated Electron capture fails the launch.
+  const inventory = (last: string) => [...Array.from({ length: 1_500 }, (_, i) => `llmgw/catalog-fixture-model-${i}`), last].join('\n') + '\n';
+  try {
+    writeFileSync(join(projectDir, '.zcc-model-list'), inventory('llmgw/recovery-old'));
+    await enableOpenCode(window);
+    projectId = await window.evaluate(async (path) => {
+      const result = await window.cc.projects.add(path);
+      if (!result.ok) throw new Error(result.message);
+      return result.value.id;
+    }, projectDir);
+    const launch = (model: string) => window.evaluate(async ({ projectId, model }) => {
+      return window.cc.terminals.create({ projectId, profile: 'opencode', cols: 100, rows: 30,
+        harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: model } } } });
+    }, { projectId: projectId!, model });
+    const first = await launch('llmgw/recovery-old');
+    expect(first, JSON.stringify(first)).toMatchObject({ ok: true });
+    if (first.ok) sessions.push(first.value.id);
+    writeFileSync(join(projectDir, '.zcc-model-list'), inventory('llmgw/recovery-new'));
+    // Live provider discovery is the same product request made by Settings and the palette.
+    const refreshed = await window.evaluate(async (id) => {
+      const response = await fetch(`/api/v1/system/execution-options?providerId=acp-opencode&projectId=${encodeURIComponent(id)}`);
+      return { status: response.status, body: await response.json() };
+    }, projectId);
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.modelLoadError).toBeNull();
+    const fresh = await launch('llmgw/recovery-new');
+    expect(fresh, JSON.stringify(fresh)).toMatchObject({ ok: true });
+    if (fresh.ok) sessions.push(fresh.value.id);
+    const obsolete = await launch('llmgw/recovery-old');
+    expect(obsolete.ok).toBe(false);
+    expect(JSON.stringify(obsolete)).toContain('model target unavailable');
+  } finally {
+    for (const id of sessions) await window.evaluate((id) => window.cc.terminals.close(id), id);
+    if (projectId) await window.evaluate((id) => window.cc.projects.remove(id), projectId);
     rmSync(projectDir, { recursive: true, force: true });
   }
 });

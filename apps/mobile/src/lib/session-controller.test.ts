@@ -94,13 +94,14 @@ it('flushes Android cookies and recovers on foreground after a failed connection
   expect(f.deps.cookies.set).toHaveBeenCalledTimes(1);
   stop();
 });
-it('keeps direct profiles timer-free and prevents work after unmount or failed cookie installation', async () => {
+it('rejects a missing authenticated session and prevents work after unmount or failed cookie installation', async () => {
   vi.useFakeTimers();
   const direct = setup();
   direct.deps.create.mockResolvedValue(null);
   const stop = connectNativeProfile(profile, direct.deps);
   await vi.advanceTimersByTimeAsync(0);
-  expect(direct.deps.onReady).toHaveBeenCalledOnce();
+  expect(direct.deps.onReady).not.toHaveBeenCalled();
+  expect(direct.deps.onError).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
   stop();
   const cancelled = setup();

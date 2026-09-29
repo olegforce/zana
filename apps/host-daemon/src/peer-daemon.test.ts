@@ -46,15 +46,15 @@ describe('peer-daemon commands', () => {
 
   it('quotes join secrets in the install script', () => {
     const script = peerInstallServiceCommand({
-      serverHost: 'box.tailnet.ts.net',
+      serverHost: 'machine.example.com',
       joinCode: "zcde_abc'def",
       hostId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-      serverUrl: 'https://box.tailnet.ts.net'
+      serverUrl: 'https://machine.example.com'
     });
     expect(script).toContain(`join_code='zcde_abc'\\''def'`);
     expect(script).toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
     expect(script).not.toContain('--join-code zcde_');
-    expect(script).toContain('ai.zana.zcc-host-daemon.box.tailnet.ts.net');
+    expect(script).toContain('ai.zana.zcc-host-daemon.machine.example.com');
     expect(script).toContain('/nix/store/*-nodejs-22.*/bin/node');
     expect(script).toContain('nohup "$node_bin" "$join_bin" join');
     expect(script).toContain('host-daemon.pid');

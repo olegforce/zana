@@ -1,4 +1,5 @@
 import { product } from '../../lib/product-client.js';
+import { PendingWorkerRecovery } from '../../components/PendingWorkerRecovery.js';
 import { DelayedStencilList } from '../../components/ui/Skeleton.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -288,6 +289,7 @@ function GoalRow({
   const meta = STATUS_META[goal.status];
   const terminal = isTerminal(goal.status);
   const iterations = goal.history?.iterations ?? [];
+  const pending = iterations.filter(it => it.launchState === 'pending');
   const latest = iterations[0];
 
   const setStatus = async (status: GoalStatus, verb: string) => {
@@ -345,6 +347,7 @@ function GoalRow({
               onClick={() => setStatus('active', 'Activate')}
               title="Activate (arm the loop)"
               aria-label="Activate"
+              disabled={pending.length > 0}
             >
               <Play size={14} />
             </button>
@@ -365,6 +368,7 @@ function GoalRow({
               onClick={() => setStatus('active', 'Resume')}
               title="Resume the loop"
               aria-label="Resume"
+              disabled={pending.length > 0}
             >
               <PlayCircle size={14} />
             </button>
@@ -375,6 +379,7 @@ function GoalRow({
               onClick={runNow}
               title="Run one iteration now"
               aria-label="Run now"
+              disabled={pending.length > 0}
             >
               <Flag size={14} />
             </button>
@@ -393,6 +398,7 @@ function GoalRow({
           </button>
         </div>
       </div>
+      {pending.length > 0 && <PendingWorkerRecovery key={goal.id} kind="goal" id={goal.id} sessionIds={pending.flatMap(it => it.sessionId ? [it.sessionId] : [])} />}
       {expanded && (
         <div className="scheduler-card-detail">
           <div className="scheduler-card-desc">{goal.statement}</div>

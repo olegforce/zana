@@ -8,6 +8,8 @@ describe('pairing allowlist', () => {
       '/install/version',
       '/install/zcc-host.tgz',
       '/internal/hosts/enroll',
+      '/internal/hosts/tool-call',
+      '/internal/hosts/cli-callback',
       '/internal/hosts/interactive-request',
       '/internal/hosts/interactive-request/interrupt',
       '^/internal/plugins/[^/]+/host/[a-f0-9]{64}$'

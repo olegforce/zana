@@ -284,6 +284,37 @@ describe('mobile gateway', () => {
       enabled: false
     });
   });
+  it('forwards nested document query paths without relaxing route or session checks', async () => {
+    const f = await setup();
+    const path = '/api/v1/library/content?scope=global&relPath=notes%2Freading.md';
+    expect((await f.call(path)).status).toBe(401);
+    const paired = await f.pair();
+    const session = await f.session(paired.json.credential);
+    const headers = { cookie: session.cookie };
+    expect((await f.call(path, { headers })).status).toBe(200);
+    expect(f.requests.at(-1)?.url).toBe(path);
+    const count = f.requests.length;
+    for (const route of ['/internal/hosts', '/api/v1%2Fsecret', '/internal%5chosts']) {
+      expect((await f.call(`${route}?relPath=notes%2Freading.md`, { headers })).status).toBe(404);
+    }
+    expect(f.requests).toHaveLength(count);
+  });
+  it('requires authentication for readiness, excludes old pairings and clears revoked sessions', async () => {
+    const f = await setup();
+    const body = JSON.stringify({ instanceId: 'a'.repeat(32), platform: 'ios', appVersion: '2.3.0' });
+    const opts = { method: 'POST', body, headers: { 'content-type': 'application/json' } };
+    expect((await f.call('/_zcc/mobile-ready', opts)).status).toBe(401);
+    const pair = await f.pair();
+    const session = await f.session(pair.json.credential);
+    expect(f.gateway.readySessions()).toEqual([]);
+    const headers = { ...opts.headers, cookie: session.cookie };
+    expect((await f.call('/_zcc/mobile-ready', { ...opts, headers, body: '{}' })).status).toBe(400);
+    expect((await f.call('/_zcc/mobile-ready', { ...opts, headers })).status).toBe(200);
+    expect(f.gateway.readySessions()).toEqual([expect.objectContaining({ label: 'Phone', appVersion: '2.3.0', platform: 'ios' })]);
+    expect(f.requests).toHaveLength(0); // never forwarded to product or owner controls
+    f.gateway.revoke(pair.json.deviceId);
+    expect(f.gateway.readySessions()).toEqual([]);
+  });
   it('validates upstream and public origins', async () => {
     for (const upstream of [
       'https://public.example',
@@ -305,6 +336,9 @@ describe('mobile gateway', () => {
       '/api/v2/test',
       '/_secret',
       '/api/v1%2fsecret',
+      '/api/v1%2Fsecret?relPath=notes%2Fdoc.md',
+      '/internal%5chosts?scope=global',
+      '/api/v1/%00?relPath=notes%2Fdoc.md',
       '/a\\b'
     ])
       expect(isMobileProxyPath(path)).toBe(false);
@@ -313,6 +347,8 @@ describe('mobile gateway', () => {
       '/threads/t1',
       '/plugins/a/assets/app.js',
       '/api/v1/threads',
+      '/api/v1/library/content?scope=global&relPath=notes%2Freading.md',
+      '/api/v1/library/content?scope=project&projectId=p&relPath=notes%5Creading.md',
       '/_zcc/bootstrap',
       '/_zcc/health'
     ])
@@ -346,4 +382,8 @@ describe('mobile device persistence', () => {
     writeFileSync(file, 'x'.repeat(33_000));
     expect(() => new MobileDeviceStore(file)).toThrow('too large');
   });
+});
+
+it.each(['', '192.168.1.5', '10.0.0.2', '0.0.0.0', '::', 'phone.local'])('rejects non-loopback gateway bindings (%s) before opening a listener', async host => {
+  await expect(startMobileGateway({ upstream: 'http://127.0.0.1:8780', publicUrl: 'https://relay.example', host, port: 0 })).rejects.toThrow('must bind to loopback');
 });

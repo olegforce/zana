@@ -51,7 +51,7 @@ const config: AppConfig = {
   claudeBinary: 'claude',
   fontSize: 13,
   lastProjectId: null,
-  publicAppUrl: 'https://box.tailnet.ts.net'
+  publicAppUrl: 'https://machine.example.com'
 };
 
 function host(overrides: Partial<Host> = {}): Host {
@@ -108,7 +108,7 @@ describe('MachinesTab', () => {
     );
     expect(html).toContain('Public app URL');
     expect(html).toContain('data-testid="public-app-url"');
-    expect(html).toContain('https://box.tailnet.ts.net');
+    expect(html).toContain('https://machine.example.com');
     expect(html).not.toContain('Relay token');
     expect(html).not.toContain('data-testid="relay-status"');
     expect(html).toContain('Add a machine');

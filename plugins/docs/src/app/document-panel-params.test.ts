@@ -65,4 +65,24 @@ describe('createLibraryAutosave', () => {
     saver.flush();
     expect(write).toHaveBeenCalledWith('draft');
   });
+  it('serializes writes and coalesces later drafts until the preceding revision is acknowledged', async () => {
+    vi.useFakeTimers(); let release!: () => void;
+    const write = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; })).mockResolvedValue(undefined);
+    const saver = createLibraryAutosave(write);
+    saver.schedule('first'); await vi.advanceTimersByTimeAsync(700);
+    saver.schedule('second'); await vi.advanceTimersByTimeAsync(700);
+    saver.schedule('latest'); saver.flush(); expect(write).toHaveBeenCalledTimes(1);
+    release(); await vi.advanceTimersByTimeAsync(0);
+    expect(write.mock.calls.map(call => call[0])).toEqual(['first', 'latest']);
+  });
+  it('stops on a conflict without retrying and cancels a pending draft', async () => {
+    vi.useFakeTimers(); const failed = new Error('conflict');
+    const write = vi.fn().mockRejectedValue(failed), onError = vi.fn();
+    const saver = createLibraryAutosave(write, 700, onError);
+    saver.schedule('first'); await vi.advanceTimersByTimeAsync(700);
+    saver.schedule('second'); await vi.advanceTimersByTimeAsync(700); saver.flush();
+    expect(write).toHaveBeenCalledOnce(); expect(onError).toHaveBeenCalledWith(failed);
+    const fresh = createLibraryAutosave(write); fresh.schedule('cancelled'); fresh.cancel();
+    await vi.advanceTimersByTimeAsync(700); expect(write).toHaveBeenCalledOnce();
+  });
 });

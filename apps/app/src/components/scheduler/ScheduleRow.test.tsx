@@ -43,6 +43,16 @@ import { ScheduleRow } from './ScheduleRow.js';
 import { MemoryRouter } from 'react-router-dom';
 
 describe('ScheduleRow', () => {
+  it('labels unconfirmed workers and disables repeat launch controls in the row and menu', () => {
+    const pending = { ...task, enabled: false, status: { runCount: 0, runs: [{ at: new Date().toISOString(), result: 'skipped' as const, launchState: 'pending' as const, sessionId: 'reserved' }] } };
+    const view = render(<MemoryRouter><ScheduleRow task={pending} projectName="Demo" onOpen={vi.fn()} onOpenInSplit={vi.fn()} onDuplicate={vi.fn()} onAskDelete={vi.fn()} /></MemoryRouter>);
+    expect(view.getByText('needs checking')).toBeTruthy();
+    expect((view.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+    expect((view.getByRole('button', { name: 'Run now' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.contextMenu(view.container.querySelector('.scheduler-card-main')!);
+    expect((view.getByRole('menuitem', { name: 'Run now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((view.getByRole('menuitem', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(true);
+  });
   afterEach(() => {
     cleanup();
   });

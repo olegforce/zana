@@ -35,4 +35,26 @@ describe('ComposerTypeaheadMenu', () => {
     );
     expect(html).toContain('No matching mentions');
   });
+
+  it('splits commands and skills, stripping the leading slash from labels', () => {
+    const html = renderToStaticMarkup(
+      <ComposerTypeaheadMenu
+        triggerKind="command"
+        selectedIndex={0}
+        onApply={() => undefined}
+        suggestions={[
+          { kind: 'command', name: '/clear', description: 'Start fresh context in this thread', source: 'command' },
+          { kind: 'command', name: '/acp-provider', description: 'ACP provider', source: 'skill' }
+        ]}
+      />
+    );
+    expect(html).toContain('Commands');
+    expect(html).toContain('Skills');
+    expect(html).toContain('>clear<');
+    expect(html).toContain('>acp-provider<');
+    expect(html).not.toContain('>/clear<');
+    expect(html).toContain('data-source="command"');
+    expect(html).toContain('data-source="skill"');
+    expect(html).toContain('Start fresh context in this thread');
+  });
 });

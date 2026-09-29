@@ -6,12 +6,14 @@ import type { ParsedDocDirective } from './doc-directive.js';
 export function openDocFromCard({
   document,
   projectId,
+  threadId,
   openWorkspaceFile,
   openThreadPanel,
   toPluginPanel
 }: {
   document: ParsedDocDirective;
   projectId?: string | null;
+  threadId?: string | null;
   openWorkspaceFile?: ((path: string) => boolean) | null;
   openThreadPanel?: ZccNavigate['openThreadPanel'];
   toPluginPanel?: ZccNavigate['toPluginPanel'];
@@ -28,12 +30,14 @@ export function openDocFromCard({
       ? { projectId: projectId.trim() }
       : {})
   };
+  const panelThreadId = typeof threadId === 'string' && threadId.trim() ? threadId.trim() : undefined;
   const opened =
     typeof openThreadPanel === 'function' &&
     openThreadPanel({
       actionId: 'document',
       title: document.title,
-      params
+      params,
+      ...(panelThreadId ? { threadId: panelThreadId } : {})
     }) === true;
   if (opened) return true;
   if (typeof toPluginPanel === 'function') {

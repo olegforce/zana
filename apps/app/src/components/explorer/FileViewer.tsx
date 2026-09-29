@@ -28,6 +28,7 @@ interface FileViewerProps {
   viewRoot: string;
   monacoTheme: string;
   isRemote: boolean;
+  nativeFiles?: boolean;
   isMarkdown: boolean;
   onContentChange: (content: string | null) => void;
   onEditorMount: OnMount;
@@ -76,6 +77,7 @@ export function FileViewer({
   viewRoot,
   monacoTheme,
   isRemote,
+  nativeFiles = true,
   isMarkdown,
   onContentChange,
   onEditorMount,
@@ -215,7 +217,7 @@ export function FileViewer({
           {isRemote ? (
             <span className="explorer-viewer-warn">remote · {project.remote?.host}</span>
           ) : (
-            <OpenerButtons path={explorerFile} editorPath={viewRoot} />
+            nativeFiles ? <OpenerButtons path={explorerFile} editorPath={viewRoot} /> : null
           )}
         </span>
       </div>

@@ -61,6 +61,21 @@ describe('dependencyResultsSection', () => {
 });
 
 describe('execution admission', () => {
+  it('does not claim an execution or authorize workers when the machine route is unsupported', async () => fixture(async (filePath) => {
+    const authorizeTeamLaunch = vi.fn();
+    const launchTeam = vi.fn();
+    const options = deps(filePath, {
+      authorizeTeamLaunch, launchTeam,
+      resolveTeamModelSnapshots: () => { throw new Error('Squad/Team execution on secondary machines is not available yet'); }
+    });
+    const claim = vi.spyOn(options.store, 'claim');
+    const service = new ExecutionService(options);
+    await expect(service.start('modern-owner', 'secondary-project', request)).resolves.toMatchObject({ ok: false, code: 'ADMISSION_FAILED' });
+    expect(claim).not.toHaveBeenCalled();
+    expect(authorizeTeamLaunch).not.toHaveBeenCalled();
+    expect(launchTeam).not.toHaveBeenCalled();
+  }));
+
   it('shares exact dry-run result with real admission and prevents invalid DAG spawn', async () => fixture(async (filePath) => {
     const launchTeam = vi.fn(async () => ({ ok: true }));
     const service = new ExecutionService(deps(filePath, { launchTeam }));

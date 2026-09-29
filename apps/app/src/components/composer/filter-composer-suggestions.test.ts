@@ -91,13 +91,23 @@ describe('buildCommandSuggestions', () => {
     ], 'goa').map((row) => row.kind === 'command' ? row.name : '')).toEqual(['/goal']);
     expect(buildCommandSuggestions([{ name: '/plan', description: 'Enter plan mode' }], 'xyz')).toEqual([]);
   });
+
+  it('keeps Commands ahead of Skills after ranking', () => {
+    expect(buildCommandSuggestions([
+      { name: '/acp-provider', description: 'Plugin skill', source: 'skill' },
+      { name: '/clear', description: 'Start fresh', source: 'command' }
+    ], '').map((row) => (row.kind === 'command' ? `${row.source}:${row.name}` : ''))).toEqual([
+      'command:/clear',
+      'skill:/acp-provider'
+    ]);
+  });
 });
 
 describe('commandsFromComposerActions', () => {
   it('turns provider actions into slash catalog rows', () => {
     expect(commandsFromComposerActions(['plan', '/goal'], 'Claude Code')).toEqual([
-      { name: '/plan', description: 'Claude Code plan' },
-      { name: '/goal', description: 'Claude Code goal' }
+      { name: '/plan', description: 'Claude Code plan', source: 'command' },
+      { name: '/goal', description: 'Claude Code goal', source: 'command' }
     ]);
   });
 });
@@ -113,8 +123,8 @@ describe('commandsFromPluginSkills', () => {
       { name: 'Disabled', enabled: false, skillNames: ['hidden'] },
       { name: 'Empty', enabled: true, skillNames: [] }
     ])).toEqual([
-      { name: '/salesforce-dx', description: 'Salesforce' },
-      { name: '/salesforce-constitution', description: 'Salesforce' }
+      { name: '/salesforce-dx', description: 'Salesforce', source: 'skill' },
+      { name: '/salesforce-constitution', description: 'Salesforce', source: 'skill' }
     ]);
   });
 });
@@ -122,11 +132,11 @@ describe('commandsFromPluginSkills', () => {
 describe('mergeCommandCatalogs', () => {
   it('keeps the first description for a slash name across catalogs', () => {
     expect(mergeCommandCatalogs([
-      [{ name: 'plan', description: 'Fallback plan' }],
-      [{ name: '/plan', description: 'HTTP plan' }, { name: '/commit', description: 'Commit' }]
+      [{ name: 'plan', description: 'Fallback plan', source: 'command' }],
+      [{ name: '/plan', description: 'HTTP plan' }, { name: '/commit', description: 'Commit', source: 'skill' }]
     ])).toEqual([
-      { name: '/plan', description: 'Fallback plan' },
-      { name: '/commit', description: 'Commit' }
+      { name: '/plan', description: 'Fallback plan', source: 'command' },
+      { name: '/commit', description: 'Commit', source: 'skill' }
     ]);
   });
 });

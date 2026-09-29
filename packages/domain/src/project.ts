@@ -24,3 +24,5 @@ export {
   type RemoteStartPathResolution,
   type RemoteStartPathSource
 } from './remote-start-path.js';
+
+export { projectSources, projectOnHost, ProjectSourceUnavailableError, type ProjectSource } from './project-sources.js';

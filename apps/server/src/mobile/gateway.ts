@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   createServer,
   request as httpRequest,
@@ -9,6 +9,8 @@ import { Transform } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createMobilePushRelay } from './push.js';
 import { digest, MobileDeviceStore } from './device-store.js';
+import { MobileReadiness } from './readiness.js';
+import { isMachinePath, machineIdentity, MACHINE_HOST_HEADER, MACHINE_INSTANCE_HEADER } from '../../../../services/mobile-relay/machine-routes.mjs';
 
 const COOKIE = 'zcc_mobile_session';
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -18,12 +20,15 @@ const MAX_RESPONSE = 64 * 1024 * 1024;
 
 export interface MobileGatewayOptions {
   upstream: string;
-  /** Exact URL the phone uses. HTTPS in production; HTTP only on a private network. */
+  /** Exact URL the phone uses. HTTPS through the relay; loopback HTTP is reserved for internal tests. */
   publicUrl: string;
   host?: string;
   port?: number;
   devices?: MobileDeviceStore;
   now?: () => number;
+  /** Ephemeral local capability supplied only by the authenticated Connect tunnel. */
+  connectGatewayCredential?: string;
+  connectInstanceId?: string;
 }
 
 function origin(raw: string): URL {
@@ -73,7 +78,10 @@ function bounded(limit: number) {
 }
 /** Only product and renderer routes. Host enrollment, MCP and owner controls never cross this gateway. */
 export function isMobileProxyPath(path: string): boolean {
-  if (path.includes('\\') || /%2f|%5c|%00/i.test(path)) return false;
+  // Only route separators affect dispatch. Encoded slashes in query values
+  // (e.g. a library relPath) remain data, authorized by the product endpoint.
+  const route = path.split(/[?#]/, 1)[0];
+  if (route.includes('\\') || /%2f|%5c|%00/i.test(route)) return false;
   let pathname: string;
   try {
     pathname = decodeURIComponent(new URL(path, 'http://localhost').pathname);
@@ -89,6 +97,8 @@ export function isMobileProxyPath(path: string): boolean {
 
 /** Opt-in, authenticated edge in front of the unchanged loopback product server. */
 export async function startMobileGateway(options: MobileGatewayOptions) {
+  const host = options.host ?? '127.0.0.1';
+  if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw new Error('Mobile gateway must bind to loopback; use Zana Connect for phone access.');
   const upstream = origin(options.upstream);
   if (
     upstream.protocol !== 'http:' ||
@@ -97,12 +107,16 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
     throw new Error('Mobile upstream must be a loopback HTTP origin');
   }
   const publicUrl = origin(options.publicUrl);
+  if (options.connectGatewayCredential && (!/^[\w-]{43}$/.test(options.connectGatewayCredential) || options.host !== '127.0.0.1')) {
+    throw new Error('Connect gateway must be loopback-only with a valid local capability');
+  }
   const devices = options.devices ?? new MobileDeviceStore();
   const now = options.now ?? Date.now;
   const push = createMobilePushRelay(upstream, publicUrl.origin, devices);
   let pairing: { hash: string; expiresAt: number } | null = null;
   const sessions = new Map<string, { deviceId: string; expiresAt: number }>();
   const sockets = new Map<WebSocket, string>();
+  const readiness = new MobileReadiness(now);
   let attempts = 0;
   let resetAt = 0;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -115,6 +129,13 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
     );
   }
   function sessionDevice(req: IncomingMessage): string | null {
+    if (options.connectGatewayCredential) {
+      const value = req.headers['x-zcc-connect-gateway'];
+      if (req.socket.remoteAddress === '127.0.0.1' && typeof value === 'string' &&
+          value.length === options.connectGatewayCredential.length &&
+          timingSafeEqual(Buffer.from(value), Buffer.from(options.connectGatewayCredential))) return 'connect';
+      return null;
+    }
     const cookie = req.headers.cookie
       ?.split(';')
       .map((c) => c.trim())
@@ -129,6 +150,11 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
     )
       return null;
     return session.deviceId;
+  }
+  function authenticatedMachine(req: IncomingMessage): { hostId: string; instanceId: string } | null {
+    if (!options.connectGatewayCredential || sessionDevice(req) !== 'connect') return null;
+    const machine = machineIdentity(req.headers);
+    return machine && machine.instanceId === options.connectInstanceId ? machine : null;
   }
   function rateAllowed() {
     if (now() >= resetAt) {
@@ -199,8 +225,19 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
         push.refresh();
         return json(res, 200, { enabled: !!input });
       }
-      if (!sessionDevice(req)) return json(res, 401, { error: 'Pair this device with Zana' });
-      if (!isMobileProxyPath(req.url ?? '/')) return json(res, 404, { error: 'Not found' });
+      const authenticatedDevice = sessionDevice(req);
+      if (!authenticatedDevice) return json(res, 401, { error: 'Pair this device with Zana' });
+      // Connect authenticates the phone cookie at its edge; this loopback
+      // capability has already passed the exact-host and tunnel checks above.
+      if (url.pathname === '/_zcc/mobile-ready' && req.method === 'POST') {
+        const label = authenticatedDevice === 'connect' ? 'Phone via Connect' :
+          devices.list().find(device => device.id === authenticatedDevice)?.label ?? 'Phone';
+        const accepted = readiness.record(authenticatedDevice, label, await body(req));
+        return json(res, accepted ? 200 : 400, { ready: accepted });
+      }
+      const machine = authenticatedMachine(req);
+      if ((req.headers[MACHINE_HOST_HEADER] || req.headers[MACHINE_INSTANCE_HEADER]) && !machine) return json(res, 403, { error: 'Invalid machine identity' });
+      if (machine ? !isMachinePath(req.method, req.url) : !isMobileProxyPath(req.url ?? '/')) return json(res, 404, { error: 'Not found' });
       if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method ?? 'GET'))
         return json(res, 405, { error: 'Method not allowed' });
       if (Number(req.headers['content-length'] ?? 0) > MAX_BODY)
@@ -212,6 +249,14 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
         origin: upstream.origin,
         'x-zcc-app-surface': 'mobile'
       };
+      if (machine) {
+        delete headers.origin;
+        delete headers['x-zcc-app-surface'];
+        headers['x-zcc-host-id'] = machine.hostId;
+        headers[MACHINE_HOST_HEADER] = machine.hostId;
+        headers[MACHINE_INSTANCE_HEADER] = machine.instanceId;
+        if (typeof req.headers.authorization === 'string') headers.authorization = req.headers.authorization;
+      }
       for (const key of [
         'content-type',
         'content-length',
@@ -284,10 +329,12 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
   server.maxConnections = 100;
   server.on('upgrade', (req, socket, head) => {
     const id = sessionDevice(req);
+    const machine = authenticatedMachine(req);
     if (
       !requestAllowed(req) ||
+      ((req.headers[MACHINE_HOST_HEADER] || req.headers[MACHINE_INSTANCE_HEADER]) && !machine) ||
       !id ||
-      !['/ws', '/ws/'].includes(req.url ?? '') ||
+      (machine ? !isMachinePath('GET', req.url, true) : !['/ws', '/ws/'].includes(req.url ?? '')) ||
       sockets.size >= 40
     ) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
@@ -295,10 +342,15 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
     }
     wss.handleUpgrade(req, socket, head, (client) => {
       sockets.set(client, id);
-      const target = new URL('/ws', upstream);
+      const target = new URL(machine ? req.url! : '/ws', upstream);
       target.protocol = 'ws:';
       const remote = new WebSocket(target, {
-        origin: upstream.origin,
+        ...(machine ? { headers: {
+          'x-zcc-host-id': machine.hostId,
+          [MACHINE_HOST_HEADER]: machine.hostId,
+          [MACHINE_INSTANCE_HEADER]: machine.instanceId,
+          ...(typeof req.headers.authorization === 'string' ? { authorization: req.headers.authorization } : {})
+        } } : { origin: upstream.origin }),
         handshakeTimeout: 10_000,
         maxPayload: 1024 * 1024
       });
@@ -341,13 +393,16 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
     for (const [hash, session] of sessions)
       if (session.expiresAt <= now() || !activeDevices.has(session.deviceId)) sessions.delete(hash);
     const live = new Set([...sessions.values()].map((s) => s.deviceId));
+    // Connect owns session expiry/revocation and closes the tunnel's visitor
+    // sockets. Its loopback capability is not a locally paired device.
+    if (options.connectGatewayCredential) live.add('connect');
     for (const [socket, id] of sockets) if (!live.has(id)) socket.close(1008, 'Session expired');
   }, 30_000);
   sweep.unref();
   try {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
-      server.listen(options.port ?? 8785, options.host ?? '127.0.0.1', () => {
+      server.listen(options.port ?? 8785, host, () => {
         server.off('error', reject);
         resolve();
       });
@@ -367,6 +422,9 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
       return { version: 1, serverUrl: publicUrl.origin, code, expiresAt };
     },
     devices: () => devices.list(),
+    readySessions: () => readiness.list(id => id === 'connect' ? !!options.connectGatewayCredential :
+      [...sessions.values()].some(session => session.deviceId === id && session.expiresAt > now()) &&
+      devices.list().some(device => device.id === id)),
     revoke(id: string) {
       const result = devices.revoke(id);
       push.refresh();

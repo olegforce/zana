@@ -5,7 +5,6 @@ import { ctx } from './ctx.js';
 import { listMcpServersAll, revealMcpServer, setMcpServerEnabledById } from '@zana-ai/zcc-server/services/mcp/mcp-catalogue';
 import { listMcpServers, setMcpServerEnabled } from '@zana-ai/zcc-server/services/mcp/mcp';
 import { listPlugins, revealPlugin, setPluginEnabled } from '@zana-ai/zcc-server/services/extensions/plugins';
-import { store } from '@zana-ai/zcc-server/services/projects/store';
 import type { Result } from '@zana-ai/zcc-domain/product';
 import {
   listPluginAppsFromProductServer,
@@ -23,24 +22,24 @@ export function registerPluginsIpc(): void {
   
   ctx.safeHandle(
     IPC.mcp.list,
-    (projectPath: string) => listMcpServers(projectPath),
+    (projectPath: string) => listMcpServers(requireLocalProjectPath(projectPath)),
     () => []
   );
   ctx.safeHandle(
     IPC.mcp.setEnabled,
     (projectPath: string, name: string, enabled: boolean) =>
-      setMcpServerEnabled(projectPath, name, enabled),
+      setMcpServerEnabled(requireLocalProjectPath(projectPath), name, enabled),
     () => undefined
   );
   ctx.safeHandle(
     IPC.mcp.listAll,
-    () => listMcpServersAll(store.listProjects()),
+    () => listMcpServersAll(ctx.localProjects()),
     () => []
   );
   ctx.safeHandle(
     IPC.mcp.setEnabledById,
     async (id: string, enabled: boolean) => {
-      const res = await setMcpServerEnabledById(id, enabled, store.listProjects());
+      const res = await setMcpServerEnabledById(id, enabled, ctx.localProjects());
       if (res.ok) void ctx.emitMcpChanged();
       return res;
     },
@@ -52,7 +51,7 @@ export function registerPluginsIpc(): void {
   );
   ctx.safeHandle(
     IPC.mcp.reveal,
-    (id: string) => revealMcpServer(id, store.listProjects()),
+    (id: string) => revealMcpServer(id, ctx.localProjects()),
     (err): Result<true> => ({
       ok: false,
       code: 'REVEAL_FAILED',
@@ -244,3 +243,8 @@ export function registerPluginsIpc(): void {
   );
 }
 
+function requireLocalProjectPath(projectPath: string): string {
+  const options = ctx.projectPathToOptions(projectPath);
+  if (!options.projectPath) throw new Error('Choose a project on this machine');
+  return options.projectPath;
+}

@@ -1,0 +1,17 @@
+.card { margin: 24px 0; padding: clamp(20px, 4vw, 36px); border: 1px solid var(--border); border-radius: 18px; max-width: 720px; background: var(--bg-panel); color: var(--text); }
+.card h2 { margin: 8px 0 12px; font-size: 1.6rem; letter-spacing: -.035em; }
+.card p { line-height: 1.6; overflow-wrap: anywhere; color: var(--text-muted); }
+.card .eyebrow { font-size: .75rem; font-weight: 650; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
+.card form { margin-top: 20px; }
+.card label { display: block; font-weight: 600; margin-top: 18px; font-size: 14px; }
+.computer select { display: block; margin-top: 8px; padding: 10px; max-width: 100%; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; }
+.address { display: flex; align-items: center; margin: 8px 0; border: 1px solid var(--border-strong); border-radius: 10px; padding: 16px; gap: 4px; font-family: var(--font-mono); background: var(--bg-input); }
+.address:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.address input { flex: 1 1 8ch; width: 0; min-width: 0; font: inherit; font-size: 1.1rem; background: transparent; color: var(--text); border: 0; outline: none; }
+.address input::placeholder { color: var(--text-dim); }
+.address span { flex: 0 0 auto; white-space: nowrap; color: var(--text-muted); font-size: .9rem; }
+.card small { display: block; line-height: 1.5; color: var(--text-dim); }
+.card .status { min-height: 1.6em; margin: 12px 0; font-size: .9rem; }
+.card button { width: 100%; min-height: 44px; }
+.card button:disabled { opacity: .55; cursor: default; }
+@media (max-width: 540px) { .address { flex-wrap: wrap; gap: 8px; } .address input { flex-basis: 100%; } .address span { margin-left: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; } }

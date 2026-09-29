@@ -18,6 +18,7 @@ other's traces. None of those operations should be part of a running test's life
 | Electron E2E app | Private `zcc-electron-test-*` directory, with copied output/resources/plugins/CLI/native packages; removed at teardown |
 | Playwright results | `e2e/.artifacts/runs/<run-id>`; retain 20 completed runs and never prune active runs |
 | Test settings | Per-test temporary home; bootstrap sets Electron's home before loading application code |
+| Claude in deterministic tests | `claudeBinary` defaults to a failing local fixture and the test PATH intercepts bare `claude` (including automatic `doctor` health checks); explicit fake binary paths and `seedClaudeAuth` live tests retain their overrides |
 
 The lock uses heartbeat updates and stale-lock recovery. Failed builds leave an
 incomplete marker; `test:e2e:only` refuses them with a specific rebuild instruction.
@@ -47,6 +48,7 @@ package-manager process or a destructive “restore ABI” finally block.
 - `scripts/electron-build-workspace.test.ts`: serialized preparation, failed-build
   detection, independent runtime copies surviving source-output deletion, cleanup.
 - `scripts/e2e-artifacts.test.ts`: completed-run retention preserves active traces.
+- `scripts/e2e-app-config.test.ts` and `e2e/credential-isolation.spec.ts`: isolated test homes never discover a real Claude CLI for background micro-calls; explicit fake and live-test configuration is preserved.
 - `packages/db/src/native-binding.test.ts`: runtime/dependency selection and real SQL.
 - `e2e/runtime-isolation.spec.ts`: built Electron opens Library, reloads, and reads
   its document while both native preparation commands run; test home and installed

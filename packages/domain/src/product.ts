@@ -208,6 +208,8 @@ export const DEFAULT_PROJECT_DISPLAY_NAME = 'Default Project';
 export const DEFAULT_WORKSPACE_DISPLAY_NAME = DEFAULT_PROJECT_DISPLAY_NAME;
 
 export interface Project {
+  /** Registered execution checkouts on other hosts; path/hostId remain the canonical metadata owner. */
+  sources?: import('./project-sources.js').ProjectSource[];
   /** Saved glyph. Circle or absent keeps the colored dot; the default project always uses Home. */
   icon?: ProjectIcon;
   id: string;
@@ -423,17 +425,19 @@ export interface InboxQuestion {
 
 /**
  * Resume/reopen coordinates for an inbox entry's originating agent, captured at
- * push time from the live pty. This is what lets the inbox reopen an agent's
- * work AFTER its tab is gone: `claudeSessionId` resumes the exact conversation
+ * push time from the live thread or pty. This lets the inbox reopen work after
+ * its tab is gone: threadId identifies a thread; `claudeSessionId` resumes a terminal conversation
  * (`claude --resume <id>`), and `profile`/`personaId`/`cwd` reconstruct the
  * launch. All fields are host-resolved, never agent-supplied (Rule 1).
  */
 export interface InboxOrigin {
+  /** Host-stamped conversation thread; reopen/reply continues this thread. */
+  threadId?: string;
   /**
    * The originating agent's Claude transcript id. When present, the entry is
    * resumable — reopening spawns `claude --resume <claudeSessionId>` and gets
-   * the full prior conversation back. Absent ⇒ not resumable (a fresh, seeded
-   * agent is spawned instead).
+   * the full prior conversation back. For terminal origins without this field,
+   * a fresh, seeded agent is spawned instead. Thread origins use threadId.
    */
   claudeSessionId?: string;
   /** Launch profile of the originating session (claude / claude-yolo / …). */
@@ -546,21 +550,20 @@ export interface InboxEntry {
    */
   report?: boolean;
   /**
-   * Originating terminal session, when the creation path knows it. Set by
-   * the scheduler when a notify-on-exit run completes. Absent for legacy
+   * Originating thread or terminal session, when the creation path knows it.
+   * Also set by the scheduler when a notify-on-exit run completes. Absent for legacy
    * entries on disk and for paths that don't track session identity —
    * readers must treat undefined as "no preferred tab; fall back to the
    * project's last active tab."
    */
   sessionId?: string;
   /**
-   * Enough about the originating agent to REOPEN its work when the live
-   * {@link sessionId} pty is gone (the common case — the agent pushed, then its
-   * tab was closed). Resolved server-side from the live pty at push time (never
-   * trusted from the agent) and persisted, so the inbox "Open" action can
-   * `--resume` the exact conversation, or — for legacy/non-resumable entries —
-   * spawn a fresh agent seeded with this report. Absent for entries pushed
-   * before this field existed and for non-claude sessions (nothing to resume).
+   * Host-resolved identity for reopening the originating agent's work.
+   * threadId continues the original thread, including archived conversations.
+   * Terminal coordinates let Open resume the transcript after its pty exits,
+   * or seed a fresh agent with this report when no transcript is available.
+   * Absent for entries pushed before this field existed or when the origin
+   * was unavailable. Never trusted from agent-supplied input.
    * See {@link InboxOrigin}.
    */
   origin?: InboxOrigin;
@@ -849,12 +852,39 @@ export interface LibraryManifest {
   docs: LibraryDoc[];
 }
 
+/** Availability belongs to the original metadata owner, never the execution picker. */
+export interface LibraryRootAvailability {
+  scope: LibraryScope;
+  projectId?: string;
+  projectName?: string;
+  hostId?: string;
+  state: 'ready' | 'offline' | 'unavailable' | 'limit';
+}
+
+export interface LibrarySnapshot {
+  docs: LibraryDoc[];
+  roots: LibraryRootAvailability[];
+  complete: boolean;
+}
+
+export interface LibraryDocLocation {
+  scope: LibraryScope;
+  projectId?: string;
+  relPath: string;
+}
+
+export interface LibraryImportInput extends LibraryDocLocation {
+  base64: string;
+}
+
 /**
  * A single body-content match from a full-text library search. `absPath` keys
  * back to the {@link LibraryDoc.absPath} stamped by `list()`, so the renderer
  * can merge these into the doc set and show `preview` as snippet context.
  */
 export interface LibrarySearchHit {
+  /** Stable identity disambiguates equal paths on different metadata hosts. */
+  docId?: string;
   absPath: string;
   scope?: LibraryScope;
   line: number;      // 1-indexed line of the first match in the doc body
@@ -1274,6 +1304,8 @@ export interface CliPlanFile {
 
 export interface TerminalSession {
   id: string;
+  /** Execution owner for a terminal hosted by an enrolled machine. */
+  hostId?: string;
   /** Opaque main-owned capability used to restore/reconnect this launch. */
   restoreCapabilityId?: string;
   projectId: string;
@@ -2616,7 +2648,7 @@ export interface AppConfig {
    */
   cloneRoot?: string;
   /**
-   * Public origin remotes use to enroll (Tailscale Serve, Heroku pairing door).
+   * Public origin remotes use to enroll (Heroku pairing relay).
    * Pairing prefers runtime `ZCC_APP_URL` or the compile-time bake, then this
    * field, then the repo `public-app-url` file. `presentAppConfig` overlays the
    * resolved origin for the renderer and never includes the relay token.
@@ -3110,12 +3142,15 @@ export interface FsReadResult {
   bytes?: number;
   binary?: boolean;
   truncated?: boolean;
+  /** Exact revision for a conflict-checked save on the owning machine. */
+  sha256?: string;
   message?: string;
 }
 
 export interface FsWriteResult {
   ok: boolean;
   bytes?: number;
+  sha256?: string;
   message?: string;
 }
 
@@ -3505,6 +3540,8 @@ export type CloneProjectResult =
 
 /** Per-fire record persisted in a schedule's status.runs ring buffer. */
 export interface ScheduleRun {
+  /** Durable spawn reservation; pending launches must never be replayed. */
+  launchState?: 'pending' | 'running' | 'failed';
   /** Stable per-run id (uuid). Older records may not have it; renderer
    *  falls back to `at + sessionId` for keys. */
   id?: string;
@@ -4482,6 +4519,8 @@ export interface GoalAssignment {
  * Newest-first in {@link Goal.history}, capped at `history.retain`.
  */
 export interface GoalIteration {
+  /** Durable reservation before launch; pending after restart requires reconciliation. */
+  launchState?: 'pending' | 'running' | 'failed';
   /** uuid, stable per iteration. */
   id: string;
   /** ISO-8601 when the iteration's session was spawned. */

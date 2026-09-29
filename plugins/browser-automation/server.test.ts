@@ -6,9 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import plugin from "./server.js";
 import { rpcContract } from "./contracts.js";
 
-async function setup() {
+async function setup(initial?: Map<string, unknown>) {
   const worker = vi.fn(
-    async ({ method }: { method: string }): Promise<unknown> =>
+    async ({ method }: { method: string; timeoutMs?: number }): Promise<unknown> =>
       method === "run"
         ? { text: "done", images: [], exitCode: 0 }
         : method === "prepare"
@@ -20,6 +20,10 @@ async function setup() {
     agentSkillIds: ["browser-automation"],
     experimental_callHostRpc: worker,
   });
+  const subscriptions: any[] = [];
+  let workerExit: (event: { hostId: string }) => void | Promise<void> = async () => {};
+  const client = host.bb.host.experimental_client.bind(host.bb.host);
+  host.bb.host.experimental_client = options => ({ ...client(options), experimental_onWorkerExit: callback => { workerExit = callback; return () => {}; } });
   host.harness.sdk.stub("threads.get", async () =>
     makeThreadResponse({ id: "thread-test" }),
   );
@@ -85,9 +89,7 @@ async function setup() {
       return { ok: true };
     },
   );
-  host.harness.sdk.stub("experimental_desktopBrowsers.subscribe", () => ({
-    dispose() {},
-  }));
+  host.harness.sdk.stub("experimental_desktopBrowsers.subscribe", input => { subscriptions.push(input); return { dispose() {} }; });
   host.harness.sdk.stub("experimental_desktopBrowsers.listTabs", async () => ({
     tabs: [
       { tabId: "created", profile: { kind: "automation", id: "profile" } },
@@ -97,6 +99,7 @@ async function setup() {
     { id: "local-host", name: "Lab workstation" },
     { id: "desktop-host", name: "Lab desktop" },
   ]);
+  for (const [key, value] of initial ?? []) host.harness.kv.set(key, value);
   await plugin(host.bb);
   async function open(tabId?: string) {
     const result = await host.harness.behavior.callRpc("open", {
@@ -110,7 +113,7 @@ async function setup() {
     });
     return rpcContract.open.output.parse(result);
   }
-  return { ...host, worker, open };
+  return { ...host, worker, open, subscriptions, workerExit: (hostId: string) => workerExit({ hostId }) };
 }
 
 describe("server session ownership", () => {
@@ -375,6 +378,15 @@ describe("server session ownership", () => {
       await h.harness.lifecycle.dispose();
     }
   });
+  it('gives startup and long scripts time to return their bounded cleanup result', async () => {
+    const h = await setup();
+    try {
+      const session = await h.open();
+      expect(h.worker.mock.calls.find(([call]) => call.method === 'open')?.[0].timeoutMs).toBe(45_000);
+      await h.harness.behavior.callRpc('run', { threadId: 'thread-test', sessionId: session.id, script: 'await browser.listPages()', timeoutMs: 120_000 });
+      expect(h.worker.mock.calls.find(([call]) => call.method === 'run')?.[0].timeoutMs).toBe(130_000);
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
   it("cleans up a newly created tab when worker launch fails", async () => {
     const h = await setup();
     try {
@@ -395,4 +407,105 @@ describe("server session ownership", () => {
       await h.harness.lifecycle.dispose();
     }
   });
+});
+
+
+const localOpen = async (h: Awaited<ReturnType<typeof setup>>) => rpcContract.open.output.parse(await h.harness.behavior.callRpc('open', { threadId: 'thread-test', selection: { backend: 'local', hostId: 'local-host' } }));
+describe('browser cleanup and recovery paths', () => {
+  it('routes list/pages/preview/stop/close CLI calls and strips live preview bytes', async () => {
+    const h = await setup();
+    try {
+      const session = await localOpen(h);
+      for (const argv of [['list'], ['pages', session.id]]) expect((await h.harness.behavior.runCli(argv, { threadId: 'thread-test' })).exitCode).toBe(0);
+      h.worker.mockResolvedValueOnce({ frame: { sequence: 1, mimeType: 'image/jpeg', data: 'YWJj', width: 1, height: 1, url: 'about:blank', title: 'Preview' } });
+      const preview = await h.harness.behavior.runCli(['preview', session.id], { threadId: 'thread-test' });
+      expect(JSON.parse(preview.stdout).frame).toMatchObject({ bytes: 3 }); expect(preview.stdout).not.toContain('YWJj');
+      expect((await h.harness.behavior.runCli(['stop', session.id], { threadId: 'thread-test' })).exitCode).toBe(0);
+      const stopped = await h.harness.behavior.callRpc('preview', { threadId: 'thread-test', sessionId: session.id }); expect(stopped).toMatchObject({ frame: null });
+      const run = await h.harness.behavior.runCli(['run', session.id, '--script', '1'], { threadId: 'thread-test' }); expect(run.stderr).toContain('stopped or expired');
+      expect((await h.harness.behavior.runCli(['close', session.id], { threadId: 'thread-test' })).exitCode).toBe(0);
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
+  it.each(['timeout', 'failure'])('stops sessions after a worker %s', async failure => {
+    const h = await setup();
+    try {
+      const session = await localOpen(h);
+      if (failure === 'timeout') h.worker.mockResolvedValueOnce({ text: 'timeout', images: [], exitCode: 124 });
+      else h.worker.mockRejectedValueOnce(new Error('worker disconnected'));
+      const result = await h.harness.behavior.runCli(['run', session.id, '--script', '1'], { threadId: 'thread-test' });
+      expect(result.exitCode).toBe(failure === 'timeout' ? 124 : 1);
+      expect(await h.harness.behavior.callRpc('list', { threadId: 'thread-test' })).toMatchObject([{ state: 'stopped' }]);
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
+  it('refuses missing desktop instances, cross-host endpoints and failed lease acquisition', async () => {
+    const h = await setup();
+    try {
+      await expect(h.harness.behavior.callRpc('open', { threadId: 'thread-test', selection: { backend: 'desktop', hostId: 'desktop-host', instanceId: 'missing' } })).rejects.toThrow('unavailable');
+      h.harness.sdk.stub('experimental_desktopBrowsers.openConnection', async () => ({ hostId: 'wrong', expiresAt: Date.now() + 10000, wsEndpoint: 'ws://localhost:1' }));
+      await expect(h.open()).rejects.toThrow('different execution host');
+      h.harness.sdk.stub('experimental_desktopBrowsers.acquireControl', async () => { throw new Error('cannot acquire'); });
+      await expect(h.open()).rejects.toThrow('cannot acquire');
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
+  it('reads CLI script files only from their explicitly selected host and rejects binary or ambiguous relative paths', async () => {
+    const h = await setup();
+    try {
+      const session = await localOpen(h);
+      h.harness.sdk.stub('files.read', async () => ({ contentEncoding: 'utf8', content: 'await browser.listPages()' }));
+      for (const [path, cwd] of [['script.js', '/project'], ['script.js', 'C:\\project'], ['/absolute/script.js', undefined]] as const) {
+        const result = await h.harness.behavior.runCli(['run', session.id, '--script-file', path, '--script-host', 'source-host'], { threadId: 'thread-test', ...(cwd ? { cwd } : {}) });
+        expect(result.exitCode, result.stderr).toBe(0);
+      }
+      expect(h.harness.sdk.callsTo('files.read')).toHaveLength(3);
+      expect((await h.harness.behavior.runCli(['run', session.id, '--script-file', 'relative.js', '--script-host', 'source-host'], { threadId: 'thread-test' })).stderr).toContain('working directory');
+      h.harness.sdk.stub('files.read', async () => ({ contentEncoding: 'base64', content: 'YWJj' }));
+      expect((await h.harness.behavior.runCli(['run', session.id, '--script-file', '/binary', '--script-host', 'source-host'], { threadId: 'thread-test' })).stderr).toContain('UTF-8');
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
+  it('bounds live sessions and closes idle sessions while keeping running work alive', async () => {
+    vi.useFakeTimers(); const h = await setup();
+    try {
+      for (let n = 0; n < 64; n++) await localOpen(h);
+      await expect(localOpen(h)).rejects.toThrow('session limit');
+      vi.setSystemTime(Date.now() + 5 * 60_000); await vi.advanceTimersByTimeAsync(1000);
+      expect((await h.harness.behavior.callRpc('list', { threadId: 'thread-test' }) as { state: string }[]).every(s => s.state === 'closed')).toBe(true);
+      const session = await localOpen(h); let release!: (value: unknown) => void;
+      h.worker.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const running = h.harness.behavior.callRpc('run', { threadId: 'thread-test', sessionId: session.id, script: '1' });
+      await vi.advanceTimersByTimeAsync(1); vi.setSystemTime(Date.now() + 6 * 60_000); await vi.advanceTimersByTimeAsync(1000);
+      expect((await h.harness.behavior.callRpc('list', { threadId: 'thread-test' }) as { id: string; state: string }[]).find(s => s.id === session.id)?.state).toBe('ready');
+      release({ text: 'ok', images: [], exitCode: 0 }); await running;
+    } finally { await h.harness.lifecycle.dispose(); vi.useRealTimers(); }
+  });
+  it('cleans saved sessions on restart, skips invalid/closed records and retains cleanup failures for retry', async () => {
+    const before = await setup(); const session = await localOpen(before);
+    const saved = structuredClone(before.harness.kv);
+    await before.harness.lifecycle.dispose();
+    saved.set('sessions/invalid', {});
+    const closed = structuredClone(saved.values().next().value as any); closed.session.id = '00000000-0000-4000-8000-000000000099'; closed.session.state = 'closed';
+    saved.set('sessions/thread-test/' + closed.session.id, closed);
+    const h = await setup(saved);
+    try {
+      expect(h.worker).toHaveBeenCalledWith(expect.objectContaining({ method: 'close', input: { sessionId: session.id } }));
+      const other = await localOpen(h); h.worker.mockRejectedValueOnce(new Error('offline'));
+      await h.harness.behavior.callRpc('close', { threadId: 'thread-test', sessionId: other.id });
+      const value = h.harness.kv.get('sessions/thread-test/' + other.id) as any; expect(value.cleanupPending).toBe(true);
+    } finally { await h.harness.lifecycle.dispose(); }
+  });
+});
+
+it('stops on revoked desktop leases/subscription errors and closes only the failed worker host', async () => {
+  const h = await setup();
+  try {
+    const first = await h.open();
+    h.subscriptions[0].onChange({ tabs: [{ control: { leaseId: 'lease' } }] });
+    expect(h.worker.mock.calls.filter(([call]) => call.method === 'close')).toHaveLength(0);
+    h.subscriptions[0].onChange({ tabs: [] });
+    await vi.waitFor(async () => expect(await h.harness.behavior.callRpc('list', { threadId: 'thread-test' })).toMatchObject([{ state: 'stopped' }]));
+    const second = await h.open(); h.subscriptions[1].onError(new Error('lost subscription'));
+    await vi.waitFor(async () => expect((await h.harness.behavior.callRpc('list', { threadId: 'thread-test' }) as any[]).find(s => s.id === second.id).state).toBe('stopped'));
+    const local = await localOpen(h); await h.workerExit('desktop-host');
+    const listed = await h.harness.behavior.callRpc('list', { threadId: 'thread-test' }) as any[];
+    expect(listed.find(s => s.id === first.id).state).toBe('closed'); expect(listed.find(s => s.id === second.id).state).toBe('closed'); expect(listed.find(s => s.id === local.id).state).toBe('ready');
+  } finally { await h.harness.lifecycle.dispose(); }
 });

@@ -7,7 +7,7 @@ import {
 } from './node-artifact-cache.js';
 
 const PLUGIN_HOST_ARTIFACT_CACHE_SEGMENT = 'plugin-host-artifacts';
-const ARTIFACT_FILE_NAME = 'host.js';
+const ARTIFACT_FILE_NAME = 'host.mjs';
 
 export type FetchPluginHostArtifact = (args: {
   pluginId: string;
@@ -32,6 +32,7 @@ export async function ensureCachedPluginHostArtifact(args: {
     digest: args.digest,
     byteLength: args.byteLength,
     fileName: ARTIFACT_FILE_NAME,
+    legacyFileNames: ['host.js'],
     fetchArtifact: ({ digest, byteLength }) =>
       args.fetchArtifact({
         pluginId: args.pluginId,

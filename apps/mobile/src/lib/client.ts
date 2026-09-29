@@ -1,6 +1,8 @@
+import { CONNECT_ACCOUNT_URL, isOnlineProfile, validAccount, validPhoneLogin, type AccountAccess, type PhoneLogin } from './profiles';
 import { URL } from 'whatwg-url-minimum';
 import type { ServerProfile } from './profiles';
 import { normalizeServerUrl } from './urls';
+import { isConnectServer } from './connect-discovery';
 export interface SessionCookie {
   name: string;
   value: string;
@@ -14,7 +16,7 @@ export interface MobileSession {
   expiresAt: number;
 }
 export class PairingRequired extends Error {}
-async function request(serverUrl: string, path: string, init: RequestInit = {}, fetcher = fetch) {
+async function request(serverUrl: string, path: string, init: RequestInit = {}, fetcher = fetch, maxBytes = 16_384) {
   const base = normalizeServerUrl(serverUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12_000);
@@ -37,7 +39,7 @@ async function request(serverUrl: string, path: string, init: RequestInit = {}, 
     if (response.url && new URL(response.url).origin !== base)
       throw new Error('The server redirected to another origin.');
     if (response.status === 401 || response.status === 403)
-      throw new PairingRequired('This device needs to be paired again.');
+      throw new PairingRequired('Sign in with GitHub again to approve this phone.');
     if (!response.ok)
       throw new Error(
         response.status === 429
@@ -47,43 +49,55 @@ async function request(serverUrl: string, path: string, init: RequestInit = {}, 
     if (!(response.headers.get('content-type') ?? '').includes('application/json'))
       throw new Error('This URL is not a Zana server.');
     const text = await response.text();
-    if (text.length > 16_384) throw new Error('Server response is too large.');
+    if (text.length > maxBytes) throw new Error('Server response is too large.');
     return JSON.parse(text) as Record<string, unknown>;
   } finally {
     clearTimeout(timer);
   }
 }
-export async function pairServer(serverUrl: string, code: string, label: string, fetcher = fetch) {
-  const result = await request(
-    serverUrl,
-    '/_mobile/pair',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code: code.trim(), label })
-    },
-    fetcher
-  );
-  if (
-    typeof result.credential !== 'string' ||
-    !/^[\w-]{43}$/.test(result.credential) ||
-    typeof result.deviceId !== 'string'
-  )
-    throw new Error('Invalid pairing response.');
-  return { credential: result.credential, deviceId: result.deviceId };
+export async function startPhoneLogin(name: string, fetcher = fetch): Promise<PhoneLogin> {
+  const result = await request(CONNECT_ACCOUNT_URL, '/api/connect/phone/start/', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name })
+  }, fetcher);
+  if (!validPhoneLogin(result) || result.expiresAt <= Date.now() || result.expiresAt > Date.now() + 15 * 60_000) throw new Error('Invalid sign-in response.');
+  return result;
 }
-export async function probeDirect(serverUrl: string, fetcher = fetch) {
-  const result = await request(serverUrl, '/api/v1/health', {}, fetcher);
-  if (result.ok !== true) throw new Error('This URL is not a Zana server.');
+export async function pollPhoneLogin(login: PhoneLogin, fetcher = fetch): Promise<AccountAccess | null> {
+  if (!validPhoneLogin(login) || login.expiresAt <= Date.now()) throw new Error('Sign-in expired. Cancel and sign in again.');
+  const result = await request(CONNECT_ACCOUNT_URL, '/api/connect/phone/poll/', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceCode: login.deviceCode })
+  }, fetcher);
+  if (result.pending === true) return null;
+  if (!validAccount(result) || result.accountUrl !== CONNECT_ACCOUNT_URL) throw new Error('Invalid account response.');
+  return result;
+}
+export interface AccountServer { id: string; name: string; serverUrl: string; browserUrl?: string; live: boolean }
+export async function discoverAccountServers(account: AccountAccess, fetcher = fetch): Promise<AccountServer[]> {
+  if (!validAccount(account)) throw new Error('Sign in with GitHub again.');
+  const result = await request(account.accountUrl, '/api/connect/servers/', { headers: { Authorization: `Bearer ${account.credential}` } }, fetcher, 262_144);
+  if (!Array.isArray(result.servers) || result.servers.length > 500) throw new Error('Invalid computer list.');
+  return result.servers.filter(server => server && !server.revoked).map(server => {
+    if (typeof server.id !== 'string' || !/^[\w-]{1,64}$/.test(server.id) || typeof server.name !== 'string' || server.name.length > 80 || typeof server.serverUrl !== 'string' || !isConnectServer(server.serverUrl, account.connectDomain)) throw new Error('Invalid computer address.');
+    // The friendly address is display-only; credentials use the generated gateway identity.
+    let browserUrl: string | undefined;
+    try { if (typeof server.browserUrl === 'string' && server.browserUrl.startsWith('https://') && normalizeServerUrl(server.browserUrl) === server.browserUrl) browserUrl = server.browserUrl; } catch { /* omit malformed display addresses */ }
+    return { id: server.id, name: server.name, serverUrl: server.serverUrl, browserUrl, live: server.live === true };
+  });
+}
+export async function discoverServers(profile: ServerProfile, fetcher = fetch): Promise<AccountServer[]> {
+  if (!profile.credential || !profile.connectDomain || !profile.accountUrl?.startsWith('https://') || normalizeServerUrl(profile.accountUrl) !== profile.accountUrl || !isConnectServer(profile.serverUrl, profile.connectDomain)) throw new Error('Sign in with GitHub to connect a computer.');
+  const result = await request(profile.accountUrl, '/api/connect/servers', { headers: { Authorization: `Bearer ${profile.credential}` } }, fetcher, 262_144);
+  if (!Array.isArray(result.servers) || result.servers.length > 500) throw new Error('Invalid computer list.');
+  return result.servers.filter(server => !server.revoked).map(server => {
+    if (typeof server.id !== 'string' || !/^[\w-]{1,64}$/.test(server.id) || typeof server.name !== 'string' || server.name.length > 80 || typeof server.serverUrl !== 'string' || !isConnectServer(server.serverUrl, profile.connectDomain!)) throw new Error('Invalid computer address.');
+    return { id: server.id, name: server.name, serverUrl: server.serverUrl, live: server.live === true };
+  });
 }
 export async function createSession(
   profile: ServerProfile,
   fetcher = fetch
-): Promise<MobileSession | null> {
-  if (!profile.credential) {
-    await probeDirect(profile.serverUrl, fetcher);
-    return null;
-  }
+): Promise<MobileSession> {
+  if (!isOnlineProfile(profile)) throw new PairingRequired('Local and direct connections are no longer supported. Sign in with GitHub to use Zana Connect.');
   const result = await request(
     profile.serverUrl,
     '/_mobile/session',
@@ -111,21 +125,4 @@ export async function createSession(
   )
     throw new Error('Invalid session response.');
   return { cookie, expiresAt: result.expiresAt };
-}
-
-export async function registerPush(profile: ServerProfile, token: string | null, fetcher = fetch) {
-  if (!profile.credential) throw new Error('Push notifications require a paired server.');
-  await request(
-    profile.serverUrl,
-    '/_mobile/push',
-    {
-      method: token ? 'PUT' : 'DELETE',
-      headers: {
-        Authorization: `Bearer ${profile.credential}`,
-        'content-type': 'application/json'
-      },
-      ...(token ? { body: JSON.stringify({ token }) } : {})
-    },
-    fetcher
-  );
 }

@@ -1,3 +1,5 @@
+import { discoverCliOnHost } from './cli-discovery.js';
+import type { CliTerminalStartCommand } from '@zana-ai/zcc-contracts/cli-terminal';
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { extname, join, relative, sep } from 'node:path';
@@ -20,12 +22,16 @@ import { harnessFamilyOf, parseProfile } from '@zana-ai/zcc-domain/launch-provid
 import { PERSONAL_WORKSPACE_DIR_NAME } from '@zana-ai/zcc-domain';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import type { PendingInteractionResolution, PromptInput } from '@zana-ai/zcc-domain/thread-runtime';
+import { snapshotHostPath } from './host-tree-snapshot.js';
 import {
   killProcessesWithCwdUnder,
   listProcessesWithCwdUnder,
   WORKSPACE_PROCESS_LIST_CAP
 } from '@zana-ai/zcc-agent-process-utils';
 import {
+  readCheckoutHead,
+  readCheckoutHistory,
+  discardCheckoutFile,
   WorkspaceError,
   cloneProject,
   destroyWorkspace,
@@ -44,7 +50,7 @@ import {
 } from '@zana-ai/zcc-host-workspace';
 import { probeExtraAcpAgents } from './extra-acp-agent-probes.js';
 import { verifyHarnesses } from './harness/harness-verify.js';
-import { registrationFor } from './harness/registry.js';
+import { registrationFor, invalidateHarnessModelCatalog } from './harness/registry.js';
 import { HostCommandError } from './host-command-error.js';
 import { readConfinedFileRange } from './read-file-range.js';
 import { watchWorkspacePath } from './workspace-fs-watch.js';
@@ -69,11 +75,14 @@ import {
   pickHostFolder,
   readHostFileMetadata,
   readHostPath,
+  resolveHostFsRoot,
   removeHostPath,
   writeHostFile
 } from './host-fs.js';
 import type { DesktopBrowserBroker } from './desktop-browser-broker.js';
 import type { DesktopBrowserCommand } from '@zana-ai/zcc-host-daemon-contract';
+
+import type { PluginHostManager } from './plugin-host-manager.js';
 
 const MAX_LISTED_FILES = 500;
 const MAX_DIR_ENTRIES = 2000;
@@ -145,6 +154,7 @@ export type ThreadArchiveInput = {
 };
 
 export interface CommandRuntime {
+  pluginHosts?: PluginHostManager;
   dataDir: string;
   environments: Map<string, {
     path: string;
@@ -194,6 +204,7 @@ export interface CommandRuntime {
   unarchiveWork?: (input: ThreadArchiveInput) => Promise<void>;
   clearGoal?: (input: { threadId: string }) => Promise<{ cleared: boolean }>;
   startTerminal?: (input: { sessionId: string; cwd: string; cols: number; rows: number; command?: string }) => Promise<{ pid?: number } | void>;
+  startCliTerminal?: (input: CliTerminalStartCommand) => Promise<{ pid?: number }>;
   writeTerminal?: (input: { sessionId: string; data: string }) => Promise<void>;
   resizeTerminal?: (input: { sessionId: string; cols: number; rows: number }) => Promise<void>;
   stopTerminal?: (input: { sessionId: string }) => Promise<void>;
@@ -213,6 +224,7 @@ export interface CommandRuntime {
 }
 
 export function createCommandRuntime(options: {
+  pluginHosts?: PluginHostManager;
   dataDir?: string;
   loadConfig?: () => AppConfig;
   verifyProviders?: () => Promise<ProviderStatusResult>;
@@ -253,6 +265,7 @@ export function createCommandRuntime(options: {
   unarchiveWork?: (input: ThreadArchiveInput) => Promise<void>;
   clearGoal?: (input: { threadId: string }) => Promise<{ cleared: boolean }>;
   startTerminal?: (input: { sessionId: string; cwd: string; cols: number; rows: number; command?: string }) => Promise<{ pid?: number } | void>;
+  startCliTerminal?: (input: CliTerminalStartCommand) => Promise<{ pid?: number }>;
   writeTerminal?: (input: { sessionId: string; data: string }) => Promise<void>;
   resizeTerminal?: (input: { sessionId: string; cols: number; rows: number }) => Promise<void>;
   stopTerminal?: (input: { sessionId: string }) => Promise<void>;
@@ -270,16 +283,21 @@ export function createCommandRuntime(options: {
   peerSsh?: PeerDaemonSsh;
   desktopBrowserBroker?: DesktopBrowserBroker;
 }): CommandRuntime {
+  const terminals = new Map<string, { cwd: string }>();
   const loadConfig = options.loadConfig ?? (() => ({ version: 1, theme: 'dark', shell: '/bin/zsh', claudeBinary: 'claude', fontSize: 13, lastProjectId: null }) as AppConfig);
   return {
+    pluginHosts: options.pluginHosts,
     dataDir: options.dataDir ?? resolveZccDataDir(),
     loadConfig,
     environments: new Map(),
     threads: new Map(),
-    terminals: new Map(),
+    terminals,
     provisionSignals: new Map(),
     lanes: new Map(),
-    emit: options.emit ?? (() => {}),
+    emit: event => {
+      if (event.kind === 'terminal.exited' && event.terminalId) terminals.delete(event.terminalId);
+      options.emit?.(event);
+    },
     startWork: options.startWork,
     submitTurn: options.submitTurn,
     resumeWork: options.resumeWork,
@@ -295,6 +313,7 @@ export function createCommandRuntime(options: {
     unarchiveWork: options.unarchiveWork,
     clearGoal: options.clearGoal,
     startTerminal: options.startTerminal,
+    startCliTerminal: options.startCliTerminal,
     writeTerminal: options.writeTerminal,
     resizeTerminal: options.resizeTerminal,
     stopTerminal: options.stopTerminal,
@@ -594,6 +613,8 @@ export async function dispatchHostCommand(
   command: HostRpcCommand
 ): Promise<unknown> {
   switch (command.type) {
+    case 'provider.cli_discovery':
+      return discoverCliOnHost(command, runtime.loadConfig());
     case 'provider.status':
       return runtime.verifyProviders();
     case 'provider.agent_descriptors': {
@@ -631,11 +652,13 @@ export async function dispatchHostCommand(
           throw new HostCommandError('invalid_request', 'model discovery cwd is unavailable');
         }
       }
-      return runtime.listModels({
+      const listed = await runtime.listModels({
         providerId: command.providerId,
         bridgeLaunch: command.bridgeLaunch,
         ...(cwd !== undefined ? { cwd } : {})
       });
+      invalidateHarnessModelCatalog(command.providerId);
+      return listed;
     }
     case 'provider.health': {
       if (!runtime.providerHealth) {
@@ -894,27 +917,47 @@ export async function dispatchHostCommand(
       }
       return { threadId: command.threadId, accepted: true as const };
     }
+    case 'plugin.host.call':
+    case 'plugin.host.cancel':
+    case 'plugin.host.dispose': {
+      if (!runtime.pluginHosts) throw new HostCommandError('unsupported', 'Plugin host workers are unavailable');
+      if (command.type === 'plugin.host.call') return runtime.pluginHosts.call(command);
+      if (command.type === 'plugin.host.cancel') return runtime.pluginHosts.cancel(command);
+      return runtime.pluginHosts.dispose(command);
+    }
+    case 'terminal.start_cli': {
+      const cwd = confineThreadCwd(command.root, command.cwd);
+      if (!runtime.startCliTerminal) throw new HostCommandError('unsupported', 'CLI Agents are unavailable on this host');
+      const { sessionId } = command.grant;
+      if (runtime.terminals.has(sessionId)) throw new HostCommandError('terminal_exists', 'Terminal is already running');
+      if (runtime.terminals.size >= 128) throw new HostCommandError('terminal_limit', 'Close a running terminal before starting another');
+      runtime.terminals.set(sessionId, { cwd });
+      try {
+        const started = await runtime.startCliTerminal({ ...command, cwd });
+        return { sessionId, started: true as const, ...started };
+      } catch (error) {
+        runtime.terminals.delete(sessionId);
+        throw error;
+      }
+    }
     case 'terminal.start': {
       const cwd = confineThreadCwd(command.root, command.cwd);
-      const cols = command.cols ?? 80;
-      const rows = command.rows ?? 24;
-      let pid: number | undefined;
-      if (runtime.startTerminal) {
-        const started = await runtime.startTerminal({
-          sessionId: command.sessionId,
-          cwd,
-          cols,
-          rows,
-          command: command.command
-        });
-        pid = started?.pid;
-      }
+      if (!runtime.startTerminal) throw new HostCommandError('unsupported', 'Terminals are unavailable on this host');
+      if (runtime.terminals.has(command.sessionId)) throw new HostCommandError('terminal_exists', 'Terminal is already running');
+      if (runtime.terminals.size >= 128) throw new HostCommandError('terminal_limit', 'Close a running terminal before starting another');
+      // Reserve before spawn: a fast process can exit before its start RPC resolves.
       runtime.terminals.set(command.sessionId, { cwd });
-      return {
-        sessionId: command.sessionId,
-        started: true as const,
-        ...(pid !== undefined ? { pid } : {})
-      };
+      try {
+        const started = await runtime.startTerminal({
+          sessionId: command.sessionId, cwd, cols: command.cols ?? 80,
+          rows: command.rows ?? 24, command: command.command
+        });
+        return { sessionId: command.sessionId, started: true as const,
+          ...(started?.pid !== undefined ? { pid: started.pid } : {}) };
+      } catch (error) {
+        runtime.terminals.delete(command.sessionId);
+        throw error;
+      }
     }
     case 'terminal.input': {
       requireTerminal(runtime, command.sessionId);
@@ -935,7 +978,7 @@ export async function dispatchHostCommand(
       return { sessionId: command.sessionId, resized: true as const };
     }
     case 'terminal.stop': {
-      requireTerminal(runtime, command.sessionId);
+      // A natural exit may race the owner's close. Closing remains idempotent.
       if (runtime.stopTerminal) {
         await runtime.stopTerminal({ sessionId: command.sessionId });
       }
@@ -945,10 +988,12 @@ export async function dispatchHostCommand(
     case 'host.list_files':
       return { files: command.roots.flatMap(listRoot) };
     case 'host.list_dir': {
+      const boundary = command.boundaryPath === undefined ? null : await resolveHostFsRoot(command.root, command.boundaryPath);
       const contained = await resolveListDirTarget(command.root, command.relPath);
       if (!contained) {
         throw new HostCommandError('path_not_found', 'path is outside the authorized root');
       }
+      if (boundary && !isWithin(contained, boundary)) throw new HostCommandError('invalid_path', 'Directory escapes nested boundary');
       let stat;
       try {
         stat = statSync(contained);
@@ -995,6 +1040,8 @@ export async function dispatchHostCommand(
       return mkdirHostPath(command);
     case 'host.move_path':
       return moveHostPath(command);
+    case 'host.snapshot_path':
+      return snapshotHostPath(command);
     case 'host.remove_path':
       return removeHostPath(command);
     case 'host.browse_directory':
@@ -1009,6 +1056,10 @@ export async function dispatchHostCommand(
       return readHostFileMetadata(command);
     case 'host.pick_folder':
       return pickHostFolder();
+    case 'host.git_file':
+      return command.operation === 'head' ? readCheckoutHead(command.root, command.path) : discardCheckoutFile(command.root, command.path, command.expectedSha256);
+    case 'host.git_history':
+      return readCheckoutHistory(command.root, command.limit);
     case 'host.list_branches':
       try {
         return await workspaceBranches(command.workspacePath, command.limit);

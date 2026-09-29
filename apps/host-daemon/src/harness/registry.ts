@@ -57,6 +57,12 @@ if (registrationIssues.length > 0) {
   throw new Error(`Invalid harness registrations: ${registrationIssues.map((issue) => issue.message).join(' ')}`);
 }
 
+export function invalidateHarnessModelCatalog(providerId: string): void {
+  for (const registration of HARNESS_REGISTRATIONS) {
+    if (registration.modelCatalog?.providerId === providerId) registration.modelCatalog.invalidate();
+  }
+}
+
 const providersByProfile = new Map<LaunchProfileId, LaunchProvider>(
   HARNESS_REGISTRATIONS.flatMap((registration) =>
     registration.profiles.map((profile) => [profile.id, registration.implementation] as const)

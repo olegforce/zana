@@ -276,13 +276,36 @@ describe('thread secondary panel state', () => {
       url: 'https://example.com'
     });
     expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://example.com' }).tabs).toHaveLength(1);
+    expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://example.com/' }).tabs).toHaveLength(1);
     expect(addClosableTab(browser, { kind: 'browser', title: 'Browser', url: 'https://zana.ai' }).tabs).toHaveLength(2);
+    const preview = addClosableTab(emptySecondaryPanelState(), {
+      kind: 'browser',
+      title: 'localhost',
+      url: 'http://localhost:5173/'
+    });
+    const focused = addClosableTab(preview, {
+      kind: 'browser',
+      title: 'localhost',
+      url: 'http://127.0.0.1:5173/dashboard'
+    });
+    expect(focused.tabs).toHaveLength(1);
+    expect(focused.activeId).toBe(preview.tabs[0]?.id);
+    expect(addClosableTab(preview, { kind: 'browser', title: 'localhost', url: 'http://localhost:5174' }).tabs).toHaveLength(2);
     const emptyBrowser = addClosableTab(emptySecondaryPanelState(), { kind: 'browser', title: 'Browser', url: '' });
     expect(addClosableTab(emptyBrowser, { kind: 'browser', title: 'Browser', url: '' }).tabs).toHaveLength(2);
     const explorer = addClosableTab(emptySecondaryPanelState(), { kind: 'explorer', title: 'Explorer' });
     expect(addClosableTab(explorer, { kind: 'explorer', title: 'Explorer' }).tabs).toHaveLength(1);
     const inbox = addClosableTab(emptySecondaryPanelState(), { kind: 'inbox', title: 'Inbox' });
     expect(addClosableTab(inbox, { kind: 'inbox', title: 'Inbox' }).tabs).toHaveLength(1);
+  });
+
+  it.each(['file-preview', 'storage-preview'] as const)('refreshes an explicit repeated %s while retaining the tab identity', (kind) => {
+    const opened = addClosableTab(emptySecondaryPanelState(), { kind, path: 'report.md', title: 'Report', lineNumber: 3 });
+    const repeated = addClosableTab(opened, { kind, path: 'report.md', title: 'Report' });
+    expect(repeated.tabs).toHaveLength(1);
+    expect(repeated.tabs[0]).toMatchObject({ id: opened.tabs[0].id, lineNumber: 3, previewRevision: 1 });
+    const next = addClosableTab(repeated, { kind, path: 'report.md', title: 'Report', lineNumber: 9 });
+    expect(next.tabs[0]).toMatchObject({ id: opened.tabs[0].id, lineNumber: 9, previewRevision: 2 });
   });
 
   it('leaves inactive tabs in place when closing another tab', () => {

@@ -1,6 +1,18 @@
 import * as pty from 'node-pty';
 import type { HostEventEnvelope } from '@zana-ai/zcc-contracts/host-rpc';
 import { terminatePtyProcessTree } from './pty-termination.js';
+import { accessSync, constants } from 'node:fs';
+
+/** Adapted from BB terminal-manager.ts (MIT; docs/third-party/BB-LICENSE).
+ * Minimal Linux hosts often have no zsh and no SHELL in their service env. */
+export function resolveEnrolledShell(env: NodeJS.ProcessEnv = process.env, executable = (path: string) => {
+  try { accessSync(path, constants.X_OK); return true; } catch { return false; }
+}): string {
+  for (const candidate of [env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh']) {
+    if (candidate && executable(candidate)) return candidate;
+  }
+  return '/bin/sh';
+}
 
 export interface EnrolledPtyHandle {
   pid?: number;
@@ -46,14 +58,12 @@ export function createEnrolledPty(options: {
 }) {
   const sessions = new Map<string, EnrolledPtyHandle>();
   const spawn = options.spawn ?? defaultSpawn;
-  const shell = options.shell ?? process.env.SHELL ?? '/bin/zsh';
+  const shell = options.shell ?? resolveEnrolledShell();
 
   function startTerminal(input: { sessionId: string; cwd: string; cols: number; rows: number; command?: string }): { pid?: number } {
     const existing = sessions.get(input.sessionId);
-    if (existing) {
-      terminatePtyProcessTree(existing);
-      sessions.delete(input.sessionId);
-    }
+    if (existing) throw new Error('Terminal is already running');
+    if (sessions.size >= 128) throw new Error('Terminal capacity reached');
     const launch = input.command?.trim();
     const handle = spawn(shell, launch ? ['-lc', launch] : ['-l'], {
       cwd: input.cwd,
@@ -64,6 +74,7 @@ export function createEnrolledPty(options: {
     });
     sessions.set(input.sessionId, handle);
     handle.onData((data) => {
+      if (sessions.get(input.sessionId) !== handle) return;
       options.emit({
         terminalId: input.sessionId,
         kind: 'terminal.output',
@@ -71,6 +82,7 @@ export function createEnrolledPty(options: {
       });
     });
     handle.onExit((event) => {
+      if (sessions.get(input.sessionId) !== handle) return;
       sessions.delete(input.sessionId);
       options.emit({
         terminalId: input.sessionId,

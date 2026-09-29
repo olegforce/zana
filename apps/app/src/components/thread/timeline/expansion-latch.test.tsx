@@ -95,6 +95,7 @@ describe('timeline detail scroll', () => {
         rows={[bundle]}
         now={0}
         expansion={expansion}
+        forceExpandedRowIds={new Set(['bundle'])}
       />
     );
     expect(html).toContain('thread-detail-scroll');
@@ -137,6 +138,7 @@ describe('timeline detail scroll', () => {
         rows={[delegation]}
         now={0}
         expansion={expansion}
+        forceExpandedRowIds={new Set(['del'])}
       />
     );
     expect(html).toContain('data-size="delegation"');

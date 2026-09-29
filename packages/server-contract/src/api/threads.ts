@@ -840,6 +840,7 @@ export const timelineTurnSummaryDetailsQuerySchema = z.object({
   turnId: z.string().min(1),
   sourceSeqStart: z.string().regex(/^\d+$/),
   sourceSeqEnd: z.string().regex(/^\d+$/),
+  beforeCursor: z.string().max(2048).optional(),
 });
 export type TimelineTurnSummaryDetailsQuery = z.infer<
   typeof timelineTurnSummaryDetailsQuerySchema
@@ -911,6 +912,7 @@ export type TimelineTurnSummaryDetailsRequest = z.infer<
 
 export const timelineTurnSummaryDetailsResponseSchema = z.object({
   rows: z.array(timelineRowSchema),
+  olderCursor: z.string().nullable().optional(),
 });
 export type TimelineTurnSummaryDetailsResponse = z.infer<
   typeof timelineTurnSummaryDetailsResponseSchema

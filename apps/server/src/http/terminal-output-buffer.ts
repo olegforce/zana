@@ -15,8 +15,7 @@ export function appendBoundedTerminalOutput(
   if (encoded.byteLength <= maxBytes) {
     return { text: next, truncated: current?.truncated ?? false };
   }
-  const sliced = encoded.subarray(encoded.byteLength - maxBytes);
-  return { text: sliced.toString('utf8'), truncated: true };
+  return { text: utf8Tail(encoded, maxBytes), truncated: true };
 }
 
 export function terminalOutputSlice(
@@ -31,7 +30,15 @@ export function terminalOutputSlice(
   const encoded = Buffer.from(text, 'utf8');
   if (encoded.byteLength <= tailBytes) return { text, truncated };
   return {
-    text: encoded.subarray(encoded.byteLength - tailBytes).toString('utf8'),
+    text: utf8Tail(encoded, tailBytes),
     truncated: true
   };
+}
+
+/** Discard an incomplete leading code point instead of emitting replacement bytes. */
+function utf8Tail(bytes: Buffer, requested: number): string {
+  const limit = Math.max(0, Math.floor(requested));
+  let start = Math.max(0, bytes.length - limit);
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
+  return bytes.subarray(start).toString('utf8');
 }

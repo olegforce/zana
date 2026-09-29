@@ -16,6 +16,7 @@ import { Nav, Footer } from './components/Nav';
 
 beforeEach(() => {
   route.path = '/';
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ user: null }) }));
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => values.get(key) ?? null,
@@ -99,13 +100,28 @@ describe('Fairy page journeys', () => {
 });
 
 describe('shared navigation', () => {
+  it.each(['/connect', '/connect/'])('gives %s the shared site header without the marketing footer', async (path) => {
+    route.path = path;
+    render(createElement(Nav));
+    render(createElement(Footer));
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+    expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Zana home' }).getAttribute('href')).toBe('/');
+    expect((await screen.findByRole('link', { name: 'Log in' })).getAttribute('href')).toContain('/api/auth/github/login/');
+    for (const name of ['Product', 'Plugins', 'Docs', 'Download']) expect(screen.getByRole('link', { name })).toBeTruthy();
+    expect(document.querySelector('.brand-descriptor')?.textContent).toBe('Command Center');
+    expect(document.querySelector('.nav-connect')).toBeNull();
+    expect(screen.queryByRole('contentinfo')).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Switch to light theme' })[0]);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
   it.each([
     '/features/',
     '/extensions/',
     '/marketplace/',
     '/dashboard/',
     '/docs/using-zana/'
-  ])('marks the parent destination for %s', (path) => {
+  ])('marks the parent destination for %s', async (path) => {
     route.path = path;
     render(createElement(Nav, { starCount: 1250 }));
     const current = document.querySelector('a[aria-current="page"]');
@@ -117,11 +133,18 @@ describe('shared navigation', () => {
           : 'Plugins'
     );
     expect(screen.getByLabelText(/Star on GitHub/)).toBeTruthy();
+    const login = await screen.findByRole('link', { name: 'Log in' });
+    expect(login.getAttribute('href')).toBe('/connect/');
+    expect(login.previousElementSibling?.textContent).toBe('Download');
   });
-  it('opens the mobile links, closes on navigation, and persists theme changes', () => {
+  it('opens the mobile links, closes on navigation, and persists theme changes', async () => {
     const { rerender } = render(createElement(Nav));
+    await screen.findByRole('link', { name: 'Log in' });
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
     expect(document.getElementById('mobile-menu')).not.toBeNull();
+    const mobileLogin = document.querySelector('#mobile-menu a[href="/connect/"]');
+    expect(mobileLogin?.textContent).toBe('Log in');
+    expect(mobileLogin?.previousElementSibling?.textContent).toBe('Download');
     fireEvent.click(
       screen.getAllByRole('button', { name: 'Switch to light theme' })[0]
     );

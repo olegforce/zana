@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useEffect, useMemo, useRef, useState } from "react";
 import type { PluginNavPanelProps } from "../compat/app";
 import { useProjects } from "./data.js";
 import {
@@ -19,6 +19,7 @@ import { ManagePanel } from "../views/manage/manage-panel.js";
 import { EmptyState } from "../components/empty-state.js";
 import { Button } from "../vendor/shared-ui/components/ui/button";
 import { Icon } from "../vendor/shared-ui/components/ui/icon";
+import { useIsMobileTasks } from "./mobile.js";
 import { TasksRefreshProvider } from "./refresh.js";
 
 const BOARD_MIN_WIDTH = 448;
@@ -71,6 +72,7 @@ function resolveRoute(route: TasksRoute): ResolvedTasksRoute {
 }
 
 function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
+  const compact = useIsMobileTasks();
   const route = resolveRoute(parseTasksRoute(subPath));
   const tasksNavigation = useTasksNavigation();
   const navigation = useMemo<TasksNavigation>(
@@ -110,6 +112,14 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
   const backFromTask = () =>
     navigation.go(lastBrowseRouteRef.current ?? { kind: "all" });
   const onTaskRoute = route.kind === "task";
+  const lastTaskTrigger = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!onTaskRoute && lastTaskTrigger.current?.isConnected) {
+      lastTaskTrigger.current.focus({ preventScroll: true });
+      lastTaskTrigger.current = null;
+    }
+  }, [onTaskRoute]);
+  const browseRoute = onTaskRoute ? resolveRoute(lastBrowseRouteRef.current ?? { kind: "all" }) : route;
   const backRef = useRef(backFromTask);
   backRef.current = backFromTask;
   useEffect(() => {
@@ -161,7 +171,11 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
           onNewTask={() => setNewTaskOpen(true)}
           onBack={backFromTask}
         />
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="tasks-route-outlet min-h-0 flex-1 overflow-auto" onClickCapture={(event) => {
+          const target = event.target as HTMLElement;
+          const row = target.closest<HTMLElement>("[data-task-key]");
+          if (compact && row) lastTaskTrigger.current = row.matches("button") ? row : row.querySelector("button");
+        }}>
           {noProjects && route.kind !== "task" && route.kind !== "manage" ? (
             <EmptyState
               icon="ListTodo"
@@ -175,7 +189,13 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
               }
             />
           ) : (
-            <RouteOutlet route={route} boardUsable={boardUsable} />
+            compact ? <>
+              {/* Keep only the last list mounted so Back preserves search, focus and scroll. */}
+              <div className="tasks-browse-pane" hidden={onTaskRoute} inert={onTaskRoute}>
+                <RouteOutlet route={browseRoute} boardUsable={false} />
+              </div>
+              {onTaskRoute && <DetailView taskKey={route.taskKey} />}
+            </> : <RouteOutlet route={route} boardUsable={boardUsable} />
           )}
         </div>
       </main>

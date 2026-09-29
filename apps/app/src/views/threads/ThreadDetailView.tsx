@@ -1,12 +1,14 @@
+import { subscribeProductReconnect } from '../../lib/product-ws.js';
 import { ArchivedThreadBanner } from '../../components/history/ArchivedThreadBanner.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Maximize2, Minimize2, PanelRight, X } from 'lucide-react';
 import type { ActiveThinking, ThreadTimelineGoal, ThreadTimelineModelFallback, ThreadTimelinePendingTodos } from '@zana-ai/zcc-domain/thread-runtime';
-import { type ThreadContextWindowUsage, type TimelineRow } from '@zana-ai/zcc-server-contract';
+import { mergeTimelinePages, type ThreadContextWindowUsage, type TimelineRow } from '@zana-ai/zcc-server-contract';
 import { buildTimelineViewRows, type TimelineViewWorkflowWorkRow } from '@zana-ai/zcc-thread-view';
 import { product } from '../../lib/product-client.js';
 import { ThreadCommandComposer } from '../../components/ThreadCommandComposer.js';
+import { useMobileThreadActionsTarget, useMobileThreadControlsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
 import { ThreadTimeline } from '../../components/thread/ThreadTimeline.js';
 import { ThreadDiffPanel } from '../../components/thread/ThreadDiffPanel.js';
 import { ThreadWorkspaceBanner } from '../../components/thread/ThreadWorkspaceBanner.js';
@@ -15,7 +17,7 @@ import {
   timelineHasInFlightRetry,
   timelineRowsAwaitUser
 } from '../../components/thread/thread-timeline-model.js';
-import { ThreadDetailHeading, ThreadPromptModeCard, ThreadStatusBadge, ThreadTodoCard } from '../../components/thread/timeline/ThreadBanners.js';
+import { ThreadDetailActions, ThreadDetailHeading, ThreadPromptModeCard, ThreadStatusBadge, ThreadTodoCard } from '../../components/thread/timeline/ThreadBanners.js';
 import {
   BackgroundCommandsCard,
   ModelFallbackCard,
@@ -27,6 +29,7 @@ import { ThreadDetailSearch } from '../../components/thread/ThreadDetailSearch.j
 import { createCoalescedRunner } from '../../lib/coalesced-runner.js';
 import { getThreadRoutePath } from '../../lib/route-paths.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
+import { useCompactLayout } from '../../hooks/useCompactLayout.js';
 import { pendingChildThreads, useThreads, type ThreadListItem } from '../../thread-store.js';
 import { useData } from '../../store.js';
 import { ThreadPendingInteractionBanner } from '../../components/thread/pending-interactions/ThreadPendingInteractionBanner.js';
@@ -49,6 +52,7 @@ import { ThreadPluginTab } from '../../components/thread/secondary-panel/ThreadP
 import { ThreadExplorerTab } from '../../components/thread/secondary-panel/ThreadExplorerTab.js';
 import { ThreadInboxTab } from '../../components/thread/secondary-panel/ThreadInboxTab.js';
 import { PluginThreadHeaderActions } from '../../plugins/PluginThreadHeaderActions.js';
+import { ThreadPanelOwnerProvider } from '../../plugins/thread-panel-owner.js';
 import type { ThreadChatMessageAction } from '@zana-ai/zcc-plugin-sdk/app';
 import { copyText } from '../../components/thread/secondary-panel/threadSecondaryPanelLogic.js';
 import { useThreadSecondaryPanel } from '../../components/thread/secondary-panel/useThreadSecondaryPanel.js';
@@ -81,14 +85,14 @@ import {
   type TimelineSearchHit
 } from '../../components/thread/timeline/thread-search.js';
 import {
+  loadThreadDetailProgressively,
   resolveThreadDetailStatus,
   resolveTimelinePollRows,
   shouldClearPlaceholderStartingStatus,
   threadDetailLoadError
 } from './thread-detail-load.js';
 
-/** Safety cap (Rule 5). Large enough that a normal thread loads in one shot. */
-const TIMELINE_SEGMENT_LIMIT = 10_000;
+const TIMELINE_SEGMENT_LIMIT = 20;
 const TIMELINE_DELTA_DEBOUNCE_MS = 100;
 
 export function ThreadDetailView() {
@@ -100,6 +104,7 @@ export function ThreadDetailView() {
 export function ThreadDetail({
   threadId,
   embedded = false,
+  mobileTitleInShell = false,
   modal = false,
   leadingContent,
   messageActions,
@@ -107,6 +112,8 @@ export function ThreadDetail({
 }: {
   threadId: string;
   embedded?: boolean;
+  /** A focused mobile list detail shares the shell header while retaining its list. */
+  mobileTitleInShell?: boolean;
   /** Hosted in the thread inspector modal; dialog close/fullscreen live on the modal header. */
   modal?: boolean;
   leadingContent?: ReactNode;
@@ -123,6 +130,12 @@ export function ThreadDetail({
   );
   const pendingInteractions = useOpenPendingInteractions(threadId);
   const pane = useOptionalPaneContext();
+  const mobileHeaderInShell = !modal && pane?.isFocused !== false
+    && (mobileTitleInShell || (!embedded && route.threadId === threadId));
+  const mobileTitleTarget = useMobileThreadTitleTarget(mobileHeaderInShell);
+  const mobileActionsTarget = useMobileThreadActionsTarget(mobileHeaderInShell);
+  const mobileControlsTarget = useMobileThreadControlsTarget(mobileHeaderInShell);
+  const compact = useCompactLayout();
   const hostedSecondary = pane?.secondaryPanelHost != null;
   const viewRef = useRef<HTMLElement>(null);
   const panel = useThreadSecondaryPanel(threadId, {
@@ -142,6 +155,7 @@ export function ThreadDetail({
   const [cwd, setCwd] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const project = useData((s) => (projectId ? s.projects.find((row) => row.id === projectId) ?? null : null));
+  const [hostId, setHostId] = useState<string | undefined>();
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
   const [isWorktree, setIsWorktree] = useState(false);
   const [branchName, setBranchName] = useState<string | null>(null);
@@ -153,6 +167,11 @@ export function ThreadDetail({
   const [threadPermissionMode, setThreadPermissionMode] = useState<{ threadId: string; mode: string | null } | null>(null);
   const [rows, setRows] = useState<TimelineRow[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(true);
+  const [olderCursor, setOlderCursor] = useState<{ anchorSeq: number; anchorId: string } | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderCursorRef = useRef(olderCursor);
+  const loadedOlderRef = useRef(false);
+  const historyGeneration = useRef(0);
   const [thinking, setThinking] = useState<ActiveThinking | null>(null);
   const [todos, setTodos] = useState<ThreadTimelinePendingTodos | null>(null);
   const [goal, setGoal] = useState<ThreadTimelineGoal | null>(null);
@@ -269,11 +288,18 @@ export function ThreadDetail({
   useEffect(() => {
     if (!threadId) return;
     let cancelled = false;
+    let activeLoad: AbortController | null = null;
     let debounceTimer: number | null = null;
     rowsRef.current = [];
     maxSeqRef.current = 0;
     loadedRef.current = false;
+    historyGeneration.current++;
+    loadedOlderRef.current = false;
+    olderCursorRef.current = null;
+    setOlderCursor(null);
+    setLoadingOlder(false);
     hadThreadRecordRef.current = false;
+    setTimelineLoading(true);
     setLoadError(null);
     setArchivedAt(null);
     setExecutionModeRequested(null);
@@ -282,6 +308,15 @@ export function ThreadDetail({
       timeline: Awaited<ReturnType<typeof product.threads.timeline>>,
       nextRows: TimelineRow[]
     ) => {
+      const nextTip = typeof timeline.maxSeq === 'number' ? timeline.maxSeq : 0;
+      if (nextTip < maxSeqRef.current) loadedOlderRef.current = false;
+      if (loadedOlderRef.current) {
+        const floor = Math.min(...nextRows.map(row => row.sourceSeqStart));
+        nextRows = mergeTimelinePages(rowsRef.current.filter(row => row.sourceSeqStart < floor), nextRows);
+      } else {
+        olderCursorRef.current = timeline.timelinePage?.hasOlderRows ? timeline.timelinePage.olderCursor : null;
+        setOlderCursor(olderCursorRef.current);
+      }
       rowsRef.current = nextRows;
       maxSeqRef.current = typeof timeline.maxSeq === 'number' ? timeline.maxSeq : 0;
       loadedRef.current = true;
@@ -301,7 +336,7 @@ export function ThreadDetail({
       return nextRows;
     };
 
-    const loadTimeline = async (forceFull: boolean): Promise<{
+    const loadTimeline = async (forceFull: boolean, signal: AbortSignal): Promise<{
       timeline: Awaited<ReturnType<typeof product.threads.timeline>>;
       nextRows: TimelineRow[];
     }> => {
@@ -311,14 +346,14 @@ export function ThreadDetail({
         afterSequence: useDelta ? String(maxSeqRef.current) : undefined,
         includeNestedRows: 'false',
         summaryOnly: 'true'
-      });
+      }, { signal });
       const resolved = resolveTimelinePollRows({
         prevRows: rowsRef.current,
         prevMaxSeq: maxSeqRef.current,
         useDelta,
         timeline
       });
-      if (resolved.kind === 'stale') return loadTimeline(true);
+      if (resolved.kind === 'stale') return loadTimeline(true, signal);
       return { timeline, nextRows: resolved.rows };
     };
 
@@ -354,6 +389,7 @@ export function ThreadDetail({
       if (nextStatus) setStatus(nextStatus);
       setCwd(typeof thread.cwd === 'string' ? thread.cwd : null);
       setProjectId(typeof thread.projectId === 'string' ? thread.projectId : null);
+      setHostId(thread.hostId);
       setEnvironmentId(typeof thread.environmentId === 'string' ? thread.environmentId : null);
       setIsWorktree(thread.isWorktree ?? false);
       setBranchName(thread.branchName ?? null);
@@ -392,30 +428,36 @@ export function ThreadDetail({
     };
 
     const runner = createCoalescedRunner(async () => {
-      if (!loadedRef.current) {
-        setTimelineLoading(true);
-        setLoadError(null);
-      }
-      const [detailOutcome, timelineOutcome] = await Promise.allSettled([
-        product.threads.get(threadId),
-        loadTimeline(false)
-      ]);
-      if (cancelled) return;
-      setTimelineLoading(false);
+      const request = new AbortController();
+      activeLoad = request;
+      const [detailOutcome, timelineOutcome] = await loadThreadDetailProgressively(
+        product.threads.get(threadId, { signal: request.signal }),
+        loadTimeline(false, request.signal),
+        {
+          onDetail: (detail, result) => {
+            if (!cancelled && !request.signal.aborted) applyThreadRecord(detail, result?.timeline ?? null);
+          },
+          onTimeline: (result, detail) => {
+            if (cancelled || request.signal.aborted) return;
+            setTimelineLoading(false);
+            applyTimeline(result.timeline, result.nextRows);
+            if (detail) {
+              applyThreadRecord(detail, result.timeline);
+            } else if (result.timeline.status) {
+              setStatus(result.timeline.status);
+            }
+          },
+          onTimelineError: (error) => {
+            if (cancelled || request.signal.aborted) return;
+            setTimelineLoading(false);
+            setLoadError(threadDetailLoadError(error));
+          }
+        }
+      );
+      activeLoad = null;
+      if (cancelled || request.signal.aborted) return;
       const detailFailed = detailOutcome.status === 'rejected';
       const timelineFailed = timelineOutcome.status === 'rejected';
-      if (timelineOutcome.status === 'fulfilled') {
-        applyTimeline(timelineOutcome.value.timeline, timelineOutcome.value.nextRows);
-      }
-      if (detailOutcome.status === 'fulfilled') {
-        applyThreadRecord(
-          detailOutcome.value,
-          timelineOutcome.status === 'fulfilled' ? timelineOutcome.value.timeline : null
-        );
-      } else if (timelineOutcome.status === 'fulfilled') {
-        const timelineStatus = timelineOutcome.value.timeline.status;
-        if (typeof timelineStatus === 'string' && timelineStatus) setStatus(timelineStatus);
-      }
       if (detailFailed || timelineFailed) {
         const reason = timelineFailed
           ? (timelineOutcome as PromiseRejectedResult).reason
@@ -428,7 +470,16 @@ export function ThreadDetail({
         setLoadError(null);
       }
     });
-    runLoadRef.current = () => runner.run();
+    runLoadRef.current = () => {
+      // Background refreshes keep the last failure visible until recovery.
+      // Only an explicit retry replaces it with the loading state.
+      if (!loadedRef.current) {
+        setTimelineLoading(true);
+        setLoadError(null);
+      }
+      activeLoad?.abort();
+      runner.run();
+    };
     const scheduleDelta = () => {
       if (debounceTimer !== null) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout(() => {
@@ -437,6 +488,7 @@ export function ThreadDetail({
       }, TIMELINE_DELTA_DEBOUNCE_MS);
     };
     runner.run();
+    const stopReconnect = subscribeProductReconnect(scheduleDelta);
     const stopUpdated = product.threads.onUpdated((payload) => {
       if (payload && typeof payload === 'object' && 'id' in payload) {
         if ((payload as { id: unknown }).id === threadId) scheduleDelta();
@@ -448,12 +500,15 @@ export function ThreadDetail({
       if (isOpenThreadEvent(payload, threadId)) scheduleDelta();
     });
     return () => {
+      historyGeneration.current++;
       cancelled = true;
+      activeLoad?.abort();
       runLoadRef.current = () => {};
       runner.dispose();
       if (debounceTimer !== null) window.clearTimeout(debounceTimer);
       stopUpdated();
       stopEvents();
+      stopReconnect();
     };
   }, [threadId, upsertThread]);
 
@@ -478,6 +533,8 @@ export function ThreadDetail({
     const created = await product.terminals.create({
       projectId,
       profile: 'shell',
+      hostId,
+      workspace: environmentId ? { kind: 'reuse', environmentId } : undefined,
       cwd: cwd ?? undefined,
       cols: 80,
       rows: 24
@@ -485,7 +542,7 @@ export function ThreadDetail({
     if (created.ok) {
       panel.addTab({ kind: 'terminal', title: 'Terminal', sessionId: created.value.id });
     }
-  }, [cwd, panel, projectId]);
+  }, [cwd, panel, projectId, hostId, environmentId]);
 
   const pin = activePinnedView(panel.state);
   const closable = activeClosableTab(panel.state);
@@ -570,6 +627,7 @@ export function ThreadDetail({
     panelBody = (
       <ThreadFilePreviewTab
         threadId={threadId}
+        previewRevision={closable.previewRevision}
         path={closable.path}
         openerKey={closable.openerKey}
         projectId={projectId}
@@ -590,7 +648,7 @@ export function ThreadDetail({
   } else if (closable?.kind === 'terminal' && closable.sessionId && projectId) {
     panelBody = <ThreadTerminalTab sessionId={closable.sessionId} projectId={projectId} />;
   } else if (closable?.kind === 'explorer') {
-    panelBody = <ThreadExplorerTab projectId={projectId} />;
+    panelBody = <ThreadExplorerTab projectId={projectId} scope={projectId && hostId ? { projectId, hostId, ...(environmentId ? { environmentId } : {}) } : undefined} checkoutPath={cwd ?? undefined} />;
   } else if (closable?.kind === 'inbox') {
     panelBody = <ThreadInboxTab projectId={projectId} />;
   } else if (closable?.kind === 'plugin' && closable.moduleId) {
@@ -644,7 +702,7 @@ export function ThreadDetail({
           <BrowserTabDeck
             browserTabs={panel.state.tabs.filter((tab) => tab.kind === 'browser')}
             activeBrowserTabId={closable?.kind === 'browser' ? closable.id : null}
-            canShowNativeBrowserView={panel.state.isOpen && !modal && (hostedSecondary || pane?.isFocused !== false)}
+            canShowNativeBrowserView={panel.state.isOpen && (modal || hostedSecondary || pane?.isFocused !== false)}
             threadId={threadId}
             onUpdate={({ tabId, url, title: nextTitle }) => {
               const resolvedTitle = nextTitle && nextTitle.length > 0 ? nextTitle : getBrowserUrlHost(url) || 'Browser';
@@ -679,6 +737,32 @@ export function ThreadDetail({
 
   const awaitingUser = pendingInteractions.length > 0 || timelineRowsAwaitUser(rows);
 
+  const loadOlderHistory = async () => {
+    const cursor = olderCursorRef.current;
+    if (!threadId || !cursor || loadingOlder) return;
+    const generation = historyGeneration.current;
+    setLoadingOlder(true);
+    try {
+      const body = await product.threads.timeline(threadId, {
+        segmentLimit: TIMELINE_SEGMENT_LIMIT, beforeAnchorId: cursor.anchorId, beforeAnchorSeq: cursor.anchorSeq,
+        includeNestedRows: 'false', summaryOnly: 'true'
+      });
+      if (generation !== historyGeneration.current || olderCursorRef.current?.anchorId !== cursor.anchorId) return;
+      const merged = mergeTimelinePages(body.rows as TimelineRow[], rowsRef.current);
+      if (JSON.stringify(merged).length > 32 * 1024 * 1024) {
+        setLoadError('This view has reached its history limit. Reload the conversation to return to recent messages.');
+        return;
+      }
+      loadedOlderRef.current = true;
+      rowsRef.current = merged;
+      setRows(merged);
+      olderCursorRef.current = body.timelinePage?.hasOlderRows ? body.timelinePage.olderCursor : null;
+      setOlderCursor(olderCursorRef.current);
+    } catch (error) {
+      if (generation === historyGeneration.current) setLoadError(threadDetailLoadError(error));
+    } finally { if (generation === historyGeneration.current) setLoadingOlder(false); }
+  };
+
   const exitPlanMode = useCallback(() => {
     if (!threadId || planExitPending) return;
     setPlanExitPending(true);
@@ -701,7 +785,20 @@ export function ThreadDetail({
     });
   }, [displayRows, threadId]);
 
+  const overflow = (
+    <ThreadDetailOverflow
+      threadId={threadId}
+      title={title}
+      status={status}
+      inFlightRetry={inFlightRetry}
+      projectId={projectId}
+      onRenamed={setTitle}
+      onUnread={() => setLastReadSeq(0)}
+    />
+  );
+
   return (
+    <ThreadPanelOwnerProvider ownerId={threadId}>
     <section
       ref={viewRef}
       className={viewClass}
@@ -711,29 +808,22 @@ export function ThreadDetail({
     >
       <div className="thread-detail-split">
       <div className="thread-detail-main">
-        <header className="thread-detail-header">
+        <header className="thread-detail-header" data-title-in-shell={Boolean(mobileTitleTarget) || undefined} data-controls-in-shell={Boolean(mobileControlsTarget) || undefined}>
           <ThreadDetailHeading
             title={title}
+            titleTarget={mobileTitleTarget}
+            overflowTarget={mobileActionsTarget}
             draggable={Boolean(pane?.beginPaneDrag)}
             onPointerDown={
               pane?.beginPaneDrag
                 ? (event) => pane.beginPaneDrag?.(event, title)
                 : undefined
             }
-            overflow={
-              <ThreadDetailOverflow
-                threadId={threadId}
-                title={title}
-                status={status}
-                inFlightRetry={inFlightRetry}
-                projectId={projectId}
-                onRenamed={setTitle}
-                onUnread={() => setLastReadSeq(0)}
-              />
-            }
+            overflow={mobileControlsTarget ? null : overflow}
           />
-          <div className="thread-detail-actions">
+          <ThreadDetailActions target={mobileControlsTarget}>
             <ThreadDetailSearch
+              mobileHeader={Boolean(mobileControlsTarget)}
               value={searchDraft}
               onChange={setSearchDraft}
               onSubmit={runThreadSearch}
@@ -764,6 +854,7 @@ export function ThreadDetail({
                 <X size={14} />
               </button>
             ) : null}
+            {mobileControlsTarget ? overflow : null}
             {!panel.state.isOpen && !embedded ? (
               <button
                 type="button"
@@ -776,7 +867,7 @@ export function ThreadDetail({
                 <PanelRight size={14} />
               </button>
             ) : null}
-          </div>
+          </ThreadDetailActions>
         </header>
         <div className="thread-detail-body">
           <div className="thread-detail-column">
@@ -793,6 +884,9 @@ export function ThreadDetail({
               thinking={thinking}
               goal={goal}
               loading={timelineLoading}
+              hasOlder={olderCursor !== null}
+              loadingOlder={loadingOlder}
+              onLoadOlder={loadOlderHistory}
               loadError={loadError}
               onRetryLoad={() => runLoadRef.current()}
               activeWorkflows={workflows}
@@ -837,7 +931,7 @@ export function ThreadDetail({
               includePluginMessageActions={includePluginMessageActions}
             />
             <div className="thread-composer-dock">
-              <PromptContextBanner
+              {!compact && <PromptContextBanner
                 threadId={threadId}
                 branchName={branchName}
                 isWorktree={isWorktree}
@@ -845,7 +939,7 @@ export function ThreadDetail({
                 originKind={originKind}
                 childCount={childThreads.length}
                 environmentId={environmentId}
-              />
+              />}
               <QueuedMessagesCard threadId={threadId} />
               <ModelFallbackCard fallback={modelFallback} />
               <BackgroundCommandsCard commands={backgroundCommands} workflows={workflows} />
@@ -868,10 +962,10 @@ export function ThreadDetail({
                 isExpanded={todoExpanded}
                 onToggle={() => setTodoExpanded((value) => !value)}
               />
-              <ThreadWorkspaceBanner
+              {!compact && <ThreadWorkspaceBanner
                 environmentId={environmentId}
                 onOpenDiff={(path) => openDiff(path)}
-              />
+              />}
               {archivedAt ? <ArchivedThreadBanner key={threadId} threadId={threadId} onRestored={() => { setArchivedAt(null); runLoadRef.current(); }} /> : <ThreadCommandComposer
                 threadId={threadId}
                 project={project ?? undefined}
@@ -898,5 +992,6 @@ export function ThreadDetail({
       {hostedSecondary || embedded ? null : secondaryPanelNode}
       </div>
     </section>
+    </ThreadPanelOwnerProvider>
   );
 }

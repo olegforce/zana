@@ -148,6 +148,7 @@ export function MachineCard({
   onRetryUpdate,
   onRemove,
   onReconnect,
+  onRepairPairing,
   onRelaunch,
   onInstall,
   onWorkspacePathChange
@@ -172,6 +173,7 @@ export function MachineCard({
   onRetryUpdate: () => void;
   onRemove: () => void;
   onReconnect: () => void;
+  onRepairPairing?: () => void;
   onRelaunch?: () => void;
   onInstall: (provider: ProviderCliKey, actionKind: ProviderCliInstallActionKind) => void;
   onWorkspacePathChange?: (path: string) => void;
@@ -245,6 +247,7 @@ export function MachineCard({
             <Pencil size={13} aria-hidden="true" />
             Rename
           </button>
+          {onRepairPairing && !host.isPrimary ? <button type="button" className="settings-btn" onClick={onRepairPairing}>Pair again</button> : null}
           {showReconnect ? (
             <button
               type="button"

@@ -1,9 +1,10 @@
-import { test, expect } from './fixtures/app.js';
+import { test, expect, launchApp } from './fixtures/app.js';
 import type { Locator, Page } from '@playwright/test';
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { actualOpenCodeModeLabels } from './sdk/actual-acp-modes.js';
 
 const repoRoot = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 const fixtureBin = join(repoRoot, 'e2e', 'fixtures', 'bin');
@@ -55,8 +56,12 @@ async function openRoleMenu(window: Page, modal: Locator, timeout = 5_000) {
   return menu;
 }
 
-async function readRoleLabels(window: Page, modal: Locator, timeout = 5_000) {
+async function readRoleLabels(window: Page, modal: Locator, timeout = 5_000, expected?: string[]) {
   const menu = await openRoleMenu(window, modal, timeout);
+  if (expected) await expect.poll(async () => (
+    (await menu.getByRole('option').allTextContents())
+      .map(label => label.replace(/^∞/, '').trim()).filter(label => label !== 'Refresh roles').sort()
+  ), { timeout }).toEqual([...expected].sort());
   await expect.poll(async () => (
     (await menu.getByRole('option').allTextContents())
       .map((label) => label.replace(/^∞/, '').trim())
@@ -124,7 +129,7 @@ test.describe('OpenCode native-role picker (ACP mode parity)', () => {
         opencodeBinary: undefined
       }));
       await window.getByRole('link', { name: 'Settings' }).click();
-      await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+      await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
       const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
       await expect(openCodeSettings.locator('.opener-row-status--ok').first()).toHaveAttribute('title', /1\.18\.10/);
 
@@ -159,24 +164,29 @@ test.describe('OpenCode native-role picker (ACP mode parity)', () => {
   });
 });
 
-test('real OpenCode CLI agents become selectable through Electron UI', async ({ app }) => {
+test('real OpenCode CLI agents become selectable through Electron UI', async ({ home }) => {
   test.skip(process.env.ZCC_LIVE_OPENCODE !== '1', 'requires installed OpenCode CLI');
+  const app = await launchApp(home, { env: { ZCC_E2E_PRESERVE_HOME: '1' } });
   const { window } = app;
   const projectDir = mkdtempSync(join(tmpdir(), 'zcc-opencode-live-picker-'));
   const projectName = basename(projectDir);
-  copyFileSync(join(process.cwd(), 'opencode.json'), join(projectDir, 'opencode.json'));
   let projectId: string | null = null;
 
   try {
+    writeFileSync(join(projectDir, 'opencode.json'), JSON.stringify({ agent: {
+      'zana-e2e-reviewer': { mode: 'primary', description: 'Temporary role for picker qualification', prompt: 'Review the supplied code.' },
+    } }));
+    const expected = await actualOpenCodeModeLabels(projectDir);
+    expect(expected).toContain('zana-e2e-reviewer');
     await window.evaluate(() => window.cc.config.set({
       harnessOpenCodeEnabled: true,
       defaultHarness: 'opencode',
       opencodeBinary: undefined
     }));
     await window.getByRole('link', { name: 'Settings' }).click();
-    await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+    await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
     const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
-    await expect(openCodeSettings.locator('.opener-row-status')).toHaveClass(/opener-row-status--ok/);
+    await expect(openCodeSettings.locator('.opener-row-status').first()).toHaveClass(/opener-row-status--ok/);
 
     projectId = await window.evaluate(async (path) => {
       const result = await window.cc.projects.add(path);
@@ -191,14 +201,15 @@ test('real OpenCode CLI agents become selectable through Electron UI', async ({ 
     // Native roles are the real opencode ACP session modes — plain names,
     // identical to the Modern composer. A mode that maps to a subagent is still
     // offered here even though the legacy CLI picker used to filter it out.
-    const labels = await readRoleLabels(window, modal, 30_000);
+    const labels = await readRoleLabels(window, modal, 30_000, expected);
     expect(labels).toEqual(expect.arrayContaining(['Agent', 'Plan']));
     // No `[state]` decoration — plain names only.
     expect(labels.some((label) => label.includes('['))).toBe(false);
     await selectRole(window, modal, 'plan');
-    await expect(roleTrigger(modal)).toContainText('plan');
+    await expect(roleTrigger(modal)).toHaveText(/plan/i);
   } finally {
     if (projectId) await window.evaluate((id) => window.cc.projects.remove(id), projectId);
+    await app.electron.close();
     rmSync(projectDir, { recursive: true, force: true });
   }
 });
@@ -211,6 +222,7 @@ test.describe('real OpenCode home integration', () => {
     const { window } = app;
     const projectPath = process.cwd();
     const projectName = basename(projectPath);
+    const expected = await actualOpenCodeModeLabels(projectPath);
     let projectId: string | null = null;
 
     try {
@@ -220,7 +232,7 @@ test.describe('real OpenCode home integration', () => {
         opencodeBinary: undefined
       }));
       await window.getByRole('link', { name: 'Settings' }).click();
-      await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+      await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
       const openCodeSettings = window.locator('#settings-anchor-harness-opencode');
       await expect(openCodeSettings.locator('.opener-row-status').first()).toHaveClass(/opener-row-status--ok/);
 
@@ -241,11 +253,13 @@ test.describe('real OpenCode home integration', () => {
         );
         throw new Error(`${error.message}\nRelevant main logs:\n${JSON.stringify(harnessLogs, null, 2)}`);
       });
-      const options = await readRoleLabels(window, modal, 30_000);
+      const options = await readRoleLabels(window, modal, 30_000, expected);
       expect(options).toEqual(expect.arrayContaining(['Agent', 'Plan']));
-      // Plain names, and at least one project-specific mode beyond Agent/Plan.
+      // Match what this installed CLI advertises, including its current policy
+      // for subagent modes. A separate temporary-project case requires a custom
+      // primary role; this checkout need not contain an opencode.json.
       expect(options.some((label) => label.includes('['))).toBe(false);
-      expect(options.some((label) => label !== 'Agent' && label !== 'Plan')).toBe(true);
+      expect([...options].sort()).toEqual([...expected].sort());
       await selectRole(window, modal, 'plan');
       await expect(roleTrigger(modal)).toContainText('Plan');
     } finally {

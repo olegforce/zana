@@ -28,3 +28,32 @@ describe('harnessAgentDescriptors', () => {
     });
   });
 });
+
+describe('model discovery availability', () => {
+  it('coalesces simultaneous probes per host and refreshes after completion', async () => {
+    const { harnessVerifyBundle } = await import('./harness-via-rpc.js');
+    let release!: (value: { providers: []; extraInstalledAgents: { providerId: string; installed: boolean }[] }) => void;
+    const callHostOnlineRpc = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const hub = { resolveHostId: (id: string) => id, callHostOnlineRpc } as any;
+    const one = harnessVerifyBundle(hub, 'one');
+    const duplicate = harnessVerifyBundle(hub, 'one');
+    expect(callHostOnlineRpc).toHaveBeenCalledTimes(1);
+    release({ providers: [], extraInstalledAgents: [{ providerId: 'extra', installed: true }] });
+    expect(await one).toEqual({ availability: [], extraInstalled: { extra: true } });
+    await duplicate;
+    callHostOnlineRpc.mockResolvedValue({ providers: [] });
+    await harnessVerifyBundle(hub, 'one');
+    await harnessVerifyBundle(hub, 'two');
+    expect(callHostOnlineRpc).toHaveBeenCalledTimes(3);
+  });
+
+  it('propagates offline hosts, keeps legacy verification semantics, and retries failed probes', async () => {
+    const { harnessVerify, harnessVerifyBundle } = await import('./harness-via-rpc.js');
+    const { HostUnavailableError } = await import('./host-hub.js');
+    const hub = { resolveHostId: () => 'one', callHostOnlineRpc: vi.fn().mockRejectedValue(new HostUnavailableError()) } as any;
+    await expect(harnessVerifyBundle(hub)).rejects.toBeInstanceOf(HostUnavailableError);
+    expect(await harnessVerify(hub)).toEqual([]);
+    hub.callHostOnlineRpc.mockResolvedValue({ providers: [] });
+    expect(await harnessVerifyBundle(hub)).toEqual({ availability: [], extraInstalled: {} });
+  });
+});

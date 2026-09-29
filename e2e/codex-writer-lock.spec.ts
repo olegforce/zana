@@ -21,6 +21,7 @@ test.use({
       processLogPath: join(home, 'codex-process.log'),
       requestLogPath: join(home, 'codex-requests.log'),
       writerLockPath: join(home, 'writer.lock'),
+      strictTurnIds: true,
       messageText: REPLY
     }));
     writeFileSync(join(bin, 'codex'), `#!${process.execPath}\n
@@ -93,6 +94,58 @@ test('Codex writer contention retries through the built provider and composer', 
   }
 });
 
+
+test('Codex Send now and Stop translate the active turn id through the built bridge', async ({ app }) => {
+  const { window, home } = app;
+  const root = join(home, 'queued-codex-project');
+  mkdirSync(root);
+  const threadId = await window.evaluate(async path => {
+    const project = await window.cc.projects.add(path);
+    if (!project.ok) throw new Error('Project registration failed');
+    const response = await fetch('/api/v1/threads', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: project.value.id, providerId: 'codex', input: '/wait-for-interrupt', permissionMode: 'full' })
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(JSON.stringify(body));
+    return body.thread.id as string;
+  }, root);
+  await window.evaluate(id => {
+    history.pushState({}, '', `/threads/${id}`);
+    dispatchEvent(new PopStateEvent('popstate'));
+  }, threadId);
+  const detail = window.getByTestId('thread-detail');
+  const composer = detail.locator('.thread-command-composer');
+  await expect(composer.getByTestId('thread-command-send')).toHaveAttribute('aria-label', 'Queue');
+  const queued = detail.getByTestId('thread-queued-messages');
+  for (const message of ['Keep this queued', 'Send this into the active Codex turn']) {
+    await composer.getByTestId('thread-command-input').fill(message);
+    await composer.getByTestId('thread-command-input').press('Enter');
+    await expect(queued).toContainText(message);
+  }
+  const selected = queued.locator('.thread-queued-ghost').filter({ hasText: 'Send this into the active Codex turn' });
+  const sent = window.waitForResponse(response => response.request().method() === 'POST'
+    && /\/next-turn\/[^/]+\/send$/.test(response.url()));
+  await selected.getByRole('button', { name: 'Send now', exact: true }).click();
+  const response = await sent;
+  expect(response.status(), await response.text()).toBe(200);
+  await expect(queued.locator('.thread-queued-item-text')).toHaveText(['Keep this queued']);
+  await expect(detail.getByTestId('thread-timeline').getByTestId('thread-user-text')
+    .filter({ hasText: 'Send this into the active Codex turn' })).toBeVisible();
+  await expect(queued.getByRole('alert')).toHaveCount(0);
+
+  const requests = () => readFileSync(join(home, 'codex-requests.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  expect(requests().filter(row => row.method === 'turn/steer')).toMatchObject([
+    { params: { expectedTurnId: 'turn-fx-1' } }
+  ]);
+  await window.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(queued.getByTestId('thread-queued-paused')).toBeVisible();
+  await expect(composer.getByTestId('thread-command-send')).toHaveAttribute('aria-label', 'Send');
+  expect(requests().filter(row => row.method === 'turn/interrupt')).toMatchObject([
+    { params: { turnId: 'turn-fx-1' } }
+  ]);
+  await expect(detail.locator('.thread-status-badge.is-error')).toHaveCount(0);
+});
 
 test('fresh skill snapshots reach the built Codex bridge without changing existing sessions', async ({ app }) => {
   const { window, home } = app;

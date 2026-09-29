@@ -138,7 +138,7 @@ export function copyForkSourceHistory(
   args: { sourceThreadId: string; targetThreadId: string; sourceSeqEnd?: number }
 ): ConversationThreadEventRow[] {
   const inherited = selectInheritedForkEventRows(
-    listConversationThreadEvents(db, args.sourceThreadId),
+    listConversationThreadEvents(db, args.sourceThreadId, { omitPayloadTypes: ['turn/diff/updated'] }),
     args.sourceSeqEnd
   );
   if (inherited.length === 0) return [];

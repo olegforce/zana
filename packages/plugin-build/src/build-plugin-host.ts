@@ -30,7 +30,7 @@ const NODE_ESM_REQUIRE_BANNER = [
   'var __dirname = __pathDirname(__filename);'
 ].join('\n');
 
-const PLUGIN_SDK_DEFINE_HOST_ENTRY_RUNTIME = `
+const PLUGIN_SDK_LEGACY_HOST_ENTRY_RUNTIME = `
 export function experimental_defineHostEntry(setup) {
   return { __zccPluginHost: true, setup };
 }
@@ -39,10 +39,26 @@ export function isPluginHostEntryDefinition(value) {
 }
 `;
 
+// Adapted from BB's plugin host builder (MIT); see docs/third-party/BB-LICENSE.
+// The /host subpath uses schema contracts. The root SDK retains Zana's older
+// method-registration API, so these runtimes must not be interchangeable.
+const PLUGIN_SDK_DEFINE_HOST_ENTRY_RUNTIME = `
+export function defineRpcContract(contract) { return contract; }
+export function experimental_defineHostEntry(args) {
+  return {
+    experimental_apiVersion: 1,
+    contract: args.contract,
+    handlers: args.handlers,
+    ...(args.experimental_signals === undefined ? {} : { experimental_signals: args.experimental_signals }),
+    ...(args.dispose === undefined ? {} : { dispose: args.dispose }),
+  };
+}
+`;
+
 const PLUGIN_SDK_ROOT_RUNTIME = `
 export const PLUGIN_CLI_OUTPUT_MAX_BYTES = 1024 * 1024;
 export function defineRpcContract(contract) { return contract; }
-${PLUGIN_SDK_DEFINE_HOST_ENTRY_RUNTIME}
+${PLUGIN_SDK_LEGACY_HOST_ENTRY_RUNTIME}
 `;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -297,11 +313,17 @@ export async function buildPluginHost(
         {
           name: 'provide-public-host-sdk-runtime',
           setup(build) {
-            build.onResolve({ filter: /^@zana-ai\/zcc-/ }, (args) => {
+            build.onResolve({ filter: /^@zana-ai\/zcc-/ }, async (args) => {
               if (args.path === PLUGIN_SDK_PACKAGE) {
                 return { path: args.path, namespace: PLUGIN_SDK_RUNTIME_NAMESPACE };
               }
               if (args.path === PLUGIN_SDK_HOST) {
+                if (args.pluginData === PLUGIN_SDK_HOST_FALLBACK_NAMESPACE) return undefined;
+                const installed = await build.resolve(args.path, {
+                  resolveDir: args.resolveDir, kind: args.kind, importer: args.importer,
+                  pluginData: PLUGIN_SDK_HOST_FALLBACK_NAMESPACE
+                });
+                if (installed.errors.length === 0 && installed.path !== '') return { path: installed.path };
                 return { path: args.path, namespace: PLUGIN_SDK_HOST_FALLBACK_NAMESPACE };
               }
               if (args.path === PLUGIN_SDK_PROVIDER_BRIDGE || args.path.startsWith(`${PLUGIN_SDK_PROVIDER_BRIDGE}/`)) {

@@ -398,10 +398,12 @@ export async function readWorkspaceStatus(cwd: string, maxFiles = DEFAULT_MAX_FI
       filesTruncated: false
     };
   }
-  const status = await runGit(cwd, ['status', '--porcelain=v1', '-b', '-uall'], {
+  const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '-b', '-uall', '--', '.'], {
     overflow: 'truncate'
   });
-  const lines = status.stdout.split('\n').filter(Boolean);
+  const prefixResult = await runGit(cwd, ['rev-parse', '--show-prefix'], { maxBuffer: 4096 });
+  const prefix = prefixResult.stdout.replace(/\r?\n$/, '');
+  const lines = status.stdout.split('\0').filter(Boolean);
   const header = lines.find((line) => line.startsWith('## ')) ?? '';
   let ahead: number | null = 0;
   let behind: number | null = 0;
@@ -409,18 +411,20 @@ export async function readWorkspaceStatus(cwd: string, maxFiles = DEFAULT_MAX_FI
   const behindMatch = /behind (\d+)/.exec(header);
   if (aheadMatch) ahead = Number(aheadMatch[1]);
   if (behindMatch) behind = Number(behindMatch[1]);
-  const fileLines = lines.filter((line) => !line.startsWith('## '));
-  const files: WorkspaceFileStatus[] = fileLines.slice(0, maxFiles).map((line) => {
-    const code = line.slice(0, 2);
-    const path = line.slice(3).split(' -> ').pop() ?? line.slice(3);
-    return {
-      path,
-      kind: porcelainKind(code),
-      staged: code[0] !== ' ' && code[0] !== '?',
-      additions: null,
-      deletions: null
-    };
-  });
+  // -z preserves spaces, quotes and newlines; rename/copy records carry a
+  // second NUL-delimited source path that must not become another file.
+  const fileLines: Array<{ code: string; path: string }> = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.startsWith('## ')) continue;
+    const code = line.slice(0, 2), repositoryPath = line.slice(3);
+    if (code.includes('R') || code.includes('C')) index++;
+    if (!repositoryPath.startsWith(prefix)) continue;
+    fileLines.push({ code, path: repositoryPath.slice(prefix.length) });
+  }
+  const files: WorkspaceFileStatus[] = fileLines.slice(0, maxFiles).map(({ code, path }) => ({
+    path, kind: porcelainKind(code), staged: code[0] !== ' ' && code[0] !== '?', additions: null, deletions: null
+  }));
   const originDefault = await readOriginDefaultBranch(cwd);
   return {
     path: cwd,

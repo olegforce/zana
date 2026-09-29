@@ -149,8 +149,8 @@ describe('hosts API', () => {
     });
   });
 
-  it('enrolls a join code against a Tailscale Serve Host header', async () => {
-    await start('https://box.tailnet.ts.net');
+  it('enrolls a join code against the configured HTTPS Host header', async () => {
+    await start('https://machine.example.com');
     const minted = await fetch(`${server!.url}api/v1/hosts/join-codes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -161,7 +161,7 @@ describe('hosts API', () => {
       headers: {
         authorization: `Bearer ${minted.joinCode}`,
         'content-type': 'application/json',
-        'x-forwarded-host': 'box.tailnet.ts.net'
+        'x-forwarded-host': 'machine.example.com'
       },
       body: JSON.stringify({
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,
@@ -199,9 +199,11 @@ describe('hosts API', () => {
     const artifactDir = mkdtempSync(join(tmpdir(), 'zcc-host-stub-'));
     writeFileSync(join(artifactDir, 'join.mjs'), `import { createServer } from 'node:http';
 const port = Number(process.argv[process.argv.indexOf('--host-daemon-port') + 1]);
+const hostId = process.argv[process.argv.indexOf('--host-id') + 1];
+const serverUrl = process.argv[process.argv.indexOf('--server-url') + 1];
 createServer((_req, res) => {
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ connected: true }));
+  res.end(JSON.stringify({ connected: true, hostId, serverUrl }));
 }).listen(port, '127.0.0.1');
 `);
     const tarball = join(artifactDir, 'zcc-host.tgz');
@@ -413,7 +415,7 @@ createServer((_req, res) => {
 
     await server!.close();
     server = null;
-    const offlineDir = await start('https://box.tailnet.ts.net');
+    const offlineDir = await start('https://machine.example.com');
     writeFileSync(join(offlineDir, 'projects.json'), JSON.stringify({
       version: 1,
       projects: [{
@@ -437,13 +439,13 @@ createServer((_req, res) => {
   });
 
   it('stores SSH identity for repair and refuses to repair the primary host', async () => {
-    await start('https://box.tailnet.ts.net');
+    await start('https://machine.example.com');
     const primary = await fetch(`${server!.url}internal/hosts/enroll`, {
       method: 'POST',
       headers: {
         authorization: 'Bearer enroll-token-enroll-token-enroll',
         'content-type': 'application/json',
-        'x-forwarded-host': 'box.tailnet.ts.net'
+        'x-forwarded-host': 'machine.example.com'
       },
       body: JSON.stringify({
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,
@@ -472,7 +474,7 @@ createServer((_req, res) => {
       headers: {
         authorization: `Bearer ${minted.joinCode}`,
         'content-type': 'application/json',
-        'x-forwarded-host': 'box.tailnet.ts.net'
+        'x-forwarded-host': 'machine.example.com'
       },
       body: JSON.stringify({
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,

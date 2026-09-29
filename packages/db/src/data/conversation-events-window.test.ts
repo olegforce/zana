@@ -35,7 +35,10 @@ it('reads bounded turn requests through the type index after a long streamed ans
   expect(listConversationThreadEventsWindow(db, one.id, { limit: 1 })).toEqual([second]);
   expect(listConversationThreadEventsWindow(db, one.id, { limit: 1, beforeSeq: second.sequence })[0]?.type).toBe('item/updated');
   const plan = db.sqlite.prepare('EXPLAIN QUERY PLAN SELECT * FROM thread_events WHERE thread_id = ? AND type = ? ORDER BY sequence DESC LIMIT ?').all(one.id, type, 80);
-  expect(JSON.stringify(plan)).toContain('thread_events_thread_type_seq_idx');
+  // Either column order provides an exact seek on both equality predicates.
+  // The pruning index adds type-first lookup across threads.
+  expect(JSON.stringify(plan)).toMatch(/SEARCH thread_events USING INDEX thread_events_(?:thread_type|type_thread)_seq_idx/);
+  expect(JSON.stringify(plan)).not.toContain('SCAN thread_events');
   migrate(db.sqlite); // reopening an already-migrated DB is idempotent
 });
 

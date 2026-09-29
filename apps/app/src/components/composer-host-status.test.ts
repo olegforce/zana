@@ -55,7 +55,7 @@ describe('composer host status', () => {
     const action = resolveComposerHostAction({
       hosts: [primary],
       project: sshProject,
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toMatchObject({ kind: 'install', label: 'Install' });
     expect(shouldBlockComposerSend(action, sshProject)).toBe(true);
@@ -101,7 +101,7 @@ describe('composer host status', () => {
       hosts: [primary, remoteHost],
       project,
       selectedHostId: 'h-primary',
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toMatchObject({ kind: 'fix', hostId: 'h-remote', label: 'Fix' });
     expect(shouldBlockComposerSend(action, project)).toBe(true);
@@ -125,7 +125,7 @@ describe('composer host status', () => {
     const action = resolveComposerHostAction({
       hosts: [primary, online],
       project,
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toEqual({ kind: 'ready' });
     expect(shouldBlockComposerSend(action, project)).toBe(false);
@@ -140,7 +140,7 @@ describe('composer host status', () => {
       hosts: [primary, remoteHost],
       project,
       selectedHostId: 'h-remote',
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toMatchObject({ kind: 'fix', hostId: 'h-remote', label: 'Fix' });
     expect(shouldBlockComposerSend(action, project)).toBe(true);
@@ -160,7 +160,7 @@ describe('composer host status', () => {
       hosts: [primary, offline],
       project,
       selectedHostId: 'h-remote',
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toMatchObject({ kind: 'fix', needsSshPick: true });
     expect(shouldBlockComposerSend(action, project)).toBe(true);
@@ -199,7 +199,7 @@ describe('composer host status', () => {
       hosts: [primary, remoteHost],
       project,
       selectedHostId: 'h-remote',
-      publicAppUrl: 'https://box.tailnet.ts.net'
+      publicAppUrl: 'https://machine.example.com'
     });
     expect(action).toMatchObject({ kind: 'fix', hostId: 'h-remote', label: 'Fix' });
     expect(shouldBlockComposerSend(action, project)).toBe(true);
@@ -226,13 +226,13 @@ describe('composer host status', () => {
     expect(shortHostName('fe80::1')).toBe('fe80::1');
     expect(shortHostName('Laptop')).toBe('Laptop');
     expect(shortHostName('')).toBe('');
-    expect(hostPickerLabel(primary)).toBe('This machine');
+    expect(hostPickerLabel(primary)).toBe('Primary machine');
     expect(hostPickerDescription(primary)).toBe('Laptop · Online');
     expect(hostPickerLabel(host({
       id: 'h-fqdn',
       name: 'grebmann-ltmmfjc.internal.salesforce.com',
       isPrimary: true
-    }))).toBe('This machine');
+    }))).toBe('Primary machine');
     expect(hostPickerDescription(host({
       id: 'h-fqdn',
       name: 'grebmann-ltmmfjc.internal.salesforce.com',
@@ -287,7 +287,7 @@ describe('composer host status', () => {
     });
     expect(action).toMatchObject({
       kind: 'blocked',
-      reason: 'This project lives on this machine. Add a folder on limited-pony first.'
+      reason: 'This project lives on Laptop. Add a folder on limited-pony first.'
     });
     expect(shouldBlockComposerSend(action, project)).toBe(true);
     expect(isForeignExecutionHost(project, [primary, online], 'h-remote')).toBe(true);

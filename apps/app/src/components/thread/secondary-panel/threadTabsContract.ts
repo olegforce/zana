@@ -168,7 +168,12 @@ export function applyContractTabs(
   state: ThreadSecondaryPanelState,
   tabs: readonly ThreadTab[]
 ): ThreadSecondaryPanelState {
-  const nextTabs = contractTabsToClosable(tabs);
+  const nextTabs = contractTabsToClosable(tabs).map((tab) => {
+    const local = state.tabs.find((existing) => existing.id === tab.id);
+    return local?.kind === tab.kind && local.path === tab.path && local.previewRevision !== undefined
+      ? { ...tab, previewRevision: local.previewRevision }
+      : tab;
+  });
   const known = new Set(nextTabs.map((tab) => tab.id));
   const activeId = known.has(state.activeId)
     ? state.activeId

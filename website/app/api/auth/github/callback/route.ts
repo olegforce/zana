@@ -11,6 +11,7 @@
  */
 import { NextResponse } from 'next/server';
 import { exchangeCode, fetchUser } from '@/lib/github';
+import { readConnectReturn, connectReturnCookie } from '@/lib/connect-return';
 import { completeGithubLogin, readOauthStateCookie, sessionCookieHeader, clearOauthStateCookieHeader, jsonError } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -34,10 +35,11 @@ export async function GET(req: Request) {
     const githubUser = await fetchUser(accessToken);
     const { cookieValue, expiresAt } = await completeGithubLogin(githubUser);
 
-    const dashboardUrl = new URL('/dashboard', url.origin);
+    const dashboardUrl = new URL(readConnectReturn(req), process.env.PUBLIC_BASE_URL || url.origin);
     const res = NextResponse.redirect(dashboardUrl, 302);
     res.headers.append('Set-Cookie', sessionCookieHeader(cookieValue, expiresAt));
     res.headers.append('Set-Cookie', clearOauthStateCookieHeader());
+    res.headers.append('Set-Cookie', connectReturnCookie('', true));
     return res;
   } catch (err) {
     return jsonError('github_oauth_failed', err instanceof Error ? err.message : 'GitHub OAuth failed', 502);

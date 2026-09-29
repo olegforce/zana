@@ -31,6 +31,10 @@ describe('mergeHostPreviewFileTooling', () => {
     expect(PREVIEW_FILE_DESCRIPTION).toContain('Do not open files in Cursor');
     expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('preview_file');
     expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('Do not open files in Cursor');
+    expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('in-app browser side panel by default');
+    expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('zcc guide browser');
+    expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('unless the user explicitly requests an external browser');
+    expect(HOST_PREVIEW_FILE_INSTRUCTION).toContain('automatic browser opening disabled');
   });
 
   it('offers preview_file even when no plugin tools are packed', () => {

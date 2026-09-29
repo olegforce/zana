@@ -93,7 +93,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$join_code" ] && [ -n "$host_id" ] && [ -n "$server_url" ] || usage
+[ -n "$host_id" ] && [ -n "$server_url" ] || usage
+[ -n "$join_code" ] || [ -n "${ZCC_CONNECT_HEADER_FILE:-}" ] || usage
 
 server_url=${server_url%/}
 server_host=$(printf '%s' "$server_url" | sed -E 's#^https?://##; s#[/:].*##')
@@ -102,13 +103,17 @@ server_host=$(printf '%s' "$server_url" | sed -E 's#^https?://##; s#[/:].*##')
 data_dir=${ZCC_DATA_DIR:-"$HOME/.zcc-machines/$server_host"}
 mkdir -p "$data_dir"
 chmod 700 "$data_dir"
-# A new join host id cannot keep a previous enroll's host.id (persistHostId
-# used to refuse the mismatch). Drop leftover identity; keep runtime files.
+# Never erase another identity to make enrollment succeed.
 if [ -f "$data_dir/host.id" ]; then
   existing_id=$(tr -d '[:space:]' < "$data_dir/host.id")
   if [ "$existing_id" != "$host_id" ]; then
-    rm -f "$data_dir/host.id" "$data_dir/auth.json"
+    echo "This installation belongs to another machine. Generate a repair code for it, or use another isolated data directory." >&2
+    exit 1
   fi
+fi
+if [ -n "${ZCC_CONNECT_INSTANCE_ID:-}" ]; then
+  # Stable service identity survives address changes and separates instances.
+  server_host=$ZCC_CONNECT_INSTANCE_ID
 fi
 
 port_dir="$HOME/.zcc-machines/host-daemon-ports"
@@ -137,15 +142,21 @@ package_dir="$data_dir/runtime"
 mkdir -p "$package_dir"
 package_file="$package_dir/zcc-host.tgz"
 echo "Downloading host-daemon artifact…"
-curl -fL --connect-timeout 10 --max-time 300 --retry 2 "$server_url/install/zcc-host.tgz" -o "$package_file"
+if [ -n "${ZCC_CONNECT_HEADER_FILE:-}" ]; then
+  # Credentials are in a private file, never argv; never follow a redirect.
+  curl -f --proto '=https' --header "@$ZCC_CONNECT_HEADER_FILE" --max-filesize 268435456 --connect-timeout 10 --max-time 300 --retry 2 "$server_url/install/zcc-host.tgz" -o "$package_file"
+else
+  curl -fL --connect-timeout 10 --max-time 300 --retry 2 "$server_url/install/zcc-host.tgz" -o "$package_file"
+fi
 tar -xzf "$package_file" -C "$package_dir"
 
 join_bin=${ZCC_HOST_JOIN_CLI:-}
-if [ -z "$join_bin" ] && [ -f "$package_dir/join.cjs" ]; then
-  join_bin="$package_dir/join.cjs"
-fi
+# Prefer the freshly served ESM bundle over a leftover legacy CJS launcher.
 if [ -z "$join_bin" ] && [ -f "$package_dir/join.mjs" ]; then
   join_bin="$package_dir/join.mjs"
+fi
+if [ -z "$join_bin" ] && [ -f "$package_dir/join.cjs" ]; then
+  join_bin="$package_dir/join.cjs"
 fi
 if [ -z "$join_bin" ] && command -v zcc-host >/dev/null; then
   join_bin=$(command -v zcc-host)
@@ -170,6 +181,28 @@ systemd_user_available() {
   systemctl --user show-environment >/dev/null 2>&1
 }
 
+# Stop the existing owner before starting a replacement. Never signal a saved
+# PID until both executable and process start time match this installation.
+if [ "$(uname -s)" = Darwin ]; then
+  launchctl bootout "gui/$(id -u)/ai.zana.zcc-host-daemon.$server_host" 2>/dev/null || true
+elif command -v systemctl >/dev/null 2>&1; then
+  systemctl --user stop "zcc-host-daemon-$server_host.service" 2>/dev/null || true
+fi
+if [ -f "$data_dir/host-daemon.pid" ]; then
+  old_pid=$(cat "$data_dir/host-daemon.pid")
+  case "$old_pid" in ""|*[!0-9]*|0|1) old_pid= ;; esac
+  old_command=""; old_started=""
+  if [ -n "$old_pid" ]; then old_command=$(ps -p "$old_pid" -o command= 2>/dev/null || true); old_started=$(ps -p "$old_pid" -o lstart= 2>/dev/null || true); fi
+  case "$old_command" in "$NODE_BIN $join_bin join "*|"$NODE_BIN $package_dir/join.cjs join "*)
+    if [ -n "$old_started" ] && [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ] && [ "$(ps -p "$old_pid" -o command= 2>/dev/null || true)" = "$old_command" ]; then
+      kill "$old_pid" 2>/dev/null || true
+      i=0; while [ "$i" -lt 10 ] && [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ]; do i=$((i + 1)); sleep 1; done
+      if [ "$(ps -p "$old_pid" -o lstart= 2>/dev/null || true)" = "$old_started" ] && [ "$(ps -p "$old_pid" -o command= 2>/dev/null || true)" = "$old_command" ]; then kill -9 "$old_pid" 2>/dev/null || true; fi
+    fi ;;
+  esac
+  rm -f "$data_dir/host-daemon.pid"
+fi
+
 echo "Enrolling host daemon…"
 run_join
 
@@ -178,7 +211,7 @@ wait_connected() {
   max=${ZCC_INSTALL_WAIT_ATTEMPTS:-60}
   delay=${ZCC_INSTALL_WAIT_DELAY:-1}
   while [ "$i" -lt "$max" ]; do
-    if curl -sf "http://127.0.0.1:$port/status" 2>/dev/null | grep -q '"connected":true'; then
+    if curl -sf --max-time 2 "http://127.0.0.1:$port/status" 2>/dev/null | "$NODE_BIN" -e 'let s="";process.stdin.on("data",b=>{s+=b;if(s.length>4096)process.exit(1)});process.stdin.on("end",()=>{try{const v=JSON.parse(s);process.exit(v.connected===true&&v.hostId===process.argv[1]&&v.serverUrl.replace(/\/$/,"")===process.argv[2]?0:1)}catch{process.exit(1)}})' "$host_id" "$server_url"; then
       return 0
     fi
     i=$((i + 1))
@@ -215,6 +248,7 @@ uname_s=$(uname -s)
 if [ "$uname_s" = Darwin ]; then
   kill "$join_pid" 2>/dev/null || true
   sleep 1
+  rm -f "$data_dir/host-daemon.pid"
   plist="$HOME/Library/LaunchAgents/ai.zana.zcc-host-daemon.$server_host.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
   cat > "$plist" <<PLIST
@@ -241,6 +275,8 @@ if [ "$uname_s" = Darwin ]; then
   <dict>
     <key>ZCC_DATA_DIR</key>
     <string>$data_dir</string>
+    <key>ZCC_HOST_SERVICE_MANAGED</key>
+    <string>1</string>
     <key>ZCC_SERVER_URL</key>
     <string>$server_url</string>
   </dict>
@@ -256,6 +292,7 @@ PLIST
 elif systemd_user_available; then
   kill "$join_pid" 2>/dev/null || true
   sleep 1
+  rm -f "$data_dir/host-daemon.pid"
   unit_dir="$HOME/.config/systemd/user"
   mkdir -p "$unit_dir"
   unit="$unit_dir/zcc-host-daemon-$server_host.service"
@@ -268,6 +305,7 @@ After=network-online.target
 ExecStart=$NODE_BIN $join_bin join --host-id $host_id --server-url $server_url --host-daemon-port $port --auto-update
 Environment=ZCC_DATA_DIR=$data_dir
 Environment=ZCC_SERVER_URL=$server_url
+Environment=ZCC_HOST_SERVICE_MANAGED=1
 Restart=always
 RestartSec=3
 

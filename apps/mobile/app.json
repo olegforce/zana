@@ -2,7 +2,7 @@
   "expo": {
     "name": "Zana",
     "slug": "zana-mobile",
-    "version": "0.1.0",
+    "version": "2.3.0",
     "scheme": "zana",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -11,15 +11,12 @@
       "bundleIdentifier": "ai.zana.mobile",
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Zana connects to your Zana server on your local network or tailnet.",
         "ITSAppUsesNonExemptEncryption": false,
-        "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
-        },
         "UIBackgroundModes": [
           "remote-notification"
         ]
-      }
+      },
+      "buildNumber": "202609281455"
     },
     "android": {
       "package": "ai.zana.mobile",
@@ -29,17 +26,10 @@
       "expo-router",
       "expo-secure-store",
       [
-        "expo-camera",
-        {
-          "cameraPermission": "Scan a pairing code from your Zana server.",
-          "recordAudioAndroid": false
-        }
-      ],
-      [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false
           }
         }
       ],
@@ -52,6 +42,13 @@
     "platforms": [
       "ios",
       "android"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3b4e4124-5a4b-41a0-acf9-25ca4bab8fca"
+      }
+    },
+    "owner": "grebmann"
   }
 }

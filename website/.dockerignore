@@ -2,8 +2,10 @@ node_modules
 .next
 out
 .git
-.env.local
+.env*
+!.env.example
 *.log
 .DS_Store
 README.md
 **/*.test.ts
+**/*.test.tsx

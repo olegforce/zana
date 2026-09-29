@@ -22,7 +22,8 @@ function Navigator() {
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false, title: 'Zana' }} />
-        <Stack.Screen name="connect" options={{ title: 'Add server' }} />
+        <Stack.Screen name="connect" options={{ title: 'Connect to Zana' }} />
+        <Stack.Screen name="demo" options={{ title: 'Demo' }} />
         <Stack.Screen name="settings" options={{ title: 'This device' }} />
       </Stack>
     </>

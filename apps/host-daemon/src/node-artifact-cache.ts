@@ -34,6 +34,7 @@ interface EnsureCachedNodeArtifactArgs {
   digest: string;
   byteLength: number;
   fileName: string;
+  legacyFileNames?: readonly string[];
   fetchArtifact: FetchNodeArtifact;
   logger: ArtifactCacheLogger;
 }
@@ -92,6 +93,18 @@ async function ensureCachedNodeArtifactUnlocked(
       { cacheDir: args.cacheDir, digest: args.digest },
       'Using cached host artifact'
     );
+    await pruneStaleDigests(args);
+    return artifactPath;
+  }
+
+  // BB's .js → .mjs cache migration preserves verified bytes and prevents
+  // Node from guessing module format inside a daemon's private data directory.
+  for (const legacy of args.legacyFileNames ?? []) {
+    if (legacy === args.fileName) continue;
+    const legacyPath = join(directory, legacy);
+    if (!await isVerifiedCachedArtifact(legacyPath, args)) continue;
+    await rename(legacyPath, artifactPath);
+    args.logger.debug({ cacheDir: args.cacheDir, digest: args.digest }, 'Migrated cached host artifact');
     await pruneStaleDigests(args);
     return artifactPath;
   }

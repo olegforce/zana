@@ -5,6 +5,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConversationRow } from './ConversationRow.js';
 
+const layout = vi.hoisted(() => ({ compact: false }));
+vi.mock('../../../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
+
 const editMessage = vi.fn(async (_threadId: string, _body: unknown) => ({ ok: true }));
 
     vi.mock('../../../lib/product-client.js', () => ({
@@ -365,5 +368,45 @@ describe('ConversationRow request labels', () => {
       />
     );
     expect(screen.getByTestId('thread-message-request-label').textContent).toBe('Steer rejected');
+  });
+});
+
+describe('ConversationRow mobile previews', () => {
+  afterEach(() => { cleanup(); layout.compact = false; vi.restoreAllMocks(); });
+
+  it('keeps the full text for copying, expands once, and leaves editing unclipped', () => {
+    layout.compact = true;
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(72);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(200);
+    const text = 'A long user message. '.repeat(150) + 'Last instruction.';
+    const onCopy = vi.fn();
+    const onMessageExpand = vi.fn();
+    render(<ConversationRow row={{ ...userRow, text }} threadId="t1" threadIdle onCopy={onCopy} onMessageExpand={onMessageExpand} />);
+    expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(1);
+    expect(screen.queryByText(/Last instruction/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
+    expect(onCopy).toHaveBeenCalledWith(text);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(onMessageExpand).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Last instruction/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+    expect(screen.getByLabelText('Edit message').closest('.mobile-message-preview')).toBeNull();
+    expect((screen.getByLabelText('Edit message') as HTMLTextAreaElement).value).toBe(text);
+  });
+
+  it('reveals a mobile search result and preserves the desktop and assistant overflow controls', () => {
+    const text = 'Long message. '.repeat(180) + 'Hidden search match.';
+    layout.compact = true;
+    const { container, rerender } = render(<ConversationRow row={{ ...userRow, text }} forceExpanded />);
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy();
+    expect(screen.getByText(/Hidden search match/)).toBeTruthy();
+    rerender(<ConversationRow key="assistant" row={{ ...assistantRow, text }} />);
+    expect(container.querySelector('.mobile-message-preview')).toBeNull();
+    expect(screen.getByTestId('thread-message-overflow').textContent).toBe('Show more');
+    layout.compact = false;
+    rerender(<ConversationRow key="desktop" row={{ ...userRow, text }} />);
+    expect(container.querySelector('.mobile-message-preview')).toBeNull();
+    fireEvent.click(screen.getByTestId('thread-message-overflow'));
+    expect(screen.getByText(/Hidden search match/)).toBeTruthy();
   });
 });

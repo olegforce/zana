@@ -665,7 +665,7 @@ export async function forkConversation(
   }
   const forkCapability = getThreadProvider(thread.providerId)?.capabilities.fork;
   resolveConversationForkPoint({
-    events: listConversationThreadEvents(ctx.db, thread.id),
+    events: listConversationThreadEvents(ctx.db, thread.id, { omitPayloadTypes: ['turn/diff/updated'] }),
     forkCapability,
     sourceProviderThreadId: thread.providerThreadId,
     sourceSeqEnd: options?.sourceSeqEnd
@@ -872,7 +872,7 @@ async function threadStartCommandForFork(
     projectId: thread.projectId
   });
   const fork = describeCopiedForkStart(
-    listConversationThreadEvents(ctx.db, thread.id),
+    listConversationThreadEvents(ctx.db, thread.id, { omitPayloadTypes: ['turn/diff/updated'] }),
     getThreadProvider(thread.providerId)?.capabilities.fork
   );
   return {

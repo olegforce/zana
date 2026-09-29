@@ -42,7 +42,7 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     // Refresh cached harness verification after replacing the Claude binary.
     // CLI Agent hides or rejects an unverified launch even when config is current.
     await window.getByRole('link', { name: 'Settings' }).click();
-    await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+    await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
     const claudeSettings = window.locator('#settings-anchor-harness-claude');
     await expect(claudeSettings.locator('.opener-row-status')).toHaveClass(/opener-row-status--ok/);
     await window.locator('.settings-app-back').click();
@@ -59,6 +59,13 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     await window.getByRole('button', { name: `New agent in ${projectName}` }).click();
     const modal = window.getByTestId('launch-modal');
     await modal.getByRole('button', { name: 'CLI Agent' }).click();
+    // Modern startup can remember Codex before this modal mounts. The shared
+    // picker deliberately honors that explicit choice over defaultHarness.
+    // Select this fixture's provider through the UI instead of relying on timing.
+    await modal.getByTestId('model-reasoning-picker-trigger').click();
+    const picker = window.getByTestId('model-reasoning-picker-menu');
+    await picker.getByRole('tab', { name: 'Claude Code', exact: true }).click();
+    await picker.locator('[data-testid^="model-reasoning-model-"]').first().click();
     const instruction = modal.getByTestId('legacy-agent-command-input');
     await instruction.click();
     await instruction.fill('E2E start Job Team');
@@ -68,7 +75,7 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     await expect(send).toBeEnabled({ timeout: 15_000 });
     await send.click();
     const launched = await expect.poll(async () => window.evaluate(async (projectId) =>
-      (await window.cc.terminals.list(projectId)).some((session) => session.title.includes('E2E start Job Team'))
+      (await window.cc.terminals.list(projectId)).some((session) => session.profile.startsWith('claude') && session.title.includes('E2E start Job Team'))
     , projectId!), { timeout: 15_000, intervals: [500] }).toBe(true).then(() => true, () => false);
     if (!launched) throw new Error(`CLI Agent did not launch\n${diagnostics.join('\n')}`);
     await expect(modal).toBeHidden();
@@ -94,6 +101,11 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     }
     await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
     expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');
+  } catch (error) {
+    const logPath = join(projectDir, '.fake-coordinator.log');
+    const log = existsSync(logPath) ? readFileSync(logPath, 'utf8').slice(-16_384) : 'no fake coordinator log';
+    const sessions = projectId ? await window.evaluate(async id => (await window.cc.terminals.list(id)).map(row => ({ id: row.id, profile: row.profile, status: row.status, exitCode: row.exitCode, cwd: row.cwd })), projectId).catch(() => []) : [];
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nSessions: ${JSON.stringify(sessions)}\n${log}\n${diagnostics.join('\n').slice(-16_384)}`);
   } finally {
     if (projectId) {
       await window.evaluate(async (projectId) => {

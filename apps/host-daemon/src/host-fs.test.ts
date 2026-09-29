@@ -402,3 +402,24 @@ describe('host filesystem discovery', () => {
     })).rejects.toMatchObject({ code: 'folder_picker_failed' });
   });
 });
+
+it('serializes revision-checked removal with a concurrent write and preserves newer bytes', async () => {
+  const root = realpathSync(tmpRoot()), path = join(root, 'note.md');
+  writeFileSync(path, 'old');
+  const { withFileMutationLock } = await import('@zana-ai/zcc-host-workspace');
+  let unlock!: () => void, acquired!: () => void;
+  const ready = new Promise<void>(resolve => { acquired = resolve; });
+  const holding = withFileMutationLock(path, async () => { acquired(); await new Promise<void>(resolve => { unlock = resolve; }); });
+  await ready;
+  const writing = writeHostFile({ path, rootPath: root, content: 'new', contentEncoding: 'utf8', createParents: false, expectedSha256: sha256('old') });
+  const removing = removeHostPath({ path, rootPath: root, recursive: false, expectedSha256: sha256('old') });
+  // Allow both calls to resolve the same canonical lock before releasing it.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  unlock(); await holding; await writing;
+  await expect(removing).rejects.toMatchObject({ code: 'conflict' });
+  expect(readFileSync(path, 'utf8')).toBe('new');
+  await removeHostPath({ path, rootPath: root, recursive: false, expectedSha256: sha256('new') });
+  await expect(removeHostPath({ path: root, rootPath: root, recursive: true })).rejects.toMatchObject({ code: 'invalid_path' });
+  const directory = join(root, 'dir'); mkdirSync(directory);
+  await expect(removeHostPath({ path: directory, rootPath: root, recursive: true, expectedSha256: sha256('') })).rejects.toMatchObject({ code: 'invalid_path' });
+});

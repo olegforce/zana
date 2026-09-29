@@ -80,7 +80,8 @@ async function dumpThread(http: ProductHttpClient, threadId: string, thread?: Th
   try {
     const listed = await http.request<{ events?: unknown[] } | unknown[]>(
       'GET',
-      `/api/v1/threads/${encodeURIComponent(threadId)}/events`
+      `/api/v1/threads/${encodeURIComponent(threadId)}/events`,
+      { query: { limit: '20' } }
     );
     events = Array.isArray(listed)
       ? listed

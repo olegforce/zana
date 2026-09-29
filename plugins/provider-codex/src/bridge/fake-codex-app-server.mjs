@@ -538,10 +538,18 @@ async function handleRequest(message) {
       return;
     }
     case "turn/steer":
+      if (script?.strictTurnIds && params.expectedTurnId !== openTurnIdsByThreadId.get(params.threadId)) {
+        respondError(id, -32603, `expected active turn id \`${params.expectedTurnId}\` but found \`${openTurnIdsByThreadId.get(params.threadId) ?? "none"}\``);
+        return;
+      }
       respond(id, {});
       return;
     case "turn/interrupt": {
       const openTurnId = openTurnIdsByThreadId.get(params.threadId);
+      if (script?.strictTurnIds && params.turnId !== openTurnId) {
+        respondError(id, -32603, `expected active turn id \`${params.turnId}\` but found \`${openTurnId ?? "none"}\``);
+        return;
+      }
       if (openTurnId !== undefined) {
         openTurnIdsByThreadId.delete(params.threadId);
         notify("turn/completed", {

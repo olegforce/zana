@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readHostPerformance } from './host-performance.js';
 import {
   createHostJoinCodeRequestSchema,
   hostDirectoryQuerySchema,
@@ -23,6 +24,7 @@ import { listPublicHosts, parseHostUpdate, toPublicHost } from '../services/host
 import { relaunchLocalHostDaemon } from '../services/hosts/host-relaunch.js';
 import { HostUnavailableError } from './host-hub.js';
 import { bootstrapHostForProject, parseSshIdentity, repairHost } from '../services/hosts/host-bootstrap.js';
+import { issueConnectHostCode, revokeConnectHost, usesConnect, connectInstallCommand } from '../services/hosts/connect-enrollment.js';
 
 function routeParams(pathname: string, pattern: string): Record<string, string> | null {
   const pathParts = pathname.split('/').filter(Boolean);
@@ -67,7 +69,27 @@ export async function handleHostsApi(
   method: string,
   requestUrl: URL
 ): Promise<boolean> {
-  if (path === '/api/v1/hosts/join-codes' && method === 'POST') {
+  const performanceHost = routeParams(path, '/api/v1/hosts/:id/performance');
+  if (performanceHost && method === 'GET') {
+    if (!requireHost(ctx, performanceHost.id!)) {
+      sendJson(response, 404, { error: 'host not found' });
+    } else {
+      sendJson(response, 200, readHostPerformance(ctx, performanceHost.id!));
+    }
+    return true;
+  }
+  const enrollmentStatus = /^\/api\/v1\/hosts\/enrollments\/([a-f0-9]{64})$/.exec(path);
+  if (enrollmentStatus && method === 'GET') {
+    const status = ctx.joinCodes.status(enrollmentStatus[1]!);
+    sendJson(response, 200, { status: !status ? 'expired' : status.redeemedAt === null ? 'pending' : connectedSet(ctx).has(status.hostId) ? 'connected' : 'enrolled' });
+    return true;
+  }
+  if (path === '/api/v1/hosts/connect-code' && method === 'POST') {
+    try { const issued = await issueConnectHostCode(ctx, await readJsonBody(request)); sendJson(response, 201, { ...issued, installCommand: connectInstallCommand(issued) }); }
+    catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : 'Machine enrollment unavailable' }); }
+    return true;
+  }
+  if ((path === '/api/v1/hosts/join-codes' || path === '/api/v1/hosts/join-codes/preferred') && method === 'POST') {
     let body: unknown = {};
     try {
       body = await readJsonBody(request);
@@ -77,6 +99,13 @@ export async function handleHostsApi(
     }
     if (!createHostJoinCodeRequestSchema.safeParse(body).success) {
       sendJson(response, 400, { error: 'invalid join-code request' });
+      return true;
+    }
+    if (path.endsWith('/preferred') && usesConnect(ctx)) {
+      try {
+        const issued = await issueConnectHostCode(ctx, { name: 'New machine' });
+        sendJson(response, 201, { joinCode: issued.code, enrollmentId: issued.enrollmentId, hostId: issued.hostId, expiresAt: issued.expiresAt, installCommand: connectInstallCommand(issued) });
+      } catch (error) { sendJson(response, 503, { error: error instanceof Error ? error.message : 'Connect unavailable' }); }
       return true;
     }
     const issued = ctx.joinCodes.mint();
@@ -498,7 +527,11 @@ export async function handleHostsApi(
       sendJson(response, 403, { error: 'primary host cannot be removed' });
       return true;
     }
+    try { await revokeConnectHost(ctx, host.id); }
+    catch { sendJson(response, 503, { error: 'Could not revoke account access. Retry removing this machine when Connect is available.' }); return true; }
+    ctx.hostHub.getSession(host.id)?.socket.close(4003, 'host-removed');
     ctx.hostHub.detach(host.id, 'removed');
+    ctx.joinCodes.invalidateHost(host.id);
     destroyHost(ctx.db, host.id);
     emitHostsChanged(ctx);
     sendJson(response, 200, { ok: true as const });

@@ -5,11 +5,13 @@ import {
   KeyboardAvoidingView,
   Linking,
   Platform,
+  Pressable,
   Share,
   Text,
   View
 } from 'react-native';
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -23,10 +25,12 @@ import {
 import { useProfiles } from '../src/state';
 import { Action, Label, Screen, useColors } from '../src/ui';
 import { useNativeSession } from '../src/session';
+import { isOnlineProfile } from '../src/lib/profiles';
 import { PairingRequired } from '../src/lib/client';
 import { externalUrl, isSameServer, safePath } from '../src/lib/urls';
 import { resolveShellLoadPath, shellPathFromUrl } from '../src/lib/shell-path';
 import { handleBridgeMessage } from '../src/lib/bridge-handler';
+import { showConnectionMenu } from '../src/lib/connection-menu';
 
 export default function Home() {
   const { state, ready, error: storageError, update } = useProfiles();
@@ -51,6 +55,8 @@ export default function Home() {
   const [error, setError] = useState('');
   const [authError, setAuthError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [pageHasMenu, setPageHasMenu] = useState(false);
+  useEffect(() => setPageHasMenu(false), [profile?.id, profile?.serverUrl, params.path, revision]);
   const unknownServer =
     !!params.server && !state.profiles.some((p) => p.serverUrl === params.server);
   useEffect(() => {
@@ -98,9 +104,9 @@ export default function Home() {
   const handshake = useMemo<NativeShellHandshake>(
     () => ({
       bridgeVersion: MOBILE_BRIDGE_VERSION,
-      appVersion: '0.1.0',
+      appVersion: Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? '0',
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
-      profileMode: profile?.credential ? 'connect' : 'direct',
+      profileMode: 'connect',
       secureContext: profile?.serverUrl.startsWith('https:') ?? false,
       safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
       capabilities: ['haptic', 'badge', 'share', 'open-external', 'open-native', 'safe-area']
@@ -115,7 +121,7 @@ export default function Home() {
       </Screen>
     );
   if (!ready) return <ActivityIndicator style={{ flex: 1 }} color={c.accent} />;
-  if (!profile) return <Redirect href="/connect" />;
+  if (!profile || !isOnlineProfile(profile) || state.phoneLogin) return <Redirect href="/connect" />;
   if (unknownServer)
     return (
       <Screen>
@@ -137,55 +143,60 @@ export default function Home() {
     requestedPath: params.path
   });
   const sourceUrl = profile.serverUrl + safePath(loadPath);
+  const openMenu = () =>
+    showConnectionMenu({
+      label: profile.label,
+      share: () => {
+        const url = currentUrl.current || sourceUrl;
+        void Share.share({ message: url, ...(Platform.OS === 'ios' ? { url } : {}) }).catch(() => {});
+      },
+      reload: () => {
+        setLoading(true);
+        reconnect();
+      },
+      settings: () => router.push('/settings')
+    });
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior="height">
       <SafeAreaView
         style={{ flex: 1, backgroundColor: c.background }}
         edges={['top', 'left', 'right', 'bottom']}
       >
-        <View
-          style={{
-            minHeight: 52,
-            paddingHorizontal: 12,
-            flexDirection: 'row',
-            gap: 10,
-            alignItems: 'center'
-          }}
-        >
-          <Text
-            numberOfLines={1}
-            style={{ flex: 1, color: c.text, fontWeight: '600', fontSize: 16 }}
+        {/* Older pages and connection failures still need a native way out. */}
+        {!pageHasMenu || error || !sessionReady ? (
+          <View
+            style={{
+              minHeight: 44,
+              paddingHorizontal: 12,
+              flexDirection: 'row',
+              gap: 10,
+              alignItems: 'center'
+            }}
           >
-            {profile.label}
-          </Text>
-          <Action
-            secondary
-            title="Share"
-            onPress={() => {
-              void Share.share({
-                message: currentUrl.current || sourceUrl,
-                ...(Platform.OS === 'ios' ? { url: currentUrl.current || sourceUrl } : {})
-              }).catch(() => {});
-            }}
-          />
-          <Action
-            secondary
-            title="Reload"
-            onPress={() => {
-              setLoading(true);
-              reconnect();
-            }}
-          />
-          <Action secondary title="This device" onPress={() => router.push('/settings')} />
-        </View>
+            <Text
+              numberOfLines={1}
+              style={{ flex: 1, color: c.text, fontWeight: '600', fontSize: 16 }}
+            >
+              {profile.label}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Connection options"
+              onPress={openMenu}
+              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ color: c.text, fontSize: 28 }} aria-hidden>⋯</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {error ? (
           <Screen>
             <Label>{error}</Label>
             <Action
-              title={authError ? 'Pair again' : 'Try again'}
+              title={authError ? 'Sign in again' : 'Try again'}
               onPress={() =>
                 authError
-                  ? router.push({ pathname: '/connect', params: { server: profile.serverUrl } })
+                  ? router.push('/connect')
                   : reconnect()
               }
             />
@@ -245,6 +256,8 @@ export default function Home() {
                   {
                     inject: (script) => web.current?.injectJavaScript(script),
                     ready: () => setLoading(false),
+                    openMenu,
+                    shellChrome: setPageHasMenu,
                     openSettings: () => router.push('/settings'),
                     authRequired: () => {
                       setAuthError(true);
@@ -285,6 +298,7 @@ export default function Home() {
                   }
                 );
               }}
+              onLoadStart={() => setPageHasMenu(false)}
               onLoadEnd={() => setLoading(false)}
               onError={(event) => setError(event.nativeEvent.description || 'Zana is unreachable.')}
               onHttpError={(event) => {

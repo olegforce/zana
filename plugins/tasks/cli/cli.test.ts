@@ -1986,6 +1986,21 @@ describe("zcc tasks CLI", () => {
     await harness.dispose();
   });
 
+  it.each([null, "env-without-host"])("never falls back to the primary when a thread lacks machine ownership: %s", async environmentId => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks", sdk: {
+      threads: { get: async ({ threadId }: { threadId: string }) => makeThreadResponse({ id: threadId, environmentId }) },
+      environments: { get: async () => ({ hostId: null }) },
+      files: { read: vi.fn() }
+    } });
+    try {
+      await plugin(bb);
+      stdout(await harness.runCli(["project", "create", "--name", "Machine ownership", "--prefix", "OWN"]));
+      const result = await harness.runCli(["create", "--project", "OWN", "--title", "No fallback", "--description-file", "/other-machine/private.md"], { threadId: "thr_missing_environment", cwd: "/other-machine" });
+      expect(result).toMatchObject({ exitCode: 1, stderr: expect.stringContaining("Choose --machine explicitly") });
+      expect(harness.sdk.callsTo("files.read")).toHaveLength(0);
+    } finally { await harness.dispose(); }
+  });
+
   it("returns a friendly dispatch error when the task project is not linked", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     await plugin(bb);

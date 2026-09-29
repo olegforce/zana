@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent } from '@testing-library/react';
+import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { renderSlot } from '@zana-ai/zcc-plugin-sdk/testing/app';
 import { DocumentPanel } from './DocumentPanel.js';
 
@@ -77,7 +77,7 @@ describe('DocumentPanel', () => {
       },
       {
         rpc: {
-          read: () => ({ ok: true, content: '# Auth\n' }),
+          read: () => ({ ok: true, content: '# Auth\n', sha256: 'a'.repeat(64) }),
           write: (input) => {
             writes.push(input);
             return { ok: true };
@@ -89,12 +89,42 @@ describe('DocumentPanel', () => {
     vi.useFakeTimers();
     fireEvent.change(editor, { target: { value: '# Auth\n\nUpdated.\n' } });
     expect(writes).toEqual([]);
-    await vi.advanceTimersByTimeAsync(700);
+    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
     expect(writes).toEqual([{
       path: 'findings/auth.md',
       scope: 'project',
       projectId: 'p1',
-      content: '# Auth\n\nUpdated.\n'
+      content: '# Auth\n\nUpdated.\n',
+      expectedSha256: 'a'.repeat(64)
     }]);
+  });
+  it.each([false, true])('shows a read error without enabling edits (throws=%s)', async throws => {
+    const slot = renderSlot({ component: DocumentPanel }, { pluginId: 'docs', threadId: 't1', params: { path: 'note.md', scope: 'global' } }, { rpc: { read: () => { if (throws) throw new Error('Offline'); return { ok: false, message: 'Missing document' }; } } });
+    const alert = await slot.findByRole('alert'); expect(alert.textContent).toMatch(/Offline|Missing document/); expect(slot.queryByTestId('mock-md')).toBeNull();
+  });
+  it('keeps the draft visible when a revision conflict stops autosave', async () => {
+    const write = vi.fn((_input: unknown) => ({ ok: false, message: 'Changed elsewhere; reload before saving' }));
+    const slot = renderSlot({ component: DocumentPanel }, { pluginId: 'docs', threadId: 't1', params: { path: 'note.md', scope: 'global' } }, { rpc: { read: () => ({ ok: true, content: '# Note', sha256: 'a'.repeat(64) }), write } });
+    const editor = await slot.findByTestId('mock-md'); vi.useFakeTimers();
+    fireEvent.change(editor, { target: { value: 'Unsaved draft' } }); await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    expect(slot.getByRole('alert').textContent).toContain('Changed elsewhere'); expect((slot.getByTestId('mock-md') as HTMLTextAreaElement).value).toBe('Unsaved draft');
+    fireEvent.change(editor, { target: { value: 'Later draft' } }); await act(async () => { await vi.advanceTimersByTimeAsync(700); }); expect(write).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledWith({ path: 'note.md', scope: 'global', content: 'Unsaved draft', expectedSha256: 'a'.repeat(64) });
+  });
+  it('advances the revision between sequential saves', async () => {
+    const write = vi.fn((_input: unknown) => ({ ok: true, sha256: 'b'.repeat(64) }));
+    const slot = renderSlot({ component: DocumentPanel }, { pluginId: 'docs', threadId: 't1', params: { path: 'note.md', scope: 'global' } }, { rpc: { read: () => ({ ok: true, content: '# Note', sha256: 'a'.repeat(64) }), write } });
+    const editor = await slot.findByTestId('mock-md'); vi.useFakeTimers();
+    fireEvent.change(editor, { target: { value: 'First' } }); await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    fireEvent.change(editor, { target: { value: 'Second' } }); await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    expect(write.mock.calls[1][0]).toMatchObject({ expectedSha256: 'b'.repeat(64) });
+    fireEvent.click(slot.getByRole('button', { name: 'Open in Library' }));
+  });
+  it('ignores a late read after the panel is closed', async () => {
+    let release!: (value: unknown) => void;
+    const read = vi.fn(() => new Promise(resolve => { release = resolve; }));
+    const slot = renderSlot({ component: DocumentPanel }, { pluginId: 'docs', threadId: 't1', params: { path: 'note.md', scope: 'global' } }, { rpc: { read } });
+    await waitFor(() => expect(read).toHaveBeenCalledOnce()); slot.unmount(); release({ ok: true, content: 'Late' }); await Promise.resolve();
+    expect(slot.queryByTestId('mock-md')).toBeNull();
   });
 });

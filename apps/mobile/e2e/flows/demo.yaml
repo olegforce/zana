@@ -1,0 +1,21 @@
+# Run only on an isolated test simulator: this clears its test app state.
+appId: ai.zana.mobile
+---
+- launchApp:
+    clearState: true
+- tapOn: Try a demo without connecting
+- assertVisible: Explore Zana
+- assertVisible: 'Sample project: My website'
+- scrollUntilVisible:
+    element:
+      id: demo-message
+- tapOn:
+    id: demo-message
+- inputText: Help me plan a clearer homepage
+- tapOn:
+    id: demo-send
+- assertVisible: Demo assistant
+- scrollUntilVisible:
+    element: Connect my computer
+- tapOn: Connect my computer
+- assertVisible: Your agents, anywhere.

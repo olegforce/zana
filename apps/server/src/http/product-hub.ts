@@ -1,6 +1,9 @@
 import type { WebSocket } from 'ws';
+import { boundedSocketSender } from './bounded-socket-sender.js';
 
 export type ProductEventType =
+  | 'product:reset'
+  | 'shared:changed'
   | 'inbox:appended'
   | 'inbox:removed'
   | 'inbox:updated'
@@ -22,7 +25,6 @@ export type ProductEventType =
   | 'threads:open'
   | 'threads:tabs'
   | 'threads:browser'
-  | 'scheduler:command'
   | 'projects:cloneProgress'
   | 'library:changed'
   | 'hosts:changed'
@@ -41,21 +43,27 @@ export interface ProductEvent {
  * In-process fan-out for loopback `/ws` clients. The product HTTP handlers emit
  * here after a store mutation so browser tabs stay live without polling.
  */
-export function createProductHub() {
-  const clients = new Set<WebSocket>();
+export function createProductHub(onLibraryChanged?: () => void, onProjectsChanged?: () => void) {
+  const clients = new Map<WebSocket, ReturnType<typeof boundedSocketSender>>();
+  const budget = { bytes: 0, limit: 32 * 1024 * 1024 };
   return {
     add(socket: WebSocket): void {
-      clients.add(socket);
+      if (clients.has(socket)) return;
+      if (clients.size >= 128) { socket.close(1013, 'product-client-limit'); return; }
+      const sender = boundedSocketSender(socket, budget, () => clients.delete(socket));
+      clients.set(socket, sender);
       socket.on('close', () => {
+        sender.dispose();
         clients.delete(socket);
       });
     },
     emit(type: ProductEventType, payload: unknown): void {
       const msg = JSON.stringify({ type, payload } satisfies ProductEvent);
-      for (const socket of clients) {
-        if (socket.readyState === socket.OPEN) socket.send(msg);
-      }
+      for (const sender of clients.values()) sender.send(msg);
+      if (type === 'library:changed' || type === 'hosts:changed') { try { onLibraryChanged?.(); } catch { /* Parent shutdown must not fail an acknowledged mutation. */ } }
+      if (type === 'projects:changed') { try { onProjectsChanged?.(); } catch { /* The registry commit has already succeeded. */ } }
     },
+    pong(socket: WebSocket): void { clients.get(socket)?.send('{"type":"pong"}'); },
     size(): number {
       return clients.size;
     }

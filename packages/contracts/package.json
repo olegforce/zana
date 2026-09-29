@@ -19,6 +19,16 @@
       "source": "./src/project-settings.ts",
       "default": "./src/project-settings.ts"
     },
+    "./project-metadata-records": {
+      "types": "./src/project-metadata-records.ts",
+      "source": "./src/project-metadata-records.ts",
+      "default": "./src/project-metadata-records.ts"
+    },
+    "./project-history": {
+      "types": "./src/project-history.ts",
+      "source": "./src/project-history.ts",
+      "default": "./src/project-history.ts"
+    },
     "./runtime": {
       "types": "./src/runtime.ts",
       "source": "./src/runtime.ts",
@@ -38,7 +48,26 @@
       "types": "./src/host-rpc.ts",
       "source": "./src/host-rpc.ts",
       "default": "./src/host-rpc.ts"
-    }
+    },
+    "./shared-product": {
+      "types": "./src/shared-product.ts",
+      "source": "./src/shared-product.ts",
+      "default": "./src/shared-product.ts"
+    },
+    "./library-agent": "./src/library-agent.ts",
+    "./library-documents": {
+      "types": "./src/library-documents.ts",
+      "source": "./src/library-documents.ts",
+      "default": "./src/library-documents.ts"
+    },
+    "./project-feed": {
+      "types": "./src/project-feed.ts",
+      "source": "./src/project-feed.ts",
+      "default": "./src/project-feed.ts"
+    },
+    "./cli-discovery": "./src/cli-discovery.ts",
+    "./cli-callbacks": "./src/cli-callbacks.ts",
+    "./cli-terminal": "./src/cli-terminal.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

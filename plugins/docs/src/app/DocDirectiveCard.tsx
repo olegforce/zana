@@ -21,6 +21,7 @@ export function DocDirectiveCard(props: PluginMessageDirectiveProps) {
     openDocFromCard({
       document,
       projectId: props.message.projectId,
+      threadId: props.message.threadId,
       openWorkspaceFile: props.openWorkspaceFile,
       openThreadPanel: (options) => navigate.openThreadPanel(options),
       toPluginPanel: (path, options) => navigate.toPluginPanel(path, options)

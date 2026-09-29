@@ -1,0 +1,22 @@
+appId: ai.zana.mobile
+name: Old QR links open account sign-in
+# Use a dedicated test simulator. This smoke flow does not approve an account.
+---
+- launchApp
+- openLink:
+    link: 'zana://connect?payload=%7B%22version%22%3A1%2C%22serverUrl%22%3A%22http%3A%2F%2F192.168.1.10%3A8785%22%2C%22code%22%3A%22aaaaaaaaaaaaaaaaaaaaaa%22%2C%22expiresAt%22%3A1%7D'
+- runFlow:
+    when:
+      platform: iOS
+      visible: Open
+    commands:
+      - tapOn: Open
+- extendedWaitUntil:
+    visible: 'Continue with GitHub|Choose your computer'
+    timeout: 30000
+- assertNotVisible: Server URL
+- assertNotVisible: Scan pairing QR
+- assertNotVisible: Advanced connection options
+- assertNotVisible: aaaaaaaaaaaaaaaaaaaaaa
+- assertNotVisible: 192.168.1.10
+- takeScreenshot: zana-retired-pairing

@@ -10,6 +10,8 @@ import { registerExecutionBoardIpc } from '../execution-board.js';
 // at module load — real only inside a running Electron process. Stub just
 // enough of `electron` for that import chain to load under plain vitest; the
 // respond/resume paths under test never touch `store`/`dialog` directly.
+vi.mock('../shared-product-registry.js', () => ({ registerSharedProduct: vi.fn() }));
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/zcc-execution-board-sentinel-test-home' },
   dialog: { showMessageBox: vi.fn(), showOpenDialog: vi.fn() }

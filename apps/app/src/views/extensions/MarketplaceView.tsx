@@ -1,4 +1,5 @@
 import { product } from '../../lib/product-client.js';
+import { hasDesktopBridge } from '../../lib/app-surface.js';
 import { DelayedStencilList } from '../../components/ui/Skeleton.js';
 /**
  * Plugins → Browse (Marketplace). Lists first-party plugins the app ships
@@ -120,6 +121,7 @@ export function MarketplaceView({
   }, [installMenuOpen]);
 
   const refresh = useCallback(() => {
+    if (!hasDesktopBridge()) { setLoading(false); setEntries([]); return; }
     setLoading(true);
     setError(null);
     product.extensions
@@ -410,6 +412,11 @@ export function MarketplaceView({
       )}
     </div>
   );
+
+  if (!hasDesktopBridge()) return <section className="settings-section ext-market" data-testid="desktop-plugin-install-notice">
+    <h3>Install plugins on the owner’s desktop</h3>
+    <p>Open Zana on the computer that owns this instance to install plugins. Supported installed plugins are shared with all connected clients.</p>
+  </section>;
 
   if (authorKeyParam) {
     return (

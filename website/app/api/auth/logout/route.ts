@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   await logoutSession(req);
 
-  const homeUrl = new URL('/', req.url);
+  const homeUrl = new URL('/', process.env.PUBLIC_BASE_URL || req.url);
   const res = NextResponse.redirect(homeUrl, 302);
   res.headers.append('Set-Cookie', clearSessionCookieHeader());
   return res;

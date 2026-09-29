@@ -7,10 +7,12 @@ interface UseFileOperationsProps {
   viewRoot: string;
   isRemote: boolean;
   projectId: string;
+  hostId?: string;
+  primaryHostId?: string;
   pushToast: (message: string, type?: 'error') => void;
 }
 
-export function useFileOperations({ viewRoot, isRemote, projectId, pushToast }: UseFileOperationsProps) {
+export function useFileOperations({ viewRoot, isRemote, projectId, hostId, primaryHostId, pushToast }: UseFileOperationsProps) {
   const sendPathToTerminal = useCallback(async (path: string, getActiveTabId: () => string | undefined, setProjectView: (projectId: string, mode: 'terminals') => void) => {
     const activeTabId = getActiveTabId();
     if (!activeTabId) {
@@ -28,13 +30,20 @@ export function useFileOperations({ viewRoot, isRemote, projectId, pushToast }: 
     const posixQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
     try {
-      await product.terminals.write(activeTabId, posixQuote(rel) + ' ');
+      if (hostId) {
+        const terminal = (await product.terminals.list(projectId)).find(row => row.id === activeTabId);
+        if (!terminal || (terminal.hostId ?? primaryHostId) !== hostId || (terminal.cwd !== viewRoot && !terminal.cwd.startsWith(viewRoot + '/'))) {
+          pushToast('Choose a terminal on this machine and checkout first', 'error');
+          return;
+        }
+      }
+      await product.terminals.write(activeTabId, posixQuote(hostId ? path : rel) + ' ');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : 'Failed to write to terminal', 'error');
       return;
     }
     setProjectView(projectId, 'terminals');
-  }, [viewRoot, projectId, pushToast]);
+  }, [viewRoot, projectId, hostId, primaryHostId, pushToast]);
 
   const copyPath = useCallback(async (path: string) => {
     try {

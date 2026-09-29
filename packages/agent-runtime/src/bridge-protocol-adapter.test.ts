@@ -158,6 +158,70 @@ describe("thread/stop intent", () => {
   });
 });
 
+describe("outbound turn identity", () => {
+  function openTurn(adapter: ReturnType<typeof makeAdapter>, threadId: string, providerTurnId?: string): string {
+    const events = adapter.translateEvent({
+      jsonrpc: "2.0",
+      method: "thread/delta",
+      params: { threadId, deltas: [{ kind: "turn.open", ...(providerTurnId ? { providerTurnId } : {}) }] },
+    });
+    const started = events.find((event) => event.type === "turn/started");
+    if (started?.scope.kind !== "turn") throw new Error("Turn did not start");
+    return started.scope.turnId;
+  }
+
+  function steer(adapter: ReturnType<typeof makeAdapter>, threadId: string, turnId: string) {
+    return adapter.buildCommandPlan({
+      type: "turn/steer", threadId, providerThreadId: "provider-thread",
+      expectedTurnId: turnId, input: [{ type: "text", text: "Send now", mentions: [] }],
+      clientRequestId: "creq_abcdefghjk", options: fullModeOptions,
+    });
+  }
+
+  it("translates assembled turn ids back to native ids for steering and acceptance", () => {
+    const adapter = makeAdapter();
+    const nativeId = "01a0df80-9551-7660-bfe1-6a4f17748323";
+    const turnId = openTurn(adapter, "thr_1", nativeId);
+    expect(turnId).not.toBe(nativeId);
+    expect(steer(adapter, "thr_1", turnId)).toMatchObject({
+      method: "turn/steer", params: { expectedTurnId: nativeId },
+    });
+    expect(adapter.translateEvent({
+      jsonrpc: "2.0", method: "thread/delta",
+      params: { threadId: "thr_1", deltas: [{
+        kind: "input.accepted", providerTurnId: nativeId, clientRequestId: "creq_abcdefghjk",
+      }] },
+    })).toMatchObject([{
+      type: "turn/input/accepted", scope: { kind: "turn", turnId },
+    }]);
+  });
+
+  it("translates interrupt ids using only the target thread's mapping", () => {
+    const adapter = makeAdapter();
+    const one = openTurn(adapter, "thr_1", "native-one");
+    const two = openTurn(adapter, "thr_2", "native-two");
+    for (const [threadId, turnId, nativeId] of [["thr_1", one, "native-one"], ["thr_2", two, "native-two"]] as const) {
+      expect(adapter.buildCommandPlan({
+        type: "thread/stop", threadId, providerThreadId: "provider-thread", activeTurnId: turnId,
+      })).toMatchObject({ params: { intent: "interrupt", activeTurnId: nativeId } });
+      expect(steer(adapter, threadId, turnId)).toMatchObject({ params: { expectedTurnId: nativeId } });
+    }
+    expect(steer(adapter, "unknown-thread", one)).toMatchObject({ params: { expectedTurnId: one } });
+  });
+
+  it("preserves ids for bridges without native turn ids and leaves idle release unchanged", () => {
+    const adapter = makeAdapter();
+    const turnId = openTurn(adapter, "thr_1");
+    expect(steer(adapter, "thr_1", turnId)).toMatchObject({ params: { expectedTurnId: turnId } });
+    expect(adapter.buildCommandPlan({
+      type: "thread/stop", threadId: "thr_1", providerThreadId: "provider-thread", activeTurnId: turnId,
+    })).toMatchObject({ params: { intent: "interrupt", activeTurnId: turnId } });
+    expect(adapter.buildCommandPlan({
+      type: "thread/stop", threadId: "thr_1", providerThreadId: "provider-thread", activeTurnId: null,
+    })).toMatchObject({ params: { intent: "release", activeTurnId: null } });
+  });
+});
+
 describe("provider maintenance mapping", () => {
   it("sends provider/health with the adapter id", () => {
     const adapter = makeAdapter();

@@ -1,5 +1,6 @@
 export { IPC } from './ipc.js';
-export type { CcApi, HostBootstrapEvent, ZccDesktopApi } from './cc-api.js';
+export type { RuntimePerformanceSnapshot, RuntimeProcessSample } from './performance.js';
+export type { CcApi, HostBootstrapEvent, ProjectFileScope, ZccDesktopApi } from './cc-api.js';
 export {
   DESKTOP_BROWSER_MAX_EVAL_SCRIPT_LENGTH,
   DESKTOP_BROWSER_MAX_FIND_TEXT_LENGTH,
@@ -50,6 +51,7 @@ export type {
   DesktopBrowserViewBounds,
   DesktopBrowserViewportBounds
 } from './browser.js';
+export { browserPreviewIdentity, sameBrowserDocument } from './browser-preview.js';
 export {
   DESKTOP_BROWSER_IMPORT_FAILURE_COPY,
   DESKTOP_BROWSER_IMPORT_SOURCE_IDS,

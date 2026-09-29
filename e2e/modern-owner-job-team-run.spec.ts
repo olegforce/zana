@@ -186,7 +186,11 @@ test('Modern owner starts a durable Job Team through the host tool-call bridge a
       const log = existsSync(join(projectDir, '.fake-coordinator.log'))
         ? readFileSync(join(projectDir, '.fake-coordinator.log'), 'utf8')
         : 'no fake coordinator log';
-      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify(snapshot)}\n${log}\n${diagnostics.join('\n')}`);
+      const sessions = await window.evaluate(async id => Promise.all((await window.cc.terminals.list(id)).map(async row => ({
+        id: row.id, profile: row.profile, status: row.status, exitCode: row.exitCode,
+        output: String(await window.cc.terminals.backlog(row.id)).slice(-8192)
+      }))), projectId!);
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify(snapshot)}\n${log}\nSessions: ${JSON.stringify(sessions)}\n${diagnostics.join('\n').slice(-16_384)}`);
     }
     await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
     expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');

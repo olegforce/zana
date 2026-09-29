@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import type { SquadFlowGraph, SquadFlowNode } from '@zana-ai/zcc-domain/product';
 
 // The view pulls in the live store + canvas-pan hook + router at import; stub them
@@ -19,7 +19,10 @@ vi.mock('@/store', () => ({
   agentViewTerminals: () => []
 }));
 vi.mock('@/hooks/useCanvasPan', () => ({ useCanvasPan: () => ({ isPanning: false, canvasPanProps: {} }) }));
-vi.mock('@/lib/inspect-session', () => ({ inspectAgentSession: () => undefined }));
+const mobile = vi.hoisted(() => ({ compact: false, inspect: vi.fn() }));
+vi.mock('@/hooks/useCompactLayout', () => ({ useCompactLayout: () => mobile.compact }));
+vi.mock('@/lib/inspect-session', () => ({ inspectAgentSession: mobile.inspect }));
+afterEach(() => { mobile.compact = false; mobile.inspect.mockClear(); });
 vi.mock('@/components/SquadSwitcher', () => ({ SquadSwitcher: () => null }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 
@@ -240,7 +243,40 @@ describe('SquadFlowView separate Team-run canvases', () => {
   it('uses one pannable scrollport for the full stack instead of nested run scrollports', () => {
     expect(css).toMatch(/\.squad-flow-run-groups \{[^}]*overflow:\s*auto;[^}]*cursor:\s*grab;/s);
     expect(css).toMatch(/\.squad-flow-run-groups \.squad-flow-canvas \{[^}]*overflow:\s*visible;/s);
-    expect(view).toContain('aria-label="Squad run canvases. Drag empty space to pan."');
+    expect(view).toContain('Squad run canvases. Drag empty space to pan.');
+    expect(view).toContain('Agent canvases. Swipe to explore.');
     expect(view).toContain('pannable={false}');
+  });
+});
+
+
+describe('mobile canvas interaction', () => {
+  afterEach(cleanup);
+  it('leaves touch gestures to native scrolling and opens a tapped agent directly', () => {
+    mobile.compact = true;
+    const inspectJob = vi.fn();
+    const graph: SquadFlowGraph = {
+      projectId: 'p1', nodes: [flowNode({ sessionId: 'phone-agent', job: { executionId: 'e1' } })],
+      edges: [], summary: { total: 1, working: 0, blocked: 0, idle: 1, exited: 0 }, builtAt: Date.now()
+    };
+    const { container, getByLabelText, rerender } = render(<SquadGraph graph={graph} onInspectExecution={inspectJob} />);
+    const node = container.querySelector<HTMLButtonElement>('.squad-flow-node')!;
+    expect(node.title).toContain('Tap to open agent');
+    node.setPointerCapture = vi.fn();
+    fireEvent.pointerDown(node, { pointerId: 1, pointerType: 'touch', button: 0 });
+    fireEvent.pointerMove(node, { pointerId: 1, pointerType: 'touch', clientX: 90 });
+    fireEvent.pointerCancel(node, { pointerId: 1 });
+    expect(node.setPointerCapture).not.toHaveBeenCalled();
+    expect(mobile.inspect).not.toHaveBeenCalled();
+    expect(node.classList.contains('squad-flow-node--dragging')).toBe(false);
+    const canvas = getByLabelText('Agent canvas. Swipe to explore.');
+    expect(canvas.scrollLeft).toBe(Number.parseFloat(node.style.left) + 244 / 2 - canvas.clientWidth / 2);
+    canvas.scrollLeft = 17;
+    rerender(<SquadGraph graph={{ ...graph, builtAt: graph.builtAt + 1 }} onInspectExecution={inspectJob} />);
+    expect(canvas.scrollLeft).toBe(17);
+    fireEvent.click(node);
+    expect(mobile.inspect).toHaveBeenCalledTimes(1);
+    expect(mobile.inspect).toHaveBeenCalledWith('phone-agent', 'p1', expect.any(Function));
+    expect(inspectJob).not.toHaveBeenCalled();
   });
 });

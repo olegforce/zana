@@ -1,0 +1,115 @@
+name: Mobile iOS TestFlight
+
+# Deliberate release action only: no push, tag, PR or nightly publication.
+on:
+  workflow_dispatch:
+    inputs:
+      submit:
+        description: Upload the verified IPA to TestFlight (does not publish to the App Store)
+        type: boolean
+        default: false
+        required: true
+      external_group:
+        description: Existing unique beta group name; empty skips external distribution
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+concurrency:
+  group: zana-mobile-ios-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Configure required reviewers and allowed branches before enabling this environment.
+    environment: mobile-ios-release
+    runs-on: macos-15
+    timeout-minutes: 150
+    defaults:
+      run:
+        working-directory: apps/mobile
+        shell: bash
+    env:
+      MOBILE_RELEASE_ENABLED: ${{ vars.MOBILE_RELEASE_ENABLED }}
+      EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID }}
+      EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+      ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
+      ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
+      ASC_API_KEY_PATH: ${{ runner.temp }}/zana-asc-api-key.p8
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Validate release configuration
+        run: node scripts/release-config.mjs prepare
+      - name: Require submission secret before spending build capacity
+        if: ${{ inputs.submit }}
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: test -n "$ASC_API_KEY_P8"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check release tooling
+        working-directory: .
+        run: |
+          pnpm exec vitest run apps/mobile/scripts/release-config.test.ts apps/mobile/scripts/testflight-distribute.test.ts apps/mobile/scripts/testflight-public-link.test.ts
+          python3 -m unittest discover -s apps/mobile/scripts -p 'test_verify_ipa.py'
+      - name: Build a fresh native iOS app on EAS
+        run: |
+          # No generated native tree may enter this archive. EAS prebuild
+          # regenerates Info.plist from the committed Expo release config.
+          test ! -d ios
+          pnpm dlx eas-cli@24.8.0 build --platform ios --profile production --non-interactive --freeze-credentials --wait --json > eas-build.json
+      - name: Select this exact completed build
+        id: build
+        run: node scripts/release-config.mjs result
+      - name: Download and inspect signed IPA
+        env:
+          IPA_URL: ${{ steps.build.outputs.url }}
+          APP_VERSION: ${{ steps.build.outputs.version }}
+          BUILD_NUMBER: ${{ steps.build.outputs.build }}
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' --max-time 600 --max-filesize 1073741824 "$IPA_URL" --output Zana.ipa
+          python3 scripts/verify-ipa.py Zana.ipa --version "$APP_VERSION" --build "$BUILD_NUMBER" --team "$APPLE_TEAM_ID" > verified-ipa.json
+          cat verified-ipa.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload verification record
+        uses: actions/upload-artifact@v7
+        with:
+          name: zana-ios-verification-${{ steps.build.outputs.id }}
+          path: apps/mobile/verified-ipa.json
+          if-no-files-found: error
+      - name: Prepare submission credentials
+        if: ${{ inputs.submit }}
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          test -n "$ASC_API_KEY_P8"
+          umask 077
+          printf '%s\n' "$ASC_API_KEY_P8" > "$ASC_API_KEY_PATH"
+      - name: Submit the verified IPA to TestFlight
+        if: ${{ inputs.submit }}
+        run: |
+          # Submit the inspected bytes, never --latest or an automatic upload
+          # that races ahead of the native version/signature check.
+          pnpm dlx eas-cli@24.8.0 submit --platform ios --profile production --path Zana.ipa --non-interactive --wait
+      - name: Wait for processing and attach the beta group
+        if: ${{ inputs.submit && inputs.external_group != '' }}
+        env:
+          APP_VERSION: ${{ steps.build.outputs.version }}
+          BUILD_NUMBER: ${{ steps.build.outputs.build }}
+          BETA_GROUP: ${{ inputs.external_group }}
+        run: |
+          node scripts/testflight-distribute.mjs --version "$APP_VERSION" --build "$BUILD_NUMBER" --group "$BETA_GROUP" --key-path "$ASC_API_KEY_PATH"
+      - name: Remove temporary submission key
+        if: ${{ always() }}
+        run: rm -f -- "$ASC_API_KEY_PATH"

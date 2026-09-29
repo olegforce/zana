@@ -35,6 +35,34 @@ afterEach(async () => {
 });
 
 describe('product HTTP', () => {
+  it('bounds event HTTP reads and polls/searches without loading invisible oversized diffs', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-history-http-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    const host = upsertHost(server.ctx.db, { name: 'test', hostKeyHash: 'h'.repeat(64) });
+    const thread = createConversationThread(server.ctx.db, { projectId: 'p', hostId: host.id, providerId: 'codex' });
+    appendConversationThreadEvent(server.ctx.db, {
+      threadId: thread.id, type: 'turn/diff/updated', payload: { diff: 'x'.repeat(17 * 1024 * 1024) }
+    });
+    const completed = appendConversationThreadEvent(server.ctx.db, {
+      threadId: thread.id, type: 'turn/completed', payload: { checkpoint: 'retained' }
+    });
+    const url = `${server.url}api/v1/threads/${thread.id}`;
+    const wait = await fetch(`${url}/events/wait?type=turn%2Fcompleted&waitMs=0`);
+    expect(wait.status).toBe(200);
+    expect(await wait.json()).toEqual(completed);
+    const page = await fetch(`${url}/events?limit=1`);
+    expect(await page.json()).toEqual({ events: [completed], hasOlder: true, nextBeforeSeq: completed.sequence });
+    const large = await fetch(`${url}/events?beforeSeq=${completed.sequence}`);
+    expect(large.status).toBe(413);
+    expect(await large.json()).toMatchObject({ code: 'history-read-too-large' });
+    expect((await fetch(`${url}/events?limit=-1`)).status).toBe(400);
+    expect((await fetch(`${url}/events?beforeSeq=NaN`)).status).toBe(400);
+    for (const path of ['timeline', 'conversation-outline', 'timeline/turn-summary-details?turnId=test&sourceSeqStart=1&sourceSeqEnd=2']) {
+      expect((await fetch(`${url}/${path}`)).status).toBe(200);
+    }
+    expect((await fetch(`${server.url}api/v1/health`)).status).toBe(200);
+  });
+
   it('serves health, Origin-guards browsers, and hydrates Home reads', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-http-'));
     const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-product-project-'));
@@ -158,6 +186,12 @@ describe('product HTTP', () => {
     const listed = await fetch(`${server.url}api/v1/threads`).then((response) => response.json());
     expect(listed).toEqual({ threads: [] });
 
+    // Discovery requires a connected host; test default projections with a healthy probe.
+    const originalResolve = server.ctx.hostHub.resolveHostId;
+    const originalRpc = server.ctx.hostHub.callHostOnlineRpc;
+    server.ctx.hostHub.resolveHostId = () => 'test-host';
+    server.ctx.hostHub.callHostOnlineRpc = async ({ command }) => command.type === 'provider.status'
+      ? { providers: [] } : { models: [], selectedOnlyModels: [] };
     const execution = await fetch(`${server.url}api/v1/system/execution-options?providerId=claude-code`);
     expect(execution.status).toBe(200);
     const options = await execution.json() as {
@@ -180,6 +214,9 @@ describe('product HTTP', () => {
       'Sonnet Alias (Legacy)',
       'Haiku Alias (Legacy)'
     ]));
+
+    server.ctx.hostHub.resolveHostId = originalResolve;
+    server.ctx.hostHub.callHostOnlineRpc = originalRpc;
 
     const providers = await fetch(`${server.url}api/v1/threads/providers`).then((response) => response.json());
     expect(providers.providers.map((row: { id: string }) => row.id)).toEqual(
@@ -274,6 +311,19 @@ describe('product HTTP', () => {
     expect(options.providers.map((row) => row.id)).toContain('acp-opencode');
   });
 
+  it('reports unavailable hosts as a retryable discovery failure instead of an empty successful roster', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-options-offline-'));
+    server = await startTestProductServer({ dataDir, port: 0, bindAddress: '127.0.0.1' });
+    server.ctx.hostHub.resolveHostId = () => 'local';
+    server.ctx.hostHub.callHostOnlineRpc = async () => { throw new HostUnavailableError(); };
+    const offline = await fetch(`${server.url}api/v1/system/execution-options`);
+    expect(offline.status).toBe(503);
+    expect(await offline.json()).toMatchObject({ code: 'host-unavailable' });
+    server.ctx.hostHub.callHostOnlineRpc = async () => ({ providers: [] });
+    const online = await fetch(`${server.url}api/v1/system/execution-options`);
+    expect(online.status).toBe(200);
+  });
+
   it('resolves execution-option discovery cwd from the registered project', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-options-project-'));
     const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-product-options-root-'));
@@ -311,6 +361,7 @@ describe('product HTTP', () => {
       if (input.command.type === 'provider.list_models') return { models: [], selectedOnlyModels: [] };
       throw new Error(`unexpected ${input.command.type}`);
     });
+    upsertHost(server.ctx.db, { id: 'host-1', name: 'Primary', hostKeyHash: 'a'.repeat(64), isPrimary: true });
     server.ctx.hostHub.resolveHostId = () => 'host-1';
     server.ctx.hostHub.callHostOnlineRpc = rpc;
 
@@ -337,8 +388,8 @@ describe('product HTTP', () => {
     const conflictingHost = await fetch(
       `${server.url}api/v1/system/execution-options?providerId=acp-opencode&projectId=proj-options&hostId=foreign`
     );
-    expect(conflictingHost.status).toBe(200);
-    expect(rpc.mock.calls.every(([input]) => input.hostId === 'host-1')).toBe(true);
+    expect(conflictingHost.status).toBe(409);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('uses the bound remote host and remote workspace for execution-option discovery', async () => {
@@ -509,7 +560,7 @@ describe('product HTTP', () => {
         launchCommand: 'npm run dev'
       }
     });
-    expect(created.value).not.toHaveProperty('hostId');
+    expect(created.value).toHaveProperty('hostId', 'host-1');
     expect(created.value).not.toHaveProperty('outputText');
     expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
       hostId: 'host-1',
@@ -531,7 +582,10 @@ describe('product HTTP', () => {
       record.outputTruncated = false;
     }
     const output = await fetch(`${server.url}api/v1/terminals/${created.value.id}/output`).then((response) => response.json());
-    expect(output).toEqual({ text: 'Local: http://localhost:5173\n', truncated: false });
+    expect(output).toEqual({ text: 'Local: http://localhost:5173\n', truncated: false, startOffset: 0, endOffset: 'Local: http://localhost:5173\n'.length });
+    if (record) record.outputEndOffset = 100;
+    const tail = await fetch(`${server.url}api/v1/terminals/${created.value.id}/output?tailBytes=4`).then(response => response.json());
+    expect(tail).toEqual({ text: '173\n', truncated: true, startOffset: 96, endOffset: 100 });
 
     const listed = await fetch(`${server.url}api/v1/terminals`).then((response) => response.json());
     expect(listed.sessions).toHaveLength(1);
@@ -2708,6 +2762,22 @@ describe('product HTTP thread tabs', () => {
       session: { id: 's1', status: 'idle', projectId: 'proj-1' }
     });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'proj-1', profile: 'claude' }));
+    for (const hostId of ['other-machine', '', 42]) {
+      const denied = await fetch(`${server.url}api/v1/cli-agents`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: 'proj-1', profile: 'claude', hostId })
+      });
+      expect(denied.status).toBe(409);
+    }
+    expect(create).toHaveBeenCalledOnce();
+
+    upsertHost(server.ctx.db, { id: 'selected-primary', name: 'Primary', hostKeyHash: 'a'.repeat(64), isPrimary: true });
+    const onPrimary = await fetch(`${server.url}api/v1/cli-agents`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: 'proj-1', profile: 'claude', hostId: 'selected-primary' })
+    });
+    expect(onPrimary.status).toBe(201);
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: 'selected-primary' }));
 
     const listed = await fetch(`${server.url}api/v1/cli-agents?tag=run1`).then((r) => r.json());
     expect(listed.sessions[0].id).toBe('s1');

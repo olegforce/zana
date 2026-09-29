@@ -1,4 +1,5 @@
 import React, { useState, type ReactNode } from 'react';
+import { PendingWorkerRecovery } from '../PendingWorkerRecovery.js';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -48,6 +49,7 @@ export function ScheduleInfoPanel({
     );
 
   const runs = task?.status.runs ?? [];
+  const pending = runs.filter(run => run.launchState === 'pending');
   const liveRun = task ? pickLiveRun(runs, isSessionAlive) : null;
   const liveSessionId = liveRun?.sessionId ?? null;
   const isWorking = !!liveRun && !liveRun.finishedAt;
@@ -92,6 +94,7 @@ export function ScheduleInfoPanel({
 
   return (
     <div className="schedule-info-panel" data-testid="schedule-info-panel">
+      {pending.length > 0 && <PendingWorkerRecovery key={task.id} kind="schedule" id={task.id} sessionIds={pending.flatMap(run => run.sessionId ? [run.sessionId] : [])} />}
       <section className="schedule-info-section">
         <h3>Status</h3>
         <dl className="schedule-info-facts">
@@ -179,6 +182,7 @@ export function ScheduleInfoPanel({
       {isExternal ? null : (
         <ScheduleInfoFooter
           enabled={task.enabled}
+          pending={pending.length > 0}
           liveSessionId={liveSessionId}
           onRunNow={() => void runNow()}
           onToggle={() => void toggle()}
@@ -218,6 +222,7 @@ function ScheduleRunReport({ run, taskName }: { run: ScheduleRun; taskName: stri
 
 function ScheduleInfoFooter({
   enabled,
+  pending,
   liveSessionId,
   onRunNow,
   onToggle,
@@ -225,6 +230,7 @@ function ScheduleInfoFooter({
   onAskDelete
 }: {
   enabled: boolean;
+  pending: boolean;
   liveSessionId: string | null;
   onRunNow: () => void;
   onToggle: () => void;
@@ -234,11 +240,11 @@ function ScheduleInfoFooter({
   return (
     <div className="schedule-info-actions">
       {liveSessionId ? null : (
-        <button type="button" className="settings-btn" onClick={onRunNow}>
+        <button type="button" className="settings-btn" disabled={pending} onClick={onRunNow}>
           <Play size={13} /> Run now
         </button>
       )}
-      <button type="button" className="settings-btn" onClick={onToggle}>
+      <button type="button" className="settings-btn" disabled={pending && !enabled} onClick={onToggle}>
         {enabled ? <><PowerOff size={13} /> Pause</> : <><Power size={13} /> Resume</>}
       </button>
       {onDuplicate ? (

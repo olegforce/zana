@@ -28,7 +28,7 @@ vi.mock('@zana-ai/zcc-db', () => ({
   getEnvironment: vi.fn(() => ({ id: thread.environmentId, path: '/tmp/proj' })),
   getHost: vi.fn(() => ({ permissionMode: 'auto' })),
   getThreadExecutionState: vi.fn(() => null),
-  listConversationThreadEvents: vi.fn(() => []),
+  getLatestConversationCheckpoint: vi.fn(() => null),
   listConversationThreadEventsWindow: vi.fn(() => []),
   setConversationProviderThreadId: vi.fn(),
   deleteConversationThreadEventsAfter: vi.fn(() => 1)
@@ -43,7 +43,7 @@ import {
   deleteConversationThreadEventsAfter,
   getConversationThread,
   getEnvironment,
-  listConversationThreadEvents
+  getLatestConversationCheckpoint
 } from '@zana-ai/zcc-db';
 import { sendConversationTurn, stopConversation } from './conversation-lifecycle.js';
 
@@ -84,16 +84,7 @@ beforeEach(() => {
     })
   );
   vi.mocked(getConversationThread).mockReturnValue(thread);
-  vi.mocked(listConversationThreadEvents).mockReturnValue([
-    {
-      id: 'evt-1',
-      threadId: thread.id,
-      sequence: 4,
-      type: 'turn/completed',
-      payload: { type: 'turn/completed', providerCheckpointId: 'cp-4' },
-      createdAt: 4
-    }
-  ]);
+  vi.mocked(getLatestConversationCheckpoint).mockReturnValue({ sequence: 4, checkpoint: 'cp-4' });
   vi.mocked(sendConversationTurn).mockClear();
   vi.mocked(stopConversation).mockClear();
   vi.mocked(deleteConversationThreadEventsAfter).mockClear();
@@ -180,7 +171,7 @@ describe('editConversationMessage', () => {
   });
 
   it('409s when the thread has no checkpoint', async () => {
-    vi.mocked(listConversationThreadEvents).mockReturnValue([]);
+    vi.mocked(getLatestConversationCheckpoint).mockReturnValue(null);
     await expect(editConversationMessage(ctx(vi.fn()), thread.id, {
       operationId: 'op-1',
       input: [{ type: 'text', text: 'replacement' }]

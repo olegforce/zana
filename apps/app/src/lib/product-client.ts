@@ -1,3 +1,9 @@
+import type { LibraryDoc } from '@zana-ai/zcc-domain/product';
+import { httpProjectGit, scopedDesktopGit } from './project-git.js';
+import { machineTerminals } from './machine-terminals.js';
+import { SHARED_PRODUCT_FAMILIES } from '@zana-ai/zcc-contracts/shared-product';
+import { sharedProductFamily } from './shared-product.js';
+import { sharedExtensions } from './shared-extensions.js';
 import type { CcApi } from '@zana-ai/zcc-desktop-contract';
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
 import type {
@@ -25,9 +31,19 @@ import { hasDesktopBridge } from './app-surface.js';
 import { apiJson, fetchWithAppSurface } from './fetch-with-app-surface.js';
 import { readNdjsonEvents } from './ndjson-events.js';
 import { subscribeProductEvent } from './product-ws.js';
+import { readHttpLibrary, subscribeHttpLibrary, mutateHttpLibrary, readHttpLibrarySnapshot, subscribeHttpLibrarySnapshot } from './http-library.js';
+import { readConversationJson } from './conversation-read.js';
 
 function noopSubscribe(_cb: unknown): () => void {
   return () => {};
+}
+async function goalOwnerUnavailable(): Promise<Result<never>> {
+  return { ok: false, code: 'unavailable', message: 'Goals require the instance owner to be connected' };
+}
+
+async function mutateFile(input: unknown): Promise<{ ok: boolean; path?: string; sha256?: string; message?: string }> {
+  try { return await apiJson('/fs/mutate', { method: 'POST', body: JSON.stringify(input) }); }
+  catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
 }
 
 async function requireOkNdjson<T>(
@@ -174,12 +190,14 @@ function httpProduct(): Pick<
       remove: async () => false,
       gitStatus: async () => null,
       paths: async (projectId: string, opts?: {
+        hostId?: string;
         query?: string;
         limit?: number;
         includeFiles?: boolean;
         includeDirectories?: boolean;
       }) => {
         const params = new URLSearchParams();
+        if (opts?.hostId) params.set('hostId', opts.hostId);
         if (opts?.query) params.set('query', opts.query);
         if (opts?.limit) params.set('limit', String(opts.limit));
         if (opts?.includeFiles === false) params.set('includeFiles', 'false');
@@ -318,6 +336,12 @@ function httpProduct(): Pick<
         subscribeProductEvent<SavedRecord[]>('saved:changed', cb)
     } as CcApi['saved'],
     goals: {
+      create: goalOwnerUnavailable,
+      update: goalOwnerUnavailable,
+      delete: goalOwnerUnavailable,
+      setStatus: goalOwnerUnavailable,
+      runNow: goalOwnerUnavailable,
+      reconcile: async (): ReturnType<CcApi['goals']['reconcile']> => ({ ok: false, code: 'unavailable', message: 'Worker recovery requires the instance owner to be connected' }),
       list: async () => {
         const body = await apiJson<{ goals: Goal[] }>('/goals');
         return body.goals;
@@ -336,6 +360,7 @@ function httpProduct(): Pick<
       delete: async () => ({ ok: false, code: 'unavailable', message: 'scheduling requires the desktop app' }),
       setEnabled: async () => ({ ok: false, code: 'unavailable', message: 'scheduling requires the desktop app' }),
       runNow: async () => ({ ok: false, code: 'unavailable', message: 'scheduling requires the desktop app' }),
+      reconcile: async (): ReturnType<CcApi['scheduler']['reconcile']> => ({ ok: false, code: 'unavailable', message: 'Worker recovery requires the instance owner to be connected' }),
       listTemplates: async () => [],
       onTemplatesChanged: noopSubscribe,
       revealTemplatesDir: async () => ({
@@ -385,9 +410,9 @@ function httpProduct(): Pick<
       verifyTmux: async () => ({ installed: false, installHint: 'tmux requires the desktop app' }),
       listTmuxRestoreCandidates: async () => [],
       listRememberedSessions: async () => [],
-      list: async () => {
+      list: async (projectId: string) => {
         const body = await apiJson<{ sessions: TerminalSession[] }>('/terminals');
-        return body.sessions;
+        return body.sessions.filter((session) => session.projectId === projectId);
       },
       restore: async () => ({
         ok: false,
@@ -420,15 +445,24 @@ function httpProduct(): Pick<
       setFavorites: async () => {},
       setHeartbeat: async () => null,
       setHeadless: async () => null,
-      backlog: async () => '',
-      onData: (cb) => subscribeProductEvent<{ sessionId: string; data: string }>('terminals:data', (payload) => {
-        cb(payload.sessionId, payload.data);
+      backlog: async (id) => (await apiJson<{ text: string }>(`/terminals/${encodeURIComponent(id)}/output`)).text,
+      backlogSnapshot: async (id) => apiJson<{ text: string; startOffset: number; endOffset: number }>(`/terminals/${encodeURIComponent(id)}/output`),
+      onData: (cb) => subscribeProductEvent<{ sessionId: string; data: string; startOffset?: number; endOffset?: number }>('terminals:data', (payload) => {
+        cb(payload.sessionId, payload.data, typeof payload.startOffset === 'number' && typeof payload.endOffset === 'number'
+          ? { startOffset: payload.startOffset, endOffset: payload.endOffset } : undefined);
       }),
-      onUpdated: (cb) => subscribeProductEvent('terminals:updated', (payload) => {
-        if (payload && typeof payload === 'object' && 'id' in payload) {
-          cb(payload as TerminalSession);
-        }
-      }),
+      onUpdated: (cb) => {
+        let disposed = false;
+        const stop = subscribeProductEvent('terminals:updated', (payload) => {
+          if (!payload || typeof payload !== 'object') return;
+          if ('id' in payload) cb(payload as TerminalSession);
+          else if ('sessionId' in payload && typeof payload.sessionId === 'string') {
+            void apiJson<{ session: TerminalSession }>(`/terminals/${encodeURIComponent(payload.sessionId)}`)
+              .then(body => { if (!disposed) cb(body.session); }).catch(() => {});
+          }
+        });
+        return () => { disposed = true; stop(); };
+      },
       onExit: (cb) => subscribeProductEvent<{ sessionId: string; code: number }>('terminals:exit', (payload) => {
         cb(payload.sessionId, payload.code);
       }),
@@ -479,7 +513,7 @@ function httpProduct(): Pick<
       }
     } as CcApi['terminals'],
     hosts: {
-      createJoinCode: async () => apiJson('/hosts/join-codes', { method: 'POST', body: '{}' }),
+      createJoinCode: async () => apiJson('/hosts/join-codes/preferred', { method: 'POST', body: '{}' }),
       list: async () => apiJson<Host[]>('/hosts'),
       get: async (id) => apiJson<Host>(`/hosts/${encodeURIComponent(id)}`),
       update: async (id, patch) => apiJson<Host>(`/hosts/${encodeURIComponent(id)}`, {
@@ -653,7 +687,7 @@ function httpProduct(): Pick<
         const body = await apiJson<{ threads: Awaited<ReturnType<CcApi['threads']['list']>> }>(`/threads${suffix}`);
         return body.threads;
       },
-      get: async (threadId) => apiJson(`/threads/${encodeURIComponent(threadId)}`),
+      get: async (threadId, options) => readConversationJson(`/threads/${encodeURIComponent(threadId)}`, options?.signal),
       send: async (threadId, input, mode, extras) =>
         apiJson(`/threads/${encodeURIComponent(threadId)}/send`, {
           method: 'POST',
@@ -717,7 +751,7 @@ function httpProduct(): Pick<
         apiJson(`/threads/${encodeURIComponent(threadId)}/child-summary`),
       resume: async (threadId) =>
         apiJson(`/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST', body: '{}' }),
-      timeline: async (threadId, query) => {
+      timeline: async (threadId, query, options) => {
         const params = new URLSearchParams();
         if (query?.segmentLimit) params.set('segmentLimit', String(query.segmentLimit));
         if (query?.beforeAnchorSeq) params.set('beforeAnchorSeq', String(query.beforeAnchorSeq));
@@ -726,7 +760,7 @@ function httpProduct(): Pick<
         if (query?.includeNestedRows) params.set('includeNestedRows', query.includeNestedRows);
         if (query?.summaryOnly) params.set('summaryOnly', query.summaryOnly);
         const suffix = params.size ? `?${params.toString()}` : '';
-        return apiJson(`/threads/${encodeURIComponent(threadId)}/timeline${suffix}`);
+        return readConversationJson(`/threads/${encodeURIComponent(threadId)}/timeline${suffix}`, options?.signal);
       },
       read: async (threadId) =>
         apiJson(`/threads/${encodeURIComponent(threadId)}/read`, { method: 'POST', body: '{}' }),
@@ -744,6 +778,7 @@ function httpProduct(): Pick<
         params.set('turnId', query.turnId);
         params.set('sourceSeqStart', query.sourceSeqStart);
         params.set('sourceSeqEnd', query.sourceSeqEnd);
+        if (query.beforeCursor) params.set('beforeCursor', query.beforeCursor);
         return apiJson(`/threads/${encodeURIComponent(threadId)}/timeline/turn-summary-details?${params.toString()}`);
       },
       queuedMessages: async (threadId) =>
@@ -798,13 +833,13 @@ function httpProduct(): Pick<
         }),
       onOpen: (cb) => subscribeProductEvent('threads:open', cb),
       events: async (threadId) => apiJson(`/threads/${encodeURIComponent(threadId)}/events`),
-      executionOptions: async (query) => {
+      executionOptions: async (query, options) => {
         const params = new URLSearchParams();
         if (query?.providerId) params.set('providerId', query.providerId);
         if (query?.hostId) params.set('hostId', query.hostId);
         if (query?.projectId) params.set('projectId', query.projectId);
         const suffix = params.size ? `?${params.toString()}` : '';
-        return apiJson(`/system/execution-options${suffix}`);
+        return apiJson(`/system/execution-options${suffix}`, { signal: options?.signal });
       },
       providers: async () => apiJson('/threads/providers'),
       commands: async (projectId) =>
@@ -934,16 +969,25 @@ function httpProduct(): Pick<
         )
     } as CcApi['harness'],
     library: {
-      list: async () => {
-        const body = await apiJson<{ docs: Awaited<ReturnType<CcApi['library']['list']>> }>('/library');
-        return body.docs;
-      },
+      move: (from, to) => mutateHttpLibrary({ action: 'move', from, to }),
+      deleteEntry: (scope, relPath, projectId) => mutateHttpLibrary({ action: 'deleteEntry', scope, relPath, projectId }),
+      search: async query => (await apiJson<{ value: Awaited<ReturnType<CcApi['library']['search']>> }>('/library/documents', { method: 'POST', body: JSON.stringify({ action: 'search', query }) })).value,
+      createFolder: (scope, relPath, projectId) => mutateHttpLibrary({ action: 'createFolder', scope, relPath, projectId }),
+      add: async input => { const { source: _source, ...fields } = input; return (await apiJson<{ value: LibraryDoc | null }>('/library/documents', { method: 'POST', body: JSON.stringify({ action: 'add', ...fields }) })).value; },
+      update: async (id, patch, location) => (await apiJson<{ value: LibraryDoc | null }>('/library/documents', { method: 'POST', body: JSON.stringify({ action: 'update', id, patch, location }) })).value,
+      remove: async (id, location) => (await apiJson<{ value: boolean }>('/library/documents', { method: 'POST', body: JSON.stringify({ action: 'remove', id, location }) })).value,
+      write: (scope, relPath, content, projectId, expectedSha256) => expectedSha256 ? mutateHttpLibrary({ action: 'write', scope, relPath, content, projectId, expectedSha256 }) : Promise.resolve({ ok: false, message: 'Read the document before saving it' }),
+      list: readHttpLibrary,
+      snapshot: readHttpLibrarySnapshot,
+      readAsset: async (scope, relPath, projectId) => (await apiJson<{ value: Awaited<ReturnType<CcApi['library']['readAsset']>> }>('/library/documents', { method: 'POST', body: JSON.stringify({ action: 'asset', scope, relPath, projectId }) })).value,
+      importFile: async input => (await apiJson<{ value: LibraryDoc }>('/library/documents', { method: 'POST', body: JSON.stringify({ ...input, action: 'import' }) })).value,
+      onSnapshotChanged: subscribeHttpLibrarySnapshot,
       read: async (scope, relPath, projectId) => {
         const params = new URLSearchParams({ scope, relPath });
         if (projectId) params.set('projectId', projectId);
         return apiJson<Awaited<ReturnType<CcApi['library']['read']>>>(`/library/content?${params.toString()}`);
       },
-      onChanged: (cb) => subscribeProductEvent('library:changed', cb)
+      onChanged: subscribeHttpLibrary
     } as CcApi['library'],
     quickPrompts: {
       list: async () => {
@@ -953,18 +997,24 @@ function httpProduct(): Pick<
       onChanged: noopSubscribe
     } as CcApi['quickPrompts'],
     fs: {
-      listDir: async (path) => {
+      readDataUrl: (path, scope) => apiJson('/fs/image', { method: 'POST', body: JSON.stringify({ path, scope }) }),
+      writeFile: (path, content, scope, expectedSha256) => mutateFile({ operation: 'write', path, content, scope, expectedSha256 }),
+      createFile: (_root, path, scope) => mutateFile({ operation: 'create-file', path, scope }),
+      createDir: (_root, path, scope) => mutateFile({ operation: 'create-dir', path, scope }),
+      rename: (_root, path, destination, scope) => mutateFile({ operation: 'rename', path, destination, scope }),
+      delete: (_root, path, scope) => mutateFile({ operation: 'delete', path, scope }),
+      listDir: async (path, scope) => {
         const body = await apiJson<{ entries: FsEntry[] }>('/fs/list-dir', {
           method: 'POST',
-          body: JSON.stringify({ path })
+          body: JSON.stringify({ path, ...(scope ? { scope } : {}) })
         });
         return body.entries;
       },
-      readFile: async (path) => {
+      readFile: async (path, scope) => {
         try {
           return await apiJson<FsReadResult>('/fs/read', {
             method: 'POST',
-            body: JSON.stringify({ path })
+            body: JSON.stringify({ path, ...(scope ? { scope } : {}) })
           });
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : String(error) };
@@ -1114,7 +1164,8 @@ function httpProduct(): Pick<
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
           const form = new FormData();
-          form.set('file', new Blob([bytes], { type: mimeType }), 'recording.webm');
+          const extension = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+          form.set('file', new Blob([bytes], { type: mimeType }), `recording.${extension}`);
           const response = await fetchWithAppSurface('/api/v1/system/voice-transcription', {
             method: 'POST',
             body: form
@@ -1171,6 +1222,7 @@ function httpProduct(): Pick<
       getReleaseNotes: async () => []
     } as CcApi['updates'],
     app: {
+      performance: async () => null,
       isFullScreen: async () => false,
       setFullScreen: async () => {},
       onFullScreenChanged: noopSubscribe,
@@ -1211,9 +1263,44 @@ function stubFamily(family: string): unknown {
  * Product I/O adapter. Desktop keeps talking to the preload bridge. A browser
  * tab uses loopback `/api/v1` + `/ws` and never receives a `window.cc` stand-in.
  */
+let terminalAdapter: CcApi['terminals'] | undefined;
 export const product: CcApi = new Proxy({} as CcApi, {
   get(_target, family: string | symbol) {
     const name = String(family);
+    if (name === 'extensions' && !hasDesktopBridge()) return withStubs('extensions', sharedExtensions(
+      sharedProductFamily('extensions', httpProduct().extensions) as CcApi['extensions']
+    ));
+    if (name === 'library') return withStubs('library', { ...(hasDesktopBridge() ? window.cc.library : {}), ...httpProduct().library });
+    if (name === 'git') return hasDesktopBridge() ? scopedDesktopGit(window.cc.git) : withStubs('git', httpProjectGit);
+
+    if (name === 'terminals') {
+      if (!terminalAdapter) {
+        const http = httpProduct().terminals;
+        const owner = hasDesktopBridge() ? window.cc.terminals : withStubs('terminals', sharedProductFamily('terminals', { ...http, onData: noopSubscribe, onUpdated: noopSubscribe, onExit: noopSubscribe })) as CcApi['terminals'];
+        terminalAdapter = machineTerminals(owner, http);
+      }
+      return terminalAdapter;
+    }
+
+    if (name === 'fs' && hasDesktopBridge()) {
+      const desktop = window.cc.fs;
+      const http = httpProduct().fs;
+      return {
+        ...desktop,
+        readDataUrl: (path, scope) => scope ? http.readDataUrl(path, scope) : desktop.readDataUrl(path),
+        listDir: (path: string, scope?: Parameters<CcApi['fs']['listDir']>[1]) => scope ? http.listDir(path, scope) : desktop.listDir(path),
+        readFile: (path: string, scope?: Parameters<CcApi['fs']['readFile']>[1]) => scope ? http.readFile(path, scope) : desktop.readFile(path),
+        writeFile: (path, content, scope, expected) => scope ? http.writeFile(path, content, scope, expected) : desktop.writeFile(path, content),
+        createFile: (root, path, scope) => scope ? http.createFile(root, path, scope) : desktop.createFile(root, path),
+        createDir: (root, path, scope) => scope ? http.createDir(root, path, scope) : desktop.createDir(root, path),
+        rename: (root, from, to, scope) => scope ? http.rename(root, from, to, scope) : desktop.rename(root, from, to),
+        delete: (root, path, scope) => scope ? http.delete(root, path, scope) : desktop.delete(root, path)
+      } satisfies CcApi['fs'];
+    }
+    if (!hasDesktopBridge() && SHARED_PRODUCT_FAMILIES[name]) {
+      const fallback = (httpProduct() as unknown as Record<string, object>)[name] ?? {};
+      return withStubs(name, sharedProductFamily(name, fallback));
+    }
     if (name === 'hosts') {
       const http = httpProduct().hosts;
       if (hasDesktopBridge()) {
@@ -1254,6 +1341,13 @@ export const product: CcApi = new Proxy({} as CcApi, {
       if (hasDesktopBridge()) return (window.cc as unknown as CcApi).mobile;
       return {
         status: async () => ({ running: false, publicUrl: null, host: null, port: null, boundLan: false, error: null }),
+        configure: async () => { throw new Error('Configure phone connections in the desktop app'); },
+        enroll: async () => { throw new Error('Connect this computer from the desktop app'); },
+        pollEnrollment: async () => { throw new Error('Connect this computer from the desktop app'); },
+        cancelEnrollment: async () => {},
+        disconnectAccount: async () => { throw new Error('Connect this computer from the desktop app'); },
+        browserAddress: async () => null,
+        redeemComputerCode: async () => { throw new Error('Connect this computer from the desktop app'); },
         pair: async () => { throw new Error('mobile.pair requires the desktop app'); },
         devices: async () => [],
         revoke: async () => false

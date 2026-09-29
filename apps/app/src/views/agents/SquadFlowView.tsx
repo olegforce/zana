@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { hasDesktopBridge } from '@/lib/app-surface';
 import { ChevronRight, GitPullRequest, Hash, Workflow } from 'lucide-react';
 import type { ExecutionBoardProjection, SquadFlowGraph, SquadFlowNode } from '@zana-ai/zcc-domain/product';
 import {
@@ -12,6 +13,8 @@ import {
 } from '@/store';
 import { inspectAgentSession } from '@/lib/inspect-session';
 import { useCanvasPan } from '@/hooks/useCanvasPan';
+import { useCompactLayout } from '@/hooks/useCompactLayout';
+import './mobile-canvas.css';
 import { buildSquadFlow, isQuiescentSquad } from '@/lib/squadFlow';
 import { squadFlowBounds, type FlowPoint } from '@/lib/squadFlowBounds';
 import {
@@ -485,6 +488,18 @@ export function SquadGraph({ graph, onInspectExecution, pannable = true }: {
   // hot edge, no flowing chevrons — so it doesn't keep looking like live work.
   const quiescent = isQuiescentSquad(rollup);
   const { isPanning, canvasPanProps } = useCanvasPan();
+  const compact = useCompactLayout();
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const positioned = useRef(false);
+  useLayoutEffect(() => {
+    if (!compact) { positioned.current = false; return; }
+    const canvas = canvasRef.current;
+    const first = resolvedPlaced.find(({ node }) => node.isOrchestrator) ?? resolvedPlaced[0];
+    if (!canvas || !first || positioned.current) return;
+    // Start at an agent rather than the empty left edge of the desktop graph.
+    canvas.scrollLeft = Math.max(0, first.x + bounds.offsetX + NODE_W / 2 - canvas.clientWidth / 2);
+    positioned.current = true;
+  }, [compact, resolvedPlaced, bounds.offsetX]);
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>, node: SquadFlowNode, baseX: number, baseY: number) => {
@@ -561,9 +576,10 @@ export function SquadGraph({ graph, onInspectExecution, pannable = true }: {
       </header>
 
       <div
+        ref={canvasRef}
         className={`squad-flow-canvas${pannable ? ' is-pannable' : ''}${isPanning ? ' is-panning' : ''}`}
-        aria-label={pannable ? 'Squad canvas. Drag empty space to pan.' : 'Squad canvas'}
-        {...(pannable ? canvasPanProps : {})}
+        aria-label={compact ? 'Agent canvas. Swipe to explore.' : pannable ? 'Squad canvas. Drag empty space to pan.' : 'Squad canvas'}
+        {...(pannable && !compact ? canvasPanProps : {})}
       >
         <div className="squad-flow-content" style={{ width: contentWidth, height: contentHeight }}>
           <svg
@@ -638,11 +654,12 @@ export function SquadGraph({ graph, onInspectExecution, pannable = true }: {
                 type="button"
                 className={`squad-flow-node ${node.isOrchestrator ? 'squad-flow-node--orch' : ''} ${node.exited ? 'squad-flow-node--exited' : ''} ${working && !quiescent ? 'squad-flow-node--working' : ''} ${streaming && !quiescent ? 'squad-flow-node--streaming' : ''} ${claimed && !quiescent ? 'squad-flow-node--claimed' : ''} ${isDragging ? 'squad-flow-node--dragging' : ''}`}
                 style={{ left: x + bounds.offsetX, top: y + bounds.offsetY, width: NODE_W }}
-                onPointerDown={(e) => handlePointerDown(e, node, x, y)}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onDoubleClick={() => inspectAgentSession(node.sessionId, graph.projectId, navigate)}
-                title={`${node.handle ?? node.displayName ?? node.sessionId} (${node.job?.executionId ? 'Click to inspect job details, double-click to open terminal' : 'Click to open terminal'})`}
+                onPointerDown={compact ? undefined : (e) => handlePointerDown(e, node, x, y)}
+                onPointerMove={compact ? undefined : handlePointerMove}
+                onPointerUp={compact ? undefined : handlePointerUp}
+                onClick={compact ? () => inspectAgentSession(node.sessionId, graph.projectId, navigate) : undefined}
+                onDoubleClick={compact ? undefined : () => inspectAgentSession(node.sessionId, graph.projectId, navigate)}
+                title={`${node.handle ?? node.displayName ?? node.sessionId} (${compact ? 'Tap to open agent' : node.job?.executionId ? 'Click to inspect job details, double-click to open terminal' : 'Click to open terminal'})`}
               >
                 <span className="squad-flow-node-main">
                   <span className="squad-flow-node-icon" aria-hidden="true">
@@ -722,6 +739,7 @@ interface SquadFlowViewProps {
 }
 
 export function SquadFlowView({ projectId, onInspectExecution }: SquadFlowViewProps = {}) {
+  const compact = useCompactLayout();
   const terminals = useData((s) => s.terminals);
   const projects = useData((s) => s.projects);
   const agents = useAgentMesh((s) => s.agents);
@@ -737,6 +755,7 @@ export function SquadFlowView({ projectId, onInspectExecution }: SquadFlowViewPr
 
   useEffect(() => {
     let cancelled = false;
+    if (!hasDesktopBridge()) return;
     const refresh = () => {
       const targets = projectId ? [projectId] : projects.map((project) => project.id);
       // allSettled: one project's rejection must not blank out every other
@@ -941,6 +960,7 @@ export function SquadFlowView({ projectId, onInspectExecution }: SquadFlowViewPr
 
   return (
     <div className="squad-flow">
+      {compact && <p className="mobile-canvas-hint">Swipe to explore · Tap an agent to open</p>}
       {graphs.length > 1 && (
         <SquadSwitcher items={items} selected={selected} onSelect={setSelectedId} ariaLabel="Projects" />
       )}
@@ -955,8 +975,8 @@ export function SquadFlowView({ projectId, onInspectExecution }: SquadFlowViewPr
       {separateGraphs.length > 0 ? (
         <div
           className={`squad-flow-run-groups${isStackPanning ? ' is-panning' : ''}`}
-          aria-label="Squad run canvases. Drag empty space to pan."
-          {...stackPanProps}
+          aria-label={compact ? 'Agent canvases. Swipe to explore.' : 'Squad run canvases. Drag empty space to pan.'}
+          {...(!compact ? stackPanProps : {})}
         >
           {separateGraphs.map((graph) => (
             <SquadGraph

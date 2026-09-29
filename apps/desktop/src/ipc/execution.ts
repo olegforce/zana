@@ -43,7 +43,7 @@ export function registerExecutionIpc(): void {
     () => getHarnessAuthStatus() as HarnessAuthStatusInfo[]
   );
 
-  // Code-harness verification (Settings → Code Harness). Probes each family's
+  // Code-harness verification (Settings → AI Harness). Probes each family's
   // `<binary> --version` best-effort against main's own config (Rule 1 — the
   // binary is resolved through the provider, never a renderer-supplied path).
   ctx.safeHandle(

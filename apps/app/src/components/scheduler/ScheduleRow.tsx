@@ -135,7 +135,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
           <span className="scheduler-toggle scheduler-toggle--readonly" aria-hidden title="Managed by Claude Code" />
         ) : (
           <label className="scheduler-toggle" onClick={stop} title={task.enabled ? 'Disable schedule' : 'Enable schedule'}>
-            <input type="checkbox" checked={task.enabled} onChange={toggle} />
+            <input type="checkbox" checked={task.enabled} disabled={!task.enabled && task.status.runs.some(run => run.launchState === 'pending')} onChange={toggle} />
             <span aria-hidden />
           </label>
         )}
@@ -175,6 +175,8 @@ export const ScheduleRow = React.memo(function ScheduleRow({
             <span className="scheduler-card-compact-next scheduler-card-compact-next--muted" title="Managed by Claude Code">
               {task.schedule.every}
             </span>
+          ) : task.status.runs.some(run => run.launchState === 'pending') ? (
+            <span className="scheduler-pill scheduler-pill--error" title="Open this schedule to check its reserved worker">needs checking</span>
           ) : isWorking ? (
             <span className="scheduler-pill scheduler-pill--running" title="Agent is working — turn in progress">
               running
@@ -216,7 +218,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
             </>
           )}
           {!isExternal && !liveSessionId && (
-            <button className="scheduler-icon-btn" onClick={runNow} title="Run now" aria-label="Run now">
+            <button className="scheduler-icon-btn" disabled={task.status.runs.some(run => run.launchState === 'pending')} onClick={runNow} title="Run now" aria-label="Run now">
               <Play size={14} />
             </button>
           )}
@@ -239,6 +241,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
         <ScheduleRowMenu
           anchor={rowMenu}
           enabled={task.enabled}
+          pending={task.status.runs.some(run => run.launchState === 'pending')}
           liveSessionId={liveSessionId}
           isFinishedOpen={isFinishedOpen}
           hasReport={!!lastReportRun}
@@ -261,6 +264,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
 function ScheduleRowMenu({
   anchor,
   enabled,
+  pending,
   liveSessionId,
   isFinishedOpen,
   hasReport,
@@ -277,6 +281,7 @@ function ScheduleRowMenu({
 }: {
   anchor: { x: number; y: number };
   enabled: boolean;
+  pending: boolean;
   liveSessionId: string | null;
   isFinishedOpen: boolean;
   hasReport: boolean;
@@ -354,7 +359,7 @@ function ScheduleRowMenu({
           </button>
         </>
       ) : (
-        <button role="menuitem" onClick={() => { onClose(); onRunNow(); }}>
+        <button role="menuitem" disabled={pending} onClick={() => { onClose(); onRunNow(); }}>
           <Play size={13} /> Run now
         </button>
       )}
@@ -364,7 +369,7 @@ function ScheduleRowMenu({
         </button>
       )}
       <div className="tab-context-sep" />
-      <button role="menuitem" onClick={() => { onClose(); onToggleEnabled(); }}>
+      <button role="menuitem" disabled={pending && !enabled} onClick={() => { onClose(); onToggleEnabled(); }}>
         {enabled ? <><PowerOff size={13} /> Disable</> : <><Power size={13} /> Enable</>}
       </button>
       <button role="menuitem" onClick={() => { onClose(); onDuplicate(); }}>

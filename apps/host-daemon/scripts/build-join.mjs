@@ -5,14 +5,15 @@
  * without a workspace node_modules (no import.meta.resolve of
  * @zana-ai/zcc-provider-bridge-protocol or tsx).
  *
- * Native node-pty is aliased to a pipe shim so Linux remotes do not need a
- * matching pty.node from this laptop. CJS deps that call require() are wired
+ * Native node-pty's portable prebuilds travel inside the bundle, independent
+ * of this laptop's rebuilt addon. CJS deps that call require() are wired
  * through createRequire so the bundle can load Node builtins.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { packedPtyFiles } from './packed-pty-files.mjs';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '../..');
@@ -30,12 +31,13 @@ if (!outfile) {
 const BRIDGE_WORKER_FILE = 'bb-provider-bridge-worker.mjs';
 /** Keep in lockstep with packages/agent-runtime/src/provider-registry.ts */
 const PI_BRIDGE_FILE = 'bb-pi-bridge.mjs';
+const PLUGIN_WORKER_FILE = 'zcc-plugin-host-worker.mjs';
 
 const outDir = dirname(outfile);
 mkdirSync(outDir, { recursive: true });
 
 const alias = {
-  'node-pty': join(packageRoot, 'src/pty-pipe-shim.ts'),
+  'node-pty': join(packageRoot, 'src/packed-native-pty.ts'),
   '@zcc/harness-sdk': join(repoRoot, 'packages/harness-sdk/src/index.ts'),
   'better-sqlite3': join(packageRoot, 'src/better-sqlite3-stub.ts')
 };
@@ -43,10 +45,12 @@ const alias = {
 const shared = {
   absWorkingDir: packageRoot,
   alias,
+  define: { __ZCC_PACKED_PTY_FILES__: JSON.stringify(packedPtyFiles()) },
   bundle: true,
   conditions: ['source'],
   format: 'esm',
   legalComments: 'none',
+  banner: { js: `/*! BB-derived code: MIT license\n${readFileSync(join(repoRoot, 'docs/third-party/BB-LICENSE'), 'utf8')}\n*/` },
   platform: 'node',
   sourcemap: false,
   target: 'node22'
@@ -66,6 +70,12 @@ await build({
   ...shared,
   entryPoints: [join(repoRoot, 'packages/agent-runtime/src/pi/bridge/bridge.ts')],
   outfile: join(outDir, PI_BRIDGE_FILE)
+});
+
+await build({
+  ...shared,
+  entryPoints: [join(packageRoot, 'src/plugin-host-worker.ts')],
+  outfile: join(outDir, PLUGIN_WORKER_FILE)
 });
 
 function finalizeNodeEsmBundle(path) {
@@ -91,3 +101,5 @@ const require = createRequire(import.meta.url);
 finalizeNodeEsmBundle(outfile);
 finalizeNodeEsmBundle(join(outDir, BRIDGE_WORKER_FILE));
 finalizeNodeEsmBundle(join(outDir, PI_BRIDGE_FILE));
+
+finalizeNodeEsmBundle(join(outDir, PLUGIN_WORKER_FILE));

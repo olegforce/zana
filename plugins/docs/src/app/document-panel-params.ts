@@ -2,33 +2,38 @@ export const LIBRARY_AUTOSAVE_MS = 700;
 
 export function createLibraryAutosave(
   write: (content: string) => Promise<void>,
-  delayMs = LIBRARY_AUTOSAVE_MS
+  delayMs = LIBRARY_AUTOSAVE_MS,
+  onError: (error: unknown) => void = () => undefined
 ) {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let generation = 0;
   let pending: string | null = null;
+  let active = false;
+  let failed = false;
+  async function drain() {
+    if (active || failed || pending === null) return;
+    active = true;
+    const content = pending; pending = null;
+    try { await write(content); }
+    catch (error) { failed = true; onError(error); }
+    finally {
+      active = false;
+      // Only one write can use the current read revision. Coalesce later edits
+      // and let the successful write advance that revision before continuing.
+      if (timer === null && pending !== null && !failed) void drain();
+    }
+  }
   return {
     schedule(content: string) {
       pending = content;
       if (timer) clearTimeout(timer);
-      const token = ++generation;
-      timer = setTimeout(() => {
-        if (token !== generation) return;
-        const next = pending;
-        pending = null;
-        if (next !== null) void write(next);
-      }, delayMs);
+      timer = setTimeout(() => { timer = null; void drain(); }, delayMs);
     },
     flush() {
       if (timer) clearTimeout(timer);
       timer = null;
-      generation += 1;
-      const next = pending;
-      pending = null;
-      if (next !== null) void write(next);
+      void drain();
     },
     cancel() {
-      generation += 1;
       pending = null;
       if (timer) clearTimeout(timer);
       timer = null;

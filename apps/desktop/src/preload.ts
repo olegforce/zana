@@ -405,7 +405,21 @@ const api: CcApi = {
       }
     }
   },
+  sharedClient: {
+    list: () => ipcRenderer.invoke(IPC.sharedClient.list),
+    signIn: () => ipcRenderer.invoke(IPC.sharedClient.signIn),
+    select: (id: string) => ipcRenderer.invoke(IPC.sharedClient.select, id),
+    local: () => ipcRenderer.invoke(IPC.sharedClient.local),
+    signOut: () => ipcRenderer.invoke(IPC.sharedClient.signOut)
+  },
   mobile: {
+    enroll: (address) => ipcRenderer.invoke(IPC.mobile.enroll, address),
+    pollEnrollment: () => ipcRenderer.invoke(IPC.mobile.pollEnrollment),
+    cancelEnrollment: () => ipcRenderer.invoke(IPC.mobile.cancelEnrollment),
+    disconnectAccount: () => ipcRenderer.invoke(IPC.mobile.disconnectAccount),
+    browserAddress: () => ipcRenderer.invoke(IPC.mobile.browserAddress),
+    redeemComputerCode: (address, code) => ipcRenderer.invoke(IPC.mobile.redeemComputerCode, address, code),
+    configure: (input) => ipcRenderer.invoke(IPC.mobile.configure, input),
     status: () => ipcRenderer.invoke(IPC.mobile.status),
     pair: () => ipcRenderer.invoke(IPC.mobile.pair),
     devices: () => ipcRenderer.invoke(IPC.mobile.devices),
@@ -928,14 +942,22 @@ const api: CcApi = {
   },
   library: {
     list: () => ipcRenderer.invoke(IPC.library.list),
+    snapshot: () => ipcRenderer.invoke(IPC.library.snapshot),
+    readAsset: (scope, relPath, projectId) => ipcRenderer.invoke(IPC.library.readAsset, scope, relPath, projectId),
+    importFile: input => ipcRenderer.invoke(IPC.library.importFile, input),
+    onSnapshotChanged: (cb) => {
+      const handler = (_e: unknown, snapshot: import('@zana-ai/zcc-domain/product').LibrarySnapshot) => cb(snapshot);
+      ipcRenderer.on(IPC.library.onSnapshotChanged, handler);
+      return () => ipcRenderer.off(IPC.library.onSnapshotChanged, handler);
+    },
     add: (input) => ipcRenderer.invoke(IPC.library.add, input),
-    update: (id, patch) => ipcRenderer.invoke(IPC.library.update, id, patch),
-    remove: (id) => ipcRenderer.invoke(IPC.library.remove, id),
+    update: (id, patch, location) => ipcRenderer.invoke(IPC.library.update, id, patch, location),
+    remove: (id, location) => ipcRenderer.invoke(IPC.library.remove, id, location),
     reveal: (scope, projectId) => ipcRenderer.invoke(IPC.library.reveal, scope, projectId),
     search: (query) => ipcRenderer.invoke(IPC.library.search, query),
     read: (scope, relPath, projectId) => ipcRenderer.invoke(IPC.library.read, scope, relPath, projectId),
-    write: (scope, relPath, content, projectId) =>
-      ipcRenderer.invoke(IPC.library.write, scope, relPath, content, projectId),
+    write: (scope, relPath, content, projectId, expectedSha256) =>
+      ipcRenderer.invoke(IPC.library.write, scope, relPath, content, projectId, expectedSha256),
     createFolder: (scope, relPath, projectId) =>
       ipcRenderer.invoke(IPC.library.createFolder, scope, relPath, projectId),
     move: (from, to) => ipcRenderer.invoke(IPC.library.move, from, to),
@@ -1074,6 +1096,7 @@ const api: CcApi = {
     setEnabled: (id, enabled) =>
       ipcRenderer.invoke(IPC.scheduler.setEnabled, id, enabled),
     runNow: (id) => ipcRenderer.invoke(IPC.scheduler.runNow, id),
+    reconcile: (id) => ipcRenderer.invoke(IPC.scheduler.reconcile, id),
     onChanged: (cb) => {
       const handler = (_e: unknown, tasks: Parameters<typeof cb>[0]) => cb(tasks);
       ipcRenderer.on(IPC.scheduler.onChanged, handler);
@@ -1106,6 +1129,7 @@ const api: CcApi = {
     delete: (id) => ipcRenderer.invoke(IPC.goals.delete, id),
     setStatus: (id, status) => ipcRenderer.invoke(IPC.goals.setStatus, id, status),
     runNow: (id) => ipcRenderer.invoke(IPC.goals.runNow, id),
+    reconcile: (id) => ipcRenderer.invoke(IPC.goals.reconcile, id),
     onChanged: (cb) => {
       const handler = (_e: unknown, goals: Parameters<typeof cb>[0]) => cb(goals);
       ipcRenderer.on(IPC.goals.onChanged, handler);
@@ -1202,6 +1226,7 @@ const api: CcApi = {
       };
     },
     homedir: () => ipcRenderer.invoke(IPC.app.homedir),
+    performance: () => ipcRenderer.invoke(IPC.app.performance),
     version: () => ipcRenderer.invoke(IPC.app.version),
     microVmSupported: () => ipcRenderer.invoke(IPC.app.microVmSupported),
     onFocusSession: (cb: (sessionId: string, projectId: string) => void) => {

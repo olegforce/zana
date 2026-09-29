@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react';
 import { Section, Field, CheckboxField, SettingsActionRow } from '@/components/settings/FormFields';
 import { PopoverPicklist } from '@/components/ui/PopoverPicklist';
 import { useBooleanPreference } from '@/lib/use-boolean-preference';
+import { FULL_ACCESS_BY_DEFAULT, FULL_ACCESS_BY_DEFAULT_KEY } from '@/lib/composer-permission-preference';
 import { reloadComposerCommandCatalog } from '@/lib/composer-commands-reload';
 import {
   MARKDOWN_IN_PROMPT_DEFAULT,
@@ -33,6 +34,10 @@ interface ComposerTabProps {
 }
 
 export function ComposerSettingsView({ config, onUpdate }: ComposerTabProps) {
+  const [fullAccessByDefault, setFullAccessByDefault] = useBooleanPreference(
+    FULL_ACCESS_BY_DEFAULT_KEY,
+    FULL_ACCESS_BY_DEFAULT
+  );
   const [navigateOnCreate, setNavigateOnCreate] = useBooleanPreference(
     NAVIGATE_TO_THREAD_ON_CREATE_KEY,
     NAVIGATE_TO_THREAD_ON_CREATE_DEFAULT
@@ -93,6 +98,12 @@ export function ComposerSettingsView({ config, onUpdate }: ComposerTabProps) {
         title="Composer"
         help="Composer and markdown behavior for new and running agents."
       >
+        <CheckboxField
+          label="Full access by default"
+          help="Start new Modern and CLI agents in Full mode (YOLO): no sandbox or approval prompts. Off starts in Approve for me when available, otherwise Accept Edits. You can change permissions in the composer before launching."
+          checked={fullAccessByDefault}
+          onChange={setFullAccessByDefault}
+        />
         <CheckboxField
           label="Navigate to agents on creation"
           help="Open a new agent as soon as you send the first message. Off keeps you on the current page."

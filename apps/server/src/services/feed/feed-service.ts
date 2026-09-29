@@ -33,7 +33,6 @@ import type {
   LibraryDoc
 } from '@zana-ai/zcc-domain/product';
 import { AUTO_CLOSE_KEY_PREFIX } from '@zana-ai/zcc-domain/inbox-grouping';
-import type { FeedStore } from './feed-store.js';
 
 /** Default page size for `feed:list`. */
 export const FEED_PAGE_SIZE = 60;
@@ -45,7 +44,7 @@ export const FEED_DERIVED_CAP = 400;
 
 export interface FeedServiceDeps {
   /** The persisted greenfield slice (commits / extension / project lifecycle). */
-  store: FeedStore;
+  store: { list(projectId: string): FeedEvent[] | Promise<FeedEvent[]>; appendMany(projectId: string, inputs: FeedEventInput[]): number | Promise<number> };
   /** Read recent inbox entries for a project (main's own store; newest-first). */
   readInbox: (projectId: string, limit: number) => Promise<InboxEntry[]>;
   /** All follow-ups (any project); the service filters by projectId. */
@@ -53,11 +52,11 @@ export interface FeedServiceDeps {
   /** All goals (any project); the service filters by projectId. */
   listGoals: () => Goal[];
   /** All library docs (any project); the service filters by projectId. */
-  listLibrary: () => LibraryDoc[];
-  /** Read recent commits for a project's repo. Never throws (returns []). */
-  getRecentCommits: (cwd: string, limit: number) => Promise<GitCommit[]>;
-  /** Resolve a projectId to its filesystem path (for git) + label. */
-  resolveProject: (projectId: string) => { path: string; name: string } | undefined;
+  listLibrary: () => LibraryDoc[] | Promise<LibraryDoc[]>;
+  /** Read recent commits from the registered original owner. Failures preserve
+   * persisted history; never resolve another computer's path locally. */
+  getRecentCommits: (projectId: string, limit: number) => Promise<GitCommit[]>;
+  resolveProject: (projectId: string) => { name: string } | undefined;
   logger?: (context: string, err: unknown) => void;
 }
 
@@ -259,7 +258,7 @@ export class FeedService {
 
     // 1. persisted greenfield slice (commits + extension + project lifecycle).
     try {
-      lists.push(this.deps.store.list(projectId).slice(0, FEED_DERIVED_CAP));
+      lists.push((await this.deps.store.list(projectId)).slice(0, FEED_DERIVED_CAP));
     } catch (err) {
       this.log('feed persisted slice', err);
     }
@@ -284,7 +283,7 @@ export class FeedService {
       this.log('feed derive goals', err);
     }
     try {
-      lists.push(deriveFromLibrary(this.deps.listLibrary(), projectId));
+      lists.push(deriveFromLibrary(await this.deps.listLibrary(), projectId));
     } catch (err) {
       this.log('feed derive library', err);
     }
@@ -297,10 +296,10 @@ export class FeedService {
     const project = this.deps.resolveProject(projectId);
     if (!project) return;
     try {
-      const commits = await this.deps.getRecentCommits(project.path, FEED_GIT_LIMIT);
+      const commits = await this.deps.getRecentCommits(projectId, FEED_GIT_LIMIT);
       if (commits.length === 0) return;
       const inputs = commits.map((c) => commitToInput(projectId, c));
-      this.deps.store.appendMany(projectId, inputs);
+      await this.deps.store.appendMany(projectId, inputs);
     } catch (err) {
       this.log('feed snapshot git', err);
     }

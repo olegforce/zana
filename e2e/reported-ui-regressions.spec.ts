@@ -68,6 +68,11 @@ test('agent inspector stays centered when resizing from either side or a corner'
   }
   await keyboardHandle.press('Home');
   await expect.poll(frame).toEqual({ width: 640, height: 400, centerX: 800, centerY: 500 });
+  await modal.getByTestId('thread-modal-close').click();
+  await expect(modal).toHaveCount(0);
+  await window.locator('.agent-card[data-kind="thread"]').filter({ hasText: 'Centered resize regression' }).click();
+  await expect(modal).toBeVisible();
+  await expect.poll(frame).toEqual({ width: 640, height: 400, centerX: 800, centerY: 500 });
   await keyboardHandle.press('ArrowRight');
   await expect.poll(frame).toEqual({ width: 664, height: 400, centerX: 800, centerY: 500 });
   await keyboardHandle.press('End');
@@ -184,7 +189,7 @@ test('expanded model catalogs scroll without clipping rows (#183)', async ({ app
     } });
   });
   await window.getByRole('link', { name: 'Settings' }).click();
-  await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+  await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
   const row = window.getByTestId('thread-provider-catalog').locator('.opener-row').filter({ hasText: 'Cursor' });
   await row.getByRole('button', { name: 'Models for Cursor' }).click();
   await row.getByRole('button', { name: /Load|Reload/, exact: true }).click();

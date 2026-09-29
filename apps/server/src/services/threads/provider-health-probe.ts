@@ -4,6 +4,7 @@ import type { PluginHostArtifactRegistry } from '../../plugins/plugin-host-artif
 import { bridgeLaunchForProvider, listThreadProviders } from './thread-provider-catalog.js';
 
 const PROVIDER_HEALTH_TIMEOUT_MS = 8_000;
+const pendingHealth = new WeakMap<HostHub, Map<string, Promise<Record<string, boolean>>>>();
 
 /**
  * Map a health probe onto installed vs missing. `null` means the bridge does
@@ -39,31 +40,41 @@ export async function probeInstalledProviderHealth(input: {
     return {};
   }
 
-  const extraInstalled: Record<string, boolean> = {};
-  const results = await Promise.allSettled(installedIds.map(async (providerId) => {
-    const result = await input.hub.callHostOnlineRpc<ProviderHealthResult>({
-      hostId,
-      timeoutMs: PROVIDER_HEALTH_TIMEOUT_MS,
-      command: {
-        type: 'provider.health',
-        providerId,
-        bridgeLaunch: bridgeLaunchForProvider(providerId, input.artifacts)
-      }
-    });
-    return { providerId, installed: installedFromHealthResult(result) };
-  }));
+  const launches = new Map(installedIds.map((id) => [id, bridgeLaunchForProvider(id, input.artifacts)]));
+  const key = JSON.stringify([hostId, [...launches]]);
+  let pending = pendingHealth.get(input.hub);
+  if (!pending) { pending = new Map(); pendingHealth.set(input.hub, pending); }
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const request = (async () => {
+    const extraInstalled: Record<string, boolean> = {};
+    const results = await Promise.allSettled(installedIds.map(async (providerId) => {
+      const result = await input.hub.callHostOnlineRpc<ProviderHealthResult>({
+        hostId,
+        timeoutMs: PROVIDER_HEALTH_TIMEOUT_MS,
+        command: {
+          type: 'provider.health',
+          providerId,
+          bridgeLaunch: launches.get(providerId)!
+        }
+      });
+      return { providerId, installed: installedFromHealthResult(result) };
+    }));
 
-  for (const result of results) {
-    if (result.status === 'rejected' && isUnknownProviderHealthCommand(result.reason)) {
-      return {};
+    for (const result of results) {
+      if (result.status === 'rejected' && isUnknownProviderHealthCommand(result.reason)) {
+        return {};
+      }
     }
-  }
-  for (const result of results) {
-    if (result.status === 'fulfilled' && result.value.installed !== null) {
-      extraInstalled[result.value.providerId] = result.value.installed;
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.installed !== null) {
+        extraInstalled[result.value.providerId] = result.value.installed;
+      }
     }
-  }
-  return extraInstalled;
+    return extraInstalled;
+  })().finally(() => { pending.delete(key); });
+  pending.set(key, request);
+  return request;
 }
 
 /** Health can confirm presence; it must not veto a daemon extra-ACP `--version` hit. */

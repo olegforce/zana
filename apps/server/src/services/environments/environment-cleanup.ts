@@ -12,10 +12,12 @@ import { ThreadCreateError, threadView } from '../../http/thread-create.js';
 
 async function closeDestroyedEnvironmentTerminals(
   ctx: ProductHttpContext,
-  directory: string
+  directory: string,
+  hostId: string
 ): Promise<void> {
   for (const session of ctx.terminalSessions.values()) {
     if (session.status === 'exited') continue;
+    if (session.hostId !== hostId) continue;
     if (!isWithin(session.cwd, directory)) continue;
     try {
       await ctx.hostHub.callHostOnlineRpc({
@@ -27,6 +29,7 @@ async function closeDestroyedEnvironmentTerminals(
     }
     session.status = 'exited';
     session.finishedAt = Date.now();
+    ctx.terminalSessions.set(session.id, session);
     const { hostId: _hostId, outputText: _outputText, outputTruncated: _outputTruncated, ...publicSession } = session;
     ctx.hub.emit('terminals:updated', publicSession);
   }
@@ -70,7 +73,7 @@ export async function destroyEnvironment(ctx: ProductHttpContext, environmentId:
     return;
   }
   updateEnvironmentStatus(ctx.db, environmentId, 'destroying');
-  await closeDestroyedEnvironmentTerminals(ctx, environment.path);
+  await closeDestroyedEnvironmentTerminals(ctx, environment.path, environment.hostId);
   try {
     await ctx.hostHub.callHostOnlineRpc({
       hostId: environment.hostId,

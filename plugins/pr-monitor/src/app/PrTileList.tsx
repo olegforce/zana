@@ -40,6 +40,8 @@ import {
   DEFAULT_REVIEW_TIS_WARN_DAYS,
   DEFAULT_REVIEW_TIS_DANGER_DAYS,
 } from './formatHelpers.js';
+import { PrMobileList, PrMobileToolbar, usePrCompactLayout } from './PrMobile.js';
+import { runPrAction } from './prAction.js';
 import { PrTile } from './PrTile.js';
 import { HostFilterMenu } from './HostFilterMenu.js';
 import { PrBoard } from './PrBoard.js';
@@ -214,6 +216,7 @@ export function PrTileList({
   viewMode: viewModeProp = 'list',
   onViewModeChange,
 }: Props) {
+  const compact = usePrCompactLayout();
   const [tab, setTab] = useState<SegmentTab>('all');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -224,7 +227,8 @@ export function PrTileList({
   const [collapsed, setCollapsed] = useState<Set<PrRollupStatus>>(() => new Set());
   const [detailUrl, setDetailUrl] = useState<string | null>(null);
   const hostBtnRef = useRef<HTMLButtonElement>(null);
-  const viewMode = onViewModeChange ? viewModeProp : localView;
+  // Mobile always uses a readable list without overwriting the desktop preference.
+  const viewMode = compact ? 'list' : onViewModeChange ? viewModeProp : localView;
   const setViewMode = (mode: ListViewMode) => {
     if (mode === 'board') setTab('all');
     if (mode === 'list') setSelectMode(false);
@@ -293,9 +297,11 @@ export function PrTileList({
 
   // Tab filter → search filter → sort.
   const afterTab = useMemo(() => {
-    if (tab === 'all') return afterHost;
+    // The desktop board's columns are the status filter; don't carry an invisible
+    // mobile status selection onto it when the window grows.
+    if (viewMode === 'board' || tab === 'all') return afterHost;
     return afterHost.filter((pr) => pr.status === tab);
-  }, [afterHost, tab]);
+  }, [afterHost, tab, viewMode]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -722,7 +728,10 @@ export function PrTileList({
 
   return (
     <div className={`prm-list${viewMode === 'board' ? ' prm-list--board' : ''}`}>
-      {toolbar}
+      {compact ? <PrMobileToolbar query={query} onQuery={setQuery} status={tab} onStatus={setTab}
+        statuses={STATUS_ORDER.map((id) => ({ id, count: countsByStatus.get(id) ?? 0 }))}
+        hosts={hosts} hostScope={hostScope} onHostScope={onHostScopeChange}
+        sortField={sortField} sortDir={sortDir} onSort={onSortChange} sortFields={SORT_FIELDS} shownCount={shown.length} /> : toolbar}
 
       {/* Filtered-empty state (AC-LIST-24.2): monitored, but tab/search hid all. */}
       {shown.length === 0 ? (
@@ -747,6 +756,11 @@ export function PrTileList({
             )}
           </div>
         </div>
+      ) : compact ? (
+        <PrMobileList prs={shown} onOpen={(pr) => {
+          setDetailUrl(pr.url);
+          if (isUnread(pr)) void runPrAction(host, 'markPrAsSeen', { url: pr.url });
+        }} />
       ) : viewMode === 'board' ? (
         <PrBoard
           prs={shown}

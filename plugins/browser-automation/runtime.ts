@@ -59,7 +59,11 @@ export function runtimeEnvironment(home: string): NodeJS.ProcessEnv {
     if (process.env[key]) env[key] = process.env[key];
   }
   env.DEV_BROWSER_HOME = home;
-  env.DEV_BROWSER_SOCKET = join(home, "daemon.sock");
+  // The worker's owned temp path includes both the OS temp prefix and plugin
+  // identity. Keep this basename short enough for Unix domain socket paths.
+  env.DEV_BROWSER_SOCKET = join(home, "s");
+  if (Buffer.byteLength(env.DEV_BROWSER_SOCKET) > 103)
+    throw new Error('Browser runtime socket path is too long; configure a shorter TMPDIR on the selected host.');
   return env;
 }
 
@@ -194,7 +198,9 @@ export async function createRuntime(args: {
   const binary = args.runtime.binary;
   await mkdir(args.tempDir, { recursive: true, mode: 0o700 });
   const home = await mkdtemp(join(args.tempDir, "db-"));
-  const env = runtimeEnvironment(home);
+  let env: NodeJS.ProcessEnv;
+  try { env = runtimeEnvironment(home); }
+  catch (error) { await rm(home, { recursive: true, force: true }); throw error; }
   const processes: ReturnType<typeof supervise>[] = [];
   let closed = false;
   let closing: Promise<void> | null = null;
@@ -213,17 +219,17 @@ export async function createRuntime(args: {
     return closing;
   };
   const startup = AbortSignal.any([args.signal, AbortSignal.timeout(30_000)]);
-  async function waitForFile(path: string): Promise<string> {
+  async function waitForFile(path: string, phase: string): Promise<string> {
     while (true) {
-      startup.throwIfAborted();
+      if (startup.aborted) throw new Error(`Browser startup stopped while waiting for ${phase}`);
       if (processes.some((child) => !child.alive()))
         throw new Error(
-          "Browser runtime exited during startup; check Chrome installation and runtime dependencies.",
+          `Browser runtime exited while waiting for ${phase}; check Chrome installation and runtime dependencies.`,
         );
       try {
         return await readFile(path, "utf8");
       } catch {
-        await delay(25, undefined, { signal: startup });
+        await delay(25);
       }
     }
   }
@@ -238,6 +244,8 @@ export async function createRuntime(args: {
           [
             "--headless=new",
             "--no-sandbox",
+            // This disposable automation profile must not wait for an OS keychain prompt.
+            "--use-mock-keychain",
             "--remote-debugging-port=0",
             "--remote-debugging-address=127.0.0.1",
             `--user-data-dir=${profile}`,
@@ -249,7 +257,7 @@ export async function createRuntime(args: {
           env,
         ),
       );
-      const lines = (await waitForFile(join(profile, "DevToolsActivePort")))
+      const lines = (await waitForFile(join(profile, "DevToolsActivePort"), "Chrome debugging port"))
         .trim()
         .split("\n");
       const port = z.coerce.number().int().min(1).max(65535).parse(lines[0]);
@@ -268,7 +276,7 @@ export async function createRuntime(args: {
         "Desktop connection must be a private loopback WebSocket on the selected host",
       );
     processes.push(supervise(binary, ["daemon"], env));
-    await waitForFile(join(home, "daemon.pid"));
+    await waitForFile(join(home, "daemon.pid"), "DevBrowser daemon readiness");
     const url = connectionUrl;
     const run = (
       script: string,

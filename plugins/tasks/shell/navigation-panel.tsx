@@ -19,7 +19,10 @@ function isAwaitingFirstResult(query: {
   return query.data === undefined && query.error === null;
 }
 
-function TasksNavigationPanelContent({ subPath }: PluginNavPanelProps) {
+type NavigationPanelProps = PluginNavPanelProps & { onNavigate?: () => void; searchable?: boolean };
+
+function TasksNavigationPanelContent({ subPath, onNavigate, searchable = false }: NavigationPanelProps) {
+  const [query, setQuery] = useState("");
   const route = parseTasksRoute(subPath);
   const navigation = useTasksNavigation();
   const folders = useFolders();
@@ -28,32 +31,38 @@ function TasksNavigationPanelContent({ subPath }: PluginNavPanelProps) {
   const presets = usePresets();
   const activeTasks = useActiveTasks();
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const search = query.trim().toLowerCase();
+  const visibleProjects = search
+    ? projects.data?.filter(project => `${project.name} ${project.prefix}`.toLowerCase().includes(search))
+    : projects.data;
 
   return (
-    <>
+    <div className="tasks-navigation-content">
+      {searchable && <label className="tasks-project-search"><input type="search" placeholder="Search projects…" aria-label="Search task projects" value={query} onChange={event => setQuery(event.target.value)} /></label>}
+      {search && visibleProjects?.length === 0 && <p className="px-4 text-sm text-muted-foreground" role="status">No projects match your search.</p>}
       <TasksSidebar
         route={route}
-        folders={folders.data}
-        projects={projects.data}
+        folders={search ? [] : folders.data}
+        projects={visibleProjects}
         summaries={summaries.data}
-        presets={presets.data}
+        presets={search ? undefined : presets.data}
         activeTasks={activeTasks.data}
         isLoading={
           isAwaitingFirstResult(folders) ||
           isAwaitingFirstResult(projects) ||
           isAwaitingFirstResult(summaries)
         }
-        onNavigate={navigation.go}
+        onNavigate={(route) => { onNavigate?.(); navigation.go(route); }}
         onNewProject={() => setNewProjectOpen(true)}
       />
       {newProjectOpen ? (
         <NewProjectDialog open onOpenChange={setNewProjectOpen} />
       ) : null}
-    </>
+    </div>
   );
 }
 
-export function TasksNavigationPanel(props: PluginNavPanelProps) {
+export function TasksNavigationPanel(props: NavigationPanelProps) {
   return (
     <TasksRefreshProvider>
       <TasksNavigationPanelContent {...props} />

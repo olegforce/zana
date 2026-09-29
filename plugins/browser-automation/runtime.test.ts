@@ -50,7 +50,7 @@ describe("runtime output boundary", () => {
   it("does not inherit unrelated credentials or DevBrowser routing overrides", () => {
     const env = runtimeEnvironment("/tmp/session-one");
     expect(env.DEV_BROWSER_HOME).toBe("/tmp/session-one");
-    expect(env.DEV_BROWSER_SOCKET).toBe("/tmp/session-one/daemon.sock");
+    expect(env.DEV_BROWSER_SOCKET).toBe("/tmp/session-one/s");
     expect(
       Object.keys(env).every((key) =>
         [
@@ -66,6 +66,11 @@ describe("runtime output boundary", () => {
         ].includes(key),
       ),
     ).toBe(true);
+  });
+  it('fits the real macOS worker temp path and rejects oversized Unix socket paths before spawn', () => {
+    const home = '/var/folders/w2/zmzw89qx02z6lv7xl3nzb2cm0000gn/T/zcc-host-browser-automation-abcdef/db-abcdef';
+    expect(Buffer.byteLength(runtimeEnvironment(home).DEV_BROWSER_SOCKET!)).toBeLessThanOrEqual(103);
+    expect(() => runtimeEnvironment('/tmp/' + 'x'.repeat(100))).toThrow('socket path is too long');
   });
   it("redacts connection credentials and runtime paths", async () => {
     const result = await decodeOutput(

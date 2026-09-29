@@ -320,7 +320,7 @@ async function loadImagePreview(
   path: string,
   options?: { skipLocal?: boolean; readDataUrl?: (path: string) => Promise<ReadDataUrlResult> }
 ): Promise<{ content: string } | { error: string }> {
-  if (!options?.skipLocal && typeof options?.readDataUrl === 'function') {
+  if (!threadId && !options?.skipLocal && typeof options?.readDataUrl === 'function') {
     try {
       const local = await options.readDataUrl(path);
       if (local.ok && typeof local.dataUrl === 'string' && local.dataUrl.startsWith('data:')) {
@@ -357,7 +357,8 @@ export async function loadFilePreview(
   if (isPreviewImagePath(path)) {
     return loadImagePreview(hostFileContent, threadId, path, options);
   }
-  if (!options?.skipLocal) {
+  // A thread pins the execution host. Identical paths on this client are unrelated.
+  if (!threadId && !options?.skipLocal) {
     try {
       const fromLocal = contentFromLocalRead(await readFile(path));
       if (fromLocal !== null) return { content: fromLocal };

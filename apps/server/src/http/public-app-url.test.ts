@@ -13,9 +13,9 @@ import {
 describe('public app URL', () => {
   it('prefers runtime ZCC_APP_URL over a compile-time bake', () => {
     expect(resolvePublicAppUrl({
-      env: { ZCC_APP_URL: 'https://box.tailnet.ts.net/' },
+      env: { ZCC_APP_URL: 'https://machine.example.com/' },
       bundledUrl: 'https://baked.example'
-    })).toBe('https://box.tailnet.ts.net');
+    })).toBe('https://machine.example.com');
   });
 
   it('uses bake over Settings, then Settings over the repo file', () => {
@@ -27,7 +27,7 @@ describe('public app URL', () => {
     expect(readPublicAppUrlFile(cwd)).toBe('https://zcc-7808c5bc8f3d.herokuapp.com/');
     expect(resolvePublicAppUrl({
       env: {},
-      configUrl: 'https://box.tailnet.ts.net:443/',
+      configUrl: 'https://machine.example.com:443/',
       cwd,
       bundledUrl: 'https://baked.example/'
     })).toBe('https://baked.example');
@@ -77,13 +77,13 @@ describe('public app URL', () => {
       relayToken: undefined
     });
     expect(presentAppConfig(
-      { publicAppUrl: 'https://box.tailnet.ts.net', relayToken: 'secret' },
+      { publicAppUrl: 'https://machine.example.com', relayToken: 'secret' },
       { env: { ZCC_APP_URL: 'https://from-env.example' } }
     )).toEqual({
       publicAppUrl: 'https://from-env.example',
       relayToken: undefined
     });
-    const stored = { publicAppUrl: 'https://box.tailnet.ts.net' };
+    const stored = { publicAppUrl: 'https://machine.example.com' };
     expect(presentAppConfig(stored, { env: {}, bundledUrl: '' })).toBe(stored);
     const bare = { theme: 'light' };
     expect(presentAppConfig(bare, { env: {}, bundledUrl: '' })).toBe(bare);

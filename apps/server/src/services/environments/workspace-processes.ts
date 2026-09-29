@@ -5,6 +5,7 @@ import type {
 } from '@zana-ai/zcc-contracts/host-rpc';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
+import { resolveProjectHost } from '../../http/project-host.js';
 
 const PROCESS_PID_CAP = 200;
 
@@ -41,7 +42,7 @@ function resolveWorkspace(ctx: ProductHttpContext, scope: WorkspaceProcessScope)
     throw new ThreadCreateError(404, 'unknown-project', 'project is not registered');
   }
   return {
-    hostId: ctx.hostHub.resolveHostId(project.hostId),
+    hostId: resolveProjectHost(ctx, project.hostId),
     workspacePath: project.path,
     workspaceProvisionType: 'unmanaged'
   };

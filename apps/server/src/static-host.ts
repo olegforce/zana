@@ -140,7 +140,7 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
     if (options.product && await handleHostInternalHttp(request, response, options.product)) {
       return;
     }
-    if (options.product && handleInstallHttp(request, response, options.product)) {
+    if (options.product && await handleInstallHttp(request, response, options.product)) {
       return;
     }
     if (options.product && requestUrl.pathname.startsWith('/api/')) {

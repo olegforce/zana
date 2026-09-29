@@ -1,6 +1,42 @@
 # Using Zana on multiple machines
 
-There are two separate ways to use another computer with Zana:
+Zana Connect gives an instance one address, such as
+`your-name.zana-ide.com`. Open that address from another browser, or select
+the account-owned instance under desktop **Remote access**. Those clients
+use the primary instance's records. The primary computer must stay running;
+connecting a second client does not copy or relocate the server.
+
+Multi-machine sharing is being qualified. The current implementation supports
+account-bound machine enrollment, shared desktop selection, project checkout
+sources, Modern thread routing and host-scoped file operations. Secondary-host
+CLI Agent execution and the complete Explorer/Git source UI remain unfinished.
+Do not infer full desktop feature parity from successful browser sign-in.
+
+To add execution capacity to that same instance:
+
+1. On the primary, enable **Remote access**, then open **Settings → Machines**
+   and choose **Add a machine**. Use its Connect installer on the other computer.
+2. The installer pairs a host with this instance. It preserves the existing
+   address and creates an isolated daemon under `~/.zcc-machines/<instanceId>`.
+   An independent Zana installation on that computer keeps its own data.
+3. In the existing project's settings, add its checkout on the other machine.
+   The project keeps its ID and history; each machine has its own absolute path.
+4. Choose the machine before starting a Modern thread. An offline machine or
+   missing checkout produces an error. There is no fallback to another machine.
+
+Checkouts are not synchronized automatically. Git or another explicit file
+transfer workflow moves code between them. Repository instructions and provider
+credentials belong to the execution machine; project metadata has one canonical
+owner. Library remains at the original project location, so that host must be
+reachable when it owns the metadata.
+
+Use **Pair again** to repair an enrolled Connect machine while retaining its
+host ID. Removing one machine revokes its execution access. Removing an extra
+checkout keeps the shared project, history and files; active work must stop first.
+Creating another independent instance in the account dashboard is a separate
+operation with separate records.
+
+The existing compatibility paths remain available:
 
 - **Enrolled machines** run a host daemon. The other box outbound-connects to
   this app. Add a folder on that machine from **Settings → Machines** (or the
@@ -13,13 +49,15 @@ There are two separate ways to use another computer with Zana:
 
 Copy-paste join remains for boxes you cannot SSH to from this machine.
 
-Zana does **not** ship BB Connect, a separate tunnel product, or a mobile
-bridge. Pairing another computer always goes through this app's enrolled host
-daemon and the existing website relay.
+Connect execution-machine credentials are distinct from browser/phone access.
+Browser and phone credentials cannot call host-internal routes. The Connect
+machine transport carries enrollment, host WebSocket, authorized tool callbacks
+and installation artifacts through a closed route inventory. See
+[implementation contracts](./shared-instance-contracts.md) for the boundary.
 
 ---
 
-## Reachability (public origin)
+## Legacy machine relay reachability
 
 The product server still binds **loopback** (`127.0.0.1`). Another computer
 cannot enroll against `http://127.0.0.1:<port>`. Official desktop builds carry
@@ -61,16 +99,17 @@ mirrored in the product server): `/install.sh`, `/install/version`,
 Operator detail for the front door (`ZCC_RELAY_TOKEN`, `node relay/front-door.mjs`)
 is in [`website/README.md`](../website/README.md).
 
-Do **not** bind the product server to `0.0.0.0` or use Tailscale Funnel. Those
-would put an unauthenticated control plane on a network.
+Keep the product server on loopback and use the authenticated pairing relay.
+Exposing its port directly would put an unauthenticated control plane on a network.
 
-Opening the full Zana UI in a browser through that URL is out of scope — the
-desktop app on this machine stays the control surface. SSH reverse-tunnel
-copy-paste (below) remains the offline fallback.
+The machine-pairing URL serves enrollment and host traffic. Use Zana Connect
+through **Remote access** for authenticated browser and phone access at your
+personal address. SSH reverse-tunnel copy-paste (below) remains the offline
+fallback for machine enrollment.
 
 ---
 
-## Add an execution machine
+## Legacy installer and SSH enrollment
 
 1. Open **Settings → Machines** and choose **Add a machine**.
 2. Copy the one-line installer. It looks like:
@@ -103,8 +142,9 @@ pairing downloads the host-daemon tarball from `/install/zcc-host.tgz`. Composer
 **Fix** (enrolled machines that are offline) pipes that same tarball over SSH
 from this machine instead of asking the remote to `curl` it.
 
-Each joined server gets its own daemon instance and data directory
-(`~/.zcc-machines/<server-host>`). Joining never touches a full local install's
+Each legacy joined server gets its own daemon instance and data directory
+(`~/.zcc-machines/<server-host>`); Connect uses the durable instance UUID above.
+Joining never touches a full local install's
 `~/.zcc`. Subsequent runs reuse the reserved local API port under
 `~/.zcc-machines/host-daemon-ports/`; pass `--host-daemon-port <port>` to
 override.
@@ -188,7 +228,7 @@ the session join URL with `pnpm test:docker:pairing` (needs Docker). Stop with
 
 Settings → Machines should show hostname `zcc-docker`. Add a project at
 `/home/zcc/workspace` (sample app is in the repo under
-`docker/remote-machine/workspace`). This is a pairing trial, not Tailscale Serve.
+`docker/remote-machine/workspace`). This is a local pairing trial.
 
 
 ---

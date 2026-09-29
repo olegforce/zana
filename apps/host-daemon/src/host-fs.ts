@@ -1,3 +1,5 @@
+import { withFileMutationLock } from '@zana-ai/zcc-host-workspace';
+import { readStableFile } from './read-stable-file.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, basename, relative, sep } from 'node:path';
@@ -27,7 +29,6 @@ export const HOST_WRITE_MAX_BYTES = 25 * 1024 * 1024;
 export const LIST_PATHS_VISIT_CAP = 50_000;
 const BROWSE_SKIP_NAMES = new Set(['node_modules']);
 
-const guardedWriteTails = new Map<string, Promise<void>>();
 
 function isFsErrorWithCode(error: unknown, code: string): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === code);
@@ -40,25 +41,6 @@ function sha256Hex(contents: Buffer): string {
 function assertAbsolute(value: string, field: string): void {
   if (!isAbsolute(value)) {
     throw new HostCommandError('invalid_path', `${field} must be absolute`);
-  }
-}
-
-async function serializeGuardedWrite<T>(writePath: string, operation: () => Promise<T>): Promise<T> {
-  const previous = guardedWriteTails.get(writePath) ?? Promise.resolve();
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const tail = previous.then(() => gate);
-  guardedWriteTails.set(writePath, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (guardedWriteTails.get(writePath) === tail) {
-      guardedWriteTails.delete(writePath);
-    }
   }
 }
 
@@ -111,10 +93,22 @@ async function requireNonSymlinkDirectory(path: string, description: string): Pr
   return fs.realpath(path);
 }
 
-async function requireRoot(rootPath: string | undefined): Promise<string | null> {
-  if (rootPath === undefined) return null;
+export async function resolveHostFsRoot(rootPath: string | undefined, boundaryPath?: string): Promise<string | null> {
+  if (rootPath === undefined) {
+    if (boundaryPath !== undefined) throw new HostCommandError('invalid_path', 'A nested boundary requires an authorized root');
+    return null;
+  }
   assertAbsolute(rootPath, 'rootPath');
-  return requireNonSymlinkDirectory(rootPath, 'Root path');
+  const root = await requireNonSymlinkDirectory(rootPath, 'Root path');
+  if (boundaryPath === undefined) return root;
+  assertAbsolute(boundaryPath, 'boundaryPath');
+  // The narrower boundary may not exist on a first write, but its nearest
+  // existing ancestor must still resolve inside the registered trust anchor.
+  const boundary = (await resolveWriteTarget(boundaryPath)).writePath;
+  assertWithinRoot(boundary, root, 'Nested boundary');
+  try { await requireNonSymlinkDirectory(boundaryPath, 'Nested boundary'); }
+  catch (error) { if (!isFsErrorWithCode(error, 'ENOENT')) throw error; }
+  return boundary;
 }
 
 function assertWithinRoot(candidate: string, root: string | null, label: string): void {
@@ -126,6 +120,7 @@ function assertWithinRoot(candidate: string, root: string | null, label: string)
 export async function writeHostFile(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
   content: string;
   contentEncoding: 'utf8' | 'base64';
   createParents: boolean;
@@ -144,13 +139,14 @@ export async function writeHostFile(command: {
   }
 
   const target = await resolveWriteTarget(command.path);
-  return serializeGuardedWrite(target.writePath, () => writeResolvedHostFile(command, contents, target));
+  return withFileMutationLock(target.writePath, () => writeResolvedHostFile(command, contents, target));
 }
 
 async function writeResolvedHostFile(
   command: {
     path: string;
     rootPath?: string;
+  boundaryPath?: string;
     createParents: boolean;
     expectedSha256?: string | null;
     mode?: number;
@@ -158,10 +154,10 @@ async function writeResolvedHostFile(
   contents: Buffer,
   target: ResolvedWriteTarget
 ): Promise<HostWriteFileResult> {
-  if (command.rootPath !== undefined) {
+  if (command.rootPath !== undefined || command.boundaryPath !== undefined) {
     let realRoot: string;
     try {
-      realRoot = await requireNonSymlinkDirectory(command.rootPath, 'Root path');
+      realRoot = (await resolveHostFsRoot(command.rootPath, command.boundaryPath))!;
     } catch (error) {
       if (isFsErrorWithCode(error, 'ENOENT') || (error instanceof HostCommandError && error.code === 'path_not_found')) {
         throw new HostCommandError('path_not_found', `Path does not exist: ${command.path}`);
@@ -182,6 +178,7 @@ async function writeResolvedHostFile(
     if (stat.isDirectory()) {
       throw new HostCommandError('invalid_path', 'Path is a directory, not a file');
     }
+    if (!stat.isFile() || stat.size > HOST_WRITE_MAX_BYTES) throw new HostCommandError('too_large', 'Existing file exceeds the write limit');
     currentMode = stat.mode & 0o777;
     currentContents = await fs.readFile(target.writePath);
   } catch (error) {
@@ -205,39 +202,37 @@ async function writeResolvedHostFile(
   };
   let temporaryPath: string | null = null;
   try {
-    if (command.expectedSha256 === undefined) {
-      await fs.writeFile(target.writePath, contents, writeOptions);
-    } else {
-      temporaryPath = `${target.writePath}.zcc-write-${randomUUID()}`;
-      const handle = await fs.open(temporaryPath, 'wx', writeOptions.mode);
+    temporaryPath = `${target.writePath}.zcc-write-${randomUUID()}`;
+    const handle = await fs.open(temporaryPath, 'wx', writeOptions.mode);
+    try {
+      await handle.writeFile(contents);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (command.expectedSha256 === null) {
       try {
-        await handle.writeFile(contents);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      if (command.expectedSha256 === null) {
-        try {
-          await fs.link(temporaryPath, target.writePath);
-        } catch (error) {
-          if (isFsErrorWithCode(error, 'EEXIST')) {
-            const latest = await fs.readFile(target.writePath).catch(() => null);
-            return {
-              outcome: 'conflict',
-              currentSha256: latest === null ? null : sha256Hex(latest)
-            };
-          }
-          throw error;
+        await fs.link(temporaryPath, target.writePath);
+      } catch (error) {
+        if (isFsErrorWithCode(error, 'EEXIST')) {
+          const latest = await fs.readFile(target.writePath).catch(() => null);
+          return {
+            outcome: 'conflict',
+            currentSha256: latest === null ? null : sha256Hex(latest)
+          };
         }
-      } else {
+        throw error;
+      }
+    } else {
+      if (command.expectedSha256 !== undefined) {
         const latest = await fs.readFile(target.writePath).catch(() => null);
         const latestSha256 = latest === null ? null : sha256Hex(latest);
         if (latestSha256 !== command.expectedSha256) {
           return { outcome: 'conflict', currentSha256: latestSha256 };
         }
-        await fs.rename(temporaryPath, target.writePath);
-        temporaryPath = null;
       }
+      await fs.rename(temporaryPath, target.writePath);
+      temporaryPath = null;
     }
   } catch (error) {
     if (isFsErrorWithCode(error, 'ENOENT')) {
@@ -263,10 +258,11 @@ async function writeResolvedHostFile(
 export async function mkdirHostPath(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
   recursive: boolean;
 }): Promise<HostPathMutationResult> {
   assertAbsolute(command.path, 'Path');
-  const root = await requireRoot(command.rootPath);
+  const root = await resolveHostFsRoot(command.rootPath, command.boundaryPath);
   const target = await resolveWriteTarget(command.path);
   assertWithinRoot(target.writePath, root, `Path "${command.path}"`);
   await fs.mkdir(target.writePath, { recursive: command.recursive });
@@ -277,6 +273,7 @@ export async function moveHostPath(command: {
   sourcePath: string;
   destinationPath: string;
   rootPath?: string;
+  boundaryPath?: string;
 }): Promise<HostPathMutationResult> {
   assertAbsolute(command.sourcePath, 'Path');
   assertAbsolute(command.destinationPath, 'destinationPath');
@@ -286,7 +283,7 @@ export async function moveHostPath(command: {
   }
   const [source, root] = await Promise.all([
     fs.realpath(command.sourcePath),
-    requireRoot(command.rootPath)
+    resolveHostFsRoot(command.rootPath, command.boundaryPath)
   ]);
   assertWithinRoot(source, root, `Path "${command.sourcePath}"`);
   const parent = await fs.realpath(dirname(command.destinationPath));
@@ -306,28 +303,31 @@ export async function moveHostPath(command: {
 export async function removeHostPath(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
   recursive: boolean;
+  expectedSha256?: string;
 }): Promise<HostPathMutationResult> {
   assertAbsolute(command.path, 'Path');
-  const info = await fs.lstat(command.path);
-  if (info.isSymbolicLink()) {
-    throw new HostCommandError('invalid_path', `Path "${command.path}" must not be a symbolic link`);
-  }
-  const [target, root] = await Promise.all([
-    fs.realpath(command.path),
-    requireRoot(command.rootPath)
-  ]);
-  assertWithinRoot(target, root, `Path "${command.path}"`);
-  if (root !== null && target === root) {
-    throw new HostCommandError('invalid_path', 'Cannot remove the declared root');
-  }
-  const targetInfo = await fs.lstat(target);
-  if (targetInfo.isDirectory() && !command.recursive) {
-    await fs.rmdir(target);
-  } else {
-    await fs.rm(target, { recursive: command.recursive, force: false });
-  }
-  return { ok: true };
+  const target = await resolveWriteTarget(command.path);
+  return withFileMutationLock(target.writePath, async () => {
+    const info = await fs.lstat(command.path);
+    if (info.isSymbolicLink()) {
+      throw new HostCommandError('invalid_path', `Path "${command.path}" must not be a symbolic link`);
+    }
+    const [resolved, root] = await Promise.all([fs.realpath(command.path), resolveHostFsRoot(command.rootPath, command.boundaryPath)]);
+    if (resolved !== target.writePath) throw new HostCommandError('conflict', 'Path changed while waiting to remove it');
+    assertWithinRoot(resolved, root, `Path "${command.path}"`);
+    if (root !== null && resolved === root) throw new HostCommandError('invalid_path', 'Cannot remove the declared root');
+    const targetInfo = await fs.lstat(resolved);
+    if (command.expectedSha256 !== undefined) {
+      if (!targetInfo.isFile() || targetInfo.size > HOST_WRITE_MAX_BYTES) throw new HostCommandError('invalid_path', 'Revision-checked removal requires a bounded regular file');
+      const current = await fs.readFile(resolved);
+      if (sha256Hex(current) !== command.expectedSha256) throw new HostCommandError('conflict', 'File changed concurrently. Read it again before removing it.');
+    }
+    if (targetInfo.isDirectory() && !command.recursive) await fs.rmdir(resolved);
+    else await fs.rm(resolved, { recursive: command.recursive, force: false });
+    return { ok: true };
+  });
 }
 
 export async function browseHostDirectory(command: {
@@ -523,9 +523,10 @@ export async function listHostPaths(command: {
 async function resolveExistingFile(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
 }): Promise<{ realPath: string; stat: Stats }> {
   assertAbsolute(command.path, 'Path');
-  const root = await requireRoot(command.rootPath);
+  const root = await resolveHostFsRoot(command.rootPath, command.boundaryPath);
   let realPath: string;
   try {
     realPath = await fs.realpath(command.path);
@@ -546,6 +547,7 @@ async function resolveExistingFile(command: {
 export async function readHostPath(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
 }): Promise<HostReadPathResult> {
   const { realPath, stat } = await resolveExistingFile(command);
   if (stat.size > HOST_WRITE_MAX_BYTES) {
@@ -554,7 +556,7 @@ export async function readHostPath(command: {
       `File size ${stat.size} bytes exceeds the ${Math.floor(HOST_WRITE_MAX_BYTES / (1024 * 1024))} MB limit`
     );
   }
-  const contents = await fs.readFile(realPath);
+  const contents = await readStableFile(realPath, stat, HOST_WRITE_MAX_BYTES);
   const contentEncoding = isUtf8(contents) ? 'utf8' as const : 'base64' as const;
   return {
     path: command.path,
@@ -569,6 +571,7 @@ export async function readHostPath(command: {
 export async function readHostFileMetadata(command: {
   path: string;
   rootPath?: string;
+  boundaryPath?: string;
 }): Promise<HostFileMetadataResult> {
   const { stat } = await resolveExistingFile(command);
   return {

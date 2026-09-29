@@ -40,3 +40,41 @@ describe('join codes', () => {
     expect(() => store.mintForHost('not-a-uuid')).toThrow(/UUID/);
   });
 });
+
+it('persists only hashes, consumes once across reopened stores, and invalidates repair attempts', async () => {
+  const { openDatabase } = await import('@zana-ai/zcc-db');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { createHash } = await import('node:crypto');
+  const dir = mkdtempSync(join(tmpdir(), 'durable-host-joins-')), file = join(dir, 'state.sqlite');
+  let db = openDatabase(file);
+  try {
+    const issued = createJoinCodeStore(db).mint(1000);
+    const id = createHash('sha256').update(issued.joinCode).digest('hex');
+    expect(JSON.stringify(db.sqlite.prepare('SELECT * FROM host_join_codes').all())).not.toContain(issued.joinCode);
+    db.close(); db = openDatabase(file);
+    const first = createJoinCodeStore(db), second = createJoinCodeStore(db);
+    expect(second.status(id, 1001)).toMatchObject({ hostId: issued.hostId, redeemedAt: null });
+    expect(first.redeem(issued.joinCode, 1001)).toEqual(issued);
+    expect(second.redeem(issued.joinCode, 1002)).toBeNull();
+    expect(second.recovered(issued.joinCode, 1003)).toEqual(issued);
+    expect(second.status(id, 1003)?.redeemedAt).toBe(1001);
+    first.mintForHost(issued.hostId, 1004);
+    expect(second.recovered(issued.joinCode, 1004)).toBeNull();
+    expect(second.status(id, 1004)).toBeNull();
+    first.invalidateHost(issued.hostId);
+    expect(db.sqlite.prepare('SELECT * FROM host_join_codes').all()).toEqual([]);
+    expect(first.status('invalid')).toBeNull();
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+it('bounds pending grants, prunes expired codes, and permits repair at capacity', () => {
+  const store = createJoinCodeStore();
+  const first = store.mint(1);
+  for (let n = 1; n < 500; n++) store.mint(1);
+  expect(() => store.mint(2)).toThrow('Too many');
+  expect(store.mintForHost(first.hostId, 2).hostId).toBe(first.hostId);
+  expect(store.mint(JOIN_CODE_TTL_MS + 3)).toBeTruthy();
+  expect(store.recovered(first.joinCode, JOIN_CODE_TTL_MS + 3)).toBeNull();
+});

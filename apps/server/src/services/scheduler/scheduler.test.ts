@@ -8,10 +8,12 @@ vi.mock('electron', () => ({
 
 // Save / delete to disk are not under test here — stub them out so the manager
 // doesn't try to write to /tmp/cc-test-home.
-vi.mock('../scheduler-store.js', () => ({
+vi.mock('./scheduler-store.js', () => ({
   saveSchedule: vi.fn(),
-  deleteSchedule: vi.fn(),
-  listAllSchedules: vi.fn(() => [])
+  deleteSchedule: vi.fn(() => true),
+  listAllSchedules: vi.fn(() => []),
+  globalDir: () => '/tmp/cc-test-home/.zcc/schedules',
+  projectDir: (project: { path: string }) => `${project.path}/.zcc/schedules`
 }));
 
 // claude.ts touches `app.getPath('home')` at import time; the electron mock
@@ -34,32 +36,32 @@ import type { PtyManager } from '@zana-ai/zcc-host-daemon/pty';
 import type { Project } from '@zana-ai/zcc-domain/product';
 
 describe('parseEvery', () => {
-  it('parses simple units', () => {
+  it('parses simple units', async () => {
     expect(parseEvery('5m')).toBe(5 * 60_000);
     expect(parseEvery('1h')).toBe(3_600_000);
     expect(parseEvery('24h')).toBe(24 * 3_600_000);
   });
 
-  it('parses mixed units', () => {
+  it('parses mixed units', async () => {
     expect(parseEvery('1h30m')).toBe(60 * 60_000 + 30 * 60_000);
     expect(parseEvery('  2h 0m  ')).toBeNull(); // whitespace inside isn't allowed
     expect(parseEvery('2h0m')).toBe(2 * 3_600_000);
   });
 
-  it('floors below the minimum', () => {
+  it('floors below the minimum', async () => {
     // "10s" is shorter than the floor — it gets rounded up rather than rejected
     // so a hand-edited typo doesn't fork-bomb the laptop.
     expect(parseEvery('10s')).toBe(MIN_INTERVAL_MS);
     expect(parseEvery('30s')).toBe(MIN_INTERVAL_MS);
   });
 
-  it('caps at the 24-day maximum', () => {
+  it('caps at the 24-day maximum', async () => {
     // Node's setTimeout clamps delays > ~24.85d to 1ms; cap defensively below that.
     expect(parseEvery('30d')).toBe(MAX_INTERVAL_MS);
     expect(parseEvery('100d')).toBe(MAX_INTERVAL_MS);
   });
 
-  it('returns null for garbage', () => {
+  it('returns null for garbage', async () => {
     expect(parseEvery('1 hour')).toBeNull();
     expect(parseEvery('1hr')).toBeNull();
     expect(parseEvery('60')).toBeNull();
@@ -69,7 +71,7 @@ describe('parseEvery', () => {
 });
 
 describe('formatInterval', () => {
-  it('formats common values', () => {
+  it('formats common values', async () => {
     expect(formatInterval(5 * 60_000)).toBe('5m');
     expect(formatInterval(60 * 60_000)).toBe('1h');
     expect(formatInterval(60 * 60_000 + 30 * 60_000)).toBe('1h 30m');
@@ -123,7 +125,7 @@ class FakePtyManager extends EventEmitter {
   create(opts: Record<string, unknown>) {
     this.createCalls.push(opts);
     const session = {
-      id: `pty-${this.createCalls.length}`,
+      id: opts.preallocatedSessionId as string ?? `pty-${this.createCalls.length}`,
       projectId: opts.projectId as string,
       title: 'x',
       profile: opts.profile as string,
@@ -151,12 +153,15 @@ class FakePtyManager extends EventEmitter {
   }
 }
 
-function makeManager(extraTaskFields?: Record<string, unknown>): {
+async function makeManager(
+  extraTaskFields?: Record<string, unknown>,
+  inbox?: { append: (entry: unknown) => Promise<void> }
+): Promise<{
   manager: SchedulerManager;
   ptys: FakePtyManager;
-  task: ReturnType<SchedulerManager['create']>;
+  task: Awaited<ReturnType<SchedulerManager['create']>>;
   pendingSubagents: { count: number };
-} {
+}> {
   const ptys = new FakePtyManager();
   const pendingSubagents = { count: 0 };
   const project: Project = {
@@ -177,9 +182,10 @@ function makeManager(extraTaskFields?: Record<string, unknown>): {
     ptys: ptys as unknown as PtyManager,
     launchTerminal: (opts) => ptys.create(opts as unknown as Record<string, unknown>) as never,
     store: fakeStore as unknown as Parameters<SchedulerManager['setDeps']>[0]['store'],
-    getPendingSubagentCount: () => pendingSubagents.count
+    getPendingSubagentCount: () => pendingSubagents.count,
+    ...(inbox ? { inbox: inbox as unknown as Parameters<SchedulerManager['setDeps']>[0]['inbox'] } : {})
   });
-  const task = manager.create({
+  const task = await manager.create({
     name: 't',
     projectId: 'proj-1',
     profile: 'claude',
@@ -191,16 +197,16 @@ function makeManager(extraTaskFields?: Record<string, unknown>): {
 }
 
 describe('SchedulerManager.fire — headless spawn', () => {
-  it('appends the prompt as a positional argv element for claude', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'say hello' });
-    manager.runNow(task.id);
+  it('appends the prompt as a positional argv element for claude', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'say hello' });
+    await manager.runNow(task.id);
     expect(ptys.createCalls).toHaveLength(1);
     const call = ptys.createCalls[0];
     expect(call.profile).toBe('claude-yolo');
     expect(call.extraArgs).toEqual(['say hello']);
   });
 
-  it('stamps a stable schedule principal at the launch seam', () => {
+  it('stamps a stable schedule principal at the launch seam', async () => {
     const ptys = new FakePtyManager();
     const principals: Array<{ kind: string; id: string }> = [];
     const manager = new SchedulerManager();
@@ -215,98 +221,98 @@ describe('SchedulerManager.fire — headless spawn', () => {
         getConfig: () => ({})
       } as unknown as Parameters<SchedulerManager['setDeps']>[0]['store']
     });
-    const task = manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });
-    manager.runNow(task.id);
+    const task = await manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });
+    await manager.runNow(task.id);
     expect(principals).toEqual([{ kind: 'schedule', id: `schedule:${task.id}` }]);
   });
 
-  it('keeps the prompt after the user extraArgs', () => {
-    const { manager, ptys, task } = makeManager({
+  it('keeps the prompt after the user extraArgs', async () => {
+    const { manager, ptys, task } = await makeManager({
       prompt: 'hi',
       extraArgs: ['--model', 'sonnet']
     });
-    manager.runNow(task.id);
+    await manager.runNow(task.id);
     expect(ptys.createCalls[0].extraArgs).toEqual(['--model', 'sonnet', 'hi']);
   });
 
-  it('preserves multi-line prompts as one argv element', () => {
+  it('preserves multi-line prompts as one argv element', async () => {
     const body = 'line one\nline two';
-    const { manager, ptys, task } = makeManager({ prompt: body });
-    manager.runNow(task.id);
+    const { manager, ptys, task } = await makeManager({ prompt: body });
+    await manager.runNow(task.id);
     const args = ptys.createCalls[0].extraArgs as string[];
     expect(args[args.length - 1]).toBe(body);
   });
 
-  it('omits the prompt arg when no prompt is set', () => {
-    const { manager, ptys, task } = makeManager(/* no prompt */);
-    manager.runNow(task.id);
+  it('omits the prompt arg when no prompt is set', async () => {
+    const { manager, ptys, task } = await makeManager(/* no prompt */);
+    await manager.runNow(task.id);
     expect(ptys.createCalls[0].extraArgs).toEqual([]);
   });
 
-  it('does not append the prompt for a shell profile (no positional prompt)', () => {
-    const { manager, ptys, task } = makeManager({ profile: 'shell', prompt: 'hi' });
-    manager.runNow(task.id);
+  it('does not append the prompt for a shell profile (no positional prompt)', async () => {
+    const { manager, ptys, task } = await makeManager({ profile: 'shell', prompt: 'hi' });
+    await manager.runNow(task.id);
     expect(ptys.createCalls[0].extraArgs).toEqual([]);
   });
 
-  it('appends the prompt for codex + cursor (acceptsPromptArgv), not just claude', () => {
+  it('appends the prompt for codex + cursor (acceptsPromptArgv), not just claude', async () => {
     // Regression: this gate used to be isClaudeProfile, silently dropping the
     // scheduled prompt for the two new agent CLIs that also take `[prompt]`.
     for (const profile of ['codex', 'cursor'] as const) {
-      const { manager, ptys, task } = makeManager({ profile, prompt: 'hi' });
-      manager.runNow(task.id);
+      const { manager, ptys, task } = await makeManager({ profile, prompt: 'hi' });
+      await manager.runNow(task.id);
       expect(ptys.createCalls[0].extraArgs, profile).toEqual(['hi']);
     }
   });
 
-  it('delivers the prompt via --prompt for OpenCode (positional is a project dir)', () => {
+  it('delivers the prompt via --prompt for OpenCode (positional is a project dir)', async () => {
     // Regression for the `Failed to change directory to …/<prompt>` bug: a bare
     // positional prompt makes OpenCode cd into a bogus path and exit.
     for (const profile of ['opencode', 'opencode-resume', 'opencode-yolo'] as const) {
-      const { manager, ptys, task } = makeManager({ profile, prompt: 'hi' });
-      manager.runNow(task.id);
+      const { manager, ptys, task } = await makeManager({ profile, prompt: 'hi' });
+      await manager.runNow(task.id);
       expect(ptys.createCalls[0].extraArgs, profile).toEqual(['--prompt', 'hi']);
     }
   });
 
-  it('keeps the claude-resume profile (no print-mode normalisation)', () => {
-    const { manager, ptys, task } = makeManager({ profile: 'claude-resume', prompt: 'hi' });
-    manager.runNow(task.id);
+  it('keeps the claude-resume profile (no print-mode normalisation)', async () => {
+    const { manager, ptys, task } = await makeManager({ profile: 'claude-resume', prompt: 'hi' });
+    await manager.runNow(task.id);
     expect(ptys.createCalls[0].profile).toBe('claude-resume');
     expect(ptys.createCalls[0].extraArgs).toEqual(['hi']);
   });
 
-  it('spawns headless — background run stays out of the tab strip', () => {
+  it('spawns headless — background run stays out of the tab strip', async () => {
     // Scheduled fires are background work, surfaced via the inbox rather than
     // a tab the user opened. The pty still runs (and stays replyable); the
     // inbox "Open in session" deep-link promotes it to a visible tab on
     // demand. logPath remains unused — runs are tracked via run history.
-    const { manager, ptys, task } = makeManager({ prompt: 'hi' });
-    manager.runNow(task.id);
+    const { manager, ptys, task } = await makeManager({ prompt: 'hi' });
+    await manager.runNow(task.id);
     const call = ptys.createCalls[0];
     expect(call.headless).toBe(true);
     expect(call.logPath).toBeUndefined();
   });
 
-  it('forces unattended yolo/autonomous execution so the fire cannot prompt', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'hi' });
-    manager.runNow(task.id);
+  it('forces unattended yolo/autonomous execution so the fire cannot prompt', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'hi' });
+    await manager.runNow(task.id);
     const call = ptys.createCalls[0];
     expect(call.scheduled).toBe(true);
     expect(call.profile).toBe('claude-yolo');
   });
 
-  it('remaps grok onto grok-yolo (no autonomous execution mapping)', () => {
-    const { manager, ptys, task } = makeManager({ profile: 'grok', prompt: 'hi' });
-    manager.runNow(task.id);
+  it('remaps grok onto grok-yolo (no autonomous execution mapping)', async () => {
+    const { manager, ptys, task } = await makeManager({ profile: 'grok', prompt: 'hi' });
+    await manager.runNow(task.id);
     expect(ptys.createCalls[0].profile).toBe('grok-yolo');
     expect(ptys.createCalls[0].harnessRouting).toBeUndefined();
   });
 
-  it('does not register a data listener (no TUI keystroke driving)', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'hi' });
+  it('does not register a data listener (no TUI keystroke driving)', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'hi' });
     expect(ptys.listenerCount('data')).toBe(0);
-    manager.runNow(task.id);
+    await manager.runNow(task.id);
     expect(ptys.listenerCount('data')).toBe(0);
   });
 });
@@ -318,51 +324,52 @@ describe('SchedulerManager.fire — headless spawn', () => {
  * need to exercise the timer-driven overlap path.
  */
 function autoFire(manager: SchedulerManager, taskId: string) {
-  (manager as unknown as {
-    fire: (id: string, opts: { manual: boolean }) => void;
+  return (manager as unknown as {
+    fire: (id: string, opts: { manual: boolean }) => Promise<void>;
   }).fire(taskId, { manual: false });
 }
 
 describe('SchedulerManager.fire — overlap guard', () => {
-  it('skips the next auto fire while a prior auto run is still alive', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('skips the next auto fire while a prior auto run is still alive', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(1);
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(1);
     // The skipped run should be recorded with result 'skipped'.
     const runs = manager.list().find((t) => t.id === task.id)!.status.runs;
     expect(runs[0].result).toBe('skipped');
   });
 
-  it('skips the next auto fire while a prior MANUAL run is still alive', () => {
+  it('skips the next auto fire while a prior MANUAL run is still alive', async () => {
     // Regression: previously the overlap check only consulted
     // lastAutoSessionId, so a long-running manual fire would let the next
     // interval-driven fire stack on top of it.
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    manager.runNow(task.id); // manual
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await manager.runNow(task.id); // manual
     expect(ptys.createCalls).toHaveLength(1);
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(1);
     const runs = manager.list().find((t) => t.id === task.id)!.status.runs;
     expect(runs[0].result).toBe('skipped');
   });
 
-  it('proceeds once the prior session has exited', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('proceeds once the prior session has exited', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const firstId = ptys.sessions[0].id;
     ptys.simulateExit(firstId, 0);
-    autoFire(manager, task.id);
+    await manager.attachReport('no-such-session', 'drain');
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(2);
   });
 
-  it('manual "Run now" still spawns even when an auto run is alive', () => {
+  it('manual "Run now" still spawns even when an auto run is alive', async () => {
     // Manual fires are an explicit user choice — don't block them on
     // overlap.
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
-    manager.runNow(task.id);
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
+    await manager.runNow(task.id);
     expect(ptys.createCalls).toHaveLength(2);
   });
 });
@@ -373,11 +380,11 @@ describe('SchedulerManager.fire — overlap guard', () => {
  * per-schedule overlap guard never trips, only the GLOBAL cap can). Returns the
  * manager, the shared fake pty, and the created tasks.
  */
-function makeMultiScheduleManager(count: number): {
+async function makeMultiScheduleManager(count: number): Promise<{
   manager: SchedulerManager;
   ptys: FakePtyManager;
-  tasks: Array<ReturnType<SchedulerManager['create']>>;
-} {
+  tasks: Array<Awaited<ReturnType<SchedulerManager['create']>>>;
+}> {
   const ptys = new FakePtyManager();
   const project: Project = {
     id: 'proj-1',
@@ -396,7 +403,7 @@ function makeMultiScheduleManager(count: number): {
     launchTerminal: (opts) => ptys.create(opts as unknown as Record<string, unknown>) as never,
     store: fakeStore as unknown as Parameters<SchedulerManager['setDeps']>[0]['store']
   });
-  const tasks = Array.from({ length: count }, (_, i) =>
+  const tasks = await Promise.all(Array.from({ length: count }, (_, i) =>
     manager.create({
       name: `t${i}`,
       projectId: 'proj-1',
@@ -405,23 +412,23 @@ function makeMultiScheduleManager(count: number): {
       enabled: false,
       prompt: 'work'
     })
-  );
+  ));
   return { manager, ptys, tasks };
 }
 
 describe('SchedulerManager.fire — global concurrency cap', () => {
   const CAP = 5; // mirrors MAX_CONCURRENT_SCHEDULED_RUNS in scheduler.ts
 
-  it('skips the (cap+1)th simultaneous auto fire with the concurrency reason', () => {
-    const { manager, ptys, tasks } = makeMultiScheduleManager(CAP + 1);
+  it('skips the (cap+1)th simultaneous auto fire with the concurrency reason', async () => {
+    const { manager, ptys, tasks } = await makeMultiScheduleManager(CAP + 1);
 
     // Fire CAP distinct schedules — each spawns one live session (overlap never
     // trips: different schedules, different sessions).
-    for (let i = 0; i < CAP; i += 1) autoFire(manager, tasks[i].id);
+    for (let i = 0; i < CAP; i += 1) await autoFire(manager, tasks[i].id);
     expect(ptys.createCalls).toHaveLength(CAP);
 
     // The (cap+1)th coincident fire must be skipped, NOT spawned.
-    autoFire(manager, tasks[CAP].id);
+    await autoFire(manager, tasks[CAP].id);
     expect(ptys.createCalls).toHaveLength(CAP);
 
     // ...and recorded as skipped with the concurrency-cap reason (distinct from
@@ -431,30 +438,31 @@ describe('SchedulerManager.fire — global concurrency cap', () => {
     expect(runs[0].message).toMatch(/concurrency-cap/);
   });
 
-  it('lets a capped fire proceed once a live run exits and frees a slot', () => {
-    const { manager, ptys, tasks } = makeMultiScheduleManager(CAP + 1);
-    for (let i = 0; i < CAP; i += 1) autoFire(manager, tasks[i].id);
+  it('lets a capped fire proceed once a live run exits and frees a slot', async () => {
+    const { manager, ptys, tasks } = await makeMultiScheduleManager(CAP + 1);
+    for (let i = 0; i < CAP; i += 1) await autoFire(manager, tasks[i].id);
 
     // At the cap → skipped.
-    autoFire(manager, tasks[CAP].id);
+    await autoFire(manager, tasks[CAP].id);
     expect(ptys.createCalls).toHaveLength(CAP);
 
     // One running session exits, freeing a global slot.
     ptys.simulateExit(ptys.sessions[0].id, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     // Now the previously-capped schedule fires for real.
-    autoFire(manager, tasks[CAP].id);
+    await autoFire(manager, tasks[CAP].id);
     expect(ptys.createCalls).toHaveLength(CAP + 1);
   });
 
-  it('manual "Run now" bypasses the concurrency cap (explicit user action)', () => {
+  it('manual "Run now" bypasses the concurrency cap (explicit user action)', async () => {
     // Consistent with how runNow bypasses the overlap guard — a deliberate
     // click is the user overriding the cap, same as overlap today.
-    const { manager, ptys, tasks } = makeMultiScheduleManager(CAP + 1);
-    for (let i = 0; i < CAP; i += 1) autoFire(manager, tasks[i].id);
+    const { manager, ptys, tasks } = await makeMultiScheduleManager(CAP + 1);
+    for (let i = 0; i < CAP; i += 1) await autoFire(manager, tasks[i].id);
     expect(ptys.createCalls).toHaveLength(CAP);
 
-    manager.runNow(tasks[CAP].id);
+    await manager.runNow(tasks[CAP].id);
     expect(ptys.createCalls).toHaveLength(CAP + 1);
   });
 });
@@ -462,46 +470,46 @@ describe('SchedulerManager.fire — global concurrency cap', () => {
 describe('SchedulerManager.fire — zombie-session recovery', () => {
   const CAP = 5; // mirrors MAX_CONCURRENT_SCHEDULED_RUNS in scheduler.ts
 
-  it('reaps a zombie whose process died without an exit event, freeing the slot', () => {
+  it('reaps a zombie whose process died without an exit event, freeing the slot', async () => {
     // Regression: a run whose pty never delivered onExit (machine slept/woke)
     // stayed pinned `running` and held a concurrency slot forever. Enough of
     // them deadlocked every schedule with concurrency-cap skips until an app
     // restart. The fire-time reap must clear them so a poll self-heals.
-    const { manager, ptys, tasks } = makeMultiScheduleManager(CAP + 1);
-    for (let i = 0; i < CAP; i += 1) autoFire(manager, tasks[i].id);
+    const { manager, ptys, tasks } = await makeMultiScheduleManager(CAP + 1);
+    for (let i = 0; i < CAP; i += 1) await autoFire(manager, tasks[i].id);
     expect(ptys.createCalls).toHaveLength(CAP);
 
     // All CAP processes die WITHOUT emitting exit — classic lost-onExit zombies.
     for (let i = 0; i < CAP; i += 1) ptys.killProcess(ptys.sessions[i].id);
 
     // The next auto fire reaps them up front, sees the cap is clear, and runs.
-    autoFire(manager, tasks[CAP].id);
+    await autoFire(manager, tasks[CAP].id);
     expect(ptys.createCalls).toHaveLength(CAP + 1);
   });
 
-  it('clears a self-overlap zombie so the same schedule can fire again', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('clears a self-overlap zombie so the same schedule can fire again', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(1);
 
     // Its process vanishes with no exit event → overlap guard would otherwise
     // skip forever with "previous run still active".
     ptys.killProcess(ptys.sessions[0].id);
 
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     expect(ptys.createCalls).toHaveLength(2);
   });
 
-  it('records the interrupted (reaped) run as an error, not a success', () => {
+  it('records the interrupted (reaped) run as an error, not a success', async () => {
     // The optimistic fire-time record is `success`; a reaped run must be
     // corrected to error so the failure is visible and the run isn't trusted
     // by a downstream `--needs` freshness check.
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sessionId = ptys.sessions[0].id;
     ptys.killProcess(sessionId);
 
-    autoFire(manager, task.id); // triggers the reap of the prior run
+    await autoFire(manager, task.id); // triggers the reap of the prior run
 
     const runs = manager.list().find((t) => t.id === task.id)!.status.runs;
     const reaped = runs.find((r) => r.sessionId === sessionId)!;
@@ -513,12 +521,12 @@ describe('SchedulerManager.attachReport', () => {
   const runsOf = (manager: SchedulerManager, id: string) =>
     manager.list().find((t) => t.id === id)!.status.runs;
 
-  it('attaches a report to the run owning the sessionId', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('attaches a report to the run owning the sessionId', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    manager.attachReport(sid, '## done\nall good', 'success');
+    await manager.attachReport(sid, '## done\nall good', 'success');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.report).toBe('## done\nall good');
@@ -526,15 +534,16 @@ describe('SchedulerManager.attachReport', () => {
     expect(run.reportedAt).toBeTruthy();
   });
 
-  it('report survives the exit-time recordRun merge (report BEFORE exit)', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('report survives the exit-time recordRun merge (report BEFORE exit)', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     // Report arrives while the session is still alive (optimistic run).
-    manager.attachReport(sid, 'early report', 'partial');
+    await manager.attachReport(sid, 'early report', 'partial');
     // Then the pty exits → recordRun overwrites result/duration.
     ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success'); // exit code 0 finalized
@@ -543,23 +552,24 @@ describe('SchedulerManager.attachReport', () => {
     expect(run.reportStatus).toBe('partial');
   });
 
-  it('report attaches to an already-finalized run (report AFTER exit)', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('report attaches to an already-finalized run (report AFTER exit)', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    ptys.simulateExit(sid, 0); // finalize first
-    manager.attachReport(sid, 'late report', 'success'); // then report
+    ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain'); // finalize first
+    await manager.attachReport(sid, 'late report', 'success'); // then report
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success');
     expect(run.report).toBe('late report');
   });
 
-  it('is a no-op (no throw) when no run matches the sessionId', () => {
-    const { manager, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
-    expect(() => manager.attachReport('no-such-session', 'orphan')).not.toThrow();
+  it('is a no-op (no throw) when no run matches the sessionId', async () => {
+    const { manager, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
+    await expect(manager.attachReport('no-such-session', 'orphan')).resolves.toBeUndefined();
   });
 });
 
@@ -572,12 +582,13 @@ describe('SchedulerManager — incomplete (exit-0 with no schedule_report)', () 
   const runsOf = (manager: SchedulerManager, id: string) =>
     manager.list().find((t) => t.id === id)!.status.runs;
 
-  it('stamps a claude run "incomplete" when exit-0 arrives with no report filed', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' }); // profile: claude, inboxLevel default 'quiet'
-    autoFire(manager, task.id);
+  it('stamps a claude run "incomplete" when exit-0 arrives with no report filed', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' }); // profile: claude, inboxLevel default 'quiet'
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    ptys.simulateExit(sid, 0); // no schedule_report ever called
+    ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain'); // no schedule_report ever called
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('incomplete');
@@ -585,49 +596,72 @@ describe('SchedulerManager — incomplete (exit-0 with no schedule_report)', () 
     expect(manager.list().find((t) => t.id === task.id)!.status.lastRunResult).toBe('incomplete');
   });
 
-  it('still reports "success" when the report was filed before exit', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('still reports "success" when the report was filed before exit', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    manager.attachReport(sid, 'all good', 'success');
+    await manager.attachReport(sid, 'all good', 'success');
     ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success');
   });
 
-  it('does not flag "incomplete" on a `silent` schedule (nothing reads its report)', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work', inboxLevel: 'silent' });
-    autoFire(manager, task.id);
+  it('does not flag "incomplete" on a `silent` schedule (nothing reads its report)', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', inboxLevel: 'silent' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success');
   });
 
-  it('does not flag "incomplete" on a profile that can\'t file a report (e.g. cursor)', () => {
-    const { manager, ptys, task } = makeManager({ profile: 'cursor', prompt: 'work' });
-    autoFire(manager, task.id);
+  it('does not flag "incomplete" on a profile that can\'t file a report (e.g. cursor)', async () => {
+    const { manager, ptys, task } = await makeManager({ profile: 'cursor', prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success');
   });
 
-  it('a non-zero exit still records "error", never "incomplete"', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('a non-zero exit still records "error", never "incomplete"', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     ptys.simulateExit(sid, 1);
+    await manager.attachReport('no-such-session', 'drain');
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('error');
+  });
+
+  it('still notifies loudly when the turn finished without a schedule_report', async () => {
+    const append = vi.fn(async () => undefined);
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', inboxLevel: 'quiet' }, { append });
+    await autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    await manager.onAgentFinished(sid);
+    ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.result).toBe('incomplete');
+    expect(run.finishedAt).toBeTruthy();
+    expect(append).toHaveBeenCalledTimes(1);
+    const notice = append.mock.calls[0][0] as { comments: string; notify: string };
+    expect(notice.notify).toBe('loud');
+    expect(notice.comments).toContain('incomplete');
   });
 });
 
@@ -635,18 +669,18 @@ describe('SchedulerManager.recordRun — eviction of a long-lived run', () => {
   const statusOf = (manager: SchedulerManager, id: string) =>
     manager.list().find((t) => t.id === id)!.status;
 
-  it('does not double-count or duplicate when an evicted run finally exits', () => {
+  it('does not double-count or duplicate when an evicted run finally exits', async () => {
     // Regression (QA high-sev #3): with retain=1, run #1 fires and stays alive.
     // A second (manual) fire unshifts run #2 and the slice(0,1) EVICTS run #1
     // from status.runs. When run #1's pty finally exits, its exit-time
     // recordRun must recognize it as the tail of an already-counted run — NOT
     // unshift a fresh entry (which would double-count the fire and list the run
     // twice). `runNow` (manual) bypasses the overlap guard so both fires spawn.
-    const { manager, ptys, task } = makeManager({ prompt: 'work', retain: 1 });
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', retain: 1 });
 
-    manager.runNow(task.id); // run #1 — stays alive
+    await manager.runNow(task.id); // run #1 — stays alive
     const sid1 = ptys.sessions[0].id;
-    manager.runNow(task.id); // run #2 — evicts run #1 from the retain=1 buffer
+    await manager.runNow(task.id); // run #2 — evicts run #1 from the retain=1 buffer
     const sid2 = ptys.sessions[1].id;
 
     // Snapshot BEFORE run #1's late exit (statusOf returns the live object, so
@@ -658,6 +692,7 @@ describe('SchedulerManager.recordRun — eviction of a long-lived run', () => {
 
     // Run #1 (evicted) exits late — its tail must be recognized and dropped.
     ptys.simulateExit(sid1, 0);
+    await manager.attachReport('no-such-session', 'drain');
 
     const after = statusOf(manager, task.id);
     // runCount stays at 2 — the exit is neither a new fire nor a re-insert.
@@ -676,17 +711,17 @@ describe('SchedulerManager.onAgentFinished', () => {
   const runsOf = (manager: SchedulerManager, id: string) =>
     manager.list().find((t) => t.id === id)!.status.runs;
 
-  it('stamps finishedAt + duration on the run while the pty stays alive', () => {
+  it('stamps finishedAt + duration on the run while the pty stays alive', async () => {
     // Explicitly opt OUT of auto-close — the create default is now `true`, and
     // this case is specifically the "finished but left open at the prompt" path.
-    const { manager, ptys, task } = makeManager({
+    const { manager, ptys, task } = await makeManager({
       prompt: 'work',
       autoCloseOnFinish: false
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    manager.onAgentFinished(sid);
+    await manager.onAgentFinished(sid);
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.finishedAt).toBeTruthy();
@@ -696,32 +731,32 @@ describe('SchedulerManager.onAgentFinished', () => {
     expect(ptys.sessions[0].status).toBe('running');
   });
 
-  it('closes the pty (expected) for an auto-close task', () => {
-    const { manager, ptys, task } = makeManager({
+  it('closes the pty (expected) for an auto-close task', async () => {
+    const { manager, ptys, task } = await makeManager({
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    manager.onAgentFinished(sid);
+    await manager.onAgentFinished(sid);
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.finishedAt).toBeTruthy();
     expect(ptys.closeExpectedCalls).toEqual([sid]);
   });
 
-  it('waits for a later zero-pending parent Stop after background work completes', () => {
-    const { manager, ptys, task, pendingSubagents } = makeManager({
+  it('waits for a later zero-pending parent Stop after background work completes', async () => {
+    const { manager, ptys, task, pendingSubagents } = await makeManager({
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
     pendingSubagents.count = 2;
 
-    manager.onAgentFinished(sid);
-    manager.onAgentFinished(sid); // duplicate parent Stop cannot arm another close
+    await manager.onAgentFinished(sid);
+    await manager.onAgentFinished(sid); // duplicate parent Stop cannot arm another close
     expect(ptys.closeExpectedCalls).toEqual([]);
 
     pendingSubagents.count = 0;
@@ -729,23 +764,23 @@ describe('SchedulerManager.onAgentFinished', () => {
     // Child completion alone must leave time for parent result handling/reporting.
     expect(ptys.closeExpectedCalls).toEqual([]);
 
-    manager.onAgentFinished(sid);
+    await manager.onAgentFinished(sid);
     expect(ptys.closeExpectedCalls).toEqual([sid]);
   });
 
-  it('times out a deferred background subagent run with an explicit error', () => {
+  it('times out a deferred background subagent run with an explicit error', async () => {
     vi.useFakeTimers();
     try {
-      const { manager, ptys, task, pendingSubagents } = makeManager({
+      const { manager, ptys, task, pendingSubagents } = await makeManager({
         prompt: 'work',
         autoCloseOnFinish: true
       });
-      autoFire(manager, task.id);
+      await autoFire(manager, task.id);
       const sid = ptys.sessions[0].id;
       pendingSubagents.count = 1;
 
-      manager.onAgentFinished(sid);
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      await manager.onAgentFinished(sid);
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
 
       expect(ptys.closeExpectedCalls).toEqual([sid]);
       const run = runsOf(manager, task.id).find((candidate) => candidate.sessionId === sid)!;
@@ -754,6 +789,7 @@ describe('SchedulerManager.onAgentFinished', () => {
 
       // A later expected PTY exit cannot overwrite the explicit timeout error.
       ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
       const finalRun = runsOf(manager, task.id).find((candidate) => candidate.sessionId === sid)!;
       expect(finalRun.result).toBe('error');
       expect(finalRun.message).toBe('background subagent timed out');
@@ -762,21 +798,21 @@ describe('SchedulerManager.onAgentFinished', () => {
     }
   });
 
-  it('clears a deferred timeout when parent reaches its final Stop', () => {
+  it('clears a deferred timeout when parent reaches its final Stop', async () => {
     vi.useFakeTimers();
     try {
-      const { manager, ptys, task, pendingSubagents } = makeManager({
+      const { manager, ptys, task, pendingSubagents } = await makeManager({
         prompt: 'work',
         autoCloseOnFinish: true
       });
-      autoFire(manager, task.id);
+      await autoFire(manager, task.id);
       const sid = ptys.sessions[0].id;
       pendingSubagents.count = 1;
-      manager.onAgentFinished(sid);
+      await manager.onAgentFinished(sid);
 
       pendingSubagents.count = 0;
-      manager.onAgentFinished(sid);
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      await manager.onAgentFinished(sid);
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
 
       expect(ptys.closeExpectedCalls).toEqual([sid]);
     } finally {
@@ -784,63 +820,65 @@ describe('SchedulerManager.onAgentFinished', () => {
     }
   });
 
-  it('clears deferred state on stopAll without closing the session', () => {
+  it('clears deferred state on stopAll without closing the session', async () => {
     vi.useFakeTimers();
     try {
-      const { manager, ptys, task, pendingSubagents } = makeManager({
+      const { manager, ptys, task, pendingSubagents } = await makeManager({
         prompt: 'work',
         autoCloseOnFinish: true
       });
-      autoFire(manager, task.id);
+      await autoFire(manager, task.id);
       pendingSubagents.count = 1;
-      manager.onAgentFinished(ptys.sessions[0].id);
+      await manager.onAgentFinished(ptys.sessions[0].id);
 
       manager.stopAll();
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
       expect(ptys.closeExpectedCalls).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('finishedAt survives the exit-time recordRun merge', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('finishedAt survives the exit-time recordRun merge', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
-    manager.onAgentFinished(sid); // turn ends, pty still alive
-    manager.attachReport(sid, 'done'); // filed its report, as expected
-    ptys.simulateExit(sid, 0); // later the pty actually exits
+    await manager.onAgentFinished(sid); // turn ends, pty still alive
+    await manager.attachReport(sid, 'done'); // filed its report, as expected
+    ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain'); // later the pty actually exits
 
     const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
     expect(run.result).toBe('success');
     expect(run.finishedAt).toBeTruthy(); // not clobbered by the exit merge
   });
 
-  it('leaves an unmatched interactive session open', () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    autoFire(manager, task.id);
+  it('leaves an unmatched interactive session open', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    await autoFire(manager, task.id);
 
-    manager.onAgentFinished('no-such-session');
+    await manager.onAgentFinished('no-such-session');
 
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
 
-  it('applies maxDurationMinutes watchdog to force-close runs on timeout', () => {
+  it('applies maxDurationMinutes watchdog to force-close runs on timeout', async () => {
     vi.useFakeTimers();
     try {
-      const { manager, ptys, task } = makeManager({
+      const { manager, ptys, task } = await makeManager({
         prompt: 'work',
         maxDurationMinutes: 5,
         autoCloseOnFinish: true
       });
-      autoFire(manager, task.id);
+      await autoFire(manager, task.id);
       const sid = ptys.sessions[0].id;
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
       expect(ptys.closeExpectedCalls).toEqual([]);
-      vi.advanceTimersByTime(1 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(1 * 60 * 1000);
       expect(ptys.closeExpectedCalls).toEqual([sid]);
       ptys.simulateExit(sid, 0);
+    await manager.attachReport('no-such-session', 'drain');
       const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
       expect(run.result).toBe('error');
       expect(run.message).toContain('exceeded maximum duration of 5 minutes');
@@ -849,31 +887,21 @@ describe('SchedulerManager.onAgentFinished', () => {
     }
   });
 
-  it('prevents concurrent duplicate fires when firing is true', async () => {
-    const { manager, ptys, task } = makeManager({ prompt: 'work' });
-    let resolvePromise: (v: unknown) => void;
-    const promise = new Promise<unknown>((resolve) => {
-      resolvePromise = resolve;
-    });
-    (manager as unknown as { deps: { launchTerminal: unknown } }).deps.launchTerminal = (() =>
-      promise) as never;
-    (manager as unknown as { fire: (id: string, o: { manual: boolean }) => void }).fire(task.id, {
-      manual: false
-    });
-    expect((manager as unknown as { live: Map<string, { firing?: boolean }> }).live.get(task.id)!.firing).toBe(true);
-    (manager as unknown as { fire: (id: string, o: { manual: boolean }) => void }).fire(task.id, {
-      manual: false
-    });
-    const runs = runsOf(manager, task.id);
-    expect(
-      runs.some(
-        (r) => r.result === 'skipped' && r.message === 'previous fire/launch is already in progress'
-      )
-    ).toBe(true);
-    resolvePromise!(ptys.create({ projectId: 'proj-1', title: 'Task' }));
-    await promise;
-    await new Promise((resolve) => process.nextTick(resolve));
-    expect((manager as unknown as { live: Map<string, { firing?: boolean }> }).live.get(task.id)!.firing).toBe(false);
+  it('serializes coincident automatic fires while a launch is awaiting acknowledgement', async () => {
+    const { manager, ptys, task } = await makeManager({ prompt: 'work' });
+    let release!: (value: unknown) => void;
+    const launched = new Promise<unknown>(resolve => { release = resolve; });
+    const internals = manager as unknown as { deps: { launchTerminal: unknown }; serial<T>(work: () => Promise<T>): Promise<T> };
+    internals.deps.launchTerminal = () => launched;
+    const first = internals.serial(() => autoFire(manager, task.id));
+    await vi.waitFor(() => expect(manager.list()[0].status.runs[0]?.launchState).toBe('pending'));
+    const reserved = manager.list()[0].status.runs[0].sessionId;
+    const second = internals.serial(() => autoFire(manager, task.id));
+    release(ptys.create({ projectId: 'proj-1', preallocatedSessionId: reserved }));
+    await Promise.all([first, second]);
+    expect(ptys.createCalls).toHaveLength(1);
+    expect(runsOf(manager, task.id)).toEqual(expect.arrayContaining([expect.objectContaining({ result: 'skipped' })]));
+    manager.stopAll();
   });
 });
 
@@ -897,89 +925,90 @@ describe('SchedulerManager.fire — non-hook fallback watchdog', () => {
 
   const WATCHDOG_MS = 30 * 60 * 1000;
 
-  it('force-closes a cursor autoClose run after the ceiling (no Stop hook)', () => {
-    const { manager, ptys, task } = makeManager({
+  it('force-closes a cursor autoClose run after the ceiling (no Stop hook)', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'cursor',
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     // Before the ceiling: still alive, not closed.
-    vi.advanceTimersByTime(WATCHDOG_MS - 1000);
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS - 1000);
     expect(ptys.closeExpectedCalls).toEqual([]);
 
     // Past the ceiling: the watchdog reaps the session it can't hear finish.
-    vi.advanceTimersByTime(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(ptys.closeExpectedCalls).toEqual([sid]);
   });
 
-  it('does NOT arm the watchdog for a claude run (Stop hook self-reaps)', () => {
-    const { manager, ptys, task } = makeManager({
+  it('does NOT arm the watchdog for a claude run (Stop hook self-reaps)', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'claude',
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
 
-    vi.advanceTimersByTime(WATCHDOG_MS + 5000);
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS + 5000);
     // Claude reaps via onAgentFinished, never the coarse watchdog.
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
 
-  it('does NOT arm the watchdog for a codex run (its -c Stop hook bridge self-reaps)', () => {
-    const { manager, ptys, task } = makeManager({
+  it('does NOT arm the watchdog for a codex run (its -c Stop hook bridge self-reaps)', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'codex',
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
 
-    vi.advanceTimersByTime(WATCHDOG_MS + 5000);
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS + 5000);
     // codex now flips canAutoCloseOnFinish ON (A6), so it self-reaps via
     // onAgentFinished like claude — the coarse watchdog must not arm.
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
 
-  it('does NOT arm the watchdog when autoCloseOnFinish is off', () => {
-    const { manager, ptys, task } = makeManager({
+  it('does NOT arm the watchdog when autoCloseOnFinish is off', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'cursor',
       prompt: 'work',
       autoCloseOnFinish: false
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
 
-    vi.advanceTimersByTime(WATCHDOG_MS + 5000);
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS + 5000);
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
 
-  it('clears the watchdog when the session exits before the ceiling', () => {
-    const { manager, ptys, task } = makeManager({
+  it('clears the watchdog when the session exits before the ceiling', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'cursor',
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
     const sid = ptys.sessions[0].id;
 
     // The pty exits on its own well before the ceiling.
     ptys.simulateExit(sid, 0);
-    vi.advanceTimersByTime(WATCHDOG_MS + 5000);
+    await manager.attachReport('no-such-session', 'drain');
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS + 5000);
     // No force-close — the watchdog was cleared on exit (no double-reap).
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
 
-  it('stopAll clears pending watchdogs without force-closing sessions', () => {
-    const { manager, ptys, task } = makeManager({
+  it('stopAll clears pending watchdogs without force-closing sessions', async () => {
+    const { manager, ptys, task } = await makeManager({
       profile: 'cursor',
       prompt: 'work',
       autoCloseOnFinish: true
     });
-    autoFire(manager, task.id);
+    await autoFire(manager, task.id);
 
     manager.stopAll();
-    vi.advanceTimersByTime(WATCHDOG_MS + 5000);
+    await vi.advanceTimersByTimeAsync(WATCHDOG_MS + 5000);
     // stopAll releases the timer (Rule 3); it does not itself reap the pty.
     expect(ptys.closeExpectedCalls).toEqual([]);
   });
@@ -1003,59 +1032,59 @@ describe('SchedulerManager — paused schedules do not auto-fire', () => {
     vi.useRealTimers();
   });
 
-  it('disabling clears the armed timer so the elapsed interval never fires', () => {
+  it('disabling clears the armed timer so the elapsed interval never fires', async () => {
     // Enabled task → create() arms a setTimeout. Disable it, then advance well
     // past the interval: a cleared timer means zero spawns.
-    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: true });
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', enabled: true });
 
-    manager.setEnabled(task.id, false);
-    vi.advanceTimersByTime(60 * 60_000); // an hour — far past the 5m interval
+    await manager.setEnabled(task.id, false);
+    await vi.advanceTimersByTimeAsync(60 * 60_000); // an hour — far past the 5m interval
 
     expect(ptys.createCalls).toHaveLength(0);
   });
 
-  it('an enabled task DOES auto-fire when its interval elapses (control)', () => {
+  it('an enabled task DOES auto-fire when its interval elapses (control)', async () => {
     // Guards against a false-negative: prove the harness actually fires when
     // NOT paused, so the disabled-case assertion above is meaningful. The
     // `every: '5m'` default plus the arm() 5s grace floor → advance one full
     // interval to cross the scheduled delay.
-    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: true });
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', enabled: true });
 
-    vi.advanceTimersByTime(5 * 60_000 + 5_000);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 5_000);
 
     expect(ptys.createCalls).toHaveLength(1);
     // And it self-re-armed for the next interval — still enabled.
     expect(manager.list().find((t) => t.id === task.id)?.enabled).toBe(true);
   });
 
-  it('re-arming a disabled task schedules no timer (arm() early-returns)', () => {
+  it('re-arming a disabled task schedules no timer (arm() early-returns)', async () => {
     // arm() bails on !enabled, so no setTimeout is registered — advancing well
     // past any interval produces zero spawns. (nextRunAt is a display hint set
     // at create() regardless of enabled, so we assert on firing, not that field.)
-    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: false });
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', enabled: false });
 
     (manager as unknown as { arm: (id: string) => void }).arm(task.id);
-    vi.advanceTimersByTime(60 * 60_000); // an hour — far past the 5m interval
+    await vi.advanceTimersByTimeAsync(60 * 60_000); // an hour — far past the 5m interval
 
     expect(ptys.createCalls).toHaveLength(0);
   });
 
-  it('persists enabled:false so a restart (loadAll) does not re-arm it', () => {
+  it('persists enabled:false so a restart (loadAll) does not re-arm it', async () => {
     // The boot path only arms tasks whose persisted `enabled` is true. Assert
     // the disabled state is what would be read back, locking restart-safety.
-    const { manager, task } = makeManager({ prompt: 'work', enabled: true });
+    const { manager, task } = await makeManager({ prompt: 'work', enabled: true });
 
-    manager.setEnabled(task.id, false);
+    await manager.setEnabled(task.id, false);
 
     expect(manager.list().find((t) => t.id === task.id)?.enabled).toBe(false);
   });
 
-  it('manual "Run now" still fires a paused schedule (explicit user action)', () => {
+  it('manual "Run now" still fires a paused schedule (explicit user action)', async () => {
     // The one sanctioned bypass: pausing stops AUTOMATIC fires, not a
     // deliberate click. Documents that runNow is intentionally exempt.
-    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: false });
+    const { manager, ptys, task } = await makeManager({ prompt: 'work', enabled: false });
 
-    manager.runNow(task.id);
+    await manager.runNow(task.id);
 
     expect(ptys.createCalls).toHaveLength(1);
   });
@@ -1074,10 +1103,10 @@ describe('SchedulerManager — cron cadence', () => {
     vi.useRealTimers();
   });
 
-  it('creates a cron schedule and computes nextRunAt at the wall-clock slot', () => {
+  it('creates a cron schedule and computes nextRunAt at the wall-clock slot', async () => {
     // Wednesday 2026-07-15 08:00 UTC → weekdays-at-09:00 fires same day 09:00.
     vi.setSystemTime(new Date('2026-07-15T08:00:00Z'));
-    const { manager, task } = makeManager({
+    const { manager, task } = await makeManager({
       every: undefined,
       cron: '0 9 * * 1-5',
       tz: 'UTC',
@@ -1088,21 +1117,21 @@ describe('SchedulerManager — cron cadence', () => {
     expect(live.status.nextRunAt).toBe('2026-07-15T09:00:00.000Z');
   });
 
-  it('rejects a schedule that sets both every and cron', () => {
-    expect(() =>
+  it('rejects a schedule that sets both every and cron', async () => {
+    await expect(
       makeManager({ cron: '0 9 * * *', enabled: false })
-    ).toThrow(/exactly one/i);
+    ).rejects.toThrow(/exactly one/i);
   });
 
-  it('rejects an invalid cron expression', () => {
-    expect(() =>
+  it('rejects an invalid cron expression', async () => {
+    await expect(
       makeManager({ every: undefined, cron: 'not a cron', enabled: false })
-    ).toThrow(/invalid cron/i);
+    ).rejects.toThrow(/invalid cron/i);
   });
 
-  it('fires when the cron slot elapses, then re-arms for the next slot', () => {
+  it('fires when the cron slot elapses, then re-arms for the next slot', async () => {
     vi.setSystemTime(new Date('2026-07-15T08:59:00Z')); // 1 min before 09:00
-    const { manager, ptys, task } = makeManager({
+    const { manager, ptys, task } = await makeManager({
       every: undefined,
       cron: '0 9 * * 1-5',
       tz: 'UTC',
@@ -1111,7 +1140,7 @@ describe('SchedulerManager — cron cadence', () => {
     });
 
     // Cross the 09:00 slot (60s away; grace floor is 5s so it doesn't interfere).
-    vi.advanceTimersByTime(61_000);
+    await vi.advanceTimersByTimeAsync(61_000);
     expect(ptys.createCalls).toHaveLength(1);
 
     // Re-armed for the NEXT weekday slot: Thursday 2026-07-16 09:00.
@@ -1119,12 +1148,12 @@ describe('SchedulerManager — cron cadence', () => {
     expect(live.status.nextRunAt).toBe('2026-07-16T09:00:00.000Z');
   });
 
-  it('boot catch-up: a slot missed while down fires once, soon (grace floor)', () => {
+  it('boot catch-up: a slot missed while down fires once, soon (grace floor)', async () => {
     // lastRunAt was yesterday 09:00; "now" is well past today's 09:00 slot (the
     // app was closed across it). arm() should schedule a single near-immediate
     // fire (clamped to the 5s grace floor), not replay every missed slot.
     vi.setSystemTime(new Date('2026-07-15T14:00:00Z'));
-    const { manager, ptys, task } = makeManager({
+    const { manager, ptys, task } = await makeManager({
       every: undefined,
       cron: '0 9 * * 1-5',
       tz: 'UTC',
@@ -1138,19 +1167,19 @@ describe('SchedulerManager — cron cadence', () => {
     (manager as unknown as { arm: (id: string) => void }).arm(task.id);
 
     // Nothing fires before the grace floor…
-    vi.advanceTimersByTime(4_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(ptys.createCalls).toHaveLength(0);
     // …then the single catch-up fire lands just after 5s.
-    vi.advanceTimersByTime(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(ptys.createCalls).toHaveLength(1);
   });
 
-  it('chunked re-arm: a far-future slot sleeps the cap and does NOT fire', () => {
+  it('chunked re-arm: a far-future slot sleeps the cap and does NOT fire', async () => {
     // A yearly cron (next slot > 24d out) must not fire immediately. arm()
     // schedules a MAX_INTERVAL_MS re-arm hop instead; advancing a normal
     // interval produces zero spawns while nextRunAt still points at the slot.
     vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
-    const { manager, ptys, task } = makeManager({
+    const { manager, ptys, task } = await makeManager({
       every: undefined,
       cron: '0 0 1 1 *', // Jan 1 — ~10 months away
       tz: 'UTC',
@@ -1158,7 +1187,7 @@ describe('SchedulerManager — cron cadence', () => {
       enabled: true
     });
 
-    vi.advanceTimersByTime(MAX_INTERVAL_MS - 1);
+    await vi.advanceTimersByTimeAsync(MAX_INTERVAL_MS - 1);
     expect(ptys.createCalls).toHaveLength(0);
     const live = manager.list().find((t) => t.id === task.id)!;
     expect(live.status.nextRunAt).toBe('2027-01-01T00:00:00.000Z');

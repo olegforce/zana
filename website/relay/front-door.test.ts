@@ -33,6 +33,36 @@ async function listenNext(): Promise<string> {
 }
 
 describe('pairing front door', () => {
+  it('keeps a cold browser load alive across more than 160 proxy connections', async () => {
+    const nextOrigin = await listenNext();
+    door = await startFrontDoor({
+      host: '127.0.0.1', port: 0, spawnNext: false, nextOrigin,
+      env: {} as NodeJS.ProcessEnv
+    });
+    const sockets: ReturnType<typeof netConnect>[] = [];
+    try {
+      // Hold completed HTTP connections open as an edge proxy does. The app's
+      // module graph plus API calls exceeds the old 160-socket front-door cap.
+      const replies = await Promise.all(Array.from({ length: 240 }, () => new Promise<string>((resolve) => {
+        let received = '';
+        const socket = netConnect(door!.port, '127.0.0.1', () => {
+          socket.write('GET /_zcc/relay HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n');
+        });
+        sockets.push(socket);
+        socket.setTimeout(3_000, () => socket.destroy());
+        socket.on('data', (chunk) => {
+          received += chunk.toString();
+          if (received.includes('\r\n\r\n')) resolve(received.split('\r\n')[0]);
+        });
+        socket.on('error', () => resolve(received));
+        socket.on('close', () => resolve(received));
+      })));
+      expect(replies.filter((status) => status === 'HTTP/1.1 400 Bad Request')).toHaveLength(240);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+  });
+
   it('serves Next for marketing paths and 503s install.sh without a laptop (never 308)', async () => {
     const nextOrigin = await listenNext();
     door = await startFrontDoor({

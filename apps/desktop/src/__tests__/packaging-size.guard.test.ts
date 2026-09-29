@@ -68,6 +68,10 @@ const ASAR_EXCLUDES = [
 ] as const;
 
 describe('packaged app size policy', () => {
+  it('ships every join companion needed by enrolled machines', () => {
+    const bridge = builderYml.slice(builderYml.indexOf('to: host-bridge'), builderYml.indexOf('- from: plugins'));
+    for (const file of ['join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']) expect(bridge).toContain(`- ${file}`);
+  });
   it('keeps the main-process production deps on the root package', () => {
     for (const name of MAIN_PRODUCTION_DEPS) {
       expect(pkg.dependencies, `missing root dep ${name}`).toHaveProperty(name);

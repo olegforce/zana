@@ -1,8 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { openDatabase, upsertHost } from '@zana-ai/zcc-db';
 import type { HostListFilesResult, HostReadFileResult } from '@zana-ai/zcc-contracts/host-rpc';
 import type { Project } from '@zana-ai/zcc-domain/product';
 import { listLibraryDocs, readLibraryDoc, writeLibraryDoc } from './library-via-host.js';
 import type { ProductHttpContext } from './product-context.js';
+
+const primaryDir = mkdtempSync(join(tmpdir(), 'project-primary-'));
+const primaryDb = openDatabase(join(primaryDir, 'test.sqlite'));
+upsertHost(primaryDb, { id: 'host-1', name: 'Primary', hostKeyHash: 'a'.repeat(64) });
+afterAll(() => { primaryDb.close(); rmSync(primaryDir, { recursive: true, force: true }); });
 
 function project(overrides: Partial<Project> & Pick<Project, 'id' | 'name' | 'path'>): Project {
   return {
@@ -19,11 +29,25 @@ function ctx(options: {
   read?: HostReadFileResult;
 }): ProductHttpContext {
   return {
+    db: primaryDb,
     dataDir: options.dataDir,
     toProjects: () => options.projects ?? [],
     hostHub: {
       resolveHostId: (hostId?: string) => hostId ?? 'host-1',
-      callHostOnlineRpc: async () => options.list ?? options.read ?? { files: [] }
+      callHostOnlineRpc: async ({ command }: { command: { type: string; root: string; relPath: string } }) => {
+        if (command.type === 'host.read_path') throw Object.assign(new Error('missing'), { code: 'path_not_found' });
+        if (!options.list) return options.read ?? { entries: [] };
+        const directory = `${command.root}/${command.relPath}`.replace(/\/$/, '');
+        const entries = new Map<string, { name: string; kind: string; path: string }>();
+        for (const file of options.list.files) {
+          const absolute = `${file.root}/${file.relPath}`;
+          if (!absolute.startsWith(`${directory}/`)) continue;
+          const rest = absolute.slice(directory.length + 1);
+          const name = rest.split('/')[0]!;
+          entries.set(name, { name, kind: rest.includes('/') ? 'dir' : file.kind, path: `${directory}/${name}` });
+        }
+        return { entries: [...entries.values()] };
+      }
     }
   } as unknown as ProductHttpContext;
 }
@@ -69,7 +93,7 @@ describe('listLibraryDocs', () => {
     ]);
   });
 
-  it('skips directories and index.json', async () => {
+  it('skips directories and the root manifest while retaining ordinary nested index.json documents', async () => {
     const dataDir = '/tmp/zcc-data';
     const docs = await listLibraryDocs(ctx({
       dataDir,
@@ -82,7 +106,7 @@ describe('listLibraryDocs', () => {
         ]
       }
     }));
-    expect(docs.map((doc) => doc.relPath)).toEqual(['notes/keep.md']);
+    expect(docs.map((doc) => doc.relPath)).toEqual(['notes/index.json', 'notes/keep.md']);
   });
 });
 
@@ -94,31 +118,35 @@ describe('writeLibraryDoc', () => {
       '../secret',
       'nope'
     );
-    expect(result).toEqual({ ok: false, message: 'path escapes library root' });
+    expect(result).toMatchObject({ ok: false });
+    expect(result.message).toContain('Invalid library path');
   });
 
-  it('writes utf8 content under the authorized library root', async () => {
-    const commands: unknown[] = [];
-    const context = {
-      dataDir: '/tmp/zcc-data',
-      toProjects: () => [],
-      hostHub: {
-        resolveHostId: (hostId?: string) => hostId ?? 'host-1',
-        callHostOnlineRpc: async (input: { command: unknown }) => {
-          commands.push(input.command);
-          return { outcome: 'written', sha256: 'abc', sizeBytes: 4 };
-        }
-      }
-    } as unknown as ProductHttpContext;
-    const result = await writeLibraryDoc(context, 'global', 'ideas/note.md', '# Hi\n');
-    expect(result).toEqual({ ok: true });
-    expect(commands).toEqual([{
-      type: 'host.write_file',
-      path: '/tmp/zcc-data/library/ideas/note.md',
-      rootPath: '/tmp/zcc-data/library',
-      content: '# Hi\n',
-      contentEncoding: 'utf8',
-      createParents: true
-    }]);
+  it('refuses a blind write with no read revision before issuing any host command', async () => {
+    const context = ctx({ dataDir: '/tmp/zcc-data' });
+    const rpc = vi.fn(); context.hostHub.callHostOnlineRpc = rpc;
+    expect(await writeLibraryDoc(context, 'global', 'ideas/note.md', '# Hi\n')).toMatchObject({ ok: false });
+    expect(rpc).not.toHaveBeenCalled();
   });
+});
+
+it('pins reads to the metadata owner and registered root despite a caller host override', async () => {
+  const context = ctx({ dataDir: '/data', projects: [project({ id: 'p', name: 'P', path: '/code', hostId: 'owner', sources: [{ id: 'source', hostId: 'other', path: '/checkout', createdAt: 1 }] })] });
+  const rpc = vi.fn(async ({ command }: any) => {
+    if (command.path.endsWith('/library-transaction.json')) throw Object.assign(new Error('missing'), { code: 'path_not_found' });
+    return { content: 'shared', contentEncoding: 'utf8' };
+  });
+  context.hostHub.callHostOnlineRpc = rpc;
+  expect(await readLibraryDoc(context, 'project', 'note.md', 'p', 'other')).toEqual({ ok: true, content: 'shared', sha256: createHash('sha256').update('shared').digest('hex') });
+  expect(rpc).toHaveBeenCalledWith({ hostId: 'owner', timeoutMs: expect.any(Number), command: { type: 'host.read_path', rootPath: '/code', boundaryPath: '/code/.zcc/library', path: '/code/.zcc/library/note.md' } });
+});
+
+it('uses the canonical document identity and metadata, stamping all authority fields itself', async () => {
+  const context = ctx({ dataDir: '/data', projects: [project({ id: 'p', name: 'Project', path: '/code', hostId: 'owner' })] });
+  context.hostHub.callHostOnlineRpc = vi.fn(async ({ hostId, command }: any) => {
+    if (command.type === 'host.list_dir') return { entries: hostId === 'owner' ? [{ name: 'note.md', kind: 'file', path: '/forged' }] : [] };
+    if (command.path.endsWith('/library/index.json') && hostId === 'owner') return { contentEncoding: 'utf8', content: JSON.stringify({ version: 1, docs: [{ id: 'stable-doc-id', relPath: 'note.md', title: 'Shared title', summary: 'Same everywhere', tags: ['shared'], kind: 'md', bytes: 40, createdAt: 1, updatedAt: 2, absPath: '/forged', projectId: 'other', scope: 'global' }] }) };
+    throw Object.assign(new Error('missing'), { code: 'path_not_found' });
+  }) as any;
+  expect(await listLibraryDocs(context)).toEqual([expect.objectContaining({ id: 'stable-doc-id', title: 'Shared title', summary: 'Same everywhere', tags: ['shared'], absPath: '/code/.zcc/library/note.md', projectId: 'p', scope: 'project' })]);
 });

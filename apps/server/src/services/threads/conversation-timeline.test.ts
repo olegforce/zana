@@ -17,6 +17,11 @@ vi.mock('@zana-ai/zcc-db', () => ({
   listConversationThreadEvents: vi.fn(() => []),
   listConversationThreadEventsWindow: vi.fn(() => []),
   countConversationThreadEvents: vi.fn(() => 0),
+  nextConversationEventSequence: vi.fn(() => countConversationThreadEvents({} as never, '') + 1),
+  conversationTimelineWindowStart: vi.fn(() => 1),
+  hasConversationEventsBefore: vi.fn(() => true),
+  conversationEventCursorExists: vi.fn(() => true),
+  conversationTimelineHeadEvents: vi.fn(() => []),
   getThreadPlanByRootThread: vi.fn(() => null),
   getThreadExecutionState: vi.fn(() => null),
   latestThreadPlanRevision: vi.fn(() => null),
@@ -96,8 +101,8 @@ describe('conversationTimeline', () => {
       { segmentLimit: '1' }
     );
     expect(timeline.timelinePage.hasOlderRows).toBe(true);
-    expect(timeline.timelinePage.olderCursor).toEqual({ anchorSeq: 2, anchorId: 'evt-2' });
-    expect(timeline.maxSeq).toBe(2);
+    expect(timeline.timelinePage.olderCursor).toEqual({ anchorSeq: 2, anchorId: expect.stringContaining('history1:') });
+    expect(timeline.maxSeq).toBe(3);
   });
 
   it('returns streamed reasoning as activeThinking on a live thread', () => {

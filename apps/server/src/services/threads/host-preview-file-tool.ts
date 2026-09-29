@@ -10,6 +10,7 @@
  */
 
 import type { DynamicTool, ToolCallResponse } from '@zana-ai/zcc-domain/thread-runtime';
+import { IN_APP_PREVIEW_GUIDANCE } from '@zana-ai/zcc-domain';
 import type { PanelFileSource } from '@zana-ai/zcc-server-contract';
 import {
   HOST_SESSION_INSTRUCTIONS_MAX,
@@ -32,14 +33,11 @@ export const PREVIEW_FILE_DESCRIPTION = [
   'Use this whenever the user asks you to open, show, or preview a file.',
   'Do not open files in Cursor, VS Code, or via the open/cursor/code CLI — those leave this app.',
   'Keep using Read for your own inspection. Do not preview every file you touch.',
-  'Paths are relative to this project (workspace) or thread storage.'
+  'Paths are relative to this project (workspace) or thread storage.',
+  'For web URLs use the in-app browser side panel; read `zcc guide browser`. Do not launch an external browser unless requested.'
 ].join(' ');
 
-export const HOST_PREVIEW_FILE_INSTRUCTION = [
-  'When the user asks you to open, show, or preview a file, call `preview_file`.',
-  "That opens this thread's right-hand preview tab.",
-  'Do not open files in Cursor, VS Code, or via `open` / `cursor` / `code` CLI.'
-].join(' ');
+export const HOST_PREVIEW_FILE_INSTRUCTION = IN_APP_PREVIEW_GUIDANCE;
 
 export const HOST_PREVIEW_FILE_TOOL: DynamicTool = {
   name: HOST_PREVIEW_FILE_TOOL_NAME,

@@ -42,6 +42,7 @@ test('Library and the built app survive concurrent Node and Electron SQLite prep
   )));
   await Promise.all([preparation, (async () => {
     await app.window.reload();
+    await app.window.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Docs', exact: true }).click();
     await app.window.getByText('isolation-witness.md', { exact: true }).click();
     await expect(app.window.getByRole('heading', { name: 'Isolation witness', exact: true })).toBeVisible();
   })()]);

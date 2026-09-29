@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readProductInstanceId } from '../instance-identity.js';
 import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
 import type { AppConfig, ProductTeamOps, Project, TerminalSession } from '@zana-ai/zcc-domain/product';
 import {
@@ -39,20 +40,26 @@ import {
   flushHeldConversationSends,
   reconcileStoppingConversationThreadsOnHostConnect
 } from '../services/threads/conversation-lifecycle.js';
-import { applyLoggedConversationLifecycleEvent } from '../services/threads/conversation-lifecycle-outcome.js';
+import { publishConversationLifecycleOutcome } from '../services/threads/conversation-lifecycle-outcome.js';
 import { healDisconnectedConversationThreadsForHost } from '../services/threads/conversation-host-recovery.js';
 import { HOST_ACTIVE_WORK_DISCONNECT_GRACE_MS } from '../services/threads/conversation-runtime-display.js';
 import { retryDueConversationSends } from '../services/threads/conversation-deferred-messages.js';
 import { startDeferredRetryLoop } from '../services/threads/deferred-retry-loop.js';
 import { disposeLocalHostDaemon } from '../services/hosts/host-relaunch.js';
+import { startConversationHistoryMaintenance } from '../services/threads/conversation-history-maintenance.js';
+import { PersistentTerminalSessions } from './persistent-terminal-sessions.js';
 
 export interface ProductTerminalRecord extends TerminalSession {
   hostId: string;
+  daemonInstanceId?: string;
   outputText?: string;
   outputTruncated?: boolean;
+  /** Monotonic UTF-16 length, including output evicted from the retained tail. */
+  outputEndOffset?: number;
 }
 
 export interface ProductHttpContext {
+  productInstanceId: string;
   origins: LocalAppOriginArgs;
   dataDir: string;
   enrollToken: string;
@@ -84,6 +91,8 @@ export interface ProductHttpContext {
    * Absent means 502 host_disconnected.
    */
   cliAgentOps?: import('./cli-agent-ops.js').ProductCliAgentOps;
+  /** Main-only session grants; absent on a server without a CLI coordinator. */
+  cliCallbacks?: import('../services/launch/cli-callback-authority.js').CliCallbackAuthority;
   toProjects(): Project[];
   /** Release long-lived watchers started with this context. */
   dispose(): void;
@@ -95,6 +104,8 @@ export interface CreateProductHttpContextOptions {
   enrollToken?: string;
   /** Reuse a process-local project store when one already exists. */
   projects?: ProjectStore;
+  onLibraryChanged?: () => void;
+  onProjectsChanged?: () => void;
 }
 
 const identityConfig = {
@@ -126,14 +137,15 @@ export function createProductHttpContext(
     filePath: join(dataDir, 'suggestions', 'entries.jsonl')
   });
   const saved = createSavedStore({ dir: join(dataDir, 'saved') });
-  const hub = createProductHub();
+  const hub = createProductHub(options.onLibraryChanged, options.onProjectsChanged);
   const db = openDatabase(join(dataDir, 'zcc.sqlite'));
   recoverInterruptedDeferredThreadMessages(db);
-  const terminalSessions = new Map<string, ProductTerminalRecord>();
+  const terminalSessions = new PersistentTerminalSessions(db);
   let pendingInteractions: PendingInteractionLifecycle;
   let ctx!: ProductHttpContext;
   const disconnectHealTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const hostHub = createHostHub(db, hub, terminalSessions, {
+    pluginHostGenerations: () => ctx ? [...ctx.pluginHostArtifacts.entries()].map(([pluginId, artifact]) => ({ pluginId, generation: artifact.generation })) : [],
     onNewHostInstance: (hostId) => {
       pendingInteractions?.interruptPendingInteractionsForHost(
         hostId,
@@ -155,12 +167,14 @@ export function createProductHttpContext(
       if (!thread) return;
       hub.emit('threads:updated', conversationThreadView(ctx, thread));
     },
-    onConversationLifecycle: ({ threadId, event }) => {
+    onConversationLifecycle: ({ threadId, event, outcome }) => {
       if (!ctx) return;
-      const outcome = applyLoggedConversationLifecycleEvent(ctx, { threadId, event });
+      publishConversationLifecycleOutcome(ctx, { threadId, event }, outcome);
       if (outcome.applied) emitPluginThreadStatus(ctx, outcome.thread);
     },
+    onPluginHostEvent: event => { void ctx?.plugins?.emitHostEvent(event).catch(() => undefined); },
     onHostDisconnected: (hostId) => {
+      ctx?.cliCallbacks?.abortHost(hostId);
       const existing = disconnectHealTimers.get(hostId);
       if (existing) clearTimeout(existing);
       disconnectHealTimers.set(hostId, setTimeout(() => {
@@ -216,11 +230,17 @@ export function createProductHttpContext(
   const promptRegistry = new PromptRegistry({ userDir: join(dataDir, 'llm-prompts') });
   promptRegistry.start();
   const llmService = new LlmService(new Map());
+  const configuredClaudeProvider = (): ClaudeCliProvider => {
+    const current = config.getConfig();
+    // Desktop migration removes the legacy field from disk. The server's
+    // config store does not project it back from the canonical harness entry.
+    return new ClaudeCliProvider(current.harnesses?.byId?.claude?.binary || current.claudeBinary || 'claude');
+  };
   const threadTitleNamer = createThreadTitleNamer({
     autoRenameEnabled: () => config.getConfig().autoRenameTabs !== false,
     getEntry: (id) => promptRegistry.get(id),
     run: (entry, vars, dedupeKey) => {
-      llmService.setProvider(new ClaudeCliProvider(config.getConfig().claudeBinary || 'claude'));
+      llmService.setProvider(configuredClaudeProvider());
       return llmService.run(entry, vars, dedupeKey);
     },
     applyTitle: (threadId, title) => {
@@ -246,7 +266,7 @@ export function createProductHttpContext(
           ms: 0
         });
       }
-      llmService.setProvider(new ClaudeCliProvider(config.getConfig().claudeBinary || 'claude'));
+      llmService.setProvider(configuredClaudeProvider());
       return llmService.run(entry, { lastTurn }, dedupeKey);
     },
     runTurnSummary: async () => ({ ok: false, text: '', error: 'unused', provider: 'claude-cli', ms: 0 }),
@@ -291,10 +311,11 @@ export function createProductHttpContext(
   });
 
   ctx = {
+    productInstanceId: readProductInstanceId(dataDir),
     origins: options.origins,
     dataDir,
     enrollToken,
-    joinCodes: createJoinCodeStore(),
+    joinCodes: createJoinCodeStore(db),
     db,
     hostHub,
     projects,
@@ -311,6 +332,8 @@ export function createProductHttpContext(
     pluginHostArtifacts: new PluginHostArtifactRegistry(),
     toProjects: () => projects.list() as unknown as Project[],
     dispose: () => {
+      stopHistoryMaintenance();
+      ctx.cliCallbacks?.dispose();
       stopRetries();
       for (const timer of disconnectHealTimers.values()) clearTimeout(timer);
       disconnectHealTimers.clear();
@@ -320,6 +343,7 @@ export function createProductHttpContext(
       ctx.plugins?.stop?.();
     }
   };
+  const stopHistoryMaintenance = startConversationHistoryMaintenance(db);
   const stopRetries = startDeferredRetryLoop(() => retryDueConversationSends(ctx,
     (threadId) => flushHeldConversationSends(ctx, threadId, { enforceConcurrencyCap: true })));
   return ctx;

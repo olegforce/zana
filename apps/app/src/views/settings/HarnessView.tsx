@@ -38,12 +38,13 @@ import {
   type HarnessLoginStatus
 } from '../../components/thread/pickers/harness-login.js';
 import { RemoteMachineDefaultsList } from './RemoteMachineDefaultsList.js';
+import { ModelRefreshControl } from './ModelRefreshControl.js';
 
 const USE_HARNESS_DEFAULT = { id: '', label: 'Use harness default' } as const;
 const CODEX_UI = providerUiSchema('codex');
 
 /**
- * Settings → Code Harness. The page leads with a verification list (install
+ * Settings → AI Harness. The page leads with a verification list (install
  * probe + enable switch for each coding CLI), then Modern / CLI Agent tabs
  * for the settings that belong to each launch path.
  *
@@ -576,7 +577,7 @@ function threadProviderModelsStatus(
   if (loading) return 'Loading…';
   if (!entry) return 'Not loaded';
   if (entry.models.length > 0) {
-    return `${entry.models.length} model${entry.models.length === 1 ? '' : 's'}`;
+    return `${entry.models.length} model${entry.models.length === 1 ? '' : 's'}${entry.modelLoadError ? ' · Refresh failed' : ''}`;
   }
   const hint = emptyModelsHint(providerId, entry.modelLoadError);
   if (entry.modelLoadError && entry.modelLoadError !== 'auth_required') {
@@ -653,6 +654,12 @@ function ThreadProviderRow({
           ) : (
             <p className="settings-help">{status}</p>
           )}
+          {entry?.modelLoadError && models.length > 0 ? (
+            <p role="status" className="settings-help">Showing previously loaded models. {emptyModelsHint(provider.id, entry.modelLoadError, entry.modelLoadErrorDetail)}</p>
+          ) : null}
+          {entry?.lastSuccessAt != null ? (
+            <p className="settings-help">Last loaded: {new Date(entry.lastSuccessAt).toLocaleString()}</p>
+          ) : null}
         </div>
       ) : null}
     </li>
@@ -673,6 +680,8 @@ export function ThreadProviderCatalog({
     return <p className="settings-help">No Modern providers registered.</p>;
   }
   return (
+    <>
+    {catalog.rosterError ? <p role="status" className="settings-help">Could not refresh providers. {catalog.rosterError}</p> : null}
     <ul className="opener-list thread-provider-list" data-testid="thread-provider-catalog">
       {providers.map((provider) => (
         <ThreadProviderRow
@@ -683,6 +692,7 @@ export function ThreadProviderCatalog({
         />
       ))}
     </ul>
+    </>
   );
 }
 
@@ -762,7 +772,7 @@ export function HarnessView({
     }
   }, [thisMachineId]);
 
-  // Re-probe whenever the Code Harness tab mounts so a CLI installed since boot
+  // Re-probe whenever the AI Harness tab mounts so a CLI installed since boot
   // (or a changed binary path) is reflected without a full app restart.
   useEffect(() => {
     runCheck();
@@ -1021,6 +1031,14 @@ export function HarnessView({
 
   return (
     <>
+    <Section
+      anchorId="harness-models"
+      title="Model lists"
+      help="Recalculate every available model list after signing in, changing provider configuration, or reconnecting a machine. Modern and CLI Agent pickers pick up the new lists without restarting the app."
+    >
+      <ModelRefreshControl />
+    </Section>
+
     <Section
       anchorId="harness-status"
       title="Install status"

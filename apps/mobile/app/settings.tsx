@@ -1,17 +1,19 @@
+import Constants from 'expo-constants';
 import { useState } from 'react';
-import { devicePushToken } from '../src/notifications';
-import { registerPush } from '../src/lib/client';
+import { discoverServers, type AccountServer } from '../src/lib/client';
+import type { ServerProfile } from '../src/lib/profiles';
 import { clearNativeProfileSession } from '../src/lib/session-controller';
 import CookieManager from '@react-native-cookies/cookies';
 import { Alert, Platform, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useProfiles } from '../src/state';
 import { Action, Heading, Label, Screen } from '../src/ui';
-import { removeProfile } from '../src/lib/profiles';
+import { removeProfile, saveProfile, isOnlineProfile } from '../src/lib/profiles';
 export default function Settings() {
   const { state, update } = useProfiles();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [discovery, setDiscovery] = useState<{ profile: ServerProfile; servers: AccountServer[] } | null>(null);
   const run = (job: Promise<unknown>) => {
     void job.catch((e: Error) => Alert.alert('Could not save settings', e.message));
   };
@@ -25,37 +27,28 @@ export default function Settings() {
           <Action
             secondary
             title={`${state.activeId === p.id ? '✓ ' : ''}${p.label}`}
+            disabled={!isOnlineProfile(p)}
             onPress={() => {
               run(update((s) => ({ ...s, activeId: p.id })).then(() => router.replace('/')));
             }}
           />
           <Label muted>{p.serverUrl}</Label>
-          {p.credential ? (
-            <Action
-              secondary
-              disabled={busy}
-              title={p.pushEnabled ? 'Disable notifications' : 'Enable notifications'}
-              onPress={() => {
-                setBusy(true);
-                run(
-                  (async () => {
-                    await registerPush(p, p.pushEnabled ? null : await devicePushToken(true));
-                    await update((s) => ({
-                      ...s,
-                      profiles: s.profiles.map((profile) =>
-                        profile.id === p.id ? { ...profile, pushEnabled: !p.pushEnabled } : profile
-                      )
-                    }));
-                  })().finally(() => setBusy(false))
-                );
-              }}
-            />
-          ) : null}
+          {p.connectDomain ? <Action secondary disabled={busy} title="Computers on this account" onPress={() => {
+            setBusy(true);
+            run(discoverServers(p).then(servers => setDiscovery({ profile: p, servers })).finally(() => setBusy(false)));
+          }} /> : null}
+          {discovery?.profile.id === p.id ? <View style={{ gap: 8 }}>
+            {discovery.servers.map(server => <Action key={server.id} secondary title={`${server.name} · ${server.live ? 'Online' : 'Offline'}`} onPress={() => {
+              run(update(s => saveProfile(s, { id: server.id, label: server.name, serverUrl: server.serverUrl, credential: p.credential, deviceId: p.deviceId, connectDomain: p.connectDomain, accountUrl: p.accountUrl })).then(() => router.replace('/')));
+            }} />)}
+            {!discovery.servers.length ? <Label muted>No connected computers.</Label> : null}
+          </View> : null}
+          {!isOnlineProfile(p) ? <Label muted>Retired direct connection. Sign in with GitHub to reconnect online.</Label> : null}
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <Action
               secondary
-              title="Pair again"
-              onPress={() => router.push({ pathname: '/connect', params: { server: p.serverUrl } })}
+              title="Sign in with GitHub"
+              onPress={() => router.push('/connect')}
             />
             <Action
               secondary
@@ -63,7 +56,7 @@ export default function Settings() {
               onPress={() =>
                 Alert.alert(
                   'Forget this server?',
-                  'This removes the credential from this phone. Use “revoke” on the gateway to revoke the device on your computer.',
+                  'This removes the saved computer from this phone. Revoke phone access on your Zana account page to invalidate its account credential.',
                   [
                     { text: 'Cancel', style: 'cancel' },
                     {
@@ -72,7 +65,6 @@ export default function Settings() {
                       onPress: () =>
                         run(
                           (async () => {
-                            if (p.pushEnabled) await registerPush(p, null).catch(() => {});
                             await clearNativeProfileSession(p, {
                               cookies: CookieManager,
                               platform: Platform.OS === 'ios' ? 'ios' : 'android'
@@ -88,7 +80,7 @@ export default function Settings() {
           </View>
         </View>
       ))}
-      <Action title="Add server" onPress={() => router.push('/connect')} />
+      <Action title="Connect a computer" onPress={() => router.push('/connect')} />
       <Label>Appearance</Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {(['system', 'light', 'dark'] as const).map((value) => (
@@ -108,7 +100,7 @@ export default function Settings() {
           onValueChange={(value) => run(update((s) => ({ ...s, haptics: value })))}
         />
       </View>
-      <Label muted>Zana Mobile 0.1.0 · Agent execution stays on your computer.</Label>
+      <Label muted>Zana Mobile {Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? 'Unknown version'} · Agent execution stays on your computer.</Label>
     </Screen>
   );
 }

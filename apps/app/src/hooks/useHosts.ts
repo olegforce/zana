@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
+import { updateModelCatalogHosts } from '../components/thread/pickers/thread-model-catalog.js';
+import { subscribeProductReconnect } from '../lib/product-ws.js';
 import { product } from '../lib/product-client.js';
 
 /** Last roster from a successful (or empty) fetch — survives composer remounts. */
 let cachedHosts: Host[] = [];
 
 function rememberHosts(rows: Host[]): Host[] {
+  updateModelCatalogHosts(rows);
   cachedHosts = rows;
   return rows;
 }
@@ -20,17 +23,21 @@ export function useHosts(): Host[] {
 
   useEffect(() => {
     let cancelled = false;
+    let generation = 0;
     const refresh = () => {
-      product.hosts.list().then((rows) => {
-        if (!cancelled) setHosts(rememberHosts(Array.isArray(rows) ? rows : []));
+      const requested = ++generation;
+      return product.hosts.list().then((rows) => {
+        if (!cancelled && requested === generation) setHosts(rememberHosts(Array.isArray(rows) ? rows : []));
       }).catch(() => {
-        if (!cancelled) setHosts(rememberHosts([]));
+        if (!cancelled && requested === generation) setHosts(rememberHosts([]));
       });
     };
     refresh();
+    const stopReconnect = subscribeProductReconnect(refresh);
     const unsub = product.hosts.onChanged((payload) => {
       if (cancelled) return;
       if (Array.isArray(payload)) {
+        generation++;
         setHosts(rememberHosts(payload));
         return;
       }
@@ -38,6 +45,7 @@ export function useHosts(): Host[] {
     });
     return () => {
       cancelled = true;
+      stopReconnect();
       unsub();
     };
   }, []);
@@ -50,17 +58,16 @@ export function connectedHosts(hosts: Host[]): Host[] {
 }
 
 export function primaryHost(hosts: Host[]): Host | undefined {
-  return hosts.find((host) => host.isPrimary) ?? hosts[0];
+  return hosts.find((host) => host.isPrimary);
 }
 
 export function defaultHostId(
   hosts: Host[],
   project?: { hostId?: string; remote?: unknown }
 ): string | undefined {
-  if (project?.remote) {
-    if (project.hostId && hosts.some((host) => host.id === project.hostId)) return project.hostId;
-    return undefined;
-  }
-  if (project?.hostId && hosts.some((host) => host.id === project.hostId)) return project.hostId;
+  // A missing roster row is unavailability, not authority to choose another
+  // checkout. Keep a bound identity through disconnect, revocation and refresh.
+  if (project?.hostId) return project.hostId;
+  if (project?.remote) return undefined;
   return primaryHost(hosts)?.id;
 }

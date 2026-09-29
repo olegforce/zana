@@ -57,62 +57,36 @@ describe('monaco-editor plugin contract', () => {
     expect(parsed.source.kind).toBe('workspace');
   });
 
-  it('reads and writes local project files with conflict detection', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'zcc-monaco-'));
-    tempDirs.push(dir);
-    mkdirSync(join(dir, 'src'));
-    writeFileSync(join(dir, 'src', 'hello.ts'), 'export const n = 1;\n');
-    const { zcc, harness } = createFakePluginHost({
-      pluginId: 'monaco-editor',
-      listProjects: () => [{ id: 'p1', name: 'Demo', path: dir }]
-    });
+  it('routes editing through the host SDK and preserves revision conflicts', async () => {
+    const { zcc, harness } = createFakePluginHost({ pluginId: 'monaco-editor' });
+    const source = { kind: 'workspace', projectId: 'p1', threadId: null, environmentId: null, hostId: 'machine-b' };
+    harness.sdk.stub('files.readProject', () => ({ content: 'remote', contentEncoding: 'utf8', sizeBytes: 6, sha256: 'revision' }));
+    harness.sdk.stub('files.writeProject', () => ({ outcome: 'written', sha256: 'next' }));
     await plugin(zcc);
-    const source = {
-      kind: 'workspace',
-      threadId: 'thr_1',
-      environmentId: null,
-      projectId: 'p1'
-    };
-    const file = (await harness.callRpc('read', { path: 'src/hello.ts', source })) as {
-      kind: string;
-      content: string;
-      sha256: string;
-    };
-    expect(file.kind).toBe('text');
-    expect(file.content).toContain('export const n');
-    const written = (await harness.callRpc('write', {
-      path: 'src/hello.ts',
-      source,
-      content: 'export const n = 2;\n',
-      expectedSha256: file.sha256
-    })) as { outcome: string };
-    expect(written.outcome).toBe('written');
-    expect(readFileSync(join(dir, 'src', 'hello.ts'), 'utf8')).toContain('n = 2');
-    const conflict = (await harness.callRpc('write', {
-      path: 'src/hello.ts',
-      source,
-      content: 'export const n = 3;\n',
-      expectedSha256: file.sha256
-    })) as { outcome: string };
-    expect(conflict.outcome).toBe('conflict');
+    expect(await harness.callRpc('read', { path: 'src/a.ts', source })).toEqual({ kind: 'text', content: 'remote', sha256: 'revision' });
+    expect(harness.sdk.callsTo('files.readProject')).toEqual([[{ path: 'src/a.ts', source }]]);
+    expect(await harness.callRpc('write', { path: 'src/a.ts', source, content: 'changed', expectedSha256: 'revision' })).toEqual({ outcome: 'written', sha256: 'next' });
+    expect(harness.sdk.callsTo('files.writeProject')).toEqual([[{ path: 'src/a.ts', source, content: 'changed', expectedSha256: 'revision' }]]);
+    harness.sdk.stub('files.writeProject', () => ({ outcome: 'conflict', currentSha256: 'newer' }));
+    expect(await harness.callRpc('write', { path: 'src/a.ts', source, content: 'changed', expectedSha256: 'revision' })).toEqual({ outcome: 'conflict', currentSha256: 'newer' });
+    await expect(harness.callRpc('write', { path: 'src/a.ts', source })).rejects.toThrow('content');
   });
 
-  it('delegates remote or binary files', async () => {
-    const { zcc, harness } = createFakePluginHost({
-      pluginId: 'monaco-editor',
-      listProjects: () => [{ id: 'p1', name: 'Demo' }]
-    });
+  it('delegates unsupported formats but surfaces host and confinement failures', async () => {
+    const { zcc, harness } = createFakePluginHost({ pluginId: 'monaco-editor' });
+    const file = { path: 'a.ts', source: { kind: 'workspace', projectId: 'p', threadId: null, environmentId: null } };
     await plugin(zcc);
-    const file = (await harness.callRpc('read', {
-      path: 'src/hello.ts',
-      source: { kind: 'workspace', threadId: null, environmentId: null, projectId: 'p1' }
-    })) as { kind: string };
-    expect(file.kind).toBe('unsupported');
-    const written = (await harness.callRpc('write', {
-      path: 'src/hello.ts',
-      source: { kind: 'workspace', threadId: null, environmentId: null, projectId: 'p1' },
-      content: 'export const n = 2;\n'
-    })) as { outcome: string };
-    expect(written.outcome).toBe('unsupported');
+    for (const result of [{ contentEncoding: 'base64', sizeBytes: 1 }, { contentEncoding: 'utf8', sizeBytes: 9 * 1024 * 1024 }]) {
+      harness.sdk.stub('files.readProject', () => result);
+      expect(await harness.callRpc('read', file)).toMatchObject({ kind: 'unsupported' });
+    }
+    const unsupported = () => { throw Object.assign(new Error('No project'), { code: 'unsupported' }); };
+    harness.sdk.stub('files.readProject', unsupported); harness.sdk.stub('files.writeProject', unsupported);
+    expect(await harness.callRpc('read', file)).toMatchObject({ kind: 'unsupported' });
+    expect(await harness.callRpc('write', { ...file, content: 'x' })).toMatchObject({ outcome: 'unsupported' });
+    const offline = () => { throw new Error('host offline'); };
+    harness.sdk.stub('files.readProject', offline); harness.sdk.stub('files.writeProject', offline);
+    await expect(harness.callRpc('read', file)).rejects.toThrow('host offline');
+    await expect(harness.callRpc('write', { ...file, content: 'x' })).rejects.toThrow('host offline');
   });
 });

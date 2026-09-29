@@ -148,7 +148,8 @@
       "types": "./src/machine-pairing.ts",
       "source": "./src/machine-pairing.ts",
       "default": "./src/machine-pairing.ts"
-    }
+    },
+    "./harness-config-compatibility": "./src/harness-config-compatibility.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

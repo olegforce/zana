@@ -2,10 +2,11 @@ import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NativeSessionProvider, useNativeSession } from './session';
+import type { ServerProfile } from './lib/profiles';
 import type { SessionControllerDeps } from './lib/session-controller';
 
 const fixture = vi.hoisted(() => ({
-  profiles: { state: { activeId: 'a', profiles: [{ id: 'a', credential: 'first' }] } },
+  profiles: { state: { activeId: 'a', profiles: [] as ServerProfile[] } },
   platform: { OS: 'android' },
   connect: vi.fn(),
   subscribe: vi.fn(),
@@ -25,6 +26,7 @@ function Page() {
   snapshots.push(useNativeSession());
   return null;
 }
+const profile = (id: string, credential: string): ServerProfile => ({ id, label: id, credential: credential.padEnd(43, 'x'), serverUrl: 'https://s-aaaaaaaaaaaaaaaaaaaaaaaa.connect.example.com', accountUrl: 'https://example.com', connectDomain: 'connect.example.com', deviceId: 'phone' });
 const tree = () =>
   createElement(
     NativeSessionProvider,
@@ -35,7 +37,7 @@ const tree = () =>
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   snapshots = [];
-  fixture.profiles.state = { activeId: 'a', profiles: [{ id: 'a', credential: 'first' }] };
+  fixture.profiles.state = { activeId: 'a', profiles: [profile('a', 'first')] };
   fixture.platform.OS = 'android';
   vi.clearAllMocks();
   fixture.connect.mockImplementation((_profile, deps) => {
@@ -79,13 +81,13 @@ it('gates a switched or repaired profile until its own cookie is installed', asy
   });
   expect(fixture.callbacks?.platform).toBe('ios');
   await act(() => fixture.callbacks!.onReady());
-  fixture.profiles.state = { activeId: 'b', profiles: [{ id: 'b', credential: 'second' }] };
+  fixture.profiles.state = { activeId: 'b', profiles: [profile('b', 'second')] };
   await act(() => renderer!.update(tree()));
   expect(snapshots.at(-1)?.ready).toBe(false);
   expect(fixture.stop).toHaveBeenCalledOnce();
   await act(() => fixture.callbacks!.onReady());
   expect(snapshots.at(-1)?.ready).toBe(true);
-  fixture.profiles.state.profiles[0] = { id: 'b', credential: 'repaired' };
+  fixture.profiles.state.profiles[0] = profile('b', 'repaired');
   await act(() => renderer!.update(tree()));
   expect(snapshots.at(-1)?.ready).toBe(false);
   expect(fixture.connect).toHaveBeenCalledTimes(3);
@@ -116,4 +118,33 @@ it('requires an app-level provider', async () => {
       renderer = create(createElement(Page));
     });
   }).rejects.toThrow('Missing native session provider');
+});
+
+it('never opens a session for an old local profile and closes a session when its connection metadata becomes invalid', async () => {
+  fixture.profiles.state.profiles[0] = { id: 'a', label: 'Old Mac', serverUrl: 'http://192.168.1.2:8785' };
+  await act(() => { renderer = create(tree()); });
+  expect(fixture.connect).not.toHaveBeenCalled();
+  expect(snapshots.at(-1)?.ready).toBe(false);
+  fixture.profiles.state.profiles[0] = profile('a', 'first');
+  await act(() => renderer!.update(tree()));
+  expect(fixture.connect).toHaveBeenCalledOnce();
+  await act(() => fixture.callbacks!.onReady());
+  fixture.profiles.state.profiles[0] = { ...profile('a', 'first'), connectDomain: undefined };
+  await act(() => renderer!.update(tree()));
+  expect(fixture.stop).toHaveBeenCalledOnce();
+  expect(fixture.connect).toHaveBeenCalledOnce();
+  expect(snapshots.at(-1)?.ready).toBe(false);
+});
+
+it('waits for a new cookie when the same saved record points at a different Connect computer', async () => {
+  await act(() => { renderer = create(tree()); });
+  await act(() => fixture.callbacks!.onReady());
+  fixture.profiles.state.profiles[0] = {
+    ...profile('a', 'first'), serverUrl: 'https://s-bbbbbbbbbbbbbbbbbbbbbbbb.connect.example.com'
+  };
+  await act(() => renderer!.update(tree()));
+  expect(fixture.stop).toHaveBeenCalledOnce();
+  expect(snapshots.at(-1)?.ready).toBe(false);
+  await act(() => fixture.callbacks!.onReady());
+  expect(snapshots.at(-1)?.ready).toBe(true);
 });

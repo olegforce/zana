@@ -41,7 +41,8 @@ describe('launch coordinator production spawn guard', () => {
     expect(text).toContain('launchExecutionScope(');
     expect(text).not.toContain('scope: project.remote ? \'remote\' : \'local\'');
     expect(text).toContain('await launchLedger.reconcileStartup({');
-    expect(text).toContain('reapOrphanTmuxSessions((sessionId) => ptys.getSession(sessionId) !== null)');
+    expect(text).toContain('reapOrphanTmuxSessions(ownedTmuxIds, (sessionId) => ptys.getSession(sessionId) !== null)');
+    expect(text).toContain('new Set(restoreCapabilities.list().flatMap');
     expect(text).toContain('restoreCapabilities.removeSession(sessionId)');
     expect(text).toContain('teamLifecycleIntegration.reconcileStartup([...recovered])');
   });

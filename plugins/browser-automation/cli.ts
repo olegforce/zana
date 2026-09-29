@@ -95,7 +95,7 @@ export function parseCli(argv: string[], contextThreadId?: string) {
     }
   }
   const threadId = flags.get("--thread") ?? contextThreadId;
-  if (!threadId) throw new Error("Run from a BB thread or pass --thread <id>");
+  if (!threadId) throw new Error("Run from a Zana thread or pass --thread <id>");
   if (contextThreadId && threadId !== contextThreadId)
     throw new Error(
       "CLI calls from a thread cannot access another thread's browser session",

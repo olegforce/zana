@@ -3,6 +3,7 @@ import { ThreadCommandComposer, type ThreadCommandComposerProps } from './Thread
 import { LegacyAgentHomeComposer } from './LegacyAgentHomeComposer.js';
 import { TeamComposer } from './TeamComposer.js';
 import { LaunchModeSegmented } from './LaunchModeSegmented.js';
+import { ComposerDraftProvider } from './composer/ComposerDraft.js';
 import {
   resolveAvailableLaunchMode,
   visibleComposerLaunchModes,
@@ -47,36 +48,40 @@ export function HomeAgentComposer({
     if (project?.id) setComposerProjectId(project.id);
   }, [project?.id]);
   return (
-    <div className={`home-agent-composer${walkthroughHomeMode ? ' is-walkthrough-spotlight' : ''}`}>
-      {allowLegacyAgent && showLaunchSwitcher && (
-        <LaunchModeSegmented
-          value={kind}
-          onChange={setStoredMode}
-          showCliAgent={available.showCliAgent}
-          showModern={available.showModern}
-          showTeam={available.showTeam}
-        />
-      )}
-      {allowLegacyAgent && kind === 'agent' ? (
-        <LegacyAgentHomeComposer
-          project={project}
-          composerProjectId={composerProjectId}
-          onComposerProjectIdChange={setComposerProjectId}
-        />
-      ) : allowLegacyAgent && kind === 'team' ? (
-        <TeamComposer
-          project={project}
-          composerProjectId={composerProjectId}
-          onComposerProjectIdChange={setComposerProjectId}
-        />
-      ) : (
-        <ThreadCommandComposer
-          {...props}
-          project={project}
-          composerProjectId={composerProjectId}
-          onComposerProjectIdChange={setComposerProjectId}
-        />
-      )}
-    </div>
+    <ComposerDraftProvider>
+      <div className={`home-agent-composer${walkthroughHomeMode ? ' is-walkthrough-spotlight' : ''}`}>
+        {allowLegacyAgent && showLaunchSwitcher && (
+          <LaunchModeSegmented
+            value={kind}
+            onChange={setStoredMode}
+            showCliAgent={available.showCliAgent}
+            showModern={available.showModern}
+            showTeam={available.showTeam}
+          />
+        )}
+        {allowLegacyAgent && kind === 'agent' ? (
+          <LegacyAgentHomeComposer
+            project={project}
+            initialText={props.initialText}
+            composerProjectId={composerProjectId}
+            onComposerProjectIdChange={setComposerProjectId}
+          />
+        ) : allowLegacyAgent && kind === 'team' ? (
+          <TeamComposer
+            project={project}
+            initialText={props.initialText}
+            composerProjectId={composerProjectId}
+            onComposerProjectIdChange={setComposerProjectId}
+          />
+        ) : (
+          <ThreadCommandComposer
+            {...props}
+            project={project}
+            composerProjectId={composerProjectId}
+            onComposerProjectIdChange={setComposerProjectId}
+          />
+        )}
+      </div>
+    </ComposerDraftProvider>
   );
 }

@@ -32,7 +32,7 @@ export interface GoalAgentApi {
   /** Goals for one project (the route's projectId). */
   agentList(projectId: string): Goal[];
   /** Create a goal under one project. `scope` is forced to that project by the wiring. */
-  agentCreate(projectId: string, input: GoalCreateInput): Goal;
+  agentCreate(projectId: string, input: GoalCreateInput): Goal | Promise<Goal>;
 }
 
 export const GOAL_CREATE_DESCRIPTION = [
@@ -139,7 +139,7 @@ export function registerGoalTools(server: McpServer, opts: RegisterGoalToolsOpts
     { description: GOAL_CREATE_DESCRIPTION, inputSchema: goalCreateInputSchema },
     async ({ title, statement, successCriteria, maxIterations, noProgressLimit, profile, activate }) => {
       try {
-        const goal = goalAgentApi.agentCreate(projectId, {
+        const goal = await goalAgentApi.agentCreate(projectId, {
           // projectId + scope are forced by the wiring to the route's project —
           // the agent cannot target another project or the global directory.
           projectId,

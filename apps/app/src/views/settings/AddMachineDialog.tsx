@@ -1,3 +1,4 @@
+import { apiJson } from '../../lib/fetch-with-app-surface.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import { product } from '../../lib/product-client.js';
@@ -18,7 +19,7 @@ import {
   sanitizeSshHost,
   sshPairingCommand,
   sshPublicPairingArgv,
-  TAILSCALE_SERVE_HINT,
+  REMOTE_MACHINE_CONNECTION_HINT,
   type PairingSshHostOption,
   type RelayStatus
 } from './machine-pairing.js';
@@ -29,6 +30,7 @@ interface AddMachineDialogProps {
   publicAppUrl?: string | null;
   sshHosts?: PairingSshHostOption[];
   defaultSshHost?: string;
+  repairHost?: { id: string; name: string };
 }
 
 export function AddMachineDialog({
@@ -36,7 +38,8 @@ export function AddMachineDialog({
   onClose,
   publicAppUrl,
   sshHosts,
-  defaultSshHost
+  defaultSshHost,
+  repairHost
 }: AddMachineDialogProps) {
   if (!open) return null;
   return (
@@ -45,6 +48,7 @@ export function AddMachineDialog({
       publicAppUrl={publicAppUrl}
       sshHosts={sshHosts}
       defaultSshHost={defaultSshHost}
+      repairHost={repairHost}
     />
   );
 }
@@ -312,8 +316,8 @@ export function AddMachineDialogView({
           {loopbackWarning && !viaSsh ? (
             <p className="modal-warning">
               This address is only reachable on this computer. Enter an SSH host
-              from ~/.ssh/config, or set a public app URL (Tailscale Serve). Example:{' '}
-              {TAILSCALE_SERVE_HINT}
+              from ~/.ssh/config, or configure the machine-pairing relay.{' '}
+              {REMOTE_MACHINE_CONNECTION_HINT}
             </p>
           ) : null}
         </div>
@@ -349,15 +353,18 @@ function AddMachineDialogContent({
   onClose,
   publicAppUrl,
   sshHosts = [],
-  defaultSshHost = ''
+  defaultSshHost = '',
+  repairHost
 }: {
   onClose: () => void;
   publicAppUrl?: string | null;
   sshHosts?: PairingSshHostOption[];
   defaultSshHost?: string;
+  repairHost?: { id: string; name: string };
 }) {
   const hosts = useHosts();
-  const [join, setJoin] = useState<{ joinCode: string; hostId: string; expiresAt: number } | null>(null);
+  const [join, setJoin] = useState<{ enrollmentId?: string; joinCode: string; hostId: string; expiresAt: number; installCommand?: string } | null>(null);
+  const [enrollmentConnected, setEnrollmentConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
@@ -404,8 +411,8 @@ function AddMachineDialogContent({
 
   useEffect(() => {
     if (methodTouched.current) return;
-    if (loopbackWarning) setPairingMethod('ssh');
-  }, [loopbackWarning]);
+    if (loopbackWarning && !join?.installCommand) setPairingMethod('ssh');
+  }, [loopbackWarning, join?.installCommand]);
 
   const remint = useCallback(() => {
     void product.relay.renewJoinWindow().then((row) => {
@@ -418,15 +425,18 @@ function AddMachineDialogContent({
     let cancelled = false;
     setJoin(null);
     setError(null);
-    product.hosts.createJoinCode().then((issued) => {
-      if (!cancelled) setJoin(issued);
+    const issue = repairHost
+      ? apiJson<{ enrollmentId: string; code: string; hostId: string; expiresAt: number; installCommand: string }>('/hosts/connect-code', { method: 'POST', body: JSON.stringify({ hostId: repairHost.id, name: repairHost.name }) }).then(row => ({ ...row, joinCode: row.code }))
+      : product.hosts.createJoinCode();
+    issue.then((issued) => {
+      if (!cancelled) { setJoin(issued); if (issued.installCommand) setPairingMethod('command'); }
     }).catch((err: unknown) => {
       if (!cancelled) setError(err instanceof Error ? err.message : 'Could not mint a join code');
     });
     return () => {
       cancelled = true;
     };
-  }, [mintNonce]);
+  }, [mintNonce, repairHost?.id, repairHost?.name]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -484,12 +494,27 @@ function AddMachineDialogContent({
     };
   }, []);
 
-  const paired = join
-    ? hosts.find((host) => host.id === join.hostId && host.status === 'connected')
-      ?? hosts.find((host) => !baseline.current?.has(host.id) && host.status === 'connected')
-    : hosts.find((host) => baseline.current !== null && !baseline.current.has(host.id) && host.status === 'connected');
+  useEffect(() => {
+    setEnrollmentConnected(false);
+    if (!join?.enrollmentId) return;
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const result = await apiJson<{ status: string }>(`/hosts/enrollments/${join.enrollmentId}`, { signal: abort.signal });
+        if (abort.signal.aborted) return;
+        if (result.status === 'connected') { setEnrollmentConnected(true); return; }
+        if (result.status === 'expired') return;
+      } catch { if (abort.signal.aborted) return; }
+      timer = setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => { abort.abort(); clearTimeout(timer); };
+  }, [join?.enrollmentId]);
 
-  const command = join
+  const paired = join ? hosts.find((host) => host.id === join.hostId && host.status === 'connected' && (!join.enrollmentId || enrollmentConnected)) : undefined;
+
+  const command = join?.installCommand ?? (join
     ? pairingMethod === 'ssh' && sanitizeSshHost(sshHost)
       ? viaSsh
         ? sshPairingCommand({
@@ -514,11 +539,11 @@ function AddMachineDialogContent({
           });
         })()
       : pairingCommand({ publicAppUrl: serverUrl, joinCode: join.joinCode, hostId: join.hostId })
-    : null;
+    : null);
   const remaining = join
     ? joinCountdownMs(join.expiresAt, now)
     : null;
-  const expired = joinWindowClosed || (remaining !== null && remaining <= 0);
+  const expired = (!join?.installCommand && joinWindowClosed) || (remaining !== null && remaining <= 0);
 
   const copy = async () => {
     if (!command) return;
@@ -562,11 +587,11 @@ function AddMachineDialogContent({
       remainingMs={remaining}
       expired={expired}
       mintError={error}
-      joinWindowClosed={joinWindowClosed}
-      loopbackWarning={loopbackWarning}
+      joinWindowClosed={!join?.installCommand && joinWindowClosed}
+      loopbackWarning={!join?.installCommand && loopbackWarning}
       viaSsh={viaSsh}
       pairingMethod={pairingMethod}
-      showMethodToggle={hasDesktopBridge()}
+      showMethodToggle={hasDesktopBridge() && !join?.installCommand}
       sshHost={sshHost}
       sshHosts={sshOptions}
       pairedName={paired?.name ?? null}

@@ -76,6 +76,7 @@ export function AgentSessionPage({
       state={state}
       terminalAnchorId={agentSessionAnchorId(sessionId)}
       showProject
+      mobileTitleInShell
       background={session.scheduled}
       heartbeat={
         canHeartbeat

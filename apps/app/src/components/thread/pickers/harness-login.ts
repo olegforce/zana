@@ -40,6 +40,8 @@ export function emptyModelsHint(
   if (modelLoadError === 'timeout') {
     return 'Timed out loading models';
   }
+  if (modelLoadError === 'host_unavailable') return 'Host disconnected. Models will refresh after reconnection.';
+  if (modelLoadError === 'invalid_request') return detail?.trim() || 'Model discovery configuration is unavailable';
   if (modelLoadError === 'provider_unavailable') {
     return 'Provider plugin failed to load';
   }

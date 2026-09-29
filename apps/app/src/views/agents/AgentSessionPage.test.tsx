@@ -44,6 +44,7 @@ vi.mock('../../components/AgentSessionView.js', () => ({
     session: TerminalSession;
     heartbeat: { checked: boolean; onToggle: () => void } | null;
     showProject?: boolean;
+    mobileTitleInShell?: boolean;
     projectName?: string;
     projectRemote?: boolean;
     state?: string;
@@ -54,6 +55,7 @@ vi.mock('../../components/AgentSessionView.js', () => ({
       data-anchor={props.terminalAnchorId}
       data-heartbeat={props.heartbeat ? 'on' : 'off'}
       data-show-project={props.showProject ? 'yes' : 'no'}
+      data-mobile-title={props.mobileTitleInShell ? 'yes' : 'no'}
       data-project-name={props.projectName}
       data-project-remote={props.projectRemote ? 'yes' : 'no'}
       data-state={props.state}
@@ -100,6 +102,7 @@ describe('AgentSessionPage', () => {
     expect(html).toContain('PTY agent');
     expect(html).toContain('data-heartbeat="off"');
     expect(html).toContain('data-show-project="yes"');
+    expect(html).toContain('data-mobile-title="yes"');
     expect(html).toContain('data-project-name="Demo"');
     expect(html).toContain('Delete');
     expect(html).not.toContain('data-testid="agent-session-missing"');

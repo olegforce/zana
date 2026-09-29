@@ -38,7 +38,7 @@ export interface FilteredSettingsGroup {
 export const SETTINGS_SEARCH_KEYWORDS: Record<string, readonly string[]> = {
   global: ['theme', 'appearance', 'defaults'],
   'global.appearance': ['theme', 'dark', 'light', 'system'],
-  composer: ['composer', 'prompt', 'markdown', 'send mode', 'launch mode'],
+  composer: ['composer', 'prompt', 'markdown', 'send mode', 'launch mode', 'full access', 'permissions', 'yolo'],
   'composer.launch-surfaces': [
     'launch mode',
     'default mode',
@@ -50,6 +50,9 @@ export const SETTINGS_SEARCH_KEYWORDS: Record<string, readonly string[]> = {
   ],
   'composer.composer': [
     'composer',
+    'full access',
+    'permissions',
+    'yolo',
     'markdown',
     'send mode',
     'steer',
@@ -61,6 +64,7 @@ export const SETTINGS_SEARCH_KEYWORDS: Record<string, readonly string[]> = {
   keyboard: ['shortcut', 'shortcuts', 'hotkey', 'hotkeys', 'keybinding', 'remap', 'chords'],
   'keyboard.keyboard': ['shortcut', 'shortcuts', 'hotkey', 'hotkeys', 'keybinding', 'remap'],
   phone: ['mobile', 'qr', 'pair', 'pairing', 'iphone', 'android', 'device', 'gateway'],
+  'remote-access': ['connect', 'browser', 'subdomain', 'address', 'remote', 'tunnel'],
   inbox: ['guidance', 'pdf', 'trust'],
   terminal: ['shell', 'tmux', 'font', 'appearance'],
   harness: ['claude', 'cursor', 'codex', 'pi', 'opencode', 'grok', 'mastracode', 'mastra', 'modern', 'cli agent', 'update', 'install', 'machines'],
@@ -74,6 +78,7 @@ export const SETTINGS_SEARCH_KEYWORDS: Record<string, readonly string[]> = {
   squads: ['team', 'autonomous'],
   experimental: ['labs', 'flags'],
   about: ['version', 'update', 'credits', 'release'],
+  performance: ['daemon', 'host', 'cpu', 'memory', 'resources', 'heartbeat', 'connection', 'diagnostics', 'slow'],
   project: ['cwd', 'path', 'clone', 'persona', 'default']
 };
 

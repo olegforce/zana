@@ -1,12 +1,13 @@
 import { createOpenCodeHistory } from './history.js';
 import type { HarnessRegistration } from '../registration.js';
-import { OpenCodeProvider } from './provider.js';
+import { OpenCodeProvider, invalidateOpenCodeModels } from './provider.js';
 import { OpenCodeTranscriptAdapter } from './session.js';
 
 const implementation = new OpenCodeProvider();
 
 export const openCodeHarness: HarnessRegistration = {
   id: 'opencode',
+  modelCatalog: { providerId: 'acp-opencode', invalidate: invalidateOpenCodeModels },
   createHistoryAdapter: createOpenCodeHistory,
   historyIconId: 'acp-opencode',
   label: 'OpenCode',

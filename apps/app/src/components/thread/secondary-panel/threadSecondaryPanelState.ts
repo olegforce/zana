@@ -1,3 +1,4 @@
+import { browserPreviewIdentity } from '@zana-ai/zcc-desktop-contract';
 import type { JsonValue } from '@zana-ai/zcc-domain/thread-runtime';
 
 export const SECONDARY_PANEL_STORAGE_PREFIX = 'zcc.secondaryPanel.';
@@ -35,6 +36,8 @@ export interface ClosableSecondaryTab {
   openerKey?: string | null;
   automationTargetId?: string | null;
   lineNumber?: number | null;
+  /** Local reload signal for an explicit repeat file-open request. */
+  previewRevision?: number;
 }
 
 export interface ThreadSecondaryPanelState {
@@ -289,12 +292,17 @@ export function addClosableTab(
   const existing = matchExistingTab(state.tabs, input);
   if (existing) {
     const nextLine = input.lineNumber !== undefined ? input.lineNumber : existing.lineNumber;
-    if (nextLine !== existing.lineNumber) {
+    const refreshPreview = input.kind === 'file-preview' || input.kind === 'storage-preview';
+    if (refreshPreview || nextLine !== existing.lineNumber) {
       return {
         ...state,
         isOpen: true,
         activeId: existing.id,
-        tabs: state.tabs.map((tab) => (tab.id === existing.id ? { ...tab, lineNumber: nextLine } : tab))
+        tabs: state.tabs.map((tab) => (tab.id === existing.id ? {
+          ...tab,
+          lineNumber: nextLine,
+          ...(refreshPreview ? { previewRevision: (tab.previewRevision ?? 0) + 1 } : {})
+        } : tab))
       };
     }
     return { ...state, isOpen: true, activeId: existing.id };
@@ -326,7 +334,10 @@ function matchExistingTab(
       }
       return tab.moduleId === input.moduleId && !tab.actionId;
     }
-    if (input.kind === 'browser') return tab.url === input.url && Boolean(input.url);
+    if (input.kind === 'browser') {
+      const next = browserPreviewIdentity(input.url ?? '');
+      return next !== null && browserPreviewIdentity(tab.url ?? '') === next;
+    }
     return false;
   });
 }

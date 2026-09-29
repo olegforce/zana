@@ -69,6 +69,7 @@ async function buildDb(): Promise<AnyDb> {
     const { drizzle } = await import('drizzle-orm/node-postgres');
     const { Pool } = await import('pg');
     const pool = new Pool({ connectionString: databaseUrl });
+    pool.on('error', () => console.error('Website database connection interrupted; reconnecting on the next query.'));
     const db = drizzle(pool, { schema: pgSchema });
     return { dialect: 'pg', db, schema: pgSchema };
   }

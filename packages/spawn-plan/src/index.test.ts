@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildSystemPromptGuidance, extraArgsPinSession, extractPinnedSessionId, inboxAllowedTools } from './index.js';
+import { IN_APP_PREVIEW_GUIDANCE } from '@zana-ai/zcc-domain';
 
 // Distinctive per-block markers (a tool id unique to each guidance block).
 const MESH = 'register_agent';
@@ -27,6 +28,12 @@ describe('extractPinnedSessionId / extraArgsPinSession', () => {
 });
 
 describe('buildSystemPromptGuidance', () => {
+  it.each([false, true])('keeps CLI previews inside the app, with the same guidance as Modern threads (scheduled=%s)', (scheduled) => {
+    expect(buildSystemPromptGuidance(scheduled)).toContain(IN_APP_PREVIEW_GUIDANCE);
+    expect(IN_APP_PREVIEW_GUIDANCE).toContain('preview_file');
+    expect(IN_APP_PREVIEW_GUIDANCE).toContain('zcc guide browser');
+    expect(IN_APP_PREVIEW_GUIDANCE).toContain('unless the user explicitly requests an external browser');
+  });
   it('non-scheduled interactive: mesh + awareness + library + followup present, schedule absent', () => {
     const g = buildSystemPromptGuidance(false);
     expect(g).toContain(MESH);

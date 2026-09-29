@@ -1,15 +1,19 @@
+import { useLibraryBodySearch } from './library/useLibraryBodySearch.js';
+import { LibraryAvailability } from './library/LibraryAvailability.js';
+import { LibraryImportButton } from './library/LibraryImportButton.js';
 import { product } from '../../lib/product-client.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Trash2, ExternalLink, X, Search, Plus, AtSign, BotMessageSquare } from 'lucide-react';
+import { ArrowLeft, FileText, Trash2, ExternalLink, X, Search, Plus, AtSign, BotMessageSquare } from 'lucide-react';
 
-import type { Project, LibraryDoc, LibraryScope, LibrarySearchHit } from '@zana-ai/zcc-domain/product';
+import type { Project, LibraryDoc, LibraryScope } from '@zana-ai/zcc-domain/product';
 import { useLibrary, useUi } from '@/store';
 import { AgentLauncher } from '@/components/AgentLauncher';
 import { inspectAgentSession } from '@/lib/inspect-session';
 import { DocPreview } from './library/DocPreview.js';
 import { DelayedStencilList } from '@/components/ui/Skeleton';
 import { LibraryTreeRows } from './library/LibraryTreeRows.js';
+import { useLibraryNavigation } from './library/useLibraryNavigation.js';
 import { PromptModal } from '@/components/PromptModal';
 import {
   buildLibraryTree,
@@ -72,13 +76,9 @@ export function LibraryView({ project, deepLink = null }: Props) {
     [allDocs, project.id]
   );
 
-  const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
+  const { compact, selectedDoc, setSelectedDoc, readerOpen, backToDocuments, rootRef, backRef } = useLibraryNavigation();
   const [searchQuery, setSearchQuery] = useState('');
-  // Body-content matches for the current query, keyed by absPath. Populated by
-  // the debounced main-process full-text search below; empty when the box is
-  // clear. `bodySearching` drives the spinner hint while a scan is in flight.
-  const [bodyHits, setBodyHits] = useState<Map<string, LibrarySearchHit>>(new Map());
-  const [bodySearching, setBodySearching] = useState(false);
+  const { hits: bodyHits, searching: bodySearching, warning: searchWarning } = useLibraryBodySearch(searchQuery);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   // Tags collapse to the top few by default — the full set (dozens of chips)
   // is a wall that buries the doc tree. "Show all" opens a height-capped,
@@ -101,7 +101,6 @@ export function LibraryView({ project, deepLink = null }: Props) {
   // Resizable doc-list column. The width lives on the grid via an inline CSS
   // var; dragging the splitter rewrites it and persists to localStorage on
   // mouse-up. A ref mirrors the live value so the listeners don't restart.
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const [listWidth, setListWidth] = useState(loadLibraryListWidth);
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -152,45 +151,12 @@ export function LibraryView({ project, deepLink = null }: Props) {
       .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
   }, [docs]);
 
-  // Full-text body search: the metadata filter below matches title/summary/tags
-  // synchronously; body content lives on disk, so we ask main to scan it
-  // (bounded) and merge the results. Debounced so a fast typist doesn't fan out
-  // a scan per keystroke. Clearing the box resets the hit map immediately.
-  useEffect(() => {
-    const q = searchQuery.trim();
-    if (!q) {
-      setBodyHits(new Map());
-      setBodySearching(false);
-      return;
-    }
-    let cancelled = false;
-    setBodySearching(true);
-    const t = setTimeout(() => {
-      product.library
-        .search(q)
-        .then((res) => {
-          if (cancelled) return;
-          setBodyHits(new Map(res.hits.map((h) => [h.absPath, h])));
-        })
-        .catch(() => {
-          if (!cancelled) setBodyHits(new Map());
-        })
-        .finally(() => {
-          if (!cancelled) setBodySearching(false);
-        });
-    }, 200);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [searchQuery]);
-
   // Filter docs by search query and selected tags (useMemo for stable ref)
   const filteredDocs = useMemo(() => {
     let filtered = docs;
 
     // Text search on title, summary, tags (sync) OR body content (from the
-    // main-process full-text scan, keyed by absPath).
+    // product content search, keyed by document identity).
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter(
@@ -198,7 +164,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
           doc.title.toLowerCase().includes(q) ||
           doc.summary?.toLowerCase().includes(q) ||
           doc.tags?.some((tag) => tag.toLowerCase().includes(q)) ||
-          (doc.absPath ? bodyHits.has(doc.absPath) : false)
+          (bodyHits.has(doc.id) || (doc.absPath ? bodyHits.has(doc.absPath) : false))
       );
     }
 
@@ -329,12 +295,12 @@ export function LibraryView({ project, deepLink = null }: Props) {
   // them to filteredDocs[0] in the same commit.
   useEffect(() => {
     if (pendingSelectId || pendingRevealId || pendingDeepLink) return;
-    if (!selectedDoc && filteredDocs.length > 0) {
+    if (!compact && !selectedDoc && filteredDocs.length > 0) {
       setSelectedDoc([...filteredDocs].sort((a, b) => b.updatedAt - a.updatedAt)[0]);
     } else if (selectedDoc && !filteredDocs.find((d) => d.id === selectedDoc.id)) {
       setSelectedDoc(null);
     }
-  }, [filteredDocs, selectedDoc, pendingSelectId, pendingRevealId, pendingDeepLink]);
+  }, [compact, filteredDocs, selectedDoc, pendingSelectId, pendingRevealId, pendingDeepLink]);
 
   useEffect(() => {
     if (!menu) return;
@@ -545,13 +511,15 @@ export function LibraryView({ project, deepLink = null }: Props) {
   return (
     <div
       ref={rootRef}
+      data-mobile-pane={compact ? (readerOpen ? 'document' : 'documents') : undefined}
       className="explorer-view library-view"
       style={{ gridTemplateColumns: `${listWidth}px minmax(0, 1fr)` }}
     >
       {/* Left pane: doc tree */}
-      <div className="explorer-tree">
+      <div className="explorer-tree" hidden={compact && readerOpen}>
         <div className="explorer-tree-header">
           <h3 className="explorer-tree-title">Documents</h3>
+          <LibraryImportButton projectId={project.id} />
           <button
             type="button"
             className="library-new-idea"
@@ -628,6 +596,8 @@ export function LibraryView({ project, deepLink = null }: Props) {
 
         {/* Doc tree — real nested folders (Global bucket + this project's own
             bucket), same model + row component as the global LibraryPanel. */}
+        {searchWarning && <div className="tree-loading" role="status">{searchWarning}</div>}
+        <LibraryAvailability projectId={project.id} />
         <div className="explorer-tree-body library-tree">
           {loading ? (
             <DelayedStencilList label="Loading library" className="tree-loading" />
@@ -672,7 +642,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
       />
 
       {/* Right pane: preview */}
-      <div className="explorer-viewer library-viewer">
+      <div className="explorer-viewer library-viewer" hidden={compact && !readerOpen}>
         {!selectedDoc ? (
           <div className="explorer-viewer-empty">
             <p>Select a document to preview</p>
@@ -680,8 +650,14 @@ export function LibraryView({ project, deepLink = null }: Props) {
         ) : (
           <>
             <div className="explorer-viewer-header">
+              {compact && (
+                <button ref={backRef} type="button" className="library-mobile-back" onClick={backToDocuments}>
+                  <ArrowLeft size={18} aria-hidden="true" />
+                  <span>Back to documents</span>
+                </button>
+              )}
               <div className="explorer-viewer-path">
-                {selectedDoc.title}
+                <span className="library-document-title">{selectedDoc.title}</span>
                 <span className={`library-scope-badge ${selectedDoc.scope}`}>
                   {selectedDoc.scope === 'project' ? 'Project' : 'Global'}
                 </span>
@@ -706,6 +682,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
                 <button
                   type="button"
                   onClick={() => handleReveal(selectedDoc.scope ?? 'global', selectedDoc.scope === 'project' ? selectedDoc.projectId : undefined)}
+                  hidden={compact}
                   title="Reveal in Finder"
                 >
                   <ExternalLink size={14} />
@@ -723,6 +700,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
                       doc: selectedDoc
                     })
                   }
+                  hidden={compact}
                   title="Delete"
                   disabled={selectedDoc.id === ''}
                 >
@@ -748,6 +726,7 @@ export function LibraryView({ project, deepLink = null }: Props) {
               </div>
             )}
 
+            <LibraryAvailability scope={selectedDoc.scope ?? 'global'} projectId={selectedDoc.projectId} />
             <DocPreview
               key={selectedDoc.id || selectedDoc.relPath}
               doc={selectedDoc}

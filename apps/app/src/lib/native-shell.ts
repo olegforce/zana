@@ -4,6 +4,7 @@ import {
   parseShellToPageEvent,
   type NativeShellApi
 } from '@zana-ai/zcc-mobile-bridge';
+import { reportMobileReadiness } from './mobile-readiness.js';
 
 /** This bridge offers device UI only. Product authorization stays on the server. */
 export function getNativeShell(): NativeShellApi | null {
@@ -38,5 +39,6 @@ export function installNativeShellEvents(onResume: () => void): () => void {
     if (event?.type === 'resume') onResume();
   });
   shell.post({ type: 'ready', path: window.location.pathname + window.location.search });
-  return off;
+  const stopReporting = reportMobileReadiness(shell.platform, shell.appVersion);
+  return () => { stopReporting(); off(); };
 }

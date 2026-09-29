@@ -22,7 +22,7 @@ import { join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { rewritePluginMcpArgs } from '@zana-ai/zcc-server/plugins/plugin-skills';
+import { rewritePluginMcpArgs } from '@zana-ai/zcc-host-workspace';
 import { resolveZccDataDir } from './host-config.js';
 
 function mcpConfigDir(): string {

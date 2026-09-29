@@ -20,6 +20,16 @@ export function applyLoggedConversationLifecycleEvent(
     threadId: args.threadId,
     event: args.event
   });
+  publishConversationLifecycleOutcome(ctx, args, outcome);
+  return outcome;
+}
+
+/** Publish only after the caller's transaction commits. */
+export function publishConversationLifecycleOutcome(
+  ctx: ProductHttpContext,
+  args: { threadId: string; event: ThreadLifecycleEvent },
+  outcome: ApplyConversationThreadLifecycleEventOutcome
+): void {
   if (!outcome.applied) {
     console.info(
       JSON.stringify({
@@ -30,7 +40,7 @@ export function applyLoggedConversationLifecycleEvent(
         detail: outcome.detail
       })
     );
-    return outcome;
+    return;
   }
   ctx.hub.emit('threads:updated', conversationThreadView(ctx, outcome.thread));
   if (outcome.thread.status === 'idle' || outcome.thread.status === 'error') {
@@ -41,7 +51,6 @@ export function applyLoggedConversationLifecycleEvent(
   if (outcome.thread.status === 'idle') {
     scheduleConversationIdleFlush(ctx, outcome.thread.id);
   }
-  return outcome;
 }
 
 export function scheduleConversationIdleFlush(ctx: ProductHttpContext, threadId: string): void {

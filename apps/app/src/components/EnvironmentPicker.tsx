@@ -60,13 +60,14 @@ function WorkspaceTriggerIcon({ kind }: { kind: WorkspacePickerValue['kind'] }):
 
 interface Props {
   projectId: string;
+  hostId?: string;
   value: WorkspacePickerValue;
   onChange: (value: WorkspacePickerValue) => void;
   allowPersonal?: boolean;
   disabled?: boolean;
 }
 
-export function EnvironmentPicker({ projectId, value, onChange, allowPersonal, disabled }: Props) {
+export function EnvironmentPicker({ projectId, hostId, value, onChange, allowPersonal, disabled }: Props) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [environmentsLoaded, setEnvironmentsLoaded] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -82,7 +83,7 @@ export function EnvironmentPicker({ projectId, value, onChange, allowPersonal, d
     setEnvironmentsLoaded(false);
     void product.environments.list(projectId).then((rows) => {
       if (!cancelled) {
-        setEnvironments(rows.filter((row) => row.status === 'ready' && row.workspaceProvisionType === 'managed-worktree'));
+        setEnvironments(rows.filter((row) => row.status === 'ready' && row.workspaceProvisionType === 'managed-worktree' && (!hostId || row.hostId === hostId)));
         setEnvironmentsLoaded(true);
       }
     }).catch(() => {
@@ -94,7 +95,7 @@ export function EnvironmentPicker({ projectId, value, onChange, allowPersonal, d
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, hostId]);
 
   useEffect(() => {
     if (!projectId) {
@@ -104,7 +105,7 @@ export function EnvironmentPicker({ projectId, value, onChange, allowPersonal, d
     }
     let cancelled = false;
     setBranchesLoaded(false);
-    void apiJson<{ branches: string[] }>(`/projects/${encodeURIComponent(projectId)}/branches`)
+    void apiJson<{ branches: string[] }>(`/projects/${encodeURIComponent(projectId)}/branches${hostId ? '?hostId=' + encodeURIComponent(hostId) : ''}`)
       .then((body) => {
         if (!cancelled) {
           setBranches(body.branches);
@@ -120,7 +121,7 @@ export function EnvironmentPicker({ projectId, value, onChange, allowPersonal, d
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, hostId]);
 
   const newWorktreeDisabledReason = branchesLoaded
     ? resolveNewWorktreeDisabledReason(branches)

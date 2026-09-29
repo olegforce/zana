@@ -1,13 +1,10 @@
 import { Calendar, LayoutGrid, List, Workflow } from 'lucide-react';
 import { useData, useUi, useRunningSchedulerCount } from '../store.js';
 import type { AgentsBoardView } from '../store.js';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
 
-/**
- * Segmented kanban/list switch for the Agents boards. Flips the single global
- * {@link AgentsBoardView} preference (persisted), so both the cross-project and
- * per-project boards stay in the layout you last chose. Sits in the board
- * toolbar, just left of the Scheduled-column toggle and the filter.
- */
+/** View switch shared by global and project boards. Desktop persists its choice;
+ * phones keep an independent choice for the current app session. */
 
 const OPTIONS: Array<{ view: AgentsBoardView; icon: typeof LayoutGrid; label: string }> = [
   { view: 'board', icon: LayoutGrid, label: 'Board' },
@@ -15,9 +12,22 @@ const OPTIONS: Array<{ view: AgentsBoardView; icon: typeof LayoutGrid; label: st
   { view: 'flow', icon: Workflow, label: 'Flow' }
 ];
 
+/** Canvas is opt-in on phones; switching mobile views leaves desktop alone. */
+export function useAgentsBoardView() {
+  const preferred = useUi((s) => s.agentsBoardView);
+  const compact = useCompactLayout();
+  const mobileView = useUi((s) => s.mobileAgentsBoardView);
+  const setDesktopView = useUi((s) => s.setAgentsBoardView);
+  const setMobileView = useUi((s) => s.setMobileAgentsBoardView);
+  return {
+    view: compact ? mobileView ?? (preferred === 'flow' ? 'board' : preferred) : preferred,
+    compact,
+    setView: compact ? setMobileView : setDesktopView
+  };
+}
+
 export function AgentViewToggle() {
-  const view = useUi((s) => s.agentsBoardView);
-  const setView = useUi((s) => s.setAgentsBoardView);
+  const { view, compact, setView } = useAgentsBoardView();
 
   return (
     <div className="agents-view-toggle" role="group" aria-label="Agents view">
@@ -28,10 +38,11 @@ export function AgentViewToggle() {
           className={`agents-view-toggle-btn ${view === v ? 'active' : ''}`}
           onClick={() => setView(v)}
           aria-pressed={view === v}
-          title={`${label} view`}
-          aria-label={`${label} view`}
+          title={`${compact && v === 'flow' ? 'Canvas' : label} view`}
+          aria-label={`${compact && v === 'flow' ? 'Canvas' : label} view`}
         >
           <Icon size={14} />
+          {compact && v === 'flow' && <span className="agents-view-toggle-label">Canvas</span>}
         </button>
       ))}
     </div>

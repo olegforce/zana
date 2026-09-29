@@ -84,4 +84,14 @@ describe('thread tabs contract mapping', () => {
     expect(next.isOpen).toBe(true);
     expect(next.tabs[0]).toMatchObject({ kind: 'file-preview', path: 'src/a.ts', lineNumber: 2 });
   });
+
+  it('keeps local preview refresh state through server echoes, but not a different file', () => {
+    const local = { id: 'preview', kind: 'file-preview' as const, title: 'Report', path: 'report.md', previewRevision: 2 };
+    const state = { ...emptySecondaryPanelState(), tabs: [local] };
+    const contract = closableTabToContract(local)!;
+    expect(contract).not.toHaveProperty('previewRevision');
+    expect(applyContractTabs(state, [contract]).tabs[0].previewRevision).toBe(2);
+    expect(applyContractTabs(state, [closableTabToContract({ ...local, path: 'other.md' })!]).tabs[0]).not.toHaveProperty('previewRevision');
+    expect(applyContractTabs(state, [closableTabToContract({ ...local, kind: 'storage-preview' })!]).tabs[0]).not.toHaveProperty('previewRevision');
+  });
 });

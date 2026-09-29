@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../lib/product-client.js', () => ({
   product: {
@@ -12,21 +12,40 @@ vi.mock('../lib/product-client.js', () => ({
 import {
   INSPECTOR_MIN_HEIGHT,
   INSPECTOR_MIN_WIDTH,
+  INSPECTOR_SIZE_STORAGE_KEY,
   INSPECTOR_VIEWPORT_GUTTER,
   clampInspectorFrame,
+  clearInspectorSize,
+  currentInspectorFrame,
   cursorForInspectorEdge,
   inspectorFrameFromKey,
   inspectorFrameFromPointer,
   inspectorFrameFromRect,
   inspectorFrameStyle,
   inspectorModalClassName,
-  inspectorViewport
+  inspectorViewport,
+  rememberInspectorSize,
+  scaleInspectorFrame
 } from './inspector-window.js';
 
 const viewport = { width: 1600, height: 1000 };
 const start = { left: 400, top: 200, width: 800, height: 600 };
+const h = vi.hoisted(() => ({ memory: new Map<string, string>() }));
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => h.memory.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    h.memory.set(key, value);
+  },
+  removeItem: (key: string) => {
+    h.memory.delete(key);
+  }
+});
 
 describe('inspector window geometry', () => {
+  afterEach(() => {
+    clearInspectorSize();
+    h.memory.clear();
+  });
   it('centers the frame after clamping to the minimum size or viewport gutter', () => {
     expect(clampInspectorFrame({ left: -40, top: -20, width: 80, height: 50 }, viewport)).toEqual({
       left: (viewport.width - INSPECTOR_MIN_WIDTH) / 2,
@@ -126,6 +145,34 @@ describe('inspector window geometry', () => {
     expect(inspectorFrameFromKey(start, 'Tab', viewport)).toBeNull();
   });
 
+  it('keeps a chosen size until the app window changes, then scales it', () => {
+    expect(scaleInspectorFrame(start, viewport, viewport)).toEqual(
+      clampInspectorFrame(start, viewport)
+    );
+    const grown = { width: 2000, height: 1250 };
+    expect(scaleInspectorFrame(start, viewport, grown)).toEqual({
+      left: (grown.width - 1000) / 2,
+      top: (grown.height - 750) / 2,
+      width: 1000,
+      height: 750
+    });
+    const shrunk = { width: 500, height: 360 };
+    expect(scaleInspectorFrame(start, viewport, shrunk)).toEqual(
+      clampInspectorFrame(start, shrunk)
+    );
+    clearInspectorSize();
+    expect(currentInspectorFrame(viewport)).toBeNull();
+    rememberInspectorSize(start, viewport);
+    expect(currentInspectorFrame(viewport)).toEqual(clampInspectorFrame(start, viewport));
+    expect(currentInspectorFrame(grown)?.width).toBe(1000);
+    const saved = localStorage.getItem(INSPECTOR_SIZE_STORAGE_KEY);
+    expect(saved).toContain('"width":800');
+    clearInspectorSize();
+    expect(currentInspectorFrame(grown)).toBeNull();
+    localStorage.setItem(INSPECTOR_SIZE_STORAGE_KEY, saved as string);
+    expect(currentInspectorFrame(viewport)).toEqual(clampInspectorFrame(start, viewport));
+  });
+
   it('maps CSS for a custom frame and drops it while fullscreen', () => {
     expect(inspectorFrameStyle(start, false)).toEqual({
       position: 'absolute',
@@ -133,6 +180,9 @@ describe('inspector window geometry', () => {
       top: 200,
       width: 800,
       height: 600,
+      minWidth: 800,
+      minHeight: 600,
+      maxWidth: 800,
       maxHeight: 600,
       margin: 0
     });

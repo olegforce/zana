@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { ipcMain } from 'electron';
+import { productHandle, safeProductHandle } from './shared-product-registration.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { externalReject, isExternalId, listSchedulesForUi } from './shared.js';
@@ -7,54 +7,61 @@ import { store } from '@zana-ai/zcc-server/services/projects/store';
 import type { FeedDigestResult, FollowUp, FollowUpCreateInput, FollowUpStatus, FollowUpUpdateInput, Goal, GoalCreateInput, GoalStatus, GoalUpdateInput, Result, ScheduleCreateInput, ScheduleGroup, ScheduleGroupInput, ScheduleUpdateInput, ScheduledTask } from '@zana-ai/zcc-domain/product';
 
 export function registerSchedulerIpc(): void {
-  
+  for (const [channel, manager] of [[IPC.scheduler.reconcile, ctx.scheduler], [IPC.goals.reconcile, ctx.goals]] as const) {
+    productHandle(channel, async (id: unknown): Promise<Result<boolean>> => {
+      if (typeof id !== 'string' || !id || id.length > 256) return { ok: false, code: 'BAD_INPUT', message: 'A valid record id is required' };
+      if (isExternalId(id)) return externalReject();
+      try { return { ok: true, value: await manager.reconcile(id) }; }
+      catch (error) { return { ok: false, code: 'RECOVERY_FAILED', message: error instanceof Error ? error.message : 'Could not check the worker' }; }
+    });
+  }
 
-  ctx.safeHandle(IPC.scheduler.list, () => listSchedulesForUi(), () => []);
-  ipcMain.handle(
+  safeProductHandle(IPC.scheduler.list, () => listSchedulesForUi(), () => []);
+  productHandle(
     IPC.scheduler.create,
-    async (_e, input: ScheduleCreateInput): Promise<Result<ScheduledTask>> => {
+    async (input: ScheduleCreateInput): Promise<Result<ScheduledTask>> => {
       try {
         if (!store.listProjects().some((project) => project.id === input.projectId)) {
           return { ok: false, code: 'UNKNOWN_PROJECT', message: `project not found: ${input.projectId}` };
         }
-        return { ok: true, value: ctx.scheduler.create(input) };
+        return { ok: true, value: await ctx.scheduler.create(input) };
       } catch (err) {
         return { ok: false, code: 'CREATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.update,
-    async (_e, id: string, patch: ScheduleUpdateInput): Promise<Result<ScheduledTask>> => {
+    async (id: string, patch: ScheduleUpdateInput): Promise<Result<ScheduledTask>> => {
       if (isExternalId(id)) return externalReject();
       try {
         if (patch.projectId !== undefined && !store.listProjects().some((project) => project.id === patch.projectId)) {
           return { ok: false, code: 'UNKNOWN_PROJECT', message: `project not found: ${patch.projectId}` };
         }
-        return { ok: true, value: ctx.scheduler.update(id, patch) };
+        return { ok: true, value: await ctx.scheduler.update(id, patch) };
       } catch (err) {
         return { ok: false, code: 'UPDATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.delete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       if (isExternalId(id)) return externalReject();
       try {
-        ctx.scheduler.remove(id);
+        await ctx.scheduler.remove(id);
         return { ok: true, value: true };
       } catch (err) {
         return { ok: false, code: 'DELETE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.setEnabled,
-    async (_e, id: string, enabled: boolean): Promise<Result<ScheduledTask>> => {
+    async (id: string, enabled: boolean): Promise<Result<ScheduledTask>> => {
       if (isExternalId(id)) return externalReject();
       try {
-        const task = ctx.scheduler.setEnabled(id, enabled);
+        const task = await ctx.scheduler.setEnabled(id, enabled);
         if (!task) return { ok: false, code: 'NOT_FOUND', message: `schedule not found: ${id}` };
         return { ok: true, value: task };
       } catch (err) {
@@ -62,12 +69,12 @@ export function registerSchedulerIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.runNow,
-    async (_e, id: string): Promise<Result<ScheduledTask>> => {
+    async (id: string): Promise<Result<ScheduledTask>> => {
       if (isExternalId(id)) return externalReject();
       try {
-        return { ok: true, value: ctx.scheduler.runNow(id) };
+        return { ok: true, value: await ctx.scheduler.runNow(id) };
       } catch (err) {
         return { ok: false, code: 'RUN_FAILED', message: String(err) };
       }
@@ -81,46 +88,46 @@ export function registerSchedulerIpc(): void {
   // → re-spawn). Mirrors the ctx.scheduler IPC surface. The renderer is untrusted, so
   // create() rejects an unknown projectId here in main (Rule 1) before any loop
   // could spawn into it; the manager's own spawn path re-resolves the project.
-  ctx.safeHandle(IPC.goals.list, () => ctx.goals.list(), () => []);
-  ipcMain.handle(
+  safeProductHandle(IPC.goals.list, () => ctx.goals.list(), () => []);
+  productHandle(
     IPC.goals.create,
-    async (_e, input: GoalCreateInput): Promise<Result<Goal>> => {
+    async (input: GoalCreateInput): Promise<Result<Goal>> => {
       try {
         if (!store.listProjects().some((p) => p.id === input.projectId)) {
           return { ok: false, code: 'UNKNOWN_PROJECT', message: `unknown projectId: ${input.projectId}` };
         }
-        return { ok: true, value: ctx.goals.create(input) };
+        return { ok: true, value: await ctx.goals.create(input) };
       } catch (err) {
         return { ok: false, code: 'CREATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.goals.update,
-    async (_e, id: string, patch: GoalUpdateInput): Promise<Result<Goal>> => {
+    async (id: string, patch: GoalUpdateInput): Promise<Result<Goal>> => {
       try {
-        return { ok: true, value: ctx.goals.update(id, patch) };
+        return { ok: true, value: await ctx.goals.update(id, patch) };
       } catch (err) {
         return { ok: false, code: 'UPDATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.goals.delete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       try {
-        ctx.goals.remove(id);
+        await ctx.goals.remove(id);
         return { ok: true, value: true };
       } catch (err) {
         return { ok: false, code: 'DELETE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.goals.setStatus,
-    async (_e, id: string, status: GoalStatus): Promise<Result<Goal>> => {
+    async (id: string, status: GoalStatus): Promise<Result<Goal>> => {
       try {
-        const goal = ctx.goals.setStatus(id, status);
+        const goal = await ctx.goals.setStatus(id, status);
         if (!goal) return { ok: false, code: 'NOT_FOUND', message: `goal not found: ${id}` };
         return { ok: true, value: goal };
       } catch (err) {
@@ -128,11 +135,11 @@ export function registerSchedulerIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.goals.runNow,
-    async (_e, id: string): Promise<Result<Goal>> => {
+    async (id: string): Promise<Result<Goal>> => {
       try {
-        return { ok: true, value: ctx.goals.runNow(id) };
+        return { ok: true, value: await ctx.goals.runNow(id) };
       } catch (err) {
         return { ok: false, code: 'RUN_FAILED', message: String(err) };
       }
@@ -145,46 +152,46 @@ export function registerSchedulerIpc(): void {
   // Follow-ups — agent-parked questions / decisions awaiting a human. Mirrors the
   // ctx.goals IPC surface (minus runNow — a follow-up has no loop to run). The
   // renderer is untrusted, so create() rejects an unknown projectId here (Rule 1).
-  ctx.safeHandle(IPC.followups.list, () => ctx.followups.list(), () => []);
-  ipcMain.handle(
+  safeProductHandle(IPC.followups.list, () => ctx.followups.list(), () => []);
+  productHandle(
     IPC.followups.create,
-    async (_e, input: FollowUpCreateInput): Promise<Result<FollowUp>> => {
+    async (input: FollowUpCreateInput): Promise<Result<FollowUp>> => {
       try {
         if (!store.listProjects().some((p) => p.id === input.projectId)) {
           return { ok: false, code: 'UNKNOWN_PROJECT', message: `unknown projectId: ${input.projectId}` };
         }
-        return { ok: true, value: ctx.followups.create(input) };
+        return { ok: true, value: await ctx.followups.create(input) };
       } catch (err) {
         return { ok: false, code: 'CREATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.followups.update,
-    async (_e, id: string, patch: FollowUpUpdateInput): Promise<Result<FollowUp>> => {
+    async (id: string, patch: FollowUpUpdateInput): Promise<Result<FollowUp>> => {
       try {
-        return { ok: true, value: ctx.followups.update(id, patch) };
+        return { ok: true, value: await ctx.followups.update(id, patch) };
       } catch (err) {
         return { ok: false, code: 'UPDATE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.followups.delete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       try {
-        ctx.followups.remove(id);
+        await ctx.followups.remove(id);
         return { ok: true, value: true };
       } catch (err) {
         return { ok: false, code: 'DELETE_FAILED', message: String(err) };
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.followups.setStatus,
-    async (_e, id: string, status: FollowUpStatus, resolution?: string): Promise<Result<FollowUp>> => {
+    async (id: string, status: FollowUpStatus, resolution?: string): Promise<Result<FollowUp>> => {
       try {
-        const followUp = ctx.followups.setStatus(id, status, resolution);
+        const followUp = await ctx.followups.setStatus(id, status, resolution);
         if (!followUp) return { ok: false, code: 'NOT_FOUND', message: `follow-up not found: ${id}` };
         return { ok: true, value: followUp };
       } catch (err) {
@@ -192,11 +199,11 @@ export function registerSchedulerIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.followups.markSpawned,
-    async (_e, id: string): Promise<Result<FollowUp>> => {
+    async (id: string): Promise<Result<FollowUp>> => {
       try {
-        const followUp = ctx.followups.markSpawned(id);
+        const followUp = await ctx.followups.markSpawned(id);
         if (!followUp) return { ok: false, code: 'NOT_FOUND', message: `follow-up not found: ${id}` };
         return { ok: true, value: followUp };
       } catch (err) {
@@ -216,7 +223,7 @@ export function registerSchedulerIpc(): void {
   // writer is trusted host code. `refresh` re-reads `git log`; `list` doesn't.
   const feedProjectKnown = (projectId: string) =>
     typeof projectId === 'string' && store.listProjects().some((p) => p.id === projectId);
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.feed.list,
     (projectId: string, opts?: { limit?: number; before?: number }) =>
       feedProjectKnown(projectId)
@@ -224,7 +231,7 @@ export function registerSchedulerIpc(): void {
         : Promise.resolve({ events: [], hasMore: false }),
     () => ({ events: [], hasMore: false })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.feed.refresh,
     (projectId: string, opts?: { limit?: number }) =>
       feedProjectKnown(projectId)
@@ -232,7 +239,7 @@ export function registerSchedulerIpc(): void {
         : Promise.resolve({ events: [], hasMore: false }),
     () => ({ events: [], hasMore: false })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.feed.digest,
     (projectId: string): Promise<FeedDigestResult> =>
       feedProjectKnown(projectId)
@@ -244,8 +251,8 @@ export function registerSchedulerIpc(): void {
     ctx.safeSend(IPC.feed.onChanged, projectId);
   });
 
-  ctx.safeHandle(IPC.scheduler.listTemplates, () => ctx.templates.list(), () => []);
-  ctx.safeHandle(
+  safeProductHandle(IPC.scheduler.listTemplates, () => ctx.templates.list(), () => []);
+  safeProductHandle(
     IPC.scheduler.revealTemplatesDir,
     () => ctx.templates.revealUserDir(),
     () => ({ ok: false, path: '', message: 'Failed to reveal ctx.templates directory' })
@@ -253,10 +260,10 @@ export function registerSchedulerIpc(): void {
   ctx.templates.on('changed', () => {
     ctx.safeSend(IPC.scheduler.onTemplatesChanged, ctx.templates.list());
   });
-ctx.safeHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => []);
-  ipcMain.handle(
+safeProductHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => []);
+  productHandle(
     IPC.scheduler.groupsCreate,
-    async (_e, input: ScheduleGroupInput): Promise<Result<ScheduleGroup>> => {
+    async (input: ScheduleGroupInput): Promise<Result<ScheduleGroup>> => {
       try {
         return { ok: true, value: ctx.scheduleGroups.create(input) };
       } catch (err) {
@@ -264,9 +271,9 @@ ctx.safeHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => 
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.groupsUpdate,
-    async (_e, id: string, patch: Partial<ScheduleGroupInput>): Promise<Result<ScheduleGroup>> => {
+    async (id: string, patch: Partial<ScheduleGroupInput>): Promise<Result<ScheduleGroup>> => {
       try {
         const group = ctx.scheduleGroups.update(id, patch);
         if (!group) return { ok: false, code: 'NOT_FOUND', message: `group not found: ${id}` };
@@ -276,9 +283,9 @@ ctx.safeHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => 
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.scheduler.groupsDelete,
-    async (_e, id: string): Promise<Result<true>> => {
+    async (id: string): Promise<Result<true>> => {
       try {
         const ok = ctx.scheduleGroups.delete(id);
         if (!ok) return { ok: false, code: 'NOT_FOUND', message: `group not found: ${id}` };
@@ -288,7 +295,7 @@ ctx.safeHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => 
       }
     }
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.scheduler.groupsReorder,
     (orderedIds: string[]) => ctx.scheduleGroups.reorder(orderedIds),
     () => []
@@ -297,4 +304,3 @@ ctx.safeHandle(IPC.scheduler.groupsList, () => ctx.scheduleGroups.list(), () => 
     ctx.safeSend(IPC.scheduler.groupsOnChanged, groups);
   });
 }
-

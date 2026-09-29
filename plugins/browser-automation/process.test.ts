@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { supervise } from "./process.js";
+import { execute, supervise } from "./process.js";
 
 describe("process ownership", () => {
   it.each([false, true])(
@@ -88,7 +88,7 @@ try {
         );
         expect(childEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
         expect(childEnv.DEV_BROWSER_HOME).toBe(root);
-        expect(childEnv.DEV_BROWSER_SOCKET).toBe(join(root, "daemon.sock"));
+        expect(childEnv.DEV_BROWSER_SOCKET).toBe(join(root, "s"));
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -100,7 +100,7 @@ try {
     const file = join(root, "pid");
     const childCode =
       'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);';
-    const code = `import { supervise } from ${JSON.stringify(new URL("./process.ts", import.meta.url).href)}; supervise(process.execPath, ["-e", ${JSON.stringify(childCode)}, ${JSON.stringify(file)}], process.env); setInterval(() => {}, 1000);`;
+    const code = `import { execute, supervise } from ${JSON.stringify(new URL("./process.ts", import.meta.url).href)}; supervise(process.execPath, ["-e", ${JSON.stringify(childCode)}, ${JSON.stringify(file)}], process.env); setInterval(() => {}, 1000);`;
     const worker = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", code],
@@ -160,4 +160,27 @@ try {
       await rm(root, { recursive: true, force: true });
     }
   }, 10_000);
+});
+
+
+describe('bounded browser command execution', () => {
+  it('captures realistic output completely and rejects spawn failure', async () => {
+    const text = 'browser-protocol-output'.repeat(4000);
+    expect(await execute(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(text)})`], process.env, AbortSignal.timeout(5000))).toBe(text);
+    await expect(execute('/nonexistent/zcc-browser-command', [], {}, AbortSignal.timeout(5000))).rejects.toThrow();
+  });
+  it.each(['stdout', 'stderr'])('kills a command that exceeds the combined output budget through %s', async stream => {
+    await expect(execute(process.execPath, ['-e', `process.${stream}.write('x'.repeat(600000)); setInterval(()=>{},1000)`], process.env, AbortSignal.timeout(5000))).rejects.toThrow('exceeded 512 KB');
+  });
+  it('rejects cancellation before spawn and terminates a running command', async () => {
+    const before = new AbortController(); before.abort();
+    expect(() => execute(process.execPath, [], process.env, before.signal)).toThrow();
+    const during = new AbortController();
+    const pending = execute(process.execPath, ['-e', 'setInterval(()=>{},1000)'], process.env, during.signal);
+    const checked = expect(pending).rejects.toThrow('cancelled or timed out'); during.abort(); await checked;
+  });
+  it('reports an exited supervisor and closes it without leaving a process', async () => {
+    const child = supervise(process.execPath, ['-e', 'process.exit(0)'], process.env);
+    await vi.waitFor(() => expect(child.alive()).toBe(false)); await child.close();
+  });
 });

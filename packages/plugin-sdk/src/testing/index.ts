@@ -206,6 +206,7 @@ export interface FakePluginHostOptions {
     input: unknown;
     hostId: string;
     signal?: AbortSignal;
+    timeoutMs?: number;
   }) => unknown | Promise<unknown>;
   /** Shared registry so two fake hosts can provide/use each other. */
   services?: PluginServicesRegistry;
@@ -494,6 +495,8 @@ export function createFakePluginHost(options?: FakePluginHostOptions): FakePlugi
         }
       },
       files: {
+        readProject: async (args) => invokeSdk('files.readProject', undefined, args) as ReturnType<ZccPluginApi['sdk']['files']['readProject']>,
+        writeProject: async (args) => invokeSdk('files.writeProject', undefined, args) as ReturnType<ZccPluginApi['sdk']['files']['writeProject']>,
         write: async (args) => { await invokeSdk('files.write', async () => undefined, args); },
         async read(args) {
           return invokeSdk(
@@ -568,9 +571,11 @@ export function createFakePluginHost(options?: FakePluginHostOptions): FakePlugi
               method,
               input,
               hostId: callOptions?.hostId ?? 'test',
-              signal: callOptions?.signal
+              signal: callOptions?.signal,
+              timeoutMs: callOptions?.timeoutMs
             });
           },
+          experimental_onSignal() { return () => undefined; },
           experimental_onWorkerExit() {
             return () => undefined;
           }

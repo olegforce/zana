@@ -1,5 +1,6 @@
 import {
-  listConversationThreadEvents,
+  getConversationThreadActivityCounts,
+  listConversationActiveTurnInputs,
   type ConversationThreadEventRow,
   type ConversationThreadRow
 } from '@zana-ai/zcc-db';
@@ -7,14 +8,13 @@ import type { ThreadEvent, ThreadActivityState } from '@zana-ai/zcc-domain/threa
 import {
   EMPTY_THREAD_ACTIVITY,
   extractThreadTimelineActivePlanTurn,
-  threadActivityFromEvents,
   type ThreadEventWithMeta
 } from '@zana-ai/zcc-thread-view';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { planCommandForProvider } from './thread-provider-catalog.js';
 
 const ACTIVITY_CACHE_CAP = 256;
-const activityCache = new Map<string, { maxSeq: number; activity: ThreadActivityState }>();
+const activityCache = new Map<string, { maxSeq: number; status: string; providerId: string; db: unknown; activity: ThreadActivityState }>();
 
 export function resetThreadActivityCache(): void {
   activityCache.clear();
@@ -49,7 +49,7 @@ function eventsFromRows(rows: ConversationThreadEventRow[]): ThreadEventWithMeta
 
 function remember(
   threadId: string,
-  entry: { maxSeq: number; activity: ThreadActivityState }
+  entry: { maxSeq: number; status: string; providerId: string; db: unknown; activity: ThreadActivityState }
 ): ThreadActivityState {
   if (activityCache.has(threadId)) activityCache.delete(threadId);
   activityCache.set(threadId, entry);
@@ -61,20 +61,26 @@ function remember(
   return entry.activity;
 }
 
-function withActivePlanModeCount(
-  activity: ThreadActivityState,
-  events: readonly ThreadEventWithMeta[],
-  thread: Pick<ConversationThreadRow, 'providerId' | 'status'>
-): ThreadActivityState {
-  const planTurn = extractThreadTimelineActivePlanTurn({
-    events,
-    planCommand: planCommandForProvider(thread.providerId),
-    providerId: thread.providerId,
-    threadStatus: thread.status
-  });
-  const activePlanModeCount = planTurn ? 1 : 0;
-  if (activity.activePlanModeCount === activePlanModeCount) return activity;
-  return { ...activity, activePlanModeCount };
+export function activePlanTurnForConversation(
+  ctx: Pick<ProductHttpContext, 'db'>,
+  thread: Pick<ConversationThreadRow, 'id' | 'providerId' | 'status'>
+) {
+  if (thread.status !== 'active') return null;
+  let beforeSequence: number | undefined;
+  for (;;) {
+    const inputs = listConversationActiveTurnInputs(ctx.db, thread.id, beforeSequence);
+    if (inputs.length === 0) return null;
+    for (const input of inputs) {
+      const planTurn = extractThreadTimelineActivePlanTurn({
+        events: eventsFromRows(input.events),
+        planCommand: planCommandForProvider(thread.providerId),
+        providerId: thread.providerId,
+        threadStatus: thread.status
+      });
+      if (planTurn) return planTurn;
+    }
+    beforeSequence = inputs[inputs.length - 1]!.sequence;
+  }
 }
 
 /** Cached activity rollup keyed by threadId + maxSeq. */
@@ -84,11 +90,15 @@ export function threadActivityForConversation(
   maxSeq: number
 ): ThreadActivityState {
   const cached = activityCache.get(thread.id);
-  if (cached && cached.maxSeq === maxSeq) return cached.activity;
+  if (cached && cached.maxSeq === maxSeq && cached.status === thread.status
+    && cached.providerId === thread.providerId && cached.db === ctx.db) return cached.activity;
+  const key = { maxSeq, status: thread.status, providerId: thread.providerId, db: ctx.db };
   if (maxSeq <= 0) {
-    return remember(thread.id, { maxSeq, activity: EMPTY_THREAD_ACTIVITY });
+    return remember(thread.id, { ...key, activity: EMPTY_THREAD_ACTIVITY });
   }
-  const events = eventsFromRows(listConversationThreadEvents(ctx.db, thread.id));
-  const activity = withActivePlanModeCount(threadActivityFromEvents(events), events, thread);
-  return remember(thread.id, { maxSeq, activity });
+  const activity = {
+    ...getConversationThreadActivityCounts(ctx.db, thread.id),
+    activePlanModeCount: activePlanTurnForConversation(ctx, thread) ? 1 : 0
+  };
+  return remember(thread.id, { ...key, activity });
 }

@@ -47,6 +47,7 @@ export function useMentionProviderRows(): MentionProviderRow[] {
 export function useComposerSuggestions(args: {
   trigger: ActiveTrigger | null;
   projectId: string;
+  hostId?: string;
   threadId?: string;
   projects: ReadonlyArray<{ id: string; name: string }>;
   commands: ReadonlyArray<{ name: string; description: string }>;
@@ -99,7 +100,8 @@ export function useComposerSuggestions(args: {
   useEffect(() => {
     if (args.trigger?.kind !== 'mention' || args.trigger.char !== '@' || !args.projectId) return;
     let cancelled = false;
-    void product.projects.paths(args.projectId, { limit: 200 }).then((body) => {
+    setPaths([]);
+    void product.projects.paths(args.projectId, { limit: 200, hostId: args.hostId }).then((body) => {
       if (cancelled) return;
       setPaths(body.paths.map((row) => ({
         path: row.path,
@@ -112,7 +114,7 @@ export function useComposerSuggestions(args: {
     return () => {
       cancelled = true;
     };
-  }, [args.projectId, args.trigger?.char, args.trigger?.kind]);
+  }, [args.projectId, args.hostId, args.trigger?.char, args.trigger?.kind]);
 
   useEffect(() => {
     if (args.trigger?.kind !== 'mention') return;

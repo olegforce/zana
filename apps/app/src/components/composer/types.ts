@@ -40,6 +40,8 @@ export type TypeaheadSuggestion =
       kind: 'command';
       name: string;
       description: string;
+      /** Slash catalog provenance — skills render under a Skills section. */
+      source?: 'command' | 'skill';
     }
   | {
       kind: 'plugin';

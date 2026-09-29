@@ -1,3 +1,4 @@
+import { projectOnHost, ProjectSourceUnavailableError } from '@zana-ai/zcc-domain/project';
 import {
   createEnvironment,
   findProjectEnvironmentByHostPath,
@@ -19,7 +20,7 @@ import { AmbiguousHostError, HostUnavailableError } from '../../http/host-hub.js
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
 import { unmanagedAttachRefusal } from './workspace-path-claims.js';
-import { resolveManagedTargetPath } from './worktree-paths.js';
+import { managedPathOnHost } from './host-managed-path.js';
 import { resolvePersonalTargetPathOnHost } from './host-personal-path.js';
 import {
   boundRemoteHostId,
@@ -138,6 +139,7 @@ async function attachEnvironmentOnHost(
     return ready;
   } catch (error) {
     updateEnvironmentStatus(ctx.db, args.environment.id, 'failed');
+    if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
     if (error instanceof ThreadCreateError) throw error;
     throw mapHostError(error);
   }
@@ -156,7 +158,7 @@ export async function provisionProjectEnvironment(
     checkout?: SpawnCheckout;
   }
 ): Promise<EnvironmentRow> {
-  const project = requireProject(ctx, input.projectId);
+  let project = requireProject(ctx, input.projectId);
   if (project.remote && input.choice.kind !== 'unmanaged') {
     throw new ThreadCreateError(403, 'remote-unsupported', 'remote projects can only use this checkout');
   }
@@ -177,9 +179,10 @@ export async function provisionProjectEnvironment(
       }
       hostId = ctx.hostHub.resolveHostId(primary.id);
     } else {
-      hostId = ctx.hostHub.resolveHostId(input.hostId ?? project.hostId);
+      hostId = ctx.hostHub.resolveHostId(input.hostId ?? project.hostId ?? primary?.id);
     }
     ctx.hostHub.ensureHostSessionReady(hostId);
+    project = projectOnHost(project, hostId, primary?.id);
     workspacePath = await resolveHarnessWorkspacePath({
       project,
       remoteToolProxy,
@@ -194,6 +197,7 @@ export async function provisionProjectEnvironment(
       }
     });
   } catch (error) {
+    if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
     if (error instanceof ThreadCreateError) throw error;
     throw mapHostError(error);
   }
@@ -252,6 +256,7 @@ export async function provisionProjectEnvironment(
   }
 
   const environmentId = crypto.randomUUID();
+  const managedPath = choice.kind === 'worktree' ? await managedPathOnHost(ctx, hostId, primary?.id, environmentId, project.path) : undefined;
   let personalPath: string | undefined;
   if (choice.kind === 'personal') {
     try {
@@ -261,7 +266,7 @@ export async function provisionProjectEnvironment(
     }
   }
   const path = choice.kind === 'worktree'
-    ? resolveManagedTargetPath({ dataDir: ctx.dataDir, environmentId, sourcePath: project.path })
+    ? managedPath!
     : choice.kind === 'personal'
       ? personalPath!
       : workspacePath;

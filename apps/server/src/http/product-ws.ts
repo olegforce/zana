@@ -5,9 +5,10 @@ import { browserRequestProblem, headerValue } from './browser-request-guard.js';
 import type { ProductHttpContext } from './product-context.js';
 
 export function createProductWebSocketServer(ctx: ProductHttpContext): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   wss.on('connection', (socket) => {
     ctx.hub.add(socket);
+    socket.on('message', data => { if (data.toString() === '{"type":"ping"}') ctx.hub.pong(socket); });
   });
   return wss;
 }

@@ -35,3 +35,9 @@ allowBuilds:
 blockExoticSubdeps: false
 patchedDependencies:
   '@react-native-cookies/cookies@6.2.1': patches/@react-native-cookies__cookies@6.2.1.patch
+  decode-uri-component@0.2.2: patches/decode-uri-component@0.2.2.patch
+
+# Patched compatible releases for transitive editor and Expo tooling dependencies.
+overrides:
+  dompurify: 3.4.16
+  'uuid@<11.1.1': 11.1.1

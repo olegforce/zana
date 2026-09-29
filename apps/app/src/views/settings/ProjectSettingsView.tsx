@@ -1,3 +1,4 @@
+import { ProjectSourcesSettings } from './ProjectSourcesSettings.js';
 import { product } from '../../lib/product-client.js';
 import { hasDesktopBridge } from '../../lib/app-surface.js';
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -62,6 +63,8 @@ export function ProjectSettingsView({
   return (
     <>
       {project.remote && <ProjectRemoteSettings project={project} onSaved={onSaved} />}
+
+      {!project.remote && !project.quickAgent && <ProjectSourcesSettings key={project.id} project={project} onSaved={onSaved} />}
 
       <ProjectHarnessSettings project={project} onOpen={onOpen} onSaved={onSaved} />
 
@@ -611,7 +614,7 @@ export function ProjectHarnessSettings({
 
   return (
     <Section
-      title="Code harnesses"
+      title="AI harnesses"
       help="Project settings apply after Global defaults and before Persona and Agent choices: Global → Project → Persona → Agent. Later choices take priority when a setting cannot be combined."
     >
       <Field label="Default harness">

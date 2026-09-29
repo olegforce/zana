@@ -1,4 +1,7 @@
+import { CliDiscoveryCommandSchema, CliDiscoveryResultSchema } from './cli-discovery.js';
+import { CliTerminalStartCommandSchema } from './cli-terminal.js';
 import { z } from 'zod';
+import { ProjectHistoryResultSchema } from './project-history.js';
 import {
   FILE_RANGE_MAX_BYTES,
   discoveredWorkspacePropertiesSchema,
@@ -14,6 +17,7 @@ import {
 } from '@zana-ai/zcc-domain';
 import { gitBranchNameSchema } from '@zana-ai/zcc-domain/git-checkout';
 import {
+  jsonValueSchema,
   availableModelSchema,
   clientTurnRequestIdSchema,
   dynamicToolSchema,
@@ -48,6 +52,9 @@ import {
  * remotes fetch packed dist/host.js from GET /internal/plugins/:id/host/:digest.
  * 19: host FS discovery (list_paths, read_path, file_metadata, pick_folder).
  * 20: optional terminal.start command (login shell -lc).
+ * 31: BB-derived per-machine plugin host workers, cancellation and disposal.
+ * 32: Reconcile active plugin generations on authenticated daemon reconnect.
+ * 33: Optional nested filesystem boundary within a registered root.
  * 21: project-authorized native harness agent descriptor discovery.
  * 22: optional providerCheckpointId on thread.start/resume; permissionEscalation
  * and expectedTurnId on turn.submit. Additive: provider.health (older daemons
@@ -63,8 +70,16 @@ import {
  * (ZCC ids are not always UUIDs).
  * 27: bounded byte ranges on host.read_file for streaming video previews.
  * 28: preserve service tier on thread.resume and turn.submit.
+ * 29: confined Git file operations and revision-checked host.remove_path.
+ * 30: correlated, acknowledged host event batches with durable deduplication.
  */
-export const HOST_RPC_PROTOCOL_VERSION = 28;
+// 34: bounded, symlink-free tree snapshots for recoverable Library mutations.
+// 35: bounded read-only Git history on the original project owner.
+// 36: terminal.start/resize/input require a native PTY on joined machines;
+// portable prebuilds remain inside the updater-compatible join.mjs bundle.
+// 37: host-local CLI launch discovery (version, roles, models).
+// 38: enrolled CLI engine with per-session callback grants and host-owned binaries.
+export const HOST_RPC_PROTOCOL_VERSION = 38;
 const ProtocolVersionSchema = z.literal(HOST_RPC_PROTOCOL_VERSION);
 
 const UuidSchema = z.string().uuid();
@@ -75,6 +90,7 @@ const RelPathSchema = z.string().min(1).max(1024);
 
 export const HostRpcCommandTypeSchema = z.enum([
   'provider.status',
+  'provider.cli_discovery',
   'provider.agent_descriptors',
   'provider.list_models',
   'provider.health',
@@ -94,16 +110,23 @@ export const HostRpcCommandTypeSchema = z.enum([
   'thread.unarchive',
   'thread.goal.clear',
   'turn.submit',
+  'plugin.host.call',
+  'plugin.host.cancel',
+  'plugin.host.dispose',
   'terminal.start',
+  'terminal.start_cli',
   'terminal.input',
   'terminal.resize',
   'terminal.stop',
   'host.list_files',
   'host.list_dir',
   'host.read_file',
+  'host.git_file',
+  'host.git_history',
   'host.write_file',
   'host.mkdir',
   'host.move_path',
+  'host.snapshot_path',
   'host.remove_path',
   'host.browse_directory',
   'host.paths_exist',
@@ -503,6 +526,7 @@ export const HostListFilesCommandSchema = z.object({
 export const HostListDirCommandSchema = z.object({
   type: z.literal('host.list_dir'),
   root: PathSchema,
+  boundaryPath: PathSchema.optional(),
   relPath: z.string().max(1024)
 }).strict();
 
@@ -519,6 +543,7 @@ export const HostReadFileCommandSchema = z.object({
 export const HostWriteFileCommandSchema = z.object({
   type: z.literal('host.write_file'),
   path: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional(),
   content: z.string(),
   contentEncoding: z.enum(['utf8', 'base64']),
@@ -530,6 +555,7 @@ export const HostWriteFileCommandSchema = z.object({
 export const HostMkdirCommandSchema = z.object({
   type: z.literal('host.mkdir'),
   path: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional(),
   recursive: z.boolean()
 }).strict();
@@ -538,14 +564,32 @@ export const HostMovePathCommandSchema = z.object({
   type: z.literal('host.move_path'),
   sourcePath: PathSchema,
   destinationPath: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional()
 }).strict();
+
+export const HostSnapshotPathCommandSchema = z.object({
+  type: z.literal('host.snapshot_path'),
+  path: PathSchema,
+  rootPath: PathSchema,
+  boundaryPath: PathSchema
+}).strict();
+
+export const HostTreeEntrySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('dir'), relPath: z.string().max(4096) }).strict(),
+  z.object({ kind: z.literal('file'), relPath: z.string().max(4096), sizeBytes: z.number().int().min(0).max(25 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict()
+]);
+export const HostSnapshotPathResultSchema = z.object({ entries: z.array(HostTreeEntrySchema).max(1000).nullable() }).strict();
+export type HostTreeEntry = z.infer<typeof HostTreeEntrySchema>;
+export type HostSnapshotPathResult = z.infer<typeof HostSnapshotPathResultSchema>;
 
 export const HostRemovePathCommandSchema = z.object({
   type: z.literal('host.remove_path'),
   path: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional(),
-  recursive: z.boolean()
+  recursive: z.boolean(),
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional()
 }).strict();
 
 export const HostBrowseDirectoryCommandSchema = z.object({
@@ -572,12 +616,14 @@ export const HostListPathsCommandSchema = z.object({
 export const HostReadPathCommandSchema = z.object({
   type: z.literal('host.read_path'),
   path: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional()
 }).strict();
 
 export const HostFileMetadataCommandSchema = z.object({
   type: z.literal('host.file_metadata'),
   path: PathSchema,
+  boundaryPath: PathSchema.optional(),
   rootPath: PathSchema.optional()
 }).strict();
 
@@ -775,8 +821,31 @@ export const PeerDaemonLogsCommandSchema = z.object({
 }).strict();
 export type PeerDaemonLogsCommand = z.infer<typeof PeerDaemonLogsCommandSchema>;
 
+export const HostGitFileCommandSchema = z.discriminatedUnion('operation', [
+  z.object({ type: z.literal('host.git_file'), operation: z.literal('head'), root: PathSchema, path: PathSchema }).strict(),
+  z.object({ type: z.literal('host.git_file'), operation: z.literal('discard'), root: PathSchema, path: PathSchema, expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable() }).strict()
+]);
+const HostGitFileResultSchema = z.object({ ok: z.boolean(), content: z.string().optional(), binary: z.boolean().optional(), notInHead: z.boolean().optional(), message: z.string().optional() }).strict();
+
+const pluginHostIdentity = {
+  pluginId: z.string().min(1).max(200), generation: z.string().min(1).max(200)
+};
+export const PluginHostCallCommandSchema = z.object({
+  type: z.literal('plugin.host.call'), ...pluginHostIdentity,
+  artifact: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/), byteLength: z.number().int().positive().max(HOST_ARTIFACT_MAX_BYTES) }).strict(),
+  callId: z.string().min(1).max(200), method: z.string().min(1).max(200), input: jsonValueSchema,
+  timeoutMs: z.number().int().positive().max(300_000),
+  contributedEnv: z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), value: z.union([z.string(), z.object({ serverPath: z.string().startsWith('/') }).strict()]) }).strict()).max(128).optional()
+}).strict();
+export const PluginHostCancelCommandSchema = z.object({ type: z.literal('plugin.host.cancel'), ...pluginHostIdentity, callId: z.string().min(1).max(200) }).strict();
+export const PluginHostDisposeCommandSchema = z.object({ type: z.literal('plugin.host.dispose'), ...pluginHostIdentity }).strict();
+
 export const HostRpcCommandSchema = z.union([
+  z.object({ type: z.literal('host.git_history'), root: PathSchema, limit: z.number().int().min(1).max(100) }).strict(),
+  PluginHostCallCommandSchema, PluginHostCancelCommandSchema, PluginHostDisposeCommandSchema,
+  HostGitFileCommandSchema,
   ProviderStatusCommandSchema,
+  CliDiscoveryCommandSchema,
   ProviderAgentDescriptorsCommandSchema,
   ProviderListModelsCommandSchema,
   ProviderHealthCommandSchema,
@@ -797,6 +866,7 @@ export const HostRpcCommandSchema = z.union([
   ThreadGoalClearCommandSchema,
   TurnSubmitCommandSchema,
   TerminalStartCommandSchema,
+  CliTerminalStartCommandSchema,
   TerminalInputCommandSchema,
   TerminalResizeCommandSchema,
   TerminalStopCommandSchema,
@@ -806,6 +876,7 @@ export const HostRpcCommandSchema = z.union([
   HostWriteFileCommandSchema,
   HostMkdirCommandSchema,
   HostMovePathCommandSchema,
+  HostSnapshotPathCommandSchema,
   HostRemovePathCommandSchema,
   HostBrowseDirectoryCommandSchema,
   HostPathsExistCommandSchema,
@@ -1297,6 +1368,7 @@ export type {
 
 export const HostRpcResultSchemaByType = {
   'provider.status': ProviderStatusResultSchema,
+  'provider.cli_discovery': CliDiscoveryResultSchema,
   'provider.agent_descriptors': ProviderAgentDescriptorsResultSchema,
   'provider.list_models': ProviderListModelsResultSchema,
   'provider.health': ProviderHealthResultSchema,
@@ -1316,16 +1388,23 @@ export const HostRpcResultSchemaByType = {
   'thread.unarchive': ThreadUnarchiveResultSchema,
   'thread.goal.clear': ThreadGoalClearResultSchema,
   'turn.submit': TurnSubmitResultSchema,
+  'plugin.host.call': z.object({ output: jsonValueSchema }).strict(),
+  'plugin.host.cancel': z.object({ cancelled: z.boolean() }).strict(),
+  'plugin.host.dispose': z.object({ disposed: z.boolean() }).strict(),
   'terminal.start': TerminalStartResultSchema,
+  'terminal.start_cli': TerminalStartResultSchema,
   'terminal.input': TerminalInputResultSchema,
   'terminal.resize': TerminalResizeResultSchema,
   'terminal.stop': TerminalStopResultSchema,
   'host.list_files': HostListFilesResultSchema,
   'host.list_dir': HostListDirResultSchema,
+  'host.git_file': HostGitFileResultSchema,
+  'host.git_history': ProjectHistoryResultSchema,
   'host.read_file': HostReadFileResultSchema,
   'host.write_file': HostWriteFileResultSchema,
   'host.mkdir': HostPathMutationResultSchema,
   'host.move_path': HostPathMutationResultSchema,
+  'host.snapshot_path': HostSnapshotPathResultSchema,
   'host.remove_path': HostPathMutationResultSchema,
   'host.browse_directory': HostBrowseDirectoryResultSchema,
   'host.paths_exist': HostPathsExistResultSchema,
@@ -1406,7 +1485,8 @@ export type HostHelloMessage = z.infer<typeof HostHelloMessageSchema>;
 export const HostHelloOkMessageSchema = z.object({
   type: z.literal('host.hello-ok'),
   protocolVersion: ProtocolVersionSchema,
-  hostId: UuidSchema
+  hostId: UuidSchema,
+  pluginHostGenerations: z.array(z.object({ pluginId: z.string().min(1).max(200), generation: z.string().min(1).max(200) }).strict()).max(4096).default([])
 }).strict();
 export type HostHelloOkMessage = z.infer<typeof HostHelloOkMessageSchema>;
 
@@ -1451,7 +1531,9 @@ export const HostEventKindSchema = z.enum([
   'terminal.exited',
   'environment.provision.progress',
   'project.clone.progress',
-  'desktop.browser.changed'
+  'desktop.browser.changed',
+  'plugin.host.worker-exited',
+  'plugin.host.signal'
 ]);
 export type HostEventKind = z.infer<typeof HostEventKindSchema>;
 
@@ -1469,6 +1551,7 @@ export const HostEventBatchMessageSchema = z.object({
   protocolVersion: ProtocolVersionSchema,
   hostId: UuidSchema,
   instanceId: UuidSchema,
+  batchId: UuidSchema.optional(),
   events: z.array(HostEventEnvelopeSchema).min(1).max(256)
 }).strict();
 export type HostEventBatchMessage = z.infer<typeof HostEventBatchMessageSchema>;
@@ -1476,6 +1559,7 @@ export type HostEventBatchMessage = z.infer<typeof HostEventBatchMessageSchema>;
 export const HostEventAckMessageSchema = z.object({
   type: z.literal('host.event-ack'),
   protocolVersion: ProtocolVersionSchema,
+  batchId: UuidSchema.optional(),
   accepted: z.number().int().nonnegative(),
   rejected: z.array(z.object({
     index: z.number().int().nonnegative(),

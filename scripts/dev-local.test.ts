@@ -90,10 +90,10 @@ describe('dev-local turbo TUI', () => {
     mkdirSync(dataDir, { recursive: true });
     const prepared = prepareLocalDevEnv({
       ZCC_DATA_DIR: dataDir,
-      ZCC_APP_URL: 'https://box.tailnet.ts.net/',
+      ZCC_APP_URL: 'https://machine.example.com/',
       PATH: '/usr/bin'
     });
-    expect(prepared.env.ZCC_APP_URL).toBe('https://box.tailnet.ts.net/');
+    expect(prepared.env.ZCC_APP_URL).toBe('https://machine.example.com/');
   });
 
   it('writes a shared enroll token before Turbo children start', () => {

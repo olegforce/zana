@@ -17,3 +17,5 @@ google-services.json
 
 expo-env.d.ts
 # @end expo-cli
+# Python release-verifier bytecode
+__pycache__/

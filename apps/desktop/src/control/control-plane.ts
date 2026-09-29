@@ -94,6 +94,8 @@ function constantTimeEqual(a: string, b: string): boolean {
  * handlers use — main authorizes, the CLI just asks.
  */
 export interface ControlPlaneDeps {
+  invokeSharedProduct?: (input: unknown) => Promise<unknown>;
+  invalidateModelCatalog?: (providerId: string) => void;
   /** List registered projects (read surface + name/id resolution). */
   listProjects: () => Array<{ id: string; name: string; tag?: string; path: string }>;
   /** Live terminal sessions for a project (or all when omitted). */
@@ -191,8 +193,8 @@ export interface ControlPlaneDeps {
   listTeams: () => TeamSummary[];
   /** Scheduler reads + the three gated mutations the CLI exposes. */
   listSchedules: () => ScheduledTask[];
-  runScheduleNow: (id: string) => Result<ScheduledTask>;
-  setScheduleEnabled: (id: string, enabled: boolean) => Result<ScheduledTask>;
+  runScheduleNow: (id: string) => Result<ScheduledTask> | Promise<Result<ScheduledTask>>;
+  setScheduleEnabled: (id: string, enabled: boolean) => Result<ScheduledTask> | Promise<Result<ScheduledTask>>;
   /** Team operations remain owned and authorized by Electron main. */
   teamOps?: ProductTeamOps;
   /**
@@ -272,6 +274,8 @@ const AGENT_ALLOWED_OPS = new Set<string>([
  * and do not skip confirm based on a forgeable args.source field.
  */
 const PRODUCT_SERVER_ALLOWED_OPS = new Set<string>([
+  'product.invoke',
+  'harness.models.invalidate',
   'term.create',
   'term.reply',
   'term.close',
@@ -326,8 +330,10 @@ const ORCHESTRATOR_ALLOWED_OPS = new Set<string>([
 
 /** Every op the control plane understands. */
 const KNOWN_OPS = new Set<string>([
+  'product.invoke',
   ...AGENT_ALLOWED_OPS,
   ...PLUGIN_CONTROL_OPS,
+  'harness.models.invalidate',
   'term.create',
   'term.close',
   'term.close-summary',
@@ -498,6 +504,20 @@ export async function dispatchOp(
   const dim = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), 1000) : fallback;
   switch (op) {
+    case 'product.invoke': {
+      if (caller.class !== 'product-server' || !deps.invokeSharedProduct) return { ok: false, code: 'FORBIDDEN', message: 'Product server authority required' };
+      try { return { ok: true, value: await deps.invokeSharedProduct(args) }; }
+      catch (error) { return { ok: false, code: 'PRODUCT_OPERATION_FAILED', message: error instanceof Error ? error.message : 'Shared operation failed' }; }
+    }
+    case 'harness.models.invalidate': {
+      const providerId = args.providerId;
+      if (typeof providerId !== 'string' || !providerId || providerId.length > 256) {
+        return { ok: false, code: 'BAD_ARGS', message: 'providerId required' };
+      }
+      if (!deps.invalidateModelCatalog) return { ok: false, code: 'UNAVAILABLE', message: 'Model cache is unavailable' };
+      deps.invalidateModelCatalog(providerId);
+      return { ok: true, value: null };
+    }
     case 'status': {
       const projects = deps.listProjects();
       const agents = deps.listAgents().map((a) => ({
@@ -568,9 +588,13 @@ export async function dispatchOp(
       // Confinement of `cwd` happens inside createTerminal (the SAME gate the IPC
       // handler uses) — we do not pre-trust the caller's path here.
       const environment = str(args.environment);
+      if (args.hostId !== undefined && (typeof args.hostId !== 'string' || !args.hostId)) {
+        return { ok: false, code: 'BAD_ARGS', message: 'hostId must identify an execution machine' };
+      }
       return await deps.createTerminal({
         projectId,
         profile,
+        hostId: str(args.hostId),
         cwd: str(args.cwd),
         personaId: str(args.personaId),
         prompt,

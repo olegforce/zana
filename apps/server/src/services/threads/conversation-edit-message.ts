@@ -3,7 +3,7 @@ import {
   deleteConversationThreadEventsAfter,
   getConversationThread,
   getEnvironment,
-  listConversationThreadEvents,
+  getLatestConversationCheckpoint,
   setConversationProviderThreadId
 } from '@zana-ai/zcc-db';
 import type { EditMessageRequest, EditMessageResponse } from '@zana-ai/zcc-server-contract';
@@ -69,7 +69,7 @@ export async function editConversationMessage(
   if (!environment?.path) {
     throw new ThreadCreateError(409, 'environment_not_ready', 'thread has no environment');
   }
-  const retained = latestProviderCheckpoint(listConversationThreadEvents(ctx.db, live.id));
+  const retained = getLatestConversationCheckpoint(ctx.db, live.id);
   if (!retained) {
     throw new ThreadCreateError(409, 'invalid_request', 'The thread has no editable user message');
   }

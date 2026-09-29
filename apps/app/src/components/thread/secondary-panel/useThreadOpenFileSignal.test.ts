@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { addClosableTab, emptySecondaryPanelState } from './threadSecondaryPanelState.js';
 import {
   bufferThreadOpenFile,
+  MAX_PENDING_PREVIEWS_PER_THREAD,
+  MAX_PENDING_PREVIEW_THREADS,
   consumePendingOpenFile,
   isOpenableWorkspaceRelPath,
   openWorkspaceFileForThread,
@@ -10,6 +13,12 @@ import {
 } from './useThreadOpenFileSignal.js';
 
 describe('thread-open file signal', () => {
+  it.each(['workspace', 'thread-storage'] as const)('clears a previous line focus when requesting a whole %s file', (source) => {
+    const focused = addClosableTab(emptySecondaryPanelState(), tabFromOpenFile({ source, path: 'report.md', lineNumber: 2 }));
+    const wholeFile = addClosableTab(focused, tabFromOpenFile({ source, path: 'report.md', lineNumber: null }));
+    expect(wholeFile.tabs[0].id).toBe(focused.tabs[0].id);
+    expect(wholeFile.tabs[0].lineNumber).toBeNull();
+  });
   afterEach(() => {
     resetThreadOpenFileBuffer();
   });
@@ -43,12 +52,14 @@ describe('thread-open file signal', () => {
     expect(tabFromOpenFile({ source: 'workspace', path: 'src/a.ts', lineNumber: null })).toEqual({
       kind: 'file-preview',
       title: 'a.ts',
-      path: 'src/a.ts'
+      path: 'src/a.ts',
+      lineNumber: null
     });
     expect(tabFromOpenFile({ source: 'thread-storage', path: 'notes/plan.md', lineNumber: null })).toEqual({
       kind: 'storage-preview',
       title: 'plan.md',
-      path: 'notes/plan.md'
+      path: 'notes/plan.md',
+      lineNumber: null
     });
     expect(tabFromOpenFile({ source: 'workspace', path: 'src/a.ts', lineNumber: 12 })).toEqual({
       kind: 'file-preview',
@@ -56,6 +67,24 @@ describe('thread-open file signal', () => {
       path: 'src/a.ts',
       lineNumber: 12
     });
+  });
+
+  it('bounds pending threads and files and coalesces repeated paths with their latest line', () => {
+    for (let thread = 0; thread <= MAX_PENDING_PREVIEW_THREADS; thread++) {
+      bufferThreadOpenFile(`t${thread}`, { source: 'workspace', path: 'a.md', lineNumber: null });
+    }
+    expect(consumePendingOpenFile('t0')).toBeNull();
+    expect(consumePendingOpenFile('t1')?.path).toBe('a.md');
+    for (let file = 0; file <= MAX_PENDING_PREVIEWS_PER_THREAD; file++) {
+      bufferThreadOpenFile('files', { source: 'workspace', path: `${file}.md`, lineNumber: null });
+    }
+    expect(consumePendingOpenFile('files')?.path).toBe('1.md');
+    bufferThreadOpenFile('coalesced', { source: 'workspace', path: 'a.md', lineNumber: 1 });
+    bufferThreadOpenFile('coalesced', { source: 'thread-storage', path: 'a.md', lineNumber: null });
+    bufferThreadOpenFile('coalesced', { source: 'workspace', path: 'a.md', lineNumber: 9 });
+    expect(consumePendingOpenFile('coalesced')?.source).toBe('thread-storage');
+    expect(consumePendingOpenFile('coalesced')).toEqual({ source: 'workspace', path: 'a.md', lineNumber: 9 });
+    expect(consumePendingOpenFile('coalesced')).toBeNull();
   });
 
   it('opens confined workspace paths on a thread and rejects escapes', () => {

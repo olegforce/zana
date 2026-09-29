@@ -247,7 +247,7 @@ export function BrowserTabContent({
   recordVisitRef.current = recordVisit;
   const initialUrlRef = useRef(initialUrl);
   const lastSentBoundsRef = useRef<DesktopBrowserViewBounds | null>(null);
-  const isBrowserDimmingModalOpen = useIsBrowserDimmingModalOpen();
+  const isBrowserDimmingModalOpen = useIsBrowserDimmingModalOpen(contentRef);
 
   const readBounds = useCallback(() => {
     const element = contentRef.current;
@@ -262,12 +262,13 @@ export function BrowserTabContent({
   }, [desktopBrowser, tabId]);
 
   const syncPlacement = useCallback((force: boolean) => {
+    if (visibilityCoordinator !== null && !visibilityCoordinator.owns(tabId)) return;
     const bounds = readBounds();
     if (bounds === null) return;
     const last = lastSentBoundsRef.current;
     if (!force && last !== null && boundsEqual(last, bounds)) return;
     sendBounds(bounds);
-  }, [readBounds, sendBounds]);
+  }, [readBounds, sendBounds, tabId, visibilityCoordinator]);
 
   const syncBounds = useCallback(() => {
     syncPlacement(true);
@@ -372,8 +373,9 @@ export function BrowserTabContent({
     if (url === null) return;
     setCurrentUrl(url);
     setIsEditing(false);
-    desktopBrowser?.navigate({ tabId, url });
-  }, [desktopBrowser, tabId]);
+    if (url === currentUrl) desktopBrowser?.reload(tabId);
+    else desktopBrowser?.navigate({ tabId, url });
+  }, [currentUrl, desktopBrowser, tabId]);
 
   const handleReloadOrStop = useCallback(() => {
     if (state?.isLoading ?? false) {
@@ -576,7 +578,7 @@ export function BrowserTabContent({
             onRetry={handleReloadOrStop}
             url={currentUrl}
           />
-        ) : hasPage && !isBrowserDimmingModalOpen ? null : (
+        ) : hasPage ? null : (
           <BrowserNewTabScreen
             onNavigateInput={navigateToInput}
             recent={recent}

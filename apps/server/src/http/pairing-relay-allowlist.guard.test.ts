@@ -16,14 +16,16 @@ describe('pairing relay allowlist guard', () => {
     expect(PAIRING_ALLOWLIST).toEqual(json);
   });
 
-  it('forwards install, enroll, interactive-request, and host ws only', () => {
+  it('forwards install and the complete authenticated host callback surface', () => {
     expect(isAllowedHttp('GET', '/install.sh')).toBe(true);
     expect(isAllowedHttp('HEAD', '/install/zcc-host.tgz')).toBe(true);
     expect(isAllowedHttp('POST', '/internal/hosts/enroll')).toBe(true);
     expect(isAllowedHttp('POST', '/internal/hosts/interactive-request')).toBe(true);
     expect(isAllowedHttp('POST', '/internal/hosts/interactive-request/interrupt')).toBe(true);
     expect(isAllowedHttp('GET', `/internal/plugins/provider-acp/host/${'ab'.repeat(32)}`)).toBe(true);
-    expect(isAllowedHttp('POST', '/internal/hosts/tool-call')).toBe(false);
+    expect(isAllowedHttp('POST', '/internal/hosts/tool-call')).toBe(true);
+    expect(isAllowedHttp('POST', '/internal/hosts/cli-callback')).toBe(true);
+    expect(isAllowedHttp('GET', '/internal/hosts/cli-callback')).toBe(false);
     expect(isAllowedWs('/internal/hosts/ws')).toBe(true);
     expect(isAllowedWs('/internal/hosts/ws/')).toBe(true);
   });

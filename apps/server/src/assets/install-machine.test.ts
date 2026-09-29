@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -85,12 +85,18 @@ describe('install-machine.sh flags', () => {
     expect(source.stdout).toContain('No systemd user bus');
   });
 
-  it('drops a leftover host.id when the join host id changed', () => {
-    const source = spawnSync('sh', ['-c', `grep -n "existing_id\\|host.id\\|auth.json" ${JSON.stringify(script)}`], {
-      encoding: 'utf8'
-    });
-    expect(source.stdout).toContain('host.id');
-    expect(source.stdout).toContain('auth.json');
-    expect(source.stdout).toContain('existing_id');
+  it('refuses to replace another machine and preserves its credentials', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-install-identity-'));
+    try {
+      writeFileSync(join(root, 'host.id'), 'original-host');
+      writeFileSync(join(root, 'auth.json'), 'original-credentials');
+      const result = spawnSync('sh', [script, '--host-id', 'different-host', '--join-code', 'fixture', '--server', 'https://example.com'], {
+        encoding: 'utf8', env: { ...process.env, ZCC_DATA_DIR: root }
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('another machine');
+      expect(readFileSync(join(root, 'host.id'), 'utf8')).toBe('original-host');
+      expect(readFileSync(join(root, 'auth.json'), 'utf8')).toBe('original-credentials');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

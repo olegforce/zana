@@ -1,3 +1,4 @@
+import { projectOnHost, ProjectSourceUnavailableError } from '@zana-ai/zcc-domain/project';
 import type {
   EnvironmentProvisionResult,
   ProviderStatusResult,
@@ -31,7 +32,7 @@ import { harnessFamilyOf, parseProfile } from '@zana-ai/zcc-domain/launch-provid
 import { AmbiguousHostError, HostUnavailableError } from './host-hub.js';
 import type { ProductHttpContext } from './product-context.js';
 import { unmanagedAttachRefusal } from '../services/threads/workspace-path-claims.js';
-import { resolveManagedTargetPath } from '../services/threads/worktree-paths.js';
+import { managedPathOnHost } from '../services/threads/host-managed-path.js';
 import { resolvePersonalTargetPathOnHost } from '../services/threads/host-personal-path.js';
 import {
   boundRemoteHostId,
@@ -184,7 +185,7 @@ export async function createThreadFromRequest(
   }
   const prompt = input.input.map((part) => part.trim()).filter((part) => part.length > 0);
 
-  const project = requireProject(ctx, input.projectId);
+  let project = requireProject(ctx, input.projectId);
   const boundRemote = boundRemoteHostId(project);
   if (boundRemote === null) {
     throw new ThreadCreateError(409, REMOTE_HOST_DAEMON_REQUIRED, REMOTE_HOST_DAEMON_REQUIRED_MESSAGE);
@@ -202,9 +203,10 @@ export async function createThreadFromRequest(
       }
       hostId = ctx.hostHub.resolveHostId(primary.id);
     } else {
-      hostId = ctx.hostHub.resolveHostId(input.hostId);
+      hostId = ctx.hostHub.resolveHostId(input.hostId ?? project.hostId ?? primary?.id);
     }
     ctx.hostHub.ensureHostSessionReady(hostId);
+    project = projectOnHost(project, hostId, primary?.id);
     workspacePath = await resolveHarnessWorkspacePath({
       project,
       remoteToolProxy,
@@ -219,6 +221,7 @@ export async function createThreadFromRequest(
       }
     });
   } catch (error) {
+    if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
     if (error instanceof ThreadCreateError) throw error;
     throw mapHostError(error);
   }
@@ -280,12 +283,14 @@ export async function createThreadFromRequest(
       return running;
     } catch (error) {
       updateThreadStatus(ctx.db, thread.id, 'failed');
-      if (error instanceof ThreadCreateError) throw error;
+      if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
+    if (error instanceof ThreadCreateError) throw error;
       throw mapHostError(error);
     }
   }
 
   const environmentId = crypto.randomUUID();
+  const managedPath = choice.kind === 'worktree' ? await managedPathOnHost(ctx, hostId, primary?.id, environmentId, project.path) : undefined;
   let personalPath: string | undefined;
   if (choice.kind === 'personal') {
     try {
@@ -297,7 +302,7 @@ export async function createThreadFromRequest(
 
   const created = ctx.db.transaction(() => {
     const path = choice.kind === 'worktree'
-      ? resolveManagedTargetPath({ dataDir: ctx.dataDir, environmentId, sourcePath: project.path })
+      ? managedPath!
       : choice.kind === 'personal'
         ? personalPath!
         : workspacePath;
@@ -358,6 +363,7 @@ export async function createThreadFromRequest(
   } catch (error) {
     updateThreadStatus(ctx.db, created.thread.id, 'failed');
     updateEnvironmentStatus(ctx.db, created.environment.id, 'failed');
+    if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
     if (error instanceof ThreadCreateError) throw error;
     throw mapHostError(error);
   }

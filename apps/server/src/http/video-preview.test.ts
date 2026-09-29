@@ -9,7 +9,7 @@ import { HostReadFileCommandSchema, HostReadFileResultSchema } from '@zana-ai/zc
 import type { ProductHttpContext } from './product-context.js';
 import { sendVideoPreview, videoByteRange } from './video-preview.js';
 
-vi.mock('@zana-ai/zcc-db', () => ({ getConversationThread: vi.fn(), getEnvironment: vi.fn() }));
+vi.mock('@zana-ai/zcc-db', () => ({ getConversationThread: vi.fn(), getEnvironment: vi.fn(), getPrimaryHost: () => ({ id: 'host1' }) }));
 import { getConversationThread, getEnvironment } from '@zana-ai/zcc-db';
 
 describe('video byte ranges and types', () => {

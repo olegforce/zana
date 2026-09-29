@@ -83,9 +83,14 @@ describe('TimelineRows system errors', () => {
     );
     expect(html).toContain('thread-timeline-system-title');
     expect(html).toContain('Provider rate limit reached');
-    expect(html).toContain('thread-timeline-system-detail');
-    expect(html).toContain('retry in 20s');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('thread-timeline-system-detail');
     expect(html).not.toContain('Provider rate limit reached — retry in 20s');
+    const expanded = renderToStaticMarkup(
+      <ThreadTimeline rows={[row]} status="error" thinking={null} forceExpandedRowIds={new Set(['sys-err'])} />
+    );
+    expect(expanded).toContain('thread-timeline-system-detail');
+    expect(expanded).toContain('retry in 20s');
   });
 });
 

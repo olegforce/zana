@@ -36,4 +36,10 @@ thread's panel.
 - You only need the contents yourself → `Read`.
 - You wrote or updated a **Library** document with `library_write` → emit `::doc{path title}` (library-curator). Do not `preview_file` a `.zcc/library` path.
 - You want to surface a durable deliverable in the inbox → `inbox_push` with `docs`.
-- You want the user to watch a web page → install the **Browser Automation** plugin and use `zcc browser` / `zcc guide browser`. Do not call `browser_open`.
+- You want the user to see a web app, dev server, or endpoint → use the **in-app browser side panel** (`zcc-browser`, `zcc guide browser`). A simple URL preview uses `zcc browser create --url <url> --reveal` with the discovered host/instance/generation and current thread; it does not require the Browser Automation plugin. Use that plugin for scripted interactions.
+
+Keep web previews inside Zana unless the user explicitly requests an external
+browser. Do not launch Chrome or the OS default browser with `open`, `xdg-open`,
+or `start`. Disable development-server auto-open options such as `--open`.
+If in-app browsing is unavailable, explain the limitation and provide the URL.
+The legacy `browser_open` MCP tool has been retired.

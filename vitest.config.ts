@@ -18,6 +18,9 @@ export default defineConfig({
     __ZCC_BUNDLED_POSTHOG_API_KEY__: JSON.stringify('')
   },
   test: {
+    // Leave CPU capacity for the real CLI subprocesses exercised by this suite.
+    // Saturating every core can starve their bounded version probes on busy hosts.
+    maxWorkers: '50%',
     // The default 5s per-test timeout is too tight for the full parallel run:
     // several suites `vi.resetModules()` per test, and resetModules clears the
     // module-instantiation cache but NOT Vite's transform cache, so the first

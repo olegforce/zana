@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { File, Folder, FolderGit2, MessageSquare, Puzzle, Terminal } from 'lucide-react';
+import { File, Folder, FolderGit2, MessageSquare, Puzzle, Sparkles, Terminal } from 'lucide-react';
 import { suggestionKey, type TypeaheadSuggestion } from './types.js';
 
 function directoryFromPath(path: string): string {
@@ -7,20 +7,39 @@ function directoryFromPath(path: string): string {
   return index > 0 ? path.slice(0, index) : '';
 }
 
-function sectionKind(item: TypeaheadSuggestion): 'threads' | 'projects' | 'files' | 'commands' | 'plugins' {
+type SectionKind = 'threads' | 'projects' | 'files' | 'commands' | 'skills' | 'plugins';
+
+function sectionKind(item: TypeaheadSuggestion): SectionKind {
   if (item.kind === 'thread') return 'threads';
   if (item.kind === 'project') return 'projects';
-  if (item.kind === 'command') return 'commands';
   if (item.kind === 'plugin') return 'plugins';
+  if (item.kind === 'command') {
+    return item.source === 'skill' ? 'skills' : 'commands';
+  }
   return 'files';
 }
 
-function sectionLabel(kind: ReturnType<typeof sectionKind>): string {
+function sectionLabel(kind: SectionKind): string {
   if (kind === 'threads') return 'Agents';
   if (kind === 'projects') return 'Projects';
   if (kind === 'commands') return 'Commands';
+  if (kind === 'skills') return 'Skills';
   if (kind === 'plugins') return 'Plugins';
   return 'Files';
+}
+
+/** Stable section order matching BB's Commands → Skills hierarchy. */
+const SECTION_ORDER: readonly SectionKind[] = [
+  'commands',
+  'skills',
+  'threads',
+  'projects',
+  'plugins',
+  'files'
+];
+
+function displayCommandName(name: string): string {
+  return name.replace(/^\//, '');
 }
 
 function primaryLabel(item: TypeaheadSuggestion): string {
@@ -28,7 +47,7 @@ function primaryLabel(item: TypeaheadSuggestion): string {
   if (item.kind === 'thread') return item.title;
   if (item.kind === 'project') return item.name;
   if (item.kind === 'plugin') return item.label;
-  return item.name;
+  return displayCommandName(item.name);
 }
 
 function trailingLabel(item: TypeaheadSuggestion): string {
@@ -55,6 +74,9 @@ function RowIcon({ item }: { item: TypeaheadSuggestion }) {
   if (item.kind === 'thread') return <MessageSquare className="composer-typeahead-icon" size={14} aria-hidden="true" />;
   if (item.kind === 'project') return <FolderGit2 className="composer-typeahead-icon" size={14} aria-hidden="true" />;
   if (item.kind === 'plugin') return <Puzzle className="composer-typeahead-icon" size={14} aria-hidden="true" />;
+  if (item.kind === 'command' && item.source === 'skill') {
+    return <Sparkles className="composer-typeahead-icon" size={14} aria-hidden="true" />;
+  }
   return <Terminal className="composer-typeahead-icon" size={14} aria-hidden="true" />;
 }
 
@@ -70,17 +92,25 @@ export function ComposerTypeaheadMenu({
   onApply: (item: TypeaheadSuggestion) => void;
 }) {
   const sections = useMemo(() => {
-    const grouped = new Map<ReturnType<typeof sectionKind>, TypeaheadSuggestion[]>();
+    const grouped = new Map<SectionKind, TypeaheadSuggestion[]>();
     for (const item of suggestions) {
       const kind = sectionKind(item);
       const existing = grouped.get(kind);
       if (existing) existing.push(item);
       else grouped.set(kind, [item]);
     }
-    return [...grouped.entries()].map(([kind, items]) => ({ kind, items }));
+    return SECTION_ORDER
+      .filter((kind) => grouped.has(kind))
+      .map((kind) => ({ kind, items: grouped.get(kind)! }));
   }, [suggestions]);
 
-  let offset = 0;
+  const indexByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    suggestions.forEach((item, index) => {
+      map.set(suggestionKey(item), index);
+    });
+    return map;
+  }, [suggestions]);
 
   return (
     <div
@@ -93,14 +123,12 @@ export function ComposerTypeaheadMenu({
         <div className="composer-typeahead-empty">
           {triggerKind === 'command' ? 'No matching commands' : 'No matching mentions'}
         </div>
-      ) : sections.map((section) => {
-        const start = offset;
-        offset += section.items.length;
-        return (
-          <div key={section.kind} className="composer-typeahead-section">
-            <div className="composer-typeahead-heading">{sectionLabel(section.kind)}</div>
-            {section.items.map((item, localIndex) => {
-              const index = start + localIndex;
+      ) : sections.map((section) => (
+        <div key={section.kind} className="composer-typeahead-section">
+          <div className="composer-typeahead-heading">{sectionLabel(section.kind)}</div>
+          <div className="composer-typeahead-rows">
+            {section.items.map((item) => {
+              const index = indexByKey.get(suggestionKey(item)) ?? -1;
               const selected = index === selectedIndex;
               const trailing = trailingLabel(item);
               return (
@@ -110,6 +138,7 @@ export function ComposerTypeaheadMenu({
                   role="option"
                   data-testid="composer-typeahead-item"
                   data-kind={item.kind}
+                  data-source={item.kind === 'command' ? (item.source ?? 'command') : undefined}
                   aria-selected={selected}
                   className={`mention-item composer-typeahead-item${selected ? ' active' : ''}`}
                   title={rowTitle(item)}
@@ -127,8 +156,8 @@ export function ComposerTypeaheadMenu({
               );
             })}
           </div>
-        );
-      })}
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,5 +1,6 @@
+import { LibraryAssetPreview } from './LibraryAssetPreview.js';
 import { product } from '../../../lib/product-client.js';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pencil, Eye, Save, Type, Code2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,6 +19,7 @@ import { StencilLines } from '@/components/ui/Skeleton';
 import { parseFrontMatter } from '@zana-ai/zcc-extension-sdk/helpers';
 import { LibraryMarkdownEditor } from './LibraryMarkdownEditor.js';
 import { DocumentPdfButton } from '@/components/DocumentPdfButton';
+import { LibrarySaveRecovery } from './LibrarySaveRecovery.js';
 
 export interface DocPreviewProps {
   doc: LibraryDoc;
@@ -38,7 +40,7 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
   const pushToast = useUi((s) => s.pushToast);
   const monacoTheme = useMonacoTheme();
   const [content, setContent] = useState<string | null>(null);
-  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [revision, setRevision] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Markdown editing: only `md` docs are editable. `draft` holds unsaved
@@ -46,16 +48,27 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const identity = JSON.stringify([doc.scope, doc.projectId, doc.id, doc.relPath, doc.absPath, doc.kind]);
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  const operationEpoch = useRef(0);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [editSurface, setEditSurface] = useState<EditSurface>('rich');
   const editable = doc.kind === 'md' && doc.id !== '' && !!doc.relPath;
   const { registerEditor, modal: aiEnhanceModal } = useAiEnhanceSelection();
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError(null);
     setContent(null);
-    setDataUrl(null);
+    setRevision(undefined);
     setEditing(false);
+    setSaving(false);
+    setSaveError(undefined);
     setEditSurface('rich');
 
     if (doc.kind === 'md' || doc.kind === 'code') {
@@ -71,35 +84,22 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
       product.library
         .read(doc.scope ?? 'global', doc.relPath, doc.projectId)
         .then((result) => {
+          if (!active) return;
           if (result.ok && result.content !== undefined) {
             setContent(result.content);
+            setRevision(result.sha256);
           } else {
             setError(result.message ?? 'Failed to read file');
           }
         })
-        .catch((err) => setError(String(err)))
-        .finally(() => setLoading(false));
-    } else if (!doc.absPath) {
-      setError('No absolute path available');
-      setLoading(false);
-    } else if (doc.kind === 'image') {
-      // Read as data URL
-      product.fs
-        .readDataUrl(doc.absPath)
-        .then((result) => {
-          if (result.ok && result.dataUrl) {
-            setDataUrl(result.dataUrl);
-          } else {
-            setError(result.message ?? 'Failed to read image');
-          }
-        })
-        .catch((err) => setError(String(err)))
-        .finally(() => setLoading(false));
+        .catch((err) => { if (active) setError(String(err)); })
+        .finally(() => { if (active) setLoading(false); });
     } else {
-      // PDF or other
       setLoading(false);
     }
-  }, [doc.absPath, doc.kind, doc.relPath, doc.scope, doc.projectId]);
+    return () => { active = false; };
+  }, [doc.absPath, doc.kind, doc.relPath, doc.scope, doc.projectId, doc.id]);
+  useEffect(() => { operationEpoch.current++; return () => { operationEpoch.current++; }; }, [identity]);
 
   // Honor "open in edit mode" once the content has loaded (new idea flow).
   useEffect(() => {
@@ -112,41 +112,55 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
   }, [autoEdit, editable, content, onAutoEditConsumed]);
 
   const beginEdit = () => {
+    setSaveError(undefined);
     setDraft(content ?? '');
     setEditSurface('rich');
     setEditing(true);
   };
 
-  const saveEdit = async () => {
-    if (!doc.relPath) return;
+  const saveEdit = async (expectedRevision = revision) => {
+    if (!doc.relPath || saving) return;
+    const target = identity;
+    const epoch = operationEpoch.current;
+    const isCurrent = () => identityRef.current === target && operationEpoch.current === epoch;
+    const submitted = draft;
     setSaving(true);
+    setSaveAttempt(value => value + 1);
     try {
       // Save through the scope-confined library seam (twin of the read above) so
       // a global doc's save isn't rejected by the project-confined fs.writeFile.
-      const res = await product.library.write(doc.scope ?? 'global', doc.relPath, draft, doc.projectId);
+      const res = await product.library.write(doc.scope ?? 'global', doc.relPath, submitted, doc.projectId, expectedRevision);
+      if (!isCurrent()) return;
       if (!res.ok) {
+        setSaveError(res.message ?? 'Save failed');
         pushToast(res.message ?? 'Save failed', 'error');
         return;
       }
-      setContent(draft);
-      setEditing(false);
+      setContent(submitted);
+      setRevision(res.sha256);
+      setSaveError(undefined);
+      // Keystrokes entered while the write was in flight remain an unsaved
+      // draft based on the acknowledged revision, rather than disappearing.
+      if (draftRef.current === submitted) setEditing(false);
       // Keep the manifest title in step with the note's first heading so the
       // list label tracks what the idea is actually about. Best-effort.
-      const heading = firstHeading(draft);
+      const heading = firstHeading(submitted);
       if (heading && heading !== doc.title) {
         try {
-          await product.library.update(doc.id, { title: heading });
+          await product.library.update(doc.id, { title: heading }, { scope: doc.scope ?? 'global', projectId: doc.projectId, relPath: doc.relPath });
         } catch {
           /* title sync is best-effort; the file is already saved */
         }
       }
-      pushToast('Saved');
+      if (isCurrent()) pushToast('Saved');
     } catch (err) {
-      pushToast(`Save failed: ${err}`, 'error');
+      if (isCurrent()) { setSaveError(`Save failed: ${err}`); pushToast(`Save failed: ${err}`, 'error'); }
     } finally {
-      setSaving(false);
+      if (isCurrent()) setSaving(false);
     }
   };
+
+  if (doc.kind === 'image' || doc.kind === 'pdf') return <LibraryAssetPreview key={`${doc.scope}:${doc.projectId}:${doc.relPath}`} doc={doc} />;
 
   if (loading) {
     return <StencilLines label="Loading document" className="explorer-viewer-empty" />;
@@ -176,7 +190,7 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
               <button
                 type="button"
                 className="library-edit-btn primary"
-                onClick={saveEdit}
+                onClick={() => void saveEdit()}
                 disabled={saving}
                 title="Save (writes the file)"
               >
@@ -230,6 +244,10 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
             )
           )}
         </div>
+        {editing && saveError && <LibrarySaveRecovery key={`${identity}:${saveAttempt}`} doc={doc} message={saveError} draft={draft} saving={saving}
+          onSaveMerged={saveEdit} onUseLatest={(text, nextRevision) => {
+            setContent(text); setDraft(text); setRevision(nextRevision); setSaveError(undefined); setEditing(false);
+          }} />}
         {editing ? (
           editSurface === 'rich' ? (
             <LibraryMarkdownEditor value={draft} onChange={setDraft} autofocus />
@@ -281,29 +299,6 @@ export function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProp
           }}
         />
       </div>
-    );
-  }
-
-  // Image preview
-  if (doc.kind === 'image' && dataUrl !== null) {
-    return (
-      <div className="library-image-preview">
-        <img src={dataUrl} alt={doc.title} />
-      </div>
-    );
-  }
-
-  // PDF preview (webview). Encode the path so spaces / # / ? in the absolute
-  // path (common under ~/Documents/…) don't truncate or break the file: URL.
-  if (doc.kind === 'pdf' && doc.absPath) {
-    const fileUrl = `file://${doc.absPath.split('/').map(encodeURIComponent).join('/')}`;
-    return (
-      <webview
-        src={fileUrl}
-        className="library-pdf-preview"
-        // @ts-expect-error — electron webview attributes not in JSX types
-        allowpopups="false"
-      />
     );
   }
 

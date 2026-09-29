@@ -1,6 +1,6 @@
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
 import type { Project } from '@zana-ai/zcc-domain/product';
-import { isLoopbackOrigin, TAILSCALE_SERVE_HINT } from '../views/settings/machine-pairing.js';
+import { isLoopbackOrigin, REMOTE_MACHINE_CONNECTION_HINT } from '../views/settings/machine-pairing.js';
 
 export type ComposerHostAction =
   | { kind: 'ready' }
@@ -41,7 +41,7 @@ export function shortHostName(name: string): string {
 }
 
 export function hostPickerLabel(host: Host, project?: Project): string {
-  if (host.isPrimary) return 'This machine';
+  if (host.isPrimary) return 'Primary machine';
   if (project?.remote && project.hostId === host.id) return 'Remote machine';
   return shortHostName(host.name);
 }
@@ -85,7 +85,7 @@ export function isForeignExecutionHost(
 ): boolean {
   if (!project || !selectedHostId || project.remote) return false;
   const bound = project.hostId ?? hosts.find((host) => host.isPrimary)?.id;
-  return Boolean(bound) && bound !== selectedHostId;
+  return Boolean(bound) && bound !== selectedHostId && !project.sources?.some(source => source.hostId === selectedHostId);
 }
 
 export function resolveComposerHostAction(input: {
@@ -94,9 +94,12 @@ export function resolveComposerHostAction(input: {
   selectedHostId?: string;
   publicAppUrl?: string | null;
 }): ComposerHostAction {
+  if (input.selectedHostId && !input.hosts.some(host => host.id === input.selectedHostId)) {
+    return { kind: 'blocked', reason: 'The selected machine is no longer registered. Choose another machine.' };
+  }
   const primary = input.hosts.find((host) => host.isPrimary) ?? input.hosts[0];
-  if (!primary || primary.status !== 'connected') {
-    return { kind: 'blocked', reason: 'This machine’s host daemon is not connected.' };
+  if (!primary || (primary.status !== 'connected' && !input.hosts.some(host => host.id === (input.selectedHostId ?? input.project?.hostId) && host.status === 'connected'))) {
+    return { kind: 'blocked', reason: 'The selected machine’s host daemon is not connected.' };
   }
 
   const boundHost = input.project?.hostId
@@ -108,7 +111,7 @@ export function resolveComposerHostAction(input: {
       return {
         kind: 'blocked',
         needsPublicUrl: true,
-        reason: `Set a public app URL before installing a remote daemon. ${TAILSCALE_SERVE_HINT}`
+        reason: `Set a public app URL before installing a remote daemon. ${REMOTE_MACHINE_CONNECTION_HINT}`
       };
     }
     const remote = input.project.remote;
@@ -143,9 +146,9 @@ export function resolveComposerHostAction(input: {
     && !input.project.quickAgent
   ) {
     const projectHostId = input.project.hostId ?? primary.id;
-    if (executionHost.id !== projectHostId) {
+    if (executionHost.id !== projectHostId && !input.project.sources?.some(source => source.hostId === executionHost.id)) {
       const projectHost = input.hosts.find((host) => host.id === projectHostId);
-      const here = projectHost?.isPrimary ? 'this machine' : (projectHost?.name ?? 'another machine');
+      const here = projectHost?.name ?? 'another machine';
       return {
         kind: 'blocked',
         reason: `This project lives on ${here}. Add a folder on ${executionHost.name} first.`

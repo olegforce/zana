@@ -7,8 +7,7 @@
 #
 # Product HTTP stays on 127.0.0.1. Join uses the Heroku pairing origin when
 # the laptop relay is connected; otherwise it publishes a throwaway TCP proxy
-# so Docker can reach loopback (same role Tailscale Serve plays on a real
-# tailnet). Override with `--relay` or `--local`.
+# so Docker can reach loopback through a temporary test forward. Override with `--relay` or `--local`.
 #
 # Live agents: export OPENAI_API_KEY / CURSOR_API_KEY (or put them in the repo
 # `.env`). The helper forwards them into the container and installs matching

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { buildTimelineViewRows, type ThreadTimelineViewRow } from '@zana-ai/zcc-thread-view';
-import type { TimelineRow } from '@zana-ai/zcc-server-contract';
+import { mergeTimelinePages, type TimelineRow } from '@zana-ai/zcc-server-contract';
 import { product } from '../../../lib/product-client.js';
 import { ExpandableTimelineRow } from './ExpandableTimelineRow.js';
 import { TimelineRows } from './TimelineRows.js';
@@ -19,6 +19,7 @@ export function TurnArchiveRow({
   expansion,
   unreadRowId,
   onCopy,
+  onMessageExpand,
   onTitleAction,
   onTitleLink,
   onOpenDiff,
@@ -40,6 +41,7 @@ export function TurnArchiveRow({
   expansion: ReturnType<typeof collectTimelineAutoExpansionRowIds>;
   unreadRowId?: string | null;
   onCopy?: (text: string) => void;
+  onMessageExpand?: () => void;
   onTitleAction?: TimelineTitleActionHandler;
   onTitleLink?: TimelineTitleLinkHandler;
   onOpenDiff?: (path: string) => void;
@@ -57,31 +59,50 @@ export function TurnArchiveRow({
   const [open, setOpen] = useState(row.status === 'interrupted');
   const [children, setChildren] = useState<ThreadTimelineViewRow[] | null>(row.children);
   const [loading, setLoading] = useState(false);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [earlierPortion, setEarlierPortion] = useState(false);
+  const details = useRef<TimelineRow[]>([]);
+  const generation = useRef(0);
+  const expanded = open || forceExpandedRowIds?.has(row.id) === true;
 
   useEffect(() => {
     setChildren(row.children);
-  }, [row.children]);
+    setOlderCursor(null);
+    setLoadError(false);
+    setEarlierPortion(false);
+    details.current = [];
+    generation.current++;
+    return () => { generation.current++; };
+  }, [row.children, row.id, row.sourceSeqStart, row.sourceSeqEnd, threadId]);
+
+  const loadDetails = async (beforeCursor?: string) => {
+    if (!threadId) return;
+    const current = generation.current;
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const body = await product.threads.timelineTurnSummaryDetails(threadId, {
+        turnId: row.turnId, sourceSeqStart: String(row.sourceSeqStart), sourceSeqEnd: String(row.sourceSeqEnd), beforeCursor
+      });
+      if (current !== generation.current) return;
+      const merged = beforeCursor ? mergeTimelinePages(body.rows as TimelineRow[], details.current) : body.rows as TimelineRow[];
+      if (JSON.stringify(merged).length > 32 * 1024 * 1024) {
+        details.current = body.rows as TimelineRow[];
+        setEarlierPortion(true);
+      } else {
+        details.current = merged;
+        if (!beforeCursor) setEarlierPortion(false);
+      }
+      setChildren(buildTimelineViewRows(details.current));
+      setOlderCursor(body.olderCursor ?? null);
+    } catch { if (current === generation.current) setLoadError(true); }
+    finally { if (current === generation.current) setLoading(false); }
+  };
 
   useEffect(() => {
-    if (!open || children !== null || !threadId) return;
-    let cancelled = false;
-    setLoading(true);
-    void product.threads.timelineTurnSummaryDetails(threadId, {
-      turnId: row.turnId,
-      sourceSeqStart: String(row.sourceSeqStart),
-      sourceSeqEnd: String(row.sourceSeqEnd)
-    }).then((body) => {
-      if (cancelled) return;
-      setChildren(buildTimelineViewRows((body.rows as TimelineRow[]) ?? []));
-    }).catch(() => {
-      if (!cancelled) setChildren([]);
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [children, open, row.sourceSeqEnd, row.sourceSeqStart, row.turnId, threadId]);
+    if (expanded && children === null && row.children === null) void loadDetails();
+  }, [children, expanded, row.children, row.id, row.sourceSeqEnd, row.sourceSeqStart, row.turnId, threadId]);
 
   return (
     <ExpandableTimelineRow
@@ -89,7 +110,7 @@ export function TurnArchiveRow({
       rowId={row.id}
       status={row.status}
       dim={dim}
-      open={open || forceExpandedRowIds?.has(row.id) === true}
+      open={expanded}
       expandable
       onToggle={setOpen}
       summary={(
@@ -101,7 +122,10 @@ export function TurnArchiveRow({
         />
       )}
     >
-      {loading ? (
+      {olderCursor && <button type="button" disabled={loading} onClick={() => void loadDetails(olderCursor)}>Load earlier details</button>}
+      {earlierPortion && <button type="button" disabled={loading} onClick={() => void loadDetails()}>Showing earlier details. Return to latest details</button>}
+      {loadError && <button type="button" onClick={() => void loadDetails(olderCursor ?? undefined)}>Could not load details. Retry</button>}
+      {loading && !children ? (
         <div data-testid="thread-turn-loading">
           <StencilLines label="Loading turn" widths={['70%', '55%', '40%']} />
         </div>
@@ -112,6 +136,7 @@ export function TurnArchiveRow({
           expansion={expansion}
           unreadRowId={unreadRowId}
           onCopy={onCopy}
+          onMessageExpand={onMessageExpand}
           onTitleAction={onTitleAction}
           onTitleLink={onTitleLink}
           onOpenDiff={onOpenDiff}

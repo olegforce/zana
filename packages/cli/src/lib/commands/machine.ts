@@ -46,7 +46,11 @@ export async function runMachineCommand(
   }
 
   if (subcommand === 'join-code') {
-    const minted = await productRequest<unknown>('POST', '/api/v1/hosts/join-codes', { deps, body: {} });
+    const connect = rest.includes('--connect');
+    const nameIndex = rest.indexOf('--name');
+    const name = nameIndex >= 0 ? rest[nameIndex + 1] : 'New machine';
+    if (connect && (!name || name.startsWith('--'))) return errResult('machine join-code --connect --name requires a name', 2);
+    const minted = await productRequest<unknown>('POST', connect ? '/api/v1/hosts/connect-code' : '/api/v1/hosts/join-codes', { deps, body: connect ? { name } : {} });
     if (!minted.ok) return minted.result;
     return renderOrJson(json, minted.data, `${JSON.stringify(minted.data, null, 2)}\n`);
   }

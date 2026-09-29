@@ -1,4 +1,6 @@
 import { product } from '../../lib/product-client.js';
+import { hasDesktopBridge } from '../../lib/app-surface.js';
+import { DesktopOnlyPlugin } from './DesktopOnlyPlugin.js';
 /**
  * Extensions hub. Installed is a host-wide PluginService collection (icon,
  * Official badge, description, enable switch); clicking a row opens the
@@ -388,7 +390,7 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
       <header className="ext-installed-header">
         <h3>Plugins</h3>
         <p className="settings-help">
-          The plugins installed on this host. Turn one on or off, apply updates, or open it for
+          The plugins installed in this instance. Turn one on or off, apply updates, or open it for
           settings and details.
         </p>
       </header>
@@ -435,7 +437,8 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
               aria-haspopup="menu"
               aria-expanded={newMenuOpen}
               aria-label="Install or open a plugin"
-              title="Install or open a plugin"
+              disabled={!hasDesktopBridge()}
+              title={hasDesktopBridge() ? 'Install or open a plugin' : 'Install from a folder or repository on the instance owner’s desktop'}
             >
               <ChevronDown size={12} />
             </button>
@@ -535,13 +538,14 @@ function InstalledPluginRow({ row, onOpen }: { row: HubRow; onOpen: () => void }
   const [pending, setPending] = useState<boolean | null>(null);
   const [updating, setUpdating] = useState(false);
   const enabled = pending ?? rowEnabled(row);
-  const canToggle = row.plugin != null || row.entry != null;
-  const availableVersion = pluginAvailableVersion(row);
+  const desktopOnly = !hasDesktopBridge() && !!row.entry && !row.plugin;
+  const canToggle = !desktopOnly && (row.plugin != null || row.entry != null);
+  const availableVersion = desktopOnly ? null : pluginAvailableVersion(row);
   const publisher = installedPublisher(row);
   const pill = publisherLabel(publisher);
   const runtime = installedRuntimeStatus(row);
   const notRunning =
-    enabled === true &&
+    !desktopOnly && enabled === true &&
     installedNotRunning({
       ...row,
       plugin: row.plugin ? { ...row.plugin, enabled: true } : null
@@ -613,6 +617,7 @@ function InstalledPluginRow({ row, onOpen }: { row: HubRow; onOpen: () => void }
         <span className="ext-installed-row-body">
           <span className="ext-installed-row-head">
             <span className="ext-installed-row-title">{row.module.title}</span>
+            {desktopOnly && <span className="ext-installed-status">Owner desktop</span>}
             {pill && (
               <span className={`ext-installed-pill ext-market-item-source--${publisher}`}>
                 {pill}
@@ -798,6 +803,8 @@ function ExtensionDetail({ row }: { row: HubRow }) {
   }, [module.id]);
 
   const catalogEntry = catalog.find((item) => item.id === module.id) ?? null;
+
+  if (!hasDesktopBridge() && entry && !plugin) return <DesktopOnlyPlugin entry={entry} />;
 
   return (
     <>

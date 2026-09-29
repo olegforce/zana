@@ -10,11 +10,11 @@ function installScriptPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), '../assets/install-machine.sh');
 }
 
-export function handleInstallHttp(
+export async function handleInstallHttp(
   request: IncomingMessage,
   response: ServerResponse,
   ctx: ProductHttpContext
-): boolean {
+): Promise<boolean> {
   const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
   const pathname = requestUrl.pathname.replace(/\/$/, '') || '/';
   if (
@@ -54,7 +54,7 @@ export function handleInstallHttp(
     return true;
   }
 
-  const artifact = resolveHostArtifact();
+  const artifact = await resolveHostArtifact();
   if (pathname === '/install/version') {
     const body = JSON.stringify({
       version: artifact.version,

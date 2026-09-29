@@ -11,7 +11,7 @@
  *  - three-way empty states                         AC-LIST-24.0/24.1/24.2
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { useState } from 'react';
 import { render, fireEvent, waitFor, within } from '@testing-library/react';
 import type { ModuleHost, ProjectInfo } from './host.js';
@@ -831,3 +831,9 @@ describe('PrTileList toolbar', () => {
     expect(container.querySelector('[data-board-column="failed"]')).toBeNull();
   });
 });
+
+// These suites exercise the desktop board/toolbar; mobile has a separate flow.
+beforeEach(() => {
+  vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+});
+afterEach(() => vi.restoreAllMocks());

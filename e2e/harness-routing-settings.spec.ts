@@ -35,15 +35,15 @@ test('Global and Project harness settings persist provider, model, execution, an
     }));
     await window.evaluate((bin) => window.cc.config.set({ opencodeBinary: bin }), openCode.path);
     await window.getByRole('link', { name: 'Settings' }).click();
-    await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
-    await expect(window.locator('.settings-header')).toContainText('Code Harness');
+    await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
+    await expect(window.locator('.settings-header')).toContainText('AI Harness');
 
     // Updating binary config does not retroactively change boot-time availability.
     // Leave Settings (its section nav replaces the global rail) and re-open the
     // tab so its mount-time probe sees our deterministic fake binary.
     await window.locator('.settings-app-back').click();
     await window.getByRole('link', { name: 'Settings' }).click();
-    await window.locator('.settings-section-item').filter({ hasText: 'Code Harness' }).click();
+    await window.locator('.settings-section-item').filter({ hasText: 'AI Harness' }).click();
 
     await window.getByRole('tab', { name: 'CLI Agent' }).click();
     const globalOpenCode = window.getByTestId('harness-legacy-list').locator('.opener-row').filter({ hasText: 'OpenCode' });

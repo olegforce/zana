@@ -1,9 +1,21 @@
+import { discoverProjectCli } from './services/launch/cli-discovery.js';
+import { createProductCliCallbackAuthority } from './services/launch/cli-callback-authority.js';
+import { projectFeed } from './services/feed/project-feed.js';
+import { readProjectCatalogs } from './services/projects/project-catalogs.js';
+import { invokeHostLibraryTool } from './services/threads/host-library-tools.js';
+import { libraryDocumentOperation } from './services/library/library-documents.js';
+import { forwardRuntimeProductEvent } from './runtime-product-events.js';
+import { dispatchRuntimeMessage } from './runtime-request-boundary.js';
+import { projectMetadataRecords } from './services/projects/project-metadata-records.js';
+import { readProjectHistory } from './services/projects/project-history.js';
+import type { ProductHttpContext } from './http/product-context.js';
+import { installRuntimeLog } from '@zana-ai/zcc-process-utils';
 import { startStaticHost } from './static-host.js';
 import { toBrowserProjectSummaries } from './browser-bootstrap.js';
 import { createProductHttpContext } from './http/product-context.js';
 import type { ProductHub } from './http/product-hub.js';
 import { DEFAULT_DEV_APP_PORT, serverPortFromEnv } from './http/ports.js';
-import { SERVER_RUNTIME_PROTOCOL_VERSION, ServerRuntimeInboundSchema } from '@zana-ai/zcc-contracts/runtime';
+import { SERVER_RUNTIME_PROTOCOL_VERSION, type ServerRuntimeInbound } from '@zana-ai/zcc-contracts/runtime';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createTeamOpsViaControl } from './http/team-ops-via-control.js';
@@ -44,6 +56,7 @@ let terminalLaunchAuthority: ReturnType<typeof createTerminalLaunchAuthority> | 
 let runtimeDatabase: TerminalSessionRepository | null = null;
 let projects: ProjectStore | null = null;
 let productHub: ProductHub | null = null;
+let productContext: ProductHttpContext | null = null;
 let projectSettings: ProjectSettingsStore | null = null;
 let hostConnectionRenewal: NodeJS.Timeout | null = null;
 let plugins: PluginService | null = null;
@@ -54,15 +67,14 @@ const runtimeMcpConfig = createRuntimeMcpConfig();
 // can read the conversation-thread store (main asks before honoring a loopback
 // launch_team from a Modern/ACP thread).
 let threadDb: ZccDatabase | null = null;
-parentPort.on('message', async ({ data }) => {
-  const parsed = ServerRuntimeInboundSchema.safeParse(data);
-  if (!parsed.success) {
-    parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, message: 'invalid server runtime message' });
-    return;
-  }
-  const message = parsed.data;
+parentPort.on('message', ({ data }) => {
+  void dispatchRuntimeMessage(data, reply => parentPort.postMessage(reply), handleRuntimeMessage);
+});
+
+async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void> {
   if (message.type === 'start' && message.rendererRoot && !close) {
     try {
+      installRuntimeLog(message.dataDir, 'server', import.meta.url);
       version = message.version ?? '';
       projects = createProjectStore({
         projectsFile: join(message.dataDir, 'projects.json'),
@@ -75,11 +87,15 @@ parentPort.on('message', async ({ data }) => {
       const product = createProductHttpContext({
         dataDir: message.dataDir,
         origins: { serverPort: preferredPort, devAppPort: DEFAULT_DEV_APP_PORT },
+        onLibraryChanged: () => parentPort.postMessage({ type: 'library-changed', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION }),
+        onProjectsChanged: () => parentPort.postMessage({ type: 'projects-changed', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION }),
         projects: projects ?? undefined
       });
       productHub = product.hub;
+      productContext = product;
       product.teamOps = createTeamOpsViaControl(message.dataDir);
       product.cliAgentOps = createCliAgentOpsViaControl(message.dataDir);
+      product.cliCallbacks = createProductCliCallbackAuthority(product, () => runtimeMcpConfig.get().mcpBaseUrl ?? null);
       threadDb = product.db;
       plugins = await attachProductPluginService(product, {
         bundledRoot: bundledPluginsRootFromDataDir(message.dataDir, message.bundledPluginsRoot),
@@ -170,6 +186,49 @@ parentPort.on('message', async ({ data }) => {
     if (message.operation === 'app-version') {
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: version });
     }
+    if (message.operation === 'library-agent') {
+      if (!productContext) throw new Error('Library runtime is unavailable');
+      const { action, projectId, sessionId, ...input } = message.request;
+      const value = await invokeHostLibraryTool(productContext, { name: `library_${action}`, projectId, threadId: sessionId, input }, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'library-document') {
+      if (!productContext) throw new Error('Library runtime is unavailable');
+      const value = await libraryDocumentOperation(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'project-catalogs') {
+      if (!productContext) throw new Error('Project catalogue runtime is unavailable');
+      const value = await readProjectCatalogs(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'project-feed') {
+      if (!productContext) throw new Error('Activity feed runtime is unavailable');
+      const value = await projectFeed(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'cli-discovery') {
+      if (!productContext) throw new Error('CLI discovery runtime is unavailable');
+      const value = await discoverProjectCli(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'cli-callback-grant') {
+      const authority = productContext?.cliCallbacks;
+      if (!authority) throw new Error('CLI callback runtime is unavailable');
+      if (message.request.action === 'register') authority.register(message.request.grant);
+      else authority.revoke(message.request.sessionId);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: { ok: true } });
+    }
+    if (message.operation === 'project-history') {
+      if (!productContext) throw new Error('Project history runtime is unavailable');
+      const value = await readProjectHistory(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'project-metadata') {
+      if (!productContext) throw new Error('Project metadata runtime is unavailable');
+      const value = await projectMetadataRecords(productContext, message.request, Date.parse(message.deadlineAt));
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
     if (message.operation === 'thread-live') {
       // Live owner = non-archived thread still usable in the asserted project.
       // Idle is rest between turns, not death. Any lookup miss / mismatch /
@@ -191,7 +250,9 @@ parentPort.on('message', async ({ data }) => {
         parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, message: 'project storage is unavailable' });
         return;
       }
-      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await projects.add(message.path) });
+      const added = await projects.add(message.path);
+      productHub?.emit('projects:changed', projects.list());
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: added });
     }
     if (message.operation === 'projects-update') {
       if (!projects) {
@@ -208,14 +269,18 @@ parentPort.on('message', async ({ data }) => {
         parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, message: 'project storage is unavailable' });
         return;
       }
-      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await projects.reorder(message.orderedIds) });
+      const reordered = await projects.reorder(message.orderedIds);
+      productHub?.emit('projects:changed', projects.list());
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: reordered });
     }
     if (message.operation === 'projects-touch') {
       if (!projects) {
         parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, message: 'project storage is unavailable' });
         return;
       }
-      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await projects.touch(message.projectId) });
+      const touched = await projects.touch(message.projectId);
+      if (touched) productHub?.emit('projects:changed', projects.list());
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: touched });
     }
     if (message.operation === 'projects-remove') {
       if (!projects || !projectSettings) {
@@ -226,6 +291,7 @@ parentPort.on('message', async ({ data }) => {
       // orphaned row, but never a live project without its launch settings.
       const removed = await projects.remove(message.projectId);
       await projectSettings.remove(message.projectId);
+      if (removed) productHub?.emit('projects:changed', projects.list());
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: removed });
     }
     if (message.operation === 'project-settings-get') {
@@ -246,6 +312,10 @@ parentPort.on('message', async ({ data }) => {
         return;
       }
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await terminalLaunchAuthority.execute(message.command) });
+    }
+    if (message.operation === 'product-event') {
+      if (productHub) forwardRuntimeProductEvent(productHub, message.channel, message.args);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: true });
     }
     if (message.operation === 'terminal-record') {
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: terminalSessions?.record(message.event) ?? false });
@@ -430,4 +500,4 @@ parentPort.on('message', async ({ data }) => {
     parentPort.postMessage({ type: 'stopped', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION });
     process.exit(0);
   }
-});
+}

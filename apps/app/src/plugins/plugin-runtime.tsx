@@ -22,6 +22,7 @@ import { hrefForPluginNavPanel, hrefForPluginProjectTab } from './plugin-nav-hre
 import { ComposerViewContext, getActiveComposerApi, getActiveComposerView, setPluginLaunchPatch } from './plugin-composer-api.js';
 import { usePluginRuntimeContext } from './PluginSlotBoundary.js';
 import { openPluginThreadPanel } from './plugin-thread-panel.js';
+import { resolveThreadPanelOwnerId, useThreadPanelOwnerId } from './thread-panel-owner.js';
 import { subscribeProductEvent } from '../lib/product-ws.js';
 
 const ThreadDetailLazy = lazy(async () => {
@@ -105,6 +106,7 @@ function useZccNavigateImpl(): ZccNavigate {
   const navigate = useNavigate();
   const { pluginId } = usePluginRuntimeContext();
   const route = useRouteState();
+  const panelOwnerId = useThreadPanelOwnerId();
   return useMemo(
     () => ({
       toThread(threadId: string) {
@@ -130,14 +132,19 @@ function useZccNavigateImpl(): ZccNavigate {
       openThreadPanel(options) {
         return openPluginThreadPanel({
           pluginId,
-          threadId: route.threadId,
+          threadId: resolveThreadPanelOwnerId([
+            panelOwnerId,
+            options.threadId,
+            route.threadId,
+            route.sessionId
+          ]),
           actionId: options.actionId,
           title: options.title,
           params: options.params ?? null
         });
       }
     }),
-    [navigate, pluginId, route.threadId]
+    [navigate, panelOwnerId, pluginId, route.sessionId, route.threadId]
   );
 }
 

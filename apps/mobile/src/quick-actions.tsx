@@ -10,7 +10,7 @@ export function QuickActionsHost() {
       {
         id: 'device-settings',
         title: 'This device',
-        subtitle: 'Servers and notifications',
+        subtitle: 'Computers and appearance',
         icon: 'symbol:gearshape'
       }
     ]).catch(() => {});

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -176,4 +176,16 @@ describe('diff parsers', () => {
     expect(sections[0]).toContain('a/a.ts');
     expect(sections[1]).toContain('a/b.ts');
   });
+});
+
+it('scopes status to nested folders and preserves renamed and quoted filenames', async () => {
+  const repo = await initRepo(), sub = join(repo, 'nested'); await mkdir(sub);
+  await writeFile(join(sub, 'old.txt'), 'tracked\n');
+  await runGit(repo, ['add', '.']); await runGit(repo, ['commit', '-m', 'nested']);
+  await runGit(repo, ['mv', 'nested/old.txt', 'nested/new name.txt']);
+  await writeFile(join(sub, 'quoted "name" -> file.txt'), 'new');
+  await writeFile(join(repo, 'README.md'), 'outside edit');
+  const status = await readWorkspaceStatus(sub);
+  expect(status.files.map(row => [row.path, row.kind])).toEqual(expect.arrayContaining([['new name.txt', 'renamed'], ['quoted "name" -> file.txt', 'untracked']]));
+  expect(status.files).toHaveLength(2);
 });

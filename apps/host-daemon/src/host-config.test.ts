@@ -5,6 +5,18 @@ import { describe, expect, it } from 'vitest';
 import { loadHostAppConfig, resolveZccDataDir, ZCC_DATA_DIR_NAME } from './host-config.js';
 
 describe('loadHostAppConfig', () => {
+  it('projects the canonical persisted harness settings instead of probing stale legacy binaries', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-canonical-config-'));
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
+      claudeBinary: '/old/claude', harnesses: { byId: {
+        claude: { binary: '/selected/claude', compatibility: { permissionMode: 'plan' } },
+        opencode: { binary: '/selected/opencode', enabled: false }
+      } }
+    }));
+    expect(loadHostAppConfig(dataDir)).toMatchObject({ claudeBinary: '/selected/claude', opencodeBinary: '/selected/opencode', harnessOpenCodeEnabled: false, defaultPermissionMode: 'plan' });
+    writeFileSync(join(dataDir, 'config.json'), '{incomplete');
+    expect(loadHostAppConfig(dataDir).claudeBinary).toBe('claude');
+  });
   it('returns the default claude binary when no config file exists', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-host-config-'));
     expect(loadHostAppConfig(dataDir).claudeBinary).toBe('claude');

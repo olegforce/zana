@@ -1,3 +1,4 @@
+import { createLibraryState } from './library-state.js';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
@@ -1110,15 +1111,7 @@ export const useFavoriteAgents = create<FavoriteAgentsState>()(
  * CRITICAL: expose the raw `docs` slice — do NOT add selectors that return fresh
  * `?? []` / `.filter()` arrays (infinite-loop trap, see `zustand-selector-stable-ref`).
  */
-interface LibraryLiveState {
-  docs: LibraryDoc[];
-  loading: boolean;
-}
-
-export const useLibrary = create<LibraryLiveState>(() => ({
-  docs: [],
-  loading: true
-}));
+export const useLibrary = createLibraryState(() => product.library.snapshot());
 
 /**
  * Per-inbox-entry "Keep" flag (star), persisted to localStorage like the other

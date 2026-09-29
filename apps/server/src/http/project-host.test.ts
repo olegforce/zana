@@ -1,0 +1,21 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, expect, it, vi } from 'vitest';
+import { openDatabase, upsertHost } from '@zana-ai/zcc-db';
+import { resolveProjectHost } from './project-host.js';
+import type { ProductHttpContext } from './product-context.js';
+const dir = mkdtempSync(join(tmpdir(), 'project-host-'));
+const db = openDatabase(join(dir, 'test.sqlite'));
+afterAll(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+it('never sends a primary-owned path to the last connected secondary daemon', () => {
+  const resolve = vi.fn((id?: string) => { if (id === 'primary') throw new Error('Primary offline'); return id ?? 'secondary'; });
+  const ctx = { db, hostHub: { resolveHostId: resolve } } as unknown as ProductHttpContext;
+  expect(() => resolveProjectHost(ctx)).toThrow('not registered');
+  expect(resolve).not.toHaveBeenCalled();
+  upsertHost(db, { id: 'primary', name: 'Primary', hostKeyHash: 'a'.repeat(64) });
+  upsertHost(db, { id: 'secondary', name: 'Secondary', hostKeyHash: 'b'.repeat(64), isPrimary: false });
+  expect(() => resolveProjectHost(ctx)).toThrow('Primary offline');
+  expect(resolve).toHaveBeenLastCalledWith('primary');
+  expect(resolveProjectHost(ctx, 'secondary')).toBe('secondary');
+});

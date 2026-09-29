@@ -20,6 +20,8 @@ vi.mock('../../../store', async () => {
     visibleTerminals: (list: TerminalSession[] | undefined) => list ?? []
   };
 });
+vi.mock('../../thread/pickers/model-refresh.js', () => ({ refreshModelsWithToast: vi.fn() }));
+import { refreshModelsWithToast } from '../../thread/pickers/model-refresh.js';
 const noop = () => {};
 const asyncNoop = async () => null;
 
@@ -79,6 +81,18 @@ function baseCtx(over: Partial<PaletteBuildContext> = {}): PaletteBuildContext {
 }
 
 describe('buildPaletteItems', () => {
+  it('offers model recovery without a selected project and runs the shared refresh', () => {
+    const onClose = vi.fn();
+    const pushToast = vi.fn();
+    const action = buildPaletteItems(baseCtx({ selectedProject: null, onClose, pushToast }))
+      .find((item) => item.key === 'action:refresh-models')!;
+    expect(action.label).toBe('Refresh models');
+    expect(action.keywords).toEqual(expect.arrayContaining(['reload', 'restore', 'models']));
+    action.run();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(refreshModelsWithToast).toHaveBeenCalledWith(pushToast);
+  });
+
   it('golden snapshot: full set of built-in keys with a project + tab', () => {
     const keys = buildPaletteItems(baseCtx()).map((i) => i.key);
     expect(keys).toEqual([
@@ -87,6 +101,7 @@ describe('buildPaletteItems', () => {
       'action:new-chat',
       'action:add-project',
       'action:settings',
+      'action:refresh-models',
       'action:shortcuts',
       'action:inbox',
       'action:scheduler',
@@ -151,6 +166,7 @@ describe('buildPaletteItems', () => {
       'action:new-chat',
       'action:add-project',
       'action:settings',
+      'action:refresh-models',
       'action:shortcuts',
       'action:inbox',
       'action:scheduler',

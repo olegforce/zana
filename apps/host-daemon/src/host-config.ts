@@ -1,3 +1,4 @@
+import { projectConfigCompatibility } from '@zana-ai/zcc-domain/harness-config-compatibility';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -48,7 +49,7 @@ export function loadHostAppConfig(dataDir?: string, env: NodeJS.ProcessEnv = pro
     const file = hostConfigPath(resolveHostConfigDir(dataDir, env));
     if (!existsSync(file)) return { ...FALLBACK };
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<AppConfig>;
-    return { ...FALLBACK, ...parsed, version: 1 };
+    return projectConfigCompatibility({ ...FALLBACK, ...parsed, version: 1 });
   } catch {
     return { ...FALLBACK };
   }

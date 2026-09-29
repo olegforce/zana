@@ -101,6 +101,7 @@ export async function launchCliAgent(
     {
       body: {
         projectId: spec.projectId,
+        hostId: spec.hostId,
         profile: spec.profile,
         prompt: spec.prompt,
         personaId: spec.personaId,

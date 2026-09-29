@@ -1,6 +1,6 @@
 /** @vitest-environment happy-dom */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { ThreadFilePreviewTab } from './ThreadFilePreviewTab.js';
 
 const mocks = vi.hoisted(() => ({ readFile: vi.fn(), hostFileContent: vi.fn(), storageContent: vi.fn() }));
@@ -14,7 +14,7 @@ vi.mock('../../../plugins/plugin-slots.js', async () => {
   const { DocsOpener } = await import('../../../../../../plugins/docs/src/app/DocsOpener.js');
   const openers = [{
     id: 'markdown', pluginId: 'docs', generation: 1, title: 'Docs',
-    extensions: ['md'], component: DocsOpener
+    extensions: ['md', 'mdx'], component: DocsOpener
   }];
   return { listFileOpeners: () => openers, subscribePluginSlots: () => () => undefined };
 });
@@ -22,6 +22,21 @@ vi.mock('../../../plugins/plugin-slots.js', async () => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); localStorage.clear(); });
 
 describe('file opener host preview lifetime', () => {
+  it('keeps Open with choices scoped to their file type and honors a changed explicit opener', async () => {
+    mocks.hostFileContent.mockResolvedValue({ content: '# Report' });
+    const view = render(<ThreadFilePreviewTab path="first.md" threadId="t1" />);
+    await view.findByRole('heading', { name: 'Report' });
+    fireEvent.change(view.getByRole('combobox', { name: 'Open with' }), { target: { value: 'host' } });
+    expect(view.container.querySelector('.docs-file-opener')).toBeNull();
+    view.rerender(<ThreadFilePreviewTab path="second.mdx" threadId="t1" />);
+    await view.findByRole('heading', { name: 'Report' });
+    expect(view.container.querySelector('.docs-file-opener')).not.toBeNull();
+    view.rerender(<ThreadFilePreviewTab path="second.mdx" threadId="t1" openerKey="host" />);
+    expect(view.container.querySelector('.docs-file-opener')).toBeNull();
+    view.rerender(<ThreadFilePreviewTab path="first.md" threadId="t1" />);
+    await view.findByRole('heading', { name: 'Report' });
+    expect(view.container.querySelector('.docs-file-opener')).toBeNull();
+  });
   it('passes the CLI panel project scope when a relative workspace file needs the host reader', async () => {
     mocks.readFile.mockResolvedValue({ ok: false, message: 'Path is not inside a known project' });
     mocks.hostFileContent.mockImplementation(async (_id, _path, projectId) => ({ content: `# ${projectId}`, encoding: 'utf8' }));
@@ -71,6 +86,9 @@ describe('file opener host preview lifetime', () => {
     fireEvent.loadedMetadata(player);
     expect(view.queryByRole('status')).toBeNull();
     fireEvent.error(player);
+    view.rerender(<ThreadFilePreviewTab path="clips/demo.MP4" threadId="t1" previewRevision={1} />);
+    expect(view.getByLabelText('Video preview: demo.MP4')).not.toBe(player);
+    expect(view.queryByRole('status')).toBeNull();
     view.rerender(<ThreadFilePreviewTab path="clip.webm" threadId="t1" storage />);
     const storagePlayer = view.getByLabelText('Video preview: clip.webm');
     expect(storagePlayer.getAttribute('src')).toContain('source=thread-storage');
@@ -83,7 +101,7 @@ describe('file opener host preview lifetime', () => {
   });
 
   it('preserves the document DOM and scroll through unrelated parent updates', async () => {
-    mocks.readFile.mockResolvedValue({ ok: true, content: '# Document\n\nRead this independently.' });
+    mocks.hostFileContent.mockResolvedValue({ content: '# Document\n\nRead this independently.' });
     const view = render(<ThreadFilePreviewTab path="guide.md" threadId="t1" />);
     await view.findByRole('heading', { name: 'Document' });
     const preview = view.getByTestId('thread-file-preview');
@@ -95,7 +113,39 @@ describe('file opener host preview lifetime', () => {
       expect(view.getByRole('heading', { name: 'Document' })).toBe(heading);
       expect(preview.scrollTop).toBe(640);
     }
-    expect(mocks.readFile).toHaveBeenCalledTimes(1);
+    expect(mocks.hostFileContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers after a read error and clears old content while another file loads', async () => {
+    mocks.hostFileContent.mockRejectedValueOnce(new Error('file not found'));
+    const view = render(<ThreadFilePreviewTab path="missing.md" threadId="t1" />);
+    await view.findByText('file not found');
+    mocks.hostFileContent.mockResolvedValueOnce({ content: '# Recovered' });
+    view.rerender(<ThreadFilePreviewTab path="valid.md" threadId="t1" />);
+    await view.findByRole('heading', { name: 'Recovered' });
+    expect(view.queryByText('file not found')).toBeNull();
+    const pending = Promise.withResolvers<{ content: string }>();
+    mocks.hostFileContent.mockReturnValueOnce(pending.promise);
+    view.rerender(<ThreadFilePreviewTab path="next.md" threadId="t1" />);
+    expect(view.queryByRole('heading', { name: 'Recovered' })).toBeNull();
+    pending.resolve({ content: '# Next' });
+    await view.findByRole('heading', { name: 'Next' });
+  });
+
+  it('reloads the same file only on an explicit preview revision and ignores cancelled reads', async () => {
+    mocks.hostFileContent.mockResolvedValueOnce({ content: '# Original' });
+    const view = render(<ThreadFilePreviewTab path="report.md" threadId="t1" />);
+    await view.findByRole('heading', { name: 'Original' });
+    const stale = Promise.withResolvers<{ content: string }>();
+    mocks.hostFileContent.mockReturnValueOnce(stale.promise);
+    view.rerender(<ThreadFilePreviewTab path="report.md" threadId="t1" previewRevision={1} />);
+    mocks.hostFileContent.mockResolvedValueOnce({ content: '# Updated' });
+    view.rerender(<ThreadFilePreviewTab path="report.md" threadId="t1" previewRevision={2} />);
+    await view.findByRole('heading', { name: 'Updated' });
+    await act(async () => { stale.resolve({ content: '# Obsolete' }); });
+    expect(view.queryByRole('heading', { name: 'Obsolete' })).toBeNull();
+    expect(view.getByRole('heading', { name: 'Updated' })).toBeTruthy();
+    expect(mocks.hostFileContent).toHaveBeenCalledTimes(3);
   });
 
   it('delivers updated preview content without a stale closure and isolates simultaneous previews', async () => {

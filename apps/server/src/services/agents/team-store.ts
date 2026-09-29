@@ -1,3 +1,5 @@
+import { orderedCatalogSources } from '../projects/project-catalog-order.js';
+import type { ProjectCatalogSource } from '@zana-ai/zcc-contracts/project-metadata-records';
 import { app, shell } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
@@ -176,12 +178,16 @@ function ensureReadme(dir: string) {
   }
 }
 
-function readTeamFile(path: string): Team | null {
+function parseTeam(content: string): Team | null {
   try {
-    return sanitizeTeam(JSON.parse(readFileSync(path, 'utf8')));
+    return sanitizeTeam(JSON.parse(content));
   } catch {
     return null;
   }
+}
+
+function readTeamFile(path: string): Team | null {
+  try { return parseTeam(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 function listInDir(dir: string, source: Team['source']): Team[] {
@@ -218,7 +224,7 @@ export class TeamStore extends EventEmitter {
   private projectWatchers: Map<string, FSWatcher> = new Map();
   private debounce: NodeJS.Timeout | null = null;
 
-  constructor(projectsRef: () => Project[], registry?: PersonaTeamRegistry) {
+  constructor(projectsRef: () => Project[], registry?: PersonaTeamRegistry, private readonly remoteSources: () => ProjectCatalogSource[] = () => [], private readonly projectOrder?: () => readonly string[]) {
     super();
     this.projectsRef = projectsRef;
     this.registry = registry;
@@ -277,16 +283,20 @@ export class TeamStore extends EventEmitter {
     const userDir = userTeamsDir();
     for (const t of listInDir(userDir, 'user')) merged.set(t.id, t);
     const canonicalUserDir = canonicalDir(userDir);
-    for (const project of this.projectsRef()) {
+    for (const entry of orderedCatalogSources(this.projectsRef(), this.remoteSources(), this.projectOrder?.())) {
+      if (entry.kind === 'remote') {
+        const source = entry.source;
+        for (const record of source.records) {
+          const value = parseTeam(record);
+          if (value) merged.set(value.id, { ...value, source: { projectId: source.projectId, projectName: source.projectName } });
+        }
+        continue;
+      }
+      const project = entry.project;
       const projectDir = projectTeamsDir(project);
       if (canonicalDir(projectDir) === canonicalUserDir) continue;
-      const projectSource: Team['source'] = {
-        projectId: project.id,
-        projectName: project.name
-      };
-      for (const t of listInDir(projectDir, projectSource)) {
-        merged.set(t.id, t);
-      }
+      const projectSource: Team['source'] = { projectId: project.id, projectName: project.name };
+      for (const t of listInDir(projectDir, projectSource)) merged.set(t.id, t);
     }
     this.cache = [...merged.values()];
     this.emit('changed');

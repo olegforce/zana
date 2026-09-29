@@ -1,4 +1,4 @@
-import { getEnvironment, getThreadExecutionState, listConversationThreadEvents, type ConversationThreadRow } from '@zana-ai/zcc-db';
+import { getEnvironment, getThreadExecutionState, getLatestConversationCheckpoint, type ConversationThreadRow } from '@zana-ai/zcc-db';
 import type { ThreadResumeFields } from '@zana-ai/zcc-contracts/host-rpc';
 import type { PermissionMode } from '@zana-ai/zcc-domain/thread-runtime';
 import type { ProductHttpContext } from '../../http/product-context.js';
@@ -9,7 +9,6 @@ import {
   bridgeLaunchForProvider,
   getThreadProvider
 } from './thread-provider-catalog.js';
-import { latestProviderCheckpoint } from './conversation-edit-message.js';
 import { claudeCodePermissionModeForTurn } from './conversation-execution-mode.js';
 import { threadPermissionMode } from './thread-permission-mode.js';
 import { readLastThreadExecution } from './thread-last-execution.js';
@@ -63,7 +62,7 @@ export async function threadResumeFields(
     ...(providerOptions ? { providerOptions } : {}),
     ...(getThreadProvider(thread.providerId)?.capabilities.fork === 'checkpoint'
       ? (() => {
-        const checkpoint = latestProviderCheckpoint(listConversationThreadEvents(ctx.db, thread.id));
+        const checkpoint = getLatestConversationCheckpoint(ctx.db, thread.id);
         return checkpoint ? { providerCheckpointId: checkpoint.checkpoint } : {};
       })()
       : {})

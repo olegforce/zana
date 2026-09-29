@@ -13,10 +13,10 @@ describe('DocPreview path gate', () => {
     expect(source).toContain("product.library");
     expect(source).toMatch(/doc\.kind === 'md' \|\| doc\.kind === 'code'/);
     expect(source).toContain('.read(doc.scope ?? \'global\', doc.relPath, doc.projectId)');
-    // Binary viewers still need a host absPath; text preview must not share that gate.
-    const absPathGate = source.indexOf("setError('No absolute path available')");
-    const textBranch = source.indexOf("if (doc.kind === 'md' || doc.kind === 'code')");
-    expect(absPathGate).toBeGreaterThan(textBranch);
+    // Every preview now resolves its original owner through a scoped API.
+    expect(source).not.toContain("setError('No absolute path available')");
+    expect(source).not.toContain('file://');
+    expect(source).not.toContain('.readDataUrl(doc.absPath)');
   });
 });
 

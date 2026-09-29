@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -5,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { HOST_RPC_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/host-rpc';
+import { SELF_UPDATE_MAX_BYTES } from '@zana-ai/zcc-host-daemon/protocol-self-update';
 import {
   joinDaemonFileCandidates,
   joinRepoFileCandidates,
@@ -13,8 +15,9 @@ import {
   resolvePrebuiltJoinBundleDir
 } from './host-artifact.js';
 
-function unpackArtifact(): string {
-  const artifact = resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' });
+async function unpackArtifact(): Promise<string> {
+  const artifact = await resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' });
+  expect(statSync(artifact.tarballPath).size).toBeLessThanOrEqual(SELF_UPDATE_MAX_BYTES);
   const unpack = mkdtempSync(join(tmpdir(), 'zcc-artifact-unpack-'));
   expect(spawnSync('tar', ['-xzf', artifact.tarballPath, '-C', unpack]).status).toBe(0);
   return unpack;
@@ -77,6 +80,7 @@ describe('host-artifact locator', () => {
     const bundled = join(resources, 'host-bridge');
     mkdirSync(bundled);
     writeFileSync(join(bundled, 'bb-provider-bridge-worker.mjs'), 'worker\n');
+    writeFileSync(join(bundled, 'zcc-plugin-host-worker.mjs'), 'export const pluginWorker = true;');
     writeFileSync(join(bundled, 'bb-pi-bridge.mjs'), 'pi\n');
     expect(resolvePrebuiltJoinBundleDir({
       here: join('/missing', 'out', 'main'),
@@ -91,30 +95,34 @@ describe('host-artifact locator', () => {
     })).toBe(bundled);
   });
 
-  it('names the missing sources when neither checkout nor prebuilt exist', () => {
+  it('names the missing sources when neither checkout nor prebuilt exist', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'zcc-host-empty-'));
-    expect(() => resolveHostArtifact(
+    await expect(resolveHostArtifact(
       { ...process.env, ZCC_HOST_ARTIFACT: '' },
       { here: empty, cwd: empty, resourcesPath: empty }
-    )).toThrow(/zcc-host join bundle sources are missing from this checkout \(src\/join-cli\.ts/);
+    )).rejects.toThrow(/zcc-host join bundle sources are missing from this checkout \(src\/join-cli\.ts/);
   });
 
-  it('packs a tarball from a prebuilt join bundle when checkout sources are absent', () => {
+  it('packs a tarball from a prebuilt join bundle when checkout sources are absent', async () => {
     const resources = mkdtempSync(join(tmpdir(), 'zcc-prebuilt-pack-'));
     const bundled = join(resources, 'host-bridge');
     mkdirSync(bundled);
     writeFileSync(join(bundled, 'join.mjs'), 'export const join = true;\n');
     writeFileSync(join(bundled, 'bb-provider-bridge-worker.mjs'), 'export const worker = true;\n');
+    writeFileSync(join(bundled, 'zcc-plugin-host-worker.mjs'), 'export const pluginWorker = true;');
     writeFileSync(join(bundled, 'bb-pi-bridge.mjs'), 'export const pi = true;\n');
-    const artifact = resolveHostArtifact(
+    const artifact = await resolveHostArtifact(
       { ...process.env, ZCC_HOST_ARTIFACT: '' },
       { here: join(resources, 'out', 'main'), cwd: '/', resourcesPath: resources }
     );
+    expect(statSync(artifact.tarballPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(artifact.tarballPath, '..')).mode & 0o777).toBe(0o700);
     const unpack = mkdtempSync(join(tmpdir(), 'zcc-prebuilt-unpack-'));
     expect(spawnSync('tar', ['-xzf', artifact.tarballPath, '-C', unpack]).status).toBe(0);
     expect(readFileSync(join(unpack, 'join.mjs'), 'utf8')).toBe('export const join = true;\n');
     expect(existsSync(join(unpack, 'bb-provider-bridge-worker.mjs'))).toBe(true);
     expect(existsSync(join(unpack, 'bb-pi-bridge.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-plugin-host-worker.mjs'))).toBe(true);
     expect(JSON.parse(readFileSync(join(unpack, 'package.json'), 'utf8')).bin).toEqual({
       'zcc-host': 'join.mjs'
     });
@@ -123,13 +131,14 @@ describe('host-artifact locator', () => {
 });
 
 describe('host-artifact', () => {
-  it('packs a Node-only join.mjs that can dispatch host RPC', () => {
-    const unpack = unpackArtifact();
-    expect(resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' }).protocolVersion)
+  it('packs a Node-only join.mjs that can dispatch host RPC', async () => {
+    const unpack = await unpackArtifact();
+    expect((await resolveHostArtifact({ ...process.env, ZCC_HOST_ARTIFACT: '' })).protocolVersion)
       .toBe(HOST_RPC_PROTOCOL_VERSION);
     const joinScript = readFileSync(join(unpack, 'join.mjs'), 'utf8');
     expect(joinScript).toContain('/internal/hosts/enroll');
     expect(joinScript).toContain('host.list_dir');
+    expect(joinScript).toContain('host.git_file');
     expect(joinScript).toContain('host-rpc.request');
     expect(joinScript).not.toContain('Host artifact response is missing Content-Length');
     // Codex/Claude live in provider plugins; join.mjs inlines the remaining
@@ -138,10 +147,11 @@ describe('host-artifact', () => {
     expect(joinScript).toMatch(/command:\s*"cursor-agent"/);
   }, 60_000);
 
-  it('packs the provider-bridge worker so remotes do not resolve workspace packages', () => {
-    const unpack = unpackArtifact();
+  it('packs the provider-bridge worker so remotes do not resolve workspace packages', async () => {
+    const unpack = await unpackArtifact();
     expect(existsSync(join(unpack, 'bb-provider-bridge-worker.mjs'))).toBe(true);
     expect(existsSync(join(unpack, 'bb-pi-bridge.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-plugin-host-worker.mjs'))).toBe(true);
 
     const joinLoad = isolatedNode([join(unpack, 'join.mjs')]);
     expect(joinLoad.status, joinLoad.stderr || joinLoad.stdout).toBe(0);

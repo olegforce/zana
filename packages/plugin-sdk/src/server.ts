@@ -404,6 +404,11 @@ export interface PluginSdkEnvironments {
 }
 
 export interface PluginSdkFiles {
+  /** Resolve a file opener's saved project/source/environment on its owner host. */
+  readProject(args: { path: string; source: import('./app-contract.js').PluginFileOpenerSource }): Promise<PluginSdkFileReadResult & { sha256: string }>;
+  writeProject(args: { path: string; source: import('./app-contract.js').PluginFileOpenerSource; content: string; expectedSha256: string | null }): Promise<
+    { outcome: 'written'; sha256: string } | { outcome: 'conflict'; currentSha256: string | null }
+  >;
   read(args: PluginSdkFileReadArgs): Promise<PluginSdkFileReadResult>;
   write(args: {
     hostId?: string; path: string; rootPath?: string; content: string;
@@ -439,6 +444,7 @@ export interface PluginSdkLibraryWriteArgs {
   scope: PluginSdkLibraryScope;
   relPath: string;
   content: string;
+  expectedSha256?: string;
   projectId?: string;
   hostId?: string;
 }
@@ -447,8 +453,8 @@ export interface PluginSdkLibrary {
   list(args?: PluginSdkLibraryListArgs): Promise<PluginSdkLibraryDoc[]>;
   read(
     args: PluginSdkLibraryReadArgs
-  ): Promise<{ ok: true; content: string } | { ok: false; message: string }>;
-  write(args: PluginSdkLibraryWriteArgs): Promise<{ ok: true } | { ok: false; message: string }>;
+  ): Promise<{ ok: true; content: string; sha256?: string } | { ok: false; message: string }>;
+  write(args: PluginSdkLibraryWriteArgs): Promise<{ ok: true; sha256?: string } | { ok: false; message: string }>;
 }
 
 export interface PluginSdkProviders {
@@ -564,6 +570,7 @@ export interface PluginSdkDesktopBrowsers {
 }
 
 export interface PluginHostClient {
+  experimental_onSignal(signal: string, handler: (event: { readonly hostId: string; readonly payload: unknown }) => void | Promise<void>): () => void;
   call(
     method: string,
     input?: unknown,

@@ -17,6 +17,7 @@ import { atomicDurableWrite, createSerializedTransactionQueue } from './durable-
  * own bounded migration steps.
  */
 export interface ProjectRecord {
+  sources?: import('@zana-ai/zcc-domain/project').ProjectSource[];
   id: string;
   name: string;
   path: string;
@@ -151,6 +152,8 @@ export interface ProjectStore {
   add(path: string, options?: { hostId?: string }): Promise<ProjectRecord>;
   update(id: string, patch: ProjectMutationPatch): Promise<ProjectRecord | null>;
   bindToHost(id: string, input: { hostId: string; path: string }): Promise<ProjectRecord | null>;
+  addSource(id: string, input: { hostId: string; path: string }, primaryHostId: string): Promise<ProjectRecord>;
+  removeSource(id: string, sourceId: string): Promise<ProjectRecord>;
   reorder(orderedIds: string[]): Promise<ProjectRecord[]>;
   touch(id: string): Promise<ProjectRecord | null>;
   remove(id: string): Promise<ProjectRecord | null>;
@@ -375,6 +378,43 @@ export function createProjectStore({ projectsFile, remotePlaceholderRoot }: Proj
         const nextProjects = [...projects];
         nextProjects[index] = next;
         writeProjects(nextProjects, hash);
+        return next;
+      });
+    },
+
+    addSource(id, input, primaryHostId) {
+      return queue.run(async () => {
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.hostId) || !isAbsolute(input.path) || input.path.length > 4096 || /[\x00-\x1f]/.test(input.path)) throw new Error('Invalid project source');
+        const { file, hash } = readSnapshot();
+        const project = file.projects.find(row => row.id === id);
+        if (!project) throw new Error('Project is not registered');
+        if (project.remote) throw new Error('Convert the SSH project before adding extra sources');
+        const originalHost = project.hostId ?? primaryHostId;
+        if (input.hostId === originalHost) {
+          if (input.path !== project.path) throw new Error('The original project folder owns shared metadata and cannot be replaced');
+          return project;
+        }
+        const existing = project.sources?.find(row => row.hostId === input.hostId);
+        if (existing) {
+          if (existing.path !== input.path) throw new Error('This machine already has a source; remove that source before adding another');
+          return project;
+        }
+        if ((project.sources?.length ?? 0) >= 31) throw new Error('Project source limit reached');
+        if (file.projects.some(row => row.id !== id && (((row.hostId ?? primaryHostId) === input.hostId && row.path === input.path) || row.sources?.some(source => source.hostId === input.hostId && source.path === input.path)))) throw new Error('This folder belongs to another registered project');
+        const next = { ...project, sources: [...(project.sources ?? []), { id: randomUUID(), ...input, createdAt: Date.now() }] };
+        writeProjects(file.projects.map(row => row.id === id ? next : row), hash);
+        return next;
+      });
+    },
+
+    removeSource(id, sourceId) {
+      return queue.run(async () => {
+        const { file, hash } = readSnapshot();
+        const project = file.projects.find(row => row.id === id);
+        if (!project) throw new Error('Project is not registered');
+        if (sourceId.startsWith('original:')) throw new Error('The original source owns shared metadata and cannot be removed');
+        const next = { ...project, sources: (project.sources ?? []).filter(row => row.id !== sourceId) };
+        writeProjects(file.projects.map(row => row.id === id ? next : row), hash);
         return next;
       });
     },

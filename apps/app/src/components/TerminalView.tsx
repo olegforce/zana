@@ -1,3 +1,5 @@
+import { createTerminalReplay } from '../lib/terminal-replay.js';
+import { subscribeProductReconnect } from '../lib/product-ws.js';
 import { product } from '../lib/product-client.js';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
@@ -310,16 +312,6 @@ function TerminalViewImpl({ session, area }: Props) {
     // shows just a cursor on an empty buffer. We fetch main's retained tail and
     // write it before any live output.
     //
-    // Ordering matters: `onData` is registered synchronously below, but the
-    // backlog fetch is an async IPC round-trip, so a live chunk can arrive
-    // BEFORE the replay resolves. Writing it straight to the terminal would put
-    // newer output above the older replayed tail. So until the replay is
-    // written we QUEUE live chunks in `pendingData` and flush them right after,
-    // preserving order. Any overlap between the backlog snapshot and the first
-    // live chunk is at worst a few duplicated bytes at the seam — far less
-    // jarring than a blank terminal or scrambled output.
-    let replayDone = false;
-    let pendingData: string[] | null = [];
     const writeFollowing = (data: string) => {
       // Decide BEFORE writing whether we were tailing; new rows push baseY
       // down, and xterm's built-in auto-scroll can miss the last row when the
@@ -341,36 +333,16 @@ function TerminalViewImpl({ session, area }: Props) {
         if (follow && !disposedRef.current && !term.hasSelection()) term.scrollToBottom();
       });
     };
-    void product.terminals
-      .backlog(session.id)
-      .then((tail) => {
-        if (disposedRef.current) return;
-        if (tail) term.write(tail);
-        const queued = pendingData ?? [];
-        pendingData = null;
-        replayDone = true;
-        for (const chunk of queued) term.write(chunk);
-        if (!disposedRef.current) term.scrollToBottom();
-      })
-      .catch(() => {
-        // Replay failed — don't strand queued live output; flush it as-is.
-        if (disposedRef.current) return;
-        const queued = pendingData ?? [];
-        pendingData = null;
-        replayDone = true;
-        for (const chunk of queued) term.write(chunk);
-      });
-
-    const offData = product.terminals.onData((id, data) => {
-      if (id !== session.id) return;
-      // Before the backlog replay lands, hold live chunks so they can't be
-      // written ahead of the older tail (see the replay block above).
-      if (!replayDone && pendingData) {
-        pendingData.push(data);
-        return;
-      }
-      writeFollowing(data);
+    const replay = createTerminalReplay(() => product.terminals.backlogSnapshot
+      ? product.terminals.backlogSnapshot(session.id) : product.terminals.backlog(session.id), {
+      reset: () => term.reset(), write: writeFollowing,
+      follow: () => { if (!disposedRef.current && !term.hasSelection()) term.scrollToBottom(); }
     });
+    const offData = product.terminals.onData((id, data, cursor) => {
+      if (id === session.id) replay.receive(data, cursor);
+    });
+    void replay.replay();
+    const offReconnect = subscribeProductReconnect(() => replay.replay(true));
     const offExit = product.terminals.onExit((id, code) => {
       if (id !== session.id) return;
       // 0 / undefined → dim "[session exited]"; non-zero → red "[exited code N]".
@@ -379,7 +351,7 @@ function TerminalViewImpl({ session, area }: Props) {
       const label = bad ? `[exited code ${code}]` : '[session exited]';
       term.write(`\r\n${sgr}${label}\x1b[0m\r\n`);
     });
-    offsRef.current = [offData, offExit, () => offScroll.dispose(), () => offOsc52.dispose()];
+    offsRef.current = [offData, offExit, offReconnect, () => replay.dispose(), () => offScroll.dispose(), () => offOsc52.dispose()];
 
     const onInput = term.onData((data) => {
       void product.terminals.write(session.id, data).catch(() => {});

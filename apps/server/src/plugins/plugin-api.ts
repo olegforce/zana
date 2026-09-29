@@ -1,5 +1,7 @@
+import { validatePluginHostValue } from './plugin-host-rpc.js';
 import { isProjectIcon, spawnEnvironmentChoiceSchema, type ProjectIcon } from '@zana-ai/zcc-domain';
 import { readHostFile, writeHostFile } from '../http/files-via-host.js';
+import { readPluginProjectFile, writePluginProjectFile } from '../http/plugin-project-files.js';
 import { environmentPullRequest } from '../services/environments/environment-actions.js';
 import { conversationHistory } from '../services/threads/conversation-history.js';
 import { threadSummary } from './thread-events.js';
@@ -170,7 +172,12 @@ export interface PluginHttpRouteRecord {
   handler: (request: PluginHttpRequest) => PluginHttpResponse | Promise<PluginHttpResponse>;
 }
 
+export interface PluginHostEvent {
+  hostId: string; pluginId: string; generation: string;
+  kind: 'plugin.host.worker-exited' | 'plugin.host.signal'; signal?: string; payload?: unknown;
+}
 export interface PluginHandle {
+  emitHostEvent(event: PluginHostEvent): Promise<void>;
   api: ZccPluginApi;
   extraSkillRoots: string[];
   extraInstructions: string[];
@@ -331,7 +338,7 @@ export function createPluginApi(
     listProjects?: (args: { pluginId: string }) => Promise<Array<{ id: string; name: string; path?: string; icon?: ProjectIcon }>>;
     productContext?: import('../http/product-context.js').ProductHttpContext;
     hostEntryPath?: string | null;
-    hostCall?: (method: string, input?: unknown, hostId?: string) => Promise<unknown>;
+    hostCall?: (method: string, input?: unknown, hostId?: string, signal?: AbortSignal, timeoutMs?: number) => Promise<unknown>;
     dataDir?: string;
     services?: PluginServicesRegistry;
     isAgentToolNameTaken?: (name: string) => string | undefined;
@@ -347,6 +354,7 @@ export function createPluginApi(
   const agentConfigurers: PluginHandle['agentConfigurers'] = [];
   const mentionProviders: PluginHandle['mentionProviders'] = [];
   const hostMethods = new Map<string, (input: unknown) => unknown | Promise<unknown>>();
+  const hostSignalHandlers = new Map<string, Set<(event: { hostId: string; payload: unknown }) => void | Promise<void>>>();
   const hostWorkerExitHandlers: Array<(event: { readonly hostId: string }) => void | Promise<void>> = [];
   let hostEntryLoaded: Promise<void> | null = null;
   const settingListeners: Array<(next: Record<string, PluginSettingValue | undefined>) => void> = [];
@@ -878,6 +886,16 @@ export function createPluginApi(
         }
       },
       files: {
+        readProject: async (args) => {
+          assertLive();
+          if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
+          return readPluginProjectFile(options.productContext, args);
+        },
+        writeProject: async (args) => {
+          assertLive();
+          if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
+          return writePluginProjectFile(options.productContext, args);
+        },
         write: async (args) => {
           assertLive();
           if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
@@ -927,7 +945,7 @@ export function createPluginApi(
           const hostId = typeof args?.hostId === 'string' && args.hostId.trim() ? args.hostId.trim() : undefined;
           const result = await readLibraryDoc(options.productContext, scope, relPath, projectId, hostId);
           if (!result.ok) return { ok: false as const, message: result.message ?? 'read failed' };
-          return { ok: true as const, content: result.content ?? '' };
+          return { ok: true as const, content: result.content ?? '', sha256: result.sha256 };
         },
         write: async (args) => {
           assertLive();
@@ -945,7 +963,7 @@ export function createPluginApi(
             : undefined;
           if (scope === 'project' && !projectId) throw new Error('projectId is required');
           const hostId = typeof args?.hostId === 'string' && args.hostId.trim() ? args.hostId.trim() : undefined;
-          return writeLibraryDoc(options.productContext, scope, relPath, content, projectId, hostId);
+          return writeLibraryDoc(options.productContext, scope, relPath, content, projectId, hostId, args.expectedSha256);
         }
       },
       providers: {
@@ -1103,11 +1121,19 @@ export function createPluginApi(
         }
         return handler(input);
       },
-      experimental_client() {
+      experimental_client(clientOptions) {
         return {
           call: async (method, input, callOptions) => {
             assertLive();
-            if (options?.hostCall) return options.hostCall(method, input, callOptions?.hostId);
+            const contract = clientOptions?.contract as Record<string, { input: unknown; output: unknown }> | undefined;
+            const descriptor = contract && Object.hasOwn(contract, method) ? contract[method] : undefined;
+            if (contract && !descriptor) throw new Error('Unknown plugin host method');
+            const parsed = descriptor ? await validatePluginHostValue(descriptor.input, input) : input;
+            if (options?.hostCall) {
+              const result = await options.hostCall(method, parsed, callOptions?.hostId, callOptions?.signal, callOptions?.timeoutMs);
+              return descriptor ? validatePluginHostValue(descriptor.output, result) : result;
+            }
+            if (callOptions?.hostId) throw new Error('Selected plugin host is unavailable in this runtime');
             await ensureHostEntry();
             const handler = hostMethods.get(method);
             if (!handler) {
@@ -1115,7 +1141,14 @@ export function createPluginApi(
             }
             return handler(input);
           },
+          experimental_onSignal(signal, handler) {
+            assertLive();
+            const handlers = hostSignalHandlers.get(signal) ?? new Set();
+            handlers.add(handler); hostSignalHandlers.set(signal, handlers);
+            return () => { handlers.delete(handler); if (!handlers.size) hostSignalHandlers.delete(signal); };
+          },
           experimental_onWorkerExit(handler) {
+            assertLive();
             hostWorkerExitHandlers.push(handler);
             return () => {
               const index = hostWorkerExitHandlers.indexOf(handler);
@@ -1297,6 +1330,13 @@ export function createPluginApi(
     cli: cliRecord,
     httpRoutes,
     agentTools,
+    async emitHostEvent(event) {
+      if (stale) return;
+      const handlers = event.kind === 'plugin.host.worker-exited'
+        ? hostWorkerExitHandlers.map(handler => () => handler({ hostId: event.hostId }))
+        : [...(hostSignalHandlers.get(event.signal ?? '') ?? [])].map(handler => () => handler({ hostId: event.hostId, payload: event.payload }));
+      await Promise.allSettled(handlers.map(handler => Promise.resolve().then(handler)));
+    },
     async emitThreadEvent(event) {
       for (const record of threadEventHandlers) {
         if (record.name === event.name) {
@@ -1334,6 +1374,7 @@ export function createPluginApi(
     },
     async dispose() {
       stale = true;
+      hostWorkerExitHandlers.length = 0; hostSignalHandlers.clear();
       options?.interruptPluginInteractions?.(pluginId);
       for (const handle of sqliteHandles) {
         try {

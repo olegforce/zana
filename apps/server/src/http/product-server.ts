@@ -47,7 +47,7 @@ export async function startProductServer(options: StartProductServerOptions): Pr
 
   const server = createServer(async (request, response) => {
     if (await handleHostInternalHttp(request, response, ctx)) return;
-    if (handleInstallHttp(request, response, ctx)) return;
+    if (await handleInstallHttp(request, response, ctx)) return;
     if (await handleProductHttp(request, response, ctx)) return;
     if (await tryServePluginAsset(request, response, (pluginId) => pluginAssetRootFromService(ctx.plugins, pluginId))) {
       return;

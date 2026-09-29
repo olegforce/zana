@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildPluginHost } from './build-plugin-host.js';
 
@@ -120,6 +121,40 @@ describe('plugin host build', () => {
     expect(
       distEntries.filter((entry) => entry.startsWith('.host-stage-') && entry !== '.host-stage-active')
     ).toEqual([]);
+  });
+
+  it.each([false, true])('builds schema host entries with optional signals/disposal (installed SDK: %s)', async installed => {
+    const dir = await mkdtemp(join(tmpdir(), 'zcc-host-schema-test-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'package.json'), JSON.stringify({
+      name: 'zcc-plugin-schema-fixture', version: '1.0.0', type: 'module',
+      zcc: { host: './host.ts' }
+    }));
+    if (installed) {
+      await mkdir(join(dir, 'node_modules/@zana-ai'), { recursive: true });
+      await symlink(fileURLToPath(new URL('../../plugin-sdk', import.meta.url)), join(dir, 'node_modules/@zana-ai/zcc-plugin-sdk'));
+    }
+    await writeFile(join(dir, 'host.ts'), `
+      import { defineRpcContract, experimental_defineHostEntry${installed ? ', experimental_nativeRootsResolveInputSchema' : ''} } from '@zana-ai/zcc-plugin-sdk/host';
+      const schema = { '~standard': { validate: value => ({ value }) } };
+      const contract = defineRpcContract({ echo: { input: schema, output: schema } });
+      export const minimal = experimental_defineHostEntry({ contract, handlers: { echo: value => value } });
+      export let disposed = false;
+      export default experimental_defineHostEntry({ contract,
+        handlers: { echo: value => ${installed ? 'experimental_nativeRootsResolveInputSchema.parse(value)' : 'value'} },
+        experimental_signals: { changed: { payload: schema } }, dispose() { disposed = true; }
+      });
+    `);
+    const result = await buildPluginHost(dir, 'test');
+    const module = await import(result.jsPath);
+    expect(module.minimal).toMatchObject({ experimental_apiVersion: 1 });
+    expect(module.minimal).not.toHaveProperty('dispose');
+    expect(module.minimal).not.toHaveProperty('experimental_signals');
+    expect(module.default).toMatchObject({ experimental_apiVersion: 1, experimental_signals: { changed: { payload: expect.any(Object) } } });
+    const value = { providerId: 'fixture', cwd: null };
+    expect(module.default.handlers.echo(value)).toEqual(value);
+    if (installed) expect(() => module.default.handlers.echo({ providerId: '' })).toThrow();
+    expect(module.disposed).toBe(false); module.default.dispose(); expect(module.disposed).toBe(true);
   });
 
   it('rejects a host entry outside the plugin directory', async () => {

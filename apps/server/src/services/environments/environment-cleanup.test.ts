@@ -126,6 +126,7 @@ describe('destroyEnvironment', () => {
       hostId: 'host-1'
     };
     const callHostOnlineRpc = vi.fn(async () => ({ destroyed: true }));
+    const foreign = { ...inside, id: 'same-path-foreign-host', hostId: 'host-2' };
     const emit = vi.fn();
     const ctx = {
       db: {},
@@ -133,11 +134,14 @@ describe('destroyEnvironment', () => {
       hostHub: { callHostOnlineRpc },
       terminalSessions: new Map([
         [inside.id, inside],
-        [outside.id, outside]
+        [outside.id, outside],
+        [foreign.id, foreign]
       ])
     } as unknown as ProductHttpContext;
 
     await destroyEnvironment(ctx, environment.id);
+    expect(foreign.status).toBe('running');
+    expect(callHostOnlineRpc).not.toHaveBeenCalledWith(expect.objectContaining({ hostId: 'host-2' }));
     expect(callHostOnlineRpc).toHaveBeenCalledWith({
       hostId: 'host-1',
       command: { type: 'terminal.stop', sessionId: inside.id }

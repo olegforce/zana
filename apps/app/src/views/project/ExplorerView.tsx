@@ -1,3 +1,7 @@
+import type { ProjectFileScope } from '@zana-ai/zcc-desktop-contract';
+import { projectSources } from '@zana-ai/zcc-domain/project';
+import { useHosts } from '../../hooks/useHosts.js';
+import { hasDesktopBridge } from '../../lib/app-surface.js';
 import { product } from '../../lib/product-client.js';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 // Side-effect: wires up MonacoEnvironment (local workers) + loader.config. See
@@ -38,6 +42,8 @@ interface Props {
   project: Project;
   /** Narrower tree defaults when hosted in a thread / CLI-agent side panel. */
   embedded?: boolean;
+  scope?: ProjectFileScope;
+  checkoutPath?: string;
 }
 
 // Width of the Explorer tree column. Persisted as a renderer-only UI preference
@@ -54,10 +60,42 @@ function loadExplorerTreeWidth(preset: TreeWidthPreset): number {
   return Math.max(preset.min, Math.min(preset.max, raw));
 }
 
-export function ExplorerView({ project, embedded = false }: Props) {
+export function ExplorerView(props: Props) {
+  return props.project.remote ? <CheckoutExplorerView {...props} /> : <MachineExplorerView {...props} />;
+}
+function MachineExplorerView({ project, embedded = false, scope, checkoutPath }: Props) {
+  const hosts = useHosts();
+  const sources = projectSources(project, hosts.find(host => host.isPrimary)?.id);
+  const [chosen, setChosen] = useState<string>();
+  const [dirty, setDirty] = useState(false);
+  const hostId = scope?.hostId ?? chosen ?? project.hostId ?? hosts.find(host => host.isPrimary)?.id;
+  const source = sources.find(source => source.hostId === hostId);
+  const selected = hosts.find(host => host.id === hostId);
+  const fileScope = useMemo(() => hostId ? { projectId: project.id, hostId, ...(scope?.environmentId ? { environmentId: scope.environmentId } : {}) } : undefined, [project.id, hostId, scope?.environmentId]);
+  const path = scope?.environmentId ? checkoutPath : source?.path;
+  if (!hostId || !path || !fileScope) return <p className="tree-pane-empty">Choose a machine with a registered checkout for this project.</p>;
+  return <div className="explorer-machine-surface" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', gridColumn: '2 / -1' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Machine
+        <select aria-label="Explorer machine" value={hostId} disabled={Boolean(scope)} onChange={event => {
+          if (dirty && !window.confirm('Discard unsaved edits and switch machines?')) return;
+          setDirty(false); setChosen(event.target.value);
+        }}>
+          {sources.map(source => <option key={source.hostId} value={source.hostId}>{hosts.find(host => host.id === source.hostId)?.name ?? source.hostId}</option>)}
+          {!source && <option value={hostId}>{selected?.name ?? hostId}</option>}
+        </select>
+      </label>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={path}>{path}</span>
+      {selected?.status !== 'connected' && <span role="status">Offline</span>}
+    </div>
+    <CheckoutExplorerView key={`${project.id}:${hostId}:${scope?.environmentId ?? ''}:${path}`} project={{ ...project, path }} embedded={embedded} scope={fileScope} onDirtyChange={setDirty} nativeFiles={selected?.isPrimary === true && hasDesktopBridge()} originalSource={source?.id === `original:${project.id}`} primaryHostId={hosts.find(host => host.isPrimary)?.id} />
+  </div>;
+}
+function CheckoutExplorerView({ project, embedded = false, scope: baseScope, onDirtyChange, nativeFiles = true, originalSource = true, primaryHostId }: Props & { onDirtyChange?: (dirty: boolean) => void; nativeFiles?: boolean; originalSource?: boolean; primaryHostId?: string }) {
   const pushToast = useUi((s) => s.pushToast);
-  const explorerFile = useUi((s) => s.explorerFile[project.id]);
-  const goto = useUi((s) => s.explorerGoto[project.id]);
+  const viewKey = baseScope && (!originalSource || baseScope.environmentId) ? `${project.id}:${baseScope.hostId}:${baseScope.environmentId ?? ''}` : project.id;
+  const explorerFile = useUi((s) => s.explorerFile[viewKey]);
+  const goto = useUi((s) => s.explorerGoto[viewKey]);
   const setExplorerFile = useUi((s) => s.setExplorerFile);
   const setProjectView = useUi((s) => s.setProjectView);
   const selectTab = useUi((s) => s.selectTab);
@@ -80,7 +118,19 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // the diff panel together. `worktrees` is enumerated lazily per project. For a
   // remote project `viewRoot` is the resolved remote root (set async on mount).
   const [viewRoot, setViewRoot] = useState(project.path);
+  const activeRoot = useRef(viewRoot);
+  activeRoot.current = viewRoot;
+  const [environments, setEnvironments] = useState<Awaited<ReturnType<typeof product.environments.list>>>([]);
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
+  const scope = useMemo(() => {
+    if (!baseScope) return undefined;
+    if (viewRoot === project.path) return baseScope;
+    const environment = environments.find(row => row.path === viewRoot && row.hostId === baseScope.hostId);
+    // Existing native Git worktrees retain main's established authorization.
+    // This exception is available only in the primary desktop, never on a remote target.
+    if (!environment && nativeFiles && worktrees.some(row => row.path === viewRoot)) return undefined;
+    return { ...baseScope, environmentId: environment?.id ?? 'unregistered-checkout' };
+  }, [baseScope, viewRoot, project.path, environments, nativeFiles, worktrees]);
   // All local branches of the repo (not just the ones bound to a worktree), so
   // the switcher can list every branch and badge which checkout it's on.
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
@@ -89,7 +139,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // reuse the store's status (kept fresh by terminal-close hooks etc.); for any
   // other worktree we fetch + refresh a local copy keyed to `viewRoot`.
   const [worktreeGitStatus, setWorktreeGitStatus] = useState<GitStatus | null>(null);
-  const onMainCheckout = viewRoot === project.path;
+  const onMainCheckout = !scope && viewRoot === project.path;
   const gitStatus = onMainCheckout ? storeGitStatus : worktreeGitStatus;
   const gitFiles = gitStatus?.files;
 
@@ -98,24 +148,25 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // stay in sync too.
   const reloadGitStatus = useCallback(() => {
     if (isRemote) return; // remote projects have no local git status
-    if (viewRoot === project.path) {
+    if (!scope && viewRoot === project.path) {
       useData.getState().loadGitStatus(project.id);
     } else {
-      product.git.status(viewRoot)
-        .then((s) => setWorktreeGitStatus(s))
+      product.git.status(viewRoot, undefined, scope)
+        .then((s) => { if (activeRoot.current === viewRoot) setWorktreeGitStatus(s); })
         .catch(() => {});
     }
-  }, [viewRoot, project.id, project.path, isRemote]);
+  }, [viewRoot, project.id, project.path, isRemote, scope]);
 
   // Re-enumerate the repo's worktrees + branches (after a remove, or a manual
   // refresh). Best-effort; a non-repo just clears to empty.
   const reloadWorktrees = useCallback(() => {
     if (isRemote) return;
-    product.git.listWorktrees(project.path)
+    product.git.listWorktrees(project.path, nativeFiles && !baseScope?.environmentId ? undefined : baseScope)
       .then(async (list) => {
         const environments = await product.environments.list(project.id).catch(() => []);
+        setEnvironments(environments);
         const extras: Worktree[] = environments
-          .filter((row) => row.path && row.status === 'ready' && row.workspaceProvisionType === 'managed-worktree')
+          .filter((row) => (!baseScope || row.hostId === baseScope.hostId) && row.path && row.status === 'ready' && row.workspaceProvisionType === 'managed-worktree')
           .filter((row) => !list.some((wt) => wt.path === row.path))
           .map((row) => ({
             path: row.path!,
@@ -125,25 +176,26 @@ export function ExplorerView({ project, embedded = false }: Props) {
             bare: false,
             isMain: false
           }));
-        setWorktrees([...list, ...extras]);
+        setWorktrees(baseScope?.environmentId ? [] : [...list, ...extras]);
       })
       .catch(() => setWorktrees([]));
-    product.git.listBranches(project.path)
-      .then((list) => setBranches(list))
+    product.git.listBranches(project.path, baseScope)
+      .then((list) => setBranches(baseScope?.environmentId ? [] : list))
       .catch(() => setBranches([]));
-  }, [project.path, project.id, isRemote]);
+  }, [project.path, project.id, isRemote, baseScope, nativeFiles]);
 
   const handleRemoveWorktree = useCallback(
     async (wt: Worktree) => {
       if (!window.confirm(`Remove worktree for “${wt.branch ?? wt.path.split('/').pop()}”?\n\n${wt.path}\n\nThe branch itself is kept; only the checkout directory is removed.`)) {
         return;
       }
-      if (viewRoot === wt.path) setViewRoot(project.path);
+      if (viewRoot === wt.path && fileClickStateRef.current.editedContent !== null && !window.confirm('Discard unsaved edits and remove this checkout?')) return;
       const environments = await product.environments.list(project.id).catch(() => []);
-      const managed = environments.find((row) => row.path === wt.path && row.workspaceProvisionType === 'managed-worktree');
+      const managed = environments.find((row) => (!baseScope || row.hostId === baseScope.hostId) && row.path === wt.path && row.workspaceProvisionType === 'managed-worktree');
       if (managed) {
         try {
           await product.environments.destroy(managed.id);
+          if (viewRoot === wt.path) setViewRoot(project.path);
           pushToast('Worktree removed');
           setWorktreeMenu(false);
           reloadWorktrees();
@@ -152,6 +204,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
         }
         return;
       }
+      if (baseScope && !nativeFiles) { pushToast('This checkout is no longer registered. Refresh before removing it.', 'error'); return; }
       let res = await product.git.removeWorktree(project.path, wt.path, false);
       if (!res.ok && /dirty|contains modified|use --force|locked working tree/i.test(res.message ?? '')) {
         if (window.confirm(`“${wt.branch ?? wt.path}” has uncommitted changes.\n\nForce-remove and discard them?`)) {
@@ -168,18 +221,20 @@ export function ExplorerView({ project, embedded = false }: Props) {
         pushToast(`Remove failed: ${res.message ?? 'unknown error'}`, 'error');
       }
     },
-    [project.path, project.id, viewRoot, pushToast, reloadWorktrees]
+    [project.path, project.id, viewRoot, pushToast, reloadWorktrees, baseScope]
   );
 
   const { sendPathToTerminal, copyPath, openInExternal, downloadRemoteFile, uploadLocalFiles } = useFileOperations({
     viewRoot,
     isRemote,
     projectId: project.id,
+    hostId: scope?.hostId,
+    primaryHostId,
     pushToast
   });
 
   const openShellHere = async (cwd: string) => {
-    const session = await createTerminal(project.id, 'shell', 80, 24, { cwd });
+    const session = await createTerminal(project.id, 'shell', 80, 24, { cwd, hostId: scope?.hostId, workspace: scope?.environmentId ? { kind: 'reuse', environmentId: scope.environmentId } : undefined });
     if (session) {
       selectTab(project.id, session.id);
       setProjectView(project.id, 'terminals');
@@ -188,6 +243,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
 
   const [expanded, setExpanded] = useState<Map<string, boolean>>(new Map());
   const [entries, setEntries] = useState<Map<string, FsEntry[]>>(new Map());
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
@@ -197,6 +253,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // can refresh the on-disk view without clobbering unsaved keystrokes. When
   // null, the editor mirrors fileResult.content exactly.
   const [editedContent, setEditedContent] = useState<string | null>(null);
+  useEffect(() => { onDirtyChange?.(editedContent !== null); }, [editedContent, onDirtyChange]);
   const [saving, setSaving] = useState(false);
   // Markdown files open as a rendered preview by default; the user can flip to
   // the Monaco editor to make edits. Resets per file (see effect below).
@@ -208,24 +265,24 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // placeholder). null = not loaded yet.
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
-  const treeMode = useUi((s) => s.explorerTreeMode[project.id] ?? 'files');
+  const treeMode = useUi((s) => s.explorerTreeMode[viewKey] ?? 'files');
   const setTreeModeStore = useUi((s) => s.setExplorerTreeMode);
   const toggleTreeModeStore = useUi((s) => s.toggleExplorerTreeMode);
-  const diffMode = useUi((s) => !!s.explorerDiff[project.id]);
+  const diffMode = useUi((s) => !!s.explorerDiff[viewKey]);
   const setDiffModeStore = useUi((s) => s.setExplorerDiff);
   const setTreeMode = useCallback(
     (mode: 'files' | 'changes' | ((prev: 'files' | 'changes') => 'files' | 'changes')) => {
-      const cur = useUi.getState().explorerTreeMode[project.id] ?? 'files';
+      const cur = useUi.getState().explorerTreeMode[viewKey] ?? 'files';
       const next = typeof mode === 'function' ? mode(cur) : mode;
-      setTreeModeStore(project.id, next);
+      setTreeModeStore(viewKey, next);
     },
     [project.id, setTreeModeStore]
   );
   const setDiffMode = useCallback(
     (val: boolean | ((prev: boolean) => boolean)) => {
-      const cur = !!useUi.getState().explorerDiff[project.id];
+      const cur = !!useUi.getState().explorerDiff[viewKey];
       const next = typeof val === 'function' ? val(cur) : val;
-      setDiffModeStore(project.id, next);
+      setDiffModeStore(viewKey, next);
     },
     [project.id, setDiffModeStore]
   );
@@ -268,12 +325,16 @@ export function ExplorerView({ project, embedded = false }: Props) {
       });
       let list: FsEntry[] = [];
       try {
+        if (path === viewRoot) setDirectoryError(null);
         list = isRemote
           ? await product.fs.listDirRemote(project.id, path)
-          : await product.fs.listDir(path);
+          : await product.fs.listDir(path, scope);
       } catch (err) {
-        pushToast(err instanceof Error ? err.message : 'Failed to list directory', 'error');
+        const message = err instanceof Error ? err.message : 'Failed to list directory';
+        if (path === viewRoot && activeRoot.current === viewRoot) setDirectoryError(message);
+        pushToast(message, 'error');
       }
+      if (activeRoot.current !== viewRoot) return list;
       setEntries((s) => {
         const next = new Map(s);
         next.set(path, list);
@@ -286,7 +347,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
       });
       return list;
     },
-    [entries, isRemote, project.id, pushToast]
+    [entries, isRemote, project.id, pushToast, scope, viewRoot]
   );
 
   // Walk down from project root, loading & expanding each ancestor folder of
@@ -294,7 +355,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
   // quick-open navigates to a file the user hasn't manually expanded yet.
   const revealFile = useCallback(
     async (filePath: string) => {
-      if (!filePath.startsWith(viewRoot)) return;
+      if (!filePath.startsWith(viewRoot + '/')) return;
       const rest = filePath.slice(viewRoot.length).replace(/^\//, '');
       if (!rest) return;
       const segments = rest.split('/');
@@ -356,16 +417,8 @@ export function ExplorerView({ project, embedded = false }: Props) {
     }
     setViewRoot(project.path);
     loadDir(project.path, true);
-    // Enumerate worktrees so the switcher can offer them. Cheap (`git worktree
-    // list`), best-effort — a non-repo project just yields [] and hides the UI.
-    product.git.listWorktrees(project.path)
-      .then((list) => setWorktrees(list))
-      .catch(() => setWorktrees([]));
-    // Enumerate all local branches so the switcher can show branches that don't
-    // (yet) have a worktree. Best-effort — non-repo yields [].
-    product.git.listBranches(project.path)
-      .then((list) => setBranches(list))
-      .catch(() => setBranches([]));
+    reloadWorktrees();
+    reloadGitStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
@@ -381,14 +434,14 @@ export function ExplorerView({ project, embedded = false }: Props) {
     setEntries(new Map());
     setLoading(new Set());
     setMenu(null);
-    setExplorerFile(project.id, undefined);
+    setExplorerFile(viewKey, undefined);
     loadDir(viewRoot, true);
-    if (isRemote || viewRoot === project.path) {
+    if (isRemote || (!scope && viewRoot === project.path)) {
       // Remote projects have no local git status; worktree switching is local-only.
       setWorktreeGitStatus(null);
     } else {
-      product.git.status(viewRoot)
-        .then((s) => setWorktreeGitStatus(s))
+      product.git.status(viewRoot, undefined, scope)
+        .then((s) => { if (activeRoot.current === viewRoot) setWorktreeGitStatus(s); })
         .catch(() => setWorktreeGitStatus(null));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,7 +465,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     if (headResult) return;
     let cancelled = false;
     setHeadLoading(true);
-    product.git.showHead(explorerFile)
+    product.git.showHead(explorerFile, scope)
       .then((r) => {
         if (cancelled) return;
         setHeadResult(r);
@@ -422,12 +475,14 @@ export function ExplorerView({ project, embedded = false }: Props) {
         setHeadResult({ ok: false, message: err instanceof Error ? err.message : 'Failed to read HEAD' });
       })
       .finally(() => {
-        setHeadLoading(false);
+        if (!cancelled) setHeadLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [diffMode, explorerFile, headResult]);
+  }, [diffMode, explorerFile, headResult, scope]);
+
+  useEffect(() => { if (explorerFile) void revealFile(explorerFile); }, [explorerFile, revealFile]);
 
   // load file contents when explorerFile changes
   useEffect(() => {
@@ -440,7 +495,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     setFileLoading(true);
     const read = isRemote
       ? product.fs.readFileRemote(project.id, explorerFile)
-      : product.fs.readFile(explorerFile);
+      : product.fs.readFile(explorerFile, scope);
     read
       .then((r) => {
         if (cancelled) return;
@@ -453,11 +508,10 @@ export function ExplorerView({ project, embedded = false }: Props) {
       .finally(() => {
         if (!cancelled) setFileLoading(false);
       });
-    revealFile(explorerFile);
     return () => {
       cancelled = true;
     };
-  }, [explorerFile, revealFile, isRemote, project.id]);
+  }, [explorerFile, isRemote, project.id, scope]);
 
   // Markdown opens rendered by default; everything else opens in the editor.
   // Re-evaluated on each file switch so leaving a .md in editor mode doesn't
@@ -475,7 +529,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     setImageError(null);
     if (!explorerFile || isRemote || !isImagePath(explorerFile)) return;
     let cancelled = false;
-    product.fs.readDataUrl(explorerFile)
+    product.fs.readDataUrl(explorerFile, scope)
       .then((r) => {
         if (cancelled) return;
         if (r.ok && r.dataUrl) setImageDataUrl(r.dataUrl);
@@ -485,13 +539,14 @@ export function ExplorerView({ project, embedded = false }: Props) {
         if (!cancelled) setImageError(err instanceof Error ? err.message : 'Failed to read image');
       });
     return () => { cancelled = true; };
-  }, [explorerFile, isRemote]);
+  }, [explorerFile, isRemote, scope]);
 
   // Re-read the open file when the window regains focus. Claude tabs often
   // edit the file behind your back; without this the viewer stays stale until
   // you re-click the row. We don't toggle `fileLoading` so the editor doesn't
   // flash; the value just updates in place. Same for HEAD when diff is on.
   useEffect(() => {
+    let cancelled = false;
     const onFocus = () => {
       if (!explorerFile) return;
       // Don't reload from disk while the buffer is dirty — that would silently
@@ -499,24 +554,24 @@ export function ExplorerView({ project, embedded = false }: Props) {
       if (editedContent === null) {
         const reread = isRemote
           ? product.fs.readFileRemote(project.id, explorerFile)
-          : product.fs.readFile(explorerFile);
+          : product.fs.readFile(explorerFile, scope);
         reread
           .then((r) => {
-            setFileResult((prev) => (sameFileResult(prev, r) ? prev : r));
+            if (!cancelled) setFileResult((prev) => (sameFileResult(prev, r) ? prev : r));
           })
           .catch(() => {});
       }
       if (diffMode && !isRemote) {
-        product.git.showHead(explorerFile)
+        product.git.showHead(explorerFile, scope)
           .then((r) => {
-            setHeadResult((prev) => (sameHeadResult(prev, r) ? prev : r));
+            if (!cancelled) setHeadResult((prev) => (sameHeadResult(prev, r) ? prev : r));
           })
           .catch(() => {});
       }
     };
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [explorerFile, diffMode, editedContent, isRemote, project.id]);
+    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
+  }, [explorerFile, diffMode, editedContent, isRemote, project.id, scope]);
 
   // After the file's loaded and the editor's mounted, apply any pending goto.
   useEffect(() => {
@@ -580,9 +635,9 @@ export function ExplorerView({ project, embedded = false }: Props) {
       if (edited !== null && edited !== fileContent && !window.confirm('Discard unsaved changes?')) {
         return;
       }
-      setExplorerFile(project.id, entry.path);
+      setExplorerFile(viewKey, entry.path);
     },
-    [project.id, setExplorerFile]
+    [viewKey, setExplorerFile]
   );
 
   const onContext = useCallback((e: React.MouseEvent, entry: FsEntry) => {
@@ -616,7 +671,10 @@ export function ExplorerView({ project, embedded = false }: Props) {
       : path;
     const verb = code === '?' || code === 'A' ? 'Delete' : 'Discard changes to';
     if (!window.confirm(`${verb} ${rel}? This cannot be undone.`)) return;
-    const r = await product.git.discard(path);
+    try {
+    const revision = scope ? await product.fs.readFile(path, scope) : undefined;
+    const expected = revision?.ok ? revision.sha256 : code === 'D' ? null : undefined;
+    const r = await product.git.discard(path, scope, expected);
     if (!r.ok) {
       pushToast(r.message ?? 'Discard failed', 'error');
       return;
@@ -625,16 +683,17 @@ export function ExplorerView({ project, embedded = false }: Props) {
     // If we just nuked the open file, drop the editor view; otherwise re-read.
     if (explorerFile === path) {
       if (code === '?' || code === 'A') {
-        setExplorerFile(project.id, undefined);
+        setExplorerFile(viewKey, undefined);
       } else {
         setEditedContent(null);
-        product.fs.readFile(path).then((res) => setFileResult(res)).catch(() => {});
+        product.fs.readFile(path, scope).then((res) => setFileResult(res)).catch(() => {});
         if (diffMode) {
-          product.git.showHead(path).then((h) => setHeadResult(h)).catch(() => {});
+          product.git.showHead(path, scope).then((h) => setHeadResult(h)).catch(() => {});
         }
       }
     }
     reloadGitStatus();
+    } catch (error) { pushToast(error instanceof Error ? error.message : 'Discard failed', 'error'); }
   };
 
   // Reload a directory's children and make sure it's expanded so the result of
@@ -674,8 +733,8 @@ export function ExplorerView({ project, embedded = false }: Props) {
         ? await product.fs.createDirRemote(project.id, target)
         : await product.fs.createFileRemote(project.id, target)
       : kind === 'dir'
-        ? await product.fs.createDir(viewRoot, target)
-        : await product.fs.createFile(viewRoot, target);
+        ? await product.fs.createDir(viewRoot, target, scope)
+        : await product.fs.createFile(viewRoot, target, scope);
     if (!r.ok) {
       pushToast(r.message ?? 'Create failed', 'error');
       return;
@@ -686,7 +745,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     if (kind === 'file' && r.path) {
       const dirty = editedContent !== null && editedContent !== (fileResult?.content ?? '');
       if (!dirty || window.confirm('Discard unsaved changes?')) {
-        setExplorerFile(project.id, r.path);
+        setExplorerFile(viewKey, r.path);
       }
     }
     reloadGitStatus();
@@ -707,7 +766,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     const target = viewRoot + '/' + next.replace(/^\/+/, '');
     const r = isRemote
       ? await product.fs.renameRemote(project.id, path, target)
-      : await product.fs.rename(viewRoot, path, target);
+      : await product.fs.rename(viewRoot, path, target, scope);
     if (!r.ok) {
       pushToast(r.message ?? 'Rename failed', 'error');
       return;
@@ -718,9 +777,9 @@ export function ExplorerView({ project, embedded = false }: Props) {
     // it lives inside a renamed folder (rewrite its path prefix).
     if (r.path && explorerFile) {
       if (explorerFile === path) {
-        setExplorerFile(project.id, r.path);
+        setExplorerFile(viewKey, r.path);
       } else if (explorerFile.startsWith(path + '/')) {
-        setExplorerFile(project.id, r.path + explorerFile.slice(path.length));
+        setExplorerFile(viewKey, r.path + explorerFile.slice(path.length));
       }
     }
     reloadGitStatus();
@@ -733,14 +792,14 @@ export function ExplorerView({ project, embedded = false }: Props) {
     if (!window.confirm(`Delete ${what} ${rel}? This cannot be undone.`)) return;
     const r = isRemote
       ? await product.fs.deleteRemote(project.id, path)
-      : await product.fs.delete(viewRoot, path);
+      : await product.fs.delete(viewRoot, path, scope);
     if (!r.ok) {
       pushToast(r.message ?? 'Delete failed', 'error');
       return;
     }
     pushToast(`Deleted ${rel}`);
     if (explorerFile === path || (kind === 'dir' && explorerFile?.startsWith(path + '/'))) {
-      setExplorerFile(project.id, undefined);
+      setExplorerFile(viewKey, undefined);
     }
     await refreshDir(parentOf(path));
     reloadGitStatus();
@@ -751,23 +810,27 @@ export function ExplorerView({ project, embedded = false }: Props) {
   const saveFile = useCallback(async () => {
     if (!explorerFile || editedContent === null || saving) return;
     setSaving(true);
-    const r = isRemote
-      ? await product.fs.writeFileRemote(project.id, explorerFile, editedContent)
-      : await product.fs.writeFile(explorerFile, editedContent);
-    setSaving(false);
+    let r;
+    try {
+      r = isRemote
+        ? await product.fs.writeFileRemote(project.id, explorerFile, editedContent)
+        : await product.fs.writeFile(explorerFile, editedContent, scope, fileResult?.sha256);
+    } catch (error) { pushToast(error instanceof Error ? error.message : 'Failed to save file', 'error'); return; }
+    finally { setSaving(false); }
     if (!r.ok) {
       pushToast(r.message ?? 'Failed to save file', 'error');
       return;
     }
     // Sync the on-disk snapshot to what we just wrote, drop the buffer, and
     // refresh git status so the dirty markers update right away.
-    setFileResult((prev) => (prev ? { ...prev, content: editedContent, bytes: r.bytes } : prev));
-    setEditedContent(null);
+    if (fileClickStateRef.current.explorerFile !== explorerFile) return;
+    setFileResult((prev) => (prev ? { ...prev, content: editedContent, bytes: r.bytes, sha256: r.sha256 } : prev));
+    if (fileClickStateRef.current.editedContent === editedContent) setEditedContent(null);
     if (diffMode && !isRemote) {
-      product.git.showHead(explorerFile).then((h) => setHeadResult(h)).catch(() => {});
+      product.git.showHead(explorerFile, scope).then((h) => setHeadResult(h)).catch(() => {});
     }
     reloadGitStatus();
-  }, [explorerFile, editedContent, saving, pushToast, diffMode, reloadGitStatus, isRemote, project.id]);
+  }, [explorerFile, editedContent, saving, pushToast, diffMode, reloadGitStatus, isRemote, project.id, fileResult?.sha256, scope]);
 
   // ⌘S / Ctrl+S — save the open file. Capture-phase so Monaco's default
   // "save" keybinding (which is a no-op without a wired command) can't
@@ -836,7 +899,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
   const showGitFooter = !isRemote && !!gitStatus && !!(gitStatus.branch || gitStatus.detached);
 
   const onChangeClick = (path: string) => {
-    setExplorerFile(project.id, path);
+    setExplorerFile(viewKey, path);
     // Auto-flip into diff mode when picking from the changes list — that's
     // the whole point of clicking it. User can toggle back to plain view.
     setDiffMode(true);
@@ -903,7 +966,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
     <div
       ref={rootRef}
       className={`explorer-view${embedded ? ' is-embedded' : ''}`}
-      style={{ gridTemplateColumns: `${treeWidth}px minmax(0, 1fr)` }}
+      style={{ flex: '1 1 auto', minHeight: 0, gridTemplateColumns: `${treeWidth}px minmax(0, 1fr)` }}
     >
       <aside className="explorer-tree">
         <ExplorerTreeHeader
@@ -922,7 +985,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
           {...(isRemote ? treeDropHandlers : {})}
           title={isRemote ? 'Drop files here to upload to the remote host' : undefined}
         >
-          {isRemote && remoteError ? (
+          {directoryError ? <div className="tree-pane-empty" role="alert">{directoryError}</div> : isRemote && remoteError ? (
             <div className="tree-pane-empty">
               <p>Couldn’t browse remote host:</p>
               <p style={{ color: 'var(--danger)' }}>{remoteError}</p>
@@ -971,7 +1034,10 @@ export function ExplorerView({ project, embedded = false }: Props) {
                   branches={branches}
                   viewRoot={viewRoot}
                   worktreeByBranch={worktreeByBranch}
-                  onSelectWorktree={(path) => { setViewRoot(path); setWorktreeMenu(false); }}
+                  onSelectWorktree={(path) => {
+                    if (baseScope?.environmentId || (path !== viewRoot && editedContent !== null && !window.confirm('Discard unsaved edits and switch checkouts?'))) return;
+                    setViewRoot(path); setWorktreeMenu(false);
+                  }}
                   onRemoveWorktree={handleRemoveWorktree}
                   placement="above"
                 />
@@ -1011,6 +1077,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
         viewRoot={viewRoot}
         monacoTheme={monacoTheme}
         isRemote={isRemote}
+        nativeFiles={nativeFiles}
         isMarkdown={isMarkdown}
         onContentChange={setEditedContent}
         onEditorMount={(ed, monaco) => {
@@ -1030,7 +1097,7 @@ export function ExplorerView({ project, embedded = false }: Props) {
           y={menu.y}
           isRemote={isRemote}
           gitFiles={gitFiles}
-          onViewInEditor={() => { setExplorerFile(project.id, menu.entry.path); setMenu(null); }}
+          onViewInEditor={() => { setExplorerFile(viewKey, menu.entry.path); setMenu(null); }}
           onSendToTerminal={() => {
             sendPathToTerminal(
               menu.entry.path,
@@ -1040,13 +1107,13 @@ export function ExplorerView({ project, embedded = false }: Props) {
             setMenu(null);
           }}
           onDownloadRemote={isRemote && menu.entry.kind === 'file' ? () => { downloadRemoteFile(menu.entry.path); setMenu(null); } : undefined}
-          onOpenInCursor={!isRemote ? () => { openInExternal('cursor', viewRoot); setMenu(null); } : undefined}
-          onOpenInCode={!isRemote ? () => { openInExternal('code', viewRoot); setMenu(null); } : undefined}
-          onRevealInFinder={!isRemote ? () => { openInExternal('finder', menu.entry.path); setMenu(null); } : undefined}
+          onOpenInCursor={!isRemote && nativeFiles ? () => { openInExternal('cursor', viewRoot); setMenu(null); } : undefined}
+          onOpenInCode={!isRemote && nativeFiles ? () => { openInExternal('code', viewRoot); setMenu(null); } : undefined}
+          onRevealInFinder={!isRemote && nativeFiles ? () => { openInExternal('finder', menu.entry.path); setMenu(null); } : undefined}
           onCreateFile={menu.entry.kind === 'dir' ? () => { createEntry(menu.entry.path, 'file'); setMenu(null); } : undefined}
           onCreateFolder={menu.entry.kind === 'dir' ? () => { createEntry(menu.entry.path, 'dir'); setMenu(null); } : undefined}
           onOpenShellHere={!isRemote && menu.entry.kind === 'dir' ? () => { openShellHere(menu.entry.path); setMenu(null); } : undefined}
-          onOpenInTerminal={!isRemote && menu.entry.kind === 'dir' ? () => { openInExternal('terminal', menu.entry.path); setMenu(null); } : undefined}
+          onOpenInTerminal={!isRemote && nativeFiles && menu.entry.kind === 'dir' ? () => { openInExternal('terminal', menu.entry.path); setMenu(null); } : undefined}
           onCopyPath={() => { copyPath(menu.entry.path); setMenu(null); }}
           onRename={() => { renameEntry(menu.entry.path); setMenu(null); }}
           onDiscardChanges={!isRemote && menu.entry.kind === 'file' && gitFiles?.[menu.entry.path] ? () => { discardFile(menu.entry.path); setMenu(null); } : undefined}
@@ -1123,4 +1190,3 @@ function isImagePath(path: string): boolean {
   const lower = path.toLowerCase();
   return IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
-

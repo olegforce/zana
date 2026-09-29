@@ -146,3 +146,13 @@ describe('registerGoalTools', () => {
     expect(text(res)).toContain('goal_create failed: title is required');
   });
 });
+
+
+it('awaits remote goal persistence and reports a rejected write', async () => {
+  const { server, tools } = fakeServer();
+  const agentCreate = vi.fn(async () => makeGoal({ title: 'Acknowledged' }));
+  registerGoalTools(server as never, makeOpts({ goalAgentApi: makeApi({ agentCreate }) }));
+  expect(text(await tools.get('goal_create')!({ title: 'T', statement: 'S' }))).toContain('Acknowledged');
+  agentCreate.mockRejectedValueOnce(new Error('owner offline'));
+  expect(await tools.get('goal_create')!({ title: 'T', statement: 'S' })).toMatchObject({ isError: true });
+});

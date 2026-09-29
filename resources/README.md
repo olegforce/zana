@@ -7,6 +7,7 @@ Zana is an AI fairy: a pearl-white silhouette, blue/lavender wings, and a warm g
 | `icon.svg` | Editable full-color master; README and app artwork |
 | `icon.icns`, `icon.iconset/`, `icon-1024.png` | Packaged desktop app |
 | `icon-dev.png` | Development app, with a gold DEV badge |
+| `../apps/mobile/assets/icon.svg`, `icon.png` | Mobile master and opaque PNG; see [mobile export instructions](../apps/mobile/README.md#app-icon) |
 | `zana-glyph.svg` | Monochrome fairy master for menu-bar and Stream Deck marks |
 | `../website/public/zana-mark.svg` | Simplified website header/footer mark |
 | `../website/public/favicon.svg` | Small-size browser master; also copied to the browser-hosted app |

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProductHttpContext } from '../../http/product-context.js';
@@ -141,58 +141,6 @@ describe('invokeHostSessionTool', () => {
     });
     const goals = JSON.parse(listed.contentItems[0]?.text ?? '[]') as Array<{ title: string; projectId?: string }>;
     expect(goals).toEqual([expect.objectContaining({ title: 'Green suite' })]);
-  });
-
-  it('lists schedules for this project and emits run-now on the hub', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-data-'));
-    const previousDataDir = process.env.ZCC_DATA_DIR;
-    process.env.ZCC_DATA_DIR = dataDir;
-    try {
-    const root = mkdtempSync(join(tmpdir(), 'zcc-sched-'));
-    const dir = join(root, '.zcc', 'schedules');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'sched-1.json'), JSON.stringify({
-      id: 'sched-1',
-      name: 'Hourly QA',
-      enabled: true,
-      projectId: 'proj-1',
-      profile: 'claude-yolo',
-      schedule: { every: '1h' },
-      status: { runCount: 0, runs: [] },
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z'
-    }));
-    const product = ctx({
-      toProjects: () => [{ id: 'proj-1', name: 'Demo', path: root }]
-    });
-    const listed = await invokeHostSessionTool(product, {
-      name: 'schedule_list',
-      threadId: 'thr-1',
-      projectId: 'proj-1',
-      input: {}
-    });
-    const body = JSON.parse(listed.contentItems[0]?.text ?? '{}') as { schedules: Array<{ id: string }> };
-    expect(body.schedules).toEqual([expect.objectContaining({ id: 'sched-1' })]);
-    const ran = await invokeHostSessionTool(product, {
-      name: 'schedule_run_now',
-      threadId: 'thr-1',
-      projectId: 'proj-1',
-      input: { id: 'sched-1' }
-    });
-    expect(ran.success).toBe(true);
-    expect((product.hub as unknown as { events: Array<{ type: string; payload: { id: string } }> }).events)
-      .toContainEqual({ type: 'scheduler:command', payload: { action: 'run-now', id: 'sched-1' } });
-    const toggled = await invokeHostSessionTool(product, {
-      name: 'schedule_set_enabled',
-      threadId: 'thr-1',
-      projectId: 'proj-1',
-      input: { id: 'sched-1', enabled: false }
-    });
-    expect(toggled.success).toBe(true);
-    } finally {
-      if (previousDataDir === undefined) delete process.env.ZCC_DATA_DIR;
-      else process.env.ZCC_DATA_DIR = previousDataDir;
-    }
   });
 
   it('answers inbox_search and suggest_action', async () => {

@@ -31,6 +31,7 @@ export default function plugin(zcc, deps = {}) {
       scope,
       relPath,
       content,
+      expectedSha256: args?.expectedSha256,
       ...(projectId ? { projectId } : {})
     });
   });

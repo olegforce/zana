@@ -13,6 +13,7 @@ import { TeamComposer } from './TeamComposer.js';
 import { ThreadCommandComposer } from './ThreadCommandComposer.js';
 import { LegacyAgentHomeComposer } from './LegacyAgentHomeComposer.js';
 import { LaunchModeSegmented } from './LaunchModeSegmented.js';
+import { ComposerDraftProvider } from './composer/ComposerDraft.js';
 import {
   resolveAvailableLaunchMode,
   visibleComposerLaunchModes,
@@ -314,7 +315,7 @@ export const AgentLauncher = memo(function AgentLauncher({
 
   return createPortal(
     <div className="palette-backdrop" onMouseDown={onClose}>
-      {content}
+      <ComposerDraftProvider>{content}</ComposerDraftProvider>
     </div>,
     document.body
   );

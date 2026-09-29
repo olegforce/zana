@@ -1,0 +1,20 @@
+appId: ai.zana.mobile
+name: Online account onboarding
+# Use a dedicated test simulator. This smoke flow does not approve an account.
+---
+- launchApp
+- openLink:
+    link: zana://connect
+- runFlow:
+    when:
+      platform: iOS
+      visible: Open
+    commands:
+      - tapOn: Open
+- extendedWaitUntil:
+    visible: 'Continue with GitHub|Choose your computer'
+    timeout: 30000
+- assertNotVisible: Server URL
+- assertNotVisible: Scan pairing QR
+- assertNotVisible: Advanced connection options
+- takeScreenshot: zana-online-onboarding

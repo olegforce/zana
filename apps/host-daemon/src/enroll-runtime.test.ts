@@ -104,3 +104,24 @@ describe('startEnrolledHostDaemon', () => {
     await daemon.close();
   });
 });
+
+it('consumes a Connect repair before reusing auth, then recovers a completed enrollment without rotating again', async () => {
+  vi.clearAllMocks();
+  const dataDir = mkdtempSync(join(tmpdir(), 'zcc-connect-repair-'));
+  const hostId = '11111111-1111-4111-8111-111111111111';
+  const serverUrl = 'https://shared.zana-ide.com/';
+  readHostAuth.mockReturnValue({ hostId, hostKey: 'old-key', hostName: 'test-host', serverUrl });
+  enrollDaemonHost.mockResolvedValue({ protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, hostKey: 'new-key' });
+  startEnrolledHostConnection.mockImplementation(() => openConnection());
+  const options = { dataDir, serverUrl, hostId, token: 'zcde_' + 'a'.repeat(24), connectCredential: 'b'.repeat(43) };
+  const first = await startEnrolledHostDaemon(options);
+  expect(enrollDaemonHost).toHaveBeenCalledOnce();
+  expect(startEnrolledHostConnection).toHaveBeenCalledWith(expect.objectContaining({ hostKey: 'new-key' }));
+  const saved = writeHostAuth.mock.calls[0]![1];
+  expect(saved.enrollmentId).toMatch(/^[a-f0-9]{64}$/);
+  await first.close();
+  readHostAuth.mockReturnValue(saved); enrollDaemonHost.mockClear();
+  const recovered = await startEnrolledHostDaemon(options);
+  expect(enrollDaemonHost).not.toHaveBeenCalled();
+  await recovered.close();
+});

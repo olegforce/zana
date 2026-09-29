@@ -3,6 +3,7 @@ import { VALID_PROFILES } from '@zana-ai/zcc-domain/launch-provider';
 import type { LaunchProfileId, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { readJsonBody, sendJson } from './json.js';
 import type { ProductHttpContext } from './product-context.js';
+import { getPrimaryHost } from '@zana-ai/zcc-db';
 import {
   asControlResult,
   cliAgentPresentationStatus,
@@ -98,12 +99,20 @@ export async function handleCliAgentsApi(
       sendJson(response, 400, { ok: false, code: 'invalid-input', message: 'projectId and a valid profile are required' });
       return true;
     }
-    if (!ctx.toProjects().some((row) => row.id === projectId)) {
+    const project = ctx.toProjects().find((row) => row.id === projectId);
+    if (!project) {
       sendJson(response, 404, { ok: false, code: 'unknown-project', message: 'project is not registered' });
+      return true;
+    }
+    const primaryId = getPrimaryHost(ctx.db)?.id;
+    if ((body.hostId !== undefined && (typeof body.hostId !== 'string' || !body.hostId || body.hostId !== primaryId))
+      || (project.hostId && project.hostId !== primaryId)) {
+      sendJson(response, 409, { ok: false, code: 'host-unsupported', message: 'CLI Agents on secondary machines are not available yet. Use a Modern thread on that machine.' });
       return true;
     }
     const input: ProductCliAgentCreateInput = {
       projectId,
+      hostId: typeof body.hostId === 'string' ? body.hostId : undefined,
       profile,
       prompt: typeof body.prompt === 'string' ? body.prompt : undefined,
       personaId: typeof body.personaId === 'string' ? body.personaId : undefined,

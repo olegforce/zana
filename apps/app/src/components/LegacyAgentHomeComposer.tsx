@@ -53,6 +53,7 @@ import {
   fallbackProviderOption
 } from './thread/pickers/fallback-models.js';
 import { permissionModeOptionsFor } from './thread/pickers/permission-mode-options.js';
+import { useThreadPermissionMode } from './thread/pickers/useThreadPermissionMode.js';
 import { PopoverPicklist } from './ui/PopoverPicklist.js';
 import { TextArgsField } from './settings/FormFields.js';
 import {
@@ -174,7 +175,6 @@ export function LegacyAgentHomeComposer({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [extraArgs, setExtraArgs] = useState<string[]>([]);
   const [personaId, setPersonaId] = useState('');
-  const [permissionMode, setPermissionMode] = useState('accept-edits');
   const [workMode, setWorkMode] = useState<ComposerWorkMode>('agent');
   const launchPatch = useSyncExternalStore(
     subscribeLaunchPatches,
@@ -203,7 +203,7 @@ export function LegacyAgentHomeComposer({
     setExtraArgs(readCliExtraArgs(familyId));
     setWorkMode('agent');
   }, [familyId]);
-  const catalogHostId = project?.hostId ?? executionHostId;
+  const catalogHostId = project?.remote ? project.hostId : executionHostId ?? project?.hostId;
   const hostCatalog = threadModelCatalogForHost(catalogHostId, project?.id);
   const catalog = useSyncExternalStore(hostCatalog.subscribe, hostCatalog.getSnapshot, hostCatalog.getSnapshot);
   const selectedProviderId = (familyId && threadProviderIdForFamily(familyId)) || '';
@@ -221,6 +221,7 @@ export function LegacyAgentHomeComposer({
     [catalogPermissionModes, unrestrictedId]
   );
   const permissionOptions = permissionModeOptionsFor(permissionModeIds);
+  const { permissionMode, setPermissionMode } = useThreadPermissionMode({ supportedModes: permissionModeIds });
   // Same thread AvailableModel roster as Modern. The PTY snapshot is only a
   // loading placeholder — including on a remote project. Which machine's
   // catalog is fetched is `catalogHostId`, not this flag.
@@ -334,12 +335,6 @@ export function LegacyAgentHomeComposer({
       setRoleTargetId(undefined);
     }
   }, [familyId, openCodeModeEntries, roleTargetId]);
-
-  useEffect(() => {
-    if (permissionModeIds.length > 0 && !permissionModeIds.includes(permissionMode)) {
-      setPermissionMode(permissionModeIds[0]!);
-    }
-  }, [permissionMode, permissionModeIds]);
 
   useEffect(() => {
     const generation = ++descriptorGeneration.current;
@@ -905,6 +900,7 @@ export function LegacyAgentHomeComposer({
             </span>
           ) : project ? (
             <EnvironmentPicker
+              hostId={executionHostId}
               projectId={project.id}
               value={workspace}
               onChange={setWorkspace}

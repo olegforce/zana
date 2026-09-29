@@ -1,6 +1,7 @@
 import { dialog, type BrowserWindow } from 'electron';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
+import { registerSharedProduct } from './shared-product-registry.js';
 import { store } from '@zana-ai/zcc-server/services/projects/store';
 import { projectExecutionProjection, executionBoardProjection } from '@zana-ai/zcc-server/services/execution/projection';
 import { resolveExecutionMessageArgs } from '@zana-ai/zcc-server/services/execution/message-compat';
@@ -24,14 +25,27 @@ const DEFAULT_EXECUTION_PAGE_LIMIT = 50;
 const RELAUNCH_MONITOR_SOURCE_READ_MAX_BYTES = 64 * 1024;
 /** Exponential backoff base (ms) between resume-binding retries during monitor relaunch. */
 const RELAUNCH_MONITOR_BIND_RETRY_BASE_MS = 100;
+type ExecutionCaller = { kind: 'window'; window: BrowserWindow } | { kind: 'shared-owner' };
 
 export function registerExecutionBoardIpc(): void {
   const { safeHandle, safeHandleFromWindow, ptys, teams, personas, windows,
     executionStore, executionResumeTokens, executionSources, squadExecutionService,
     startTeamJobFromUi, getTeamLaunch, createTerminalConfined } = ctx;
 
-  const isExecutionProjectAllowed = (win: BrowserWindow, projectId: string) => {
-    const scopedProjectId = windows.get(win.id)?.projectId;
+  // The product-server credential identifies the authenticated instance owner.
+  // A remote caller never supplies a window or receives a fabricated local one.
+  const handleFromCaller = <A extends unknown[], R>(channel: string,
+    handler: (caller: ExecutionCaller, ...args: A) => R | Promise<R>,
+    fallback: (error: unknown) => R
+  ) => {
+    safeHandleFromWindow<A, R>(channel, (window, ...args) => handler({ kind: 'window', window }, ...args), (error, ..._args: A) => fallback(error));
+    registerSharedProduct(channel, async (...args: A) => {
+      try { return await handler({ kind: 'shared-owner' }, ...args); } catch (error) { return fallback(error); }
+    });
+  };
+  const isExecutionProjectAllowed = (caller: ExecutionCaller, projectId: string) => {
+    if (caller.kind === 'shared-owner') return typeof projectId === 'string' && store.listProjects().some(project => project.id === projectId);
+    const scopedProjectId = windows.get(caller.window.id)?.projectId;
     return !scopedProjectId || scopedProjectId === projectId;
   };
 
@@ -45,15 +59,15 @@ export function registerExecutionBoardIpc(): void {
 
   // Team job launch (Job Team). main authorizes the whole launch and stamps the
   // originating window; a project the window is not scoped to is rejected (Rule 1).
-  safeHandleFromWindow<[TeamJobLaunchInput], Result<TeamJobLaunchResult>>(
+  handleFromCaller<[TeamJobLaunchInput], Result<TeamJobLaunchResult>>(
     IPC.teams.startJob,
     (win, input) => !isExecutionProjectAllowed(win, input?.projectId)
       ? { ok: false, code: 'NOT_FOUND', message: 'project not found' }
-      : startTeamJobFromUi(input, { windowId: win.id }),
+      : startTeamJobFromUi(input, win.kind === 'window' ? { windowId: win.window.id } : undefined),
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'Team job launch unavailable' })
   );
 
-  safeHandleFromWindow<[string, number | undefined, number | undefined], { executions: ExecutionBoardProjection[]; hasMore: boolean }>(
+  handleFromCaller<[string, number | undefined, number | undefined], { executions: ExecutionBoardProjection[]; hasMore: boolean }>(
     IPC.executionBoard.listProject,
     async (win, projectId, before, limit = DEFAULT_EXECUTION_PAGE_LIMIT) => {
       if (typeof projectId !== 'string' || !projectId.trim()) return { executions: [], hasMore: false };
@@ -71,7 +85,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ executions: [], hasMore: false })
   );
 
-  safeHandleFromWindow<[string, string, number | undefined], ExecutionBoardSnapshot | undefined>(
+  handleFromCaller<[string, string, number | undefined], ExecutionBoardSnapshot | undefined>(
     IPC.executionBoard.snapshot,
     async (win, projectId, executionId, after) => {
       if (typeof projectId !== 'string' || typeof executionId !== 'string'
@@ -97,7 +111,7 @@ export function registerExecutionBoardIpc(): void {
     () => undefined
   );
 
-  safeHandleFromWindow<[string, string, string], Result<{ content: string }>>(
+  handleFromCaller<[string, string, string], Result<{ content: string }>>(
     IPC.executionBoard.readArtifact,
     async (win, projectId, executionId, artifactId) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution artifact not found' };
@@ -109,7 +123,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'Execution artifact unavailable' })
   );
 
-  safeHandleFromWindow<[string, string], Result<{ dismissedSessionIds: string[] }>>(
+  handleFromCaller<[string, string], Result<{ dismissedSessionIds: string[] }>>(
     IPC.executionBoard.dismiss,
     async (win, projectId, executionId) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found' };
@@ -121,7 +135,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution dismissal unavailable' })
   );
 
-  safeHandleFromWindow<[string, string, number], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.stop,
     async (win, projectId, executionId, expectedStateVersion) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found' };
@@ -165,7 +179,7 @@ export function registerExecutionBoardIpc(): void {
   // never a string, so it can be popped off the compat-shaped variadic tail
   // without disturbing the existing 2-arg (slotId, message) / 3-arg
   // (blockerId, clientRequestId, message) shapes resolveExecutionMessageArgs parses.
-  const executionMessageHandler = (action: 'respond' | 'resume') => async (win: BrowserWindow, projectId: string, executionId: string, expectedStateVersion: number, ...rawArgs: Array<string | boolean>) => {
+  const executionMessageHandler = (action: 'respond' | 'resume') => async (win: ExecutionCaller, projectId: string, executionId: string, expectedStateVersion: number, ...rawArgs: Array<string | boolean>) => {
     if (!isExecutionProjectAllowed(win, projectId)) return { ok: false as const, code: 'NOT_FOUND', message: 'execution not found' };
     const record = await executionStore.getInProject(projectId, executionId) as ExecutionRecord | undefined;
     if (!record) return { ok: false as const, code: 'NOT_FOUND', message: 'execution not found' };
@@ -193,16 +207,16 @@ export function registerExecutionBoardIpc(): void {
 
     return executionMessageControl(action, projectId, executionId, effectiveStateVersion, resolved.blockerId, resolved.clientRequestId, resolved.message);
   };
-  safeHandleFromWindow<[string, string, number, ...Array<string | boolean>], Result<ExecutionBoardProjection>>(IPC.executionBoard.respond,
+  handleFromCaller<[string, string, number, ...Array<string | boolean>], Result<ExecutionBoardProjection>>(IPC.executionBoard.respond,
     executionMessageHandler('respond'),
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
-  safeHandleFromWindow<[string, string, number, ...Array<string | boolean>], Result<ExecutionBoardProjection>>(IPC.executionBoard.resume,
+  handleFromCaller<[string, string, number, ...Array<string | boolean>], Result<ExecutionBoardProjection>>(IPC.executionBoard.resume,
     executionMessageHandler('resume'),
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
 
-  safeHandleFromWindow<[string, string, number, string, string], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number, string, string], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.retryDelivery,
     async (win, projectId, executionId, expectedStateVersion, blockerId, deliveryId) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found' };
@@ -219,7 +233,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
 
-  safeHandleFromWindow<[string, string, number], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.retry,
     async (win, projectId, executionId, expectedStateVersion) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found' };
@@ -254,21 +268,21 @@ export function registerExecutionBoardIpc(): void {
     return result.ok ? { ok: true, value: executionProjection(result.value) }
       : { ok: false, code: result.code, message: result.message };
   };
-  safeHandleFromWindow<[string, string, number, string, string | undefined], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number, string, string | undefined], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.retryWork,
     (win, projectId, executionId, expectedStateVersion, workUnitId, assignedSlotId) => isExecutionProjectAllowed(win, projectId)
       ? executionWorkControl('retry', projectId, executionId, expectedStateVersion, workUnitId, assignedSlotId)
       : { ok: false as const, code: 'NOT_FOUND', message: 'execution not found' },
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
-  safeHandleFromWindow<[string, string, number, string], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number, string], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.releaseWork,
     (win, projectId, executionId, expectedStateVersion, workUnitId) => isExecutionProjectAllowed(win, projectId)
       ? executionWorkControl('release', projectId, executionId, expectedStateVersion, workUnitId)
       : { ok: false as const, code: 'NOT_FOUND', message: 'execution not found' },
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
-  safeHandleFromWindow<[string, string, number, string, string], Result<ExecutionBoardProjection>>(
+  handleFromCaller<[string, string, number, string, string], Result<ExecutionBoardProjection>>(
     IPC.executionBoard.reassignWork,
     (win, projectId, executionId, expectedStateVersion, workUnitId, assignedSlotId) => isExecutionProjectAllowed(win, projectId)
       ? executionWorkControl('reassign', projectId, executionId, expectedStateVersion, workUnitId, assignedSlotId)
@@ -276,7 +290,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution control unavailable' })
   );
 
-  safeHandleFromWindow<[string, string], Result<true>>(
+  handleFromCaller<[string, string], Result<true>>(
     IPC.executionBoard.clearResumeToken,
     async (win, projectId, executionId) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found for project' };
@@ -293,7 +307,7 @@ export function registerExecutionBoardIpc(): void {
     () => ({ ok: false, code: 'UNAVAILABLE', message: 'execution token unavailable' })
   );
 
-  safeHandleFromWindow<[string, string], Result<{ sessionId: string }>>(
+  handleFromCaller<[string, string], Result<{ sessionId: string }>>(
     IPC.executionBoard.relaunchMonitor,
     async (win, projectId, executionId) => {
       if (!isExecutionProjectAllowed(win, projectId)) return { ok: false, code: 'NOT_FOUND', message: 'execution not found for project' };

@@ -104,7 +104,7 @@ export interface CloseSummaryDeps {
     sessionId: string;
     title: string;
     detail?: string;
-  }) => string | null;
+  }) => string | null | Promise<string | null>;
 }
 
 /** One agent's distilled note. `did`/`left` may be empty when the model couldn't tell. */
@@ -369,7 +369,7 @@ export class CloseSummaryService {
       for (const { sessionId, title, note } of notes) {
         if (!note.left) continue;
         try {
-          const created = this.deps.createFollowUp({
+          const created = await this.deps.createFollowUp({
             projectId,
             sessionId,
             title: `Follow up: ${title}`,

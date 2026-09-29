@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import {
@@ -216,6 +216,13 @@ function defaultRpcHandler(projectRoot: string) {
       case 'host.list_branches':
         reply(true, { branches: ['main'], truncated: false });
         return;
+      case 'host.read_path': {
+        try {
+          const content = readFileSync(request.command.path, 'utf8');
+          reply(true, { path: request.command.path, content, contentEncoding: 'utf8', sizeBytes: Buffer.byteLength(content), sha256: createHash('sha256').update(content).digest('hex') });
+        } catch { reply(false, undefined, { code: 'path_not_found', message: 'File does not exist' }); }
+        return;
+      }
       case 'host.list_files':
         reply(true, {
           files: [{
@@ -252,11 +259,110 @@ function defaultRpcHandler(projectRoot: string) {
 }
 
 describe('host enroll hub and thread create', () => {
+  it('recovers terminal ownership and deduplicates acknowledged history after a server restart', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-terminal-recovery-'));
+    const { dataDir, enrollToken } = await startServer(root);
+    const instanceId = randomUUID();
+    const enrolled = await enrollHost(enrollToken, 'alpha', instanceId);
+    let socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    const started = await fetch(`${server!.url}api/v1/threads`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: 'proj-1', providerId: 'claude', input: ['hi'] })
+    }).then(response => response.json()) as { value: { id: string } };
+    const threadId = started.value.id;
+    const before = listConversationThreadEvents(server!.ctx.db, threadId).length;
+    const terminalId = randomUUID();
+    server!.ctx.terminalSessions.set(terminalId, { id: terminalId, projectId: 'proj-1', title: 'Owned', profile: 'shell', cwd: root, status: 'running', createdAt: 1, hostId: enrolled.hostId, daemonInstanceId: instanceId });
+    const batch = { type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, batchId: randomUUID(), events: [
+      { terminalId, kind: 'terminal.output', payload: { data: 'once\n' } },
+      { threadId, kind: 'thread.started' },
+      { threadId, kind: 'thread.event', payload: { type: 'turn/diff/updated', diff: 'never store' } },
+      { threadId, kind: 'thread.event', payload: { type: 'turn/diff/updated', diff: 'never store either' } },
+      { threadId, kind: 'thread.event', payload: { type: 'item/completed', threadId, scope: { kind: 'turn', turnId: 'retained' },
+        item: { type: 'commandExecution', id: 'retained-command', command: 'echo', cwd: '/', status: 'completed', approvalStatus: 'not-requested', aggregatedOutput: 'x'.repeat(100_000), exitCode: 0 } } }
+    ] };
+    const send = (body = batch) => new Promise<any>(resolve => {
+      const listener = (raw: WebSocket.RawData) => { const value = JSON.parse(String(raw)); if (value.type === 'host.event-ack') { socket.off('message', listener); resolve(value); } };
+      socket.on('message', listener); socket.send(JSON.stringify(body));
+    });
+    expect(await send()).toMatchObject({ batchId: batch.batchId, accepted: 5 });
+    expect(await send()).toMatchObject({ batchId: batch.batchId, accepted: 5 });
+    expect(server!.ctx.terminalSessions.get(terminalId)?.outputText).toBe('once\n');
+    expect(listConversationThreadEvents(server!.ctx.db, threadId)).toHaveLength(before + 2);
+    expect(JSON.stringify(listConversationThreadEvents(server!.ctx.db, threadId))).not.toContain('x'.repeat(5000));
+    expect(server!.ctx.db.sqlite.prepare('SELECT length(value) AS size FROM conversation_event_outputs').all()).toEqual([{ size: 100_000 }]);
+    await server!.close();
+    server = await startProductServer({ dataDir, enrollToken, origins: { serverPort: 0, devAppPort: 5173 } });
+    socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    expect(await send()).toMatchObject({ accepted: 5 });
+    expect(server.ctx.terminalSessions.get(terminalId)).toMatchObject({ status: 'running', outputText: 'once\n', outputEndOffset: 5, daemonInstanceId: instanceId });
+    expect(listConversationThreadEvents(server.ctx.db, threadId)).toHaveLength(before + 2);
+    // An identical retry is accepted; an identity reused for different content
+    // closes the socket without applying a second mutation.
+    const closed = new Promise<number>(resolve => socket.once('close', resolve));
+    socket.send(JSON.stringify({ ...batch, events: [{ terminalId, kind: 'terminal.output', payload: { data: 'wrong' } }] }));
+    expect(await closed).toBe(1011);
+    socket = await openHostSocket(enrolled, randomUUID(), defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    expect(server.ctx.terminalSessions.get(terminalId)).toMatchObject({ status: 'exited', exitCode: -1, outputText: 'once\n' });
+  });
+  it('rolls back cached output and publishes nothing if the durable batch commit fails', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-batch-rollback-'));
+    const { enrollToken } = await startServer(root);
+    const instanceId = randomUUID(), enrolled = await enrollHost(enrollToken, 'alpha', instanceId);
+    let socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    const terminalId = randomUUID();
+    const record = { id: terminalId, projectId: 'proj-1', title: 'Owned', profile: 'shell' as const, cwd: root, status: 'running' as const, createdAt: 1, hostId: enrolled.hostId, daemonInstanceId: instanceId };
+    server!.ctx.terminalSessions.set(terminalId, record);
+    const publish = vi.spyOn(server!.ctx.hub, 'emit');
+    server!.ctx.db.sqlite.exec("CREATE TEMP TRIGGER fail_batch BEFORE INSERT ON host_event_receipts BEGIN SELECT RAISE(ABORT, 'disk failure'); END");
+    const batch = { type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, batchId: randomUUID(), events: [{ terminalId, kind: 'terminal.output', payload: { data: 'one' } }] };
+    const closed = new Promise<number>(resolve => socket.once('close', resolve));
+    socket.send(JSON.stringify(batch)); expect(await closed).toBe(1011);
+    expect(server!.ctx.terminalSessions.get(terminalId)).toBe(record);
+    expect(record).not.toHaveProperty('outputText');
+    expect(record).not.toHaveProperty('outputEndOffset');
+    expect(publish.mock.calls.filter(([type]) => type === 'terminals:data')).toEqual([]);
+    expect(server!.ctx.db.sqlite.prepare('SELECT record_json FROM product_terminal_sessions WHERE id = ?').get(terminalId)).toEqual({ record_json: JSON.stringify(record) });
+    server!.ctx.db.sqlite.exec('DROP TRIGGER fail_batch');
+    socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    const acknowledged = new Promise<any>(resolve => socket.once('message', data => resolve(JSON.parse(String(data)))));
+    socket.send(JSON.stringify(batch)); expect(await acknowledged).toMatchObject({ accepted: 1 });
+    expect(server!.ctx.terminalSessions.get(terminalId)).toMatchObject({ outputText: 'one', outputEndOffset: 3 });
+    expect(publish.mock.calls.filter(([type]) => type === 'terminals:data')).toHaveLength(1);
+  });
+  it('accepts terminal output only from its registered execution host', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-terminal-owner-'));
+    const { enrollToken } = await startServer(projectRoot);
+    const instanceA = randomUUID(), instanceB = randomUUID();
+    const a = await enrollHost(enrollToken, 'alpha', instanceA), b = await enrollHost(enrollToken, 'beta', instanceB);
+    const aSocket = await openHostSocket(a, instanceA, defaultRpcHandler(projectRoot));
+    const bSocket = await openHostSocket(b, instanceB, defaultRpcHandler(projectRoot));
+    await waitForHost(a.hostId); await waitForHost(b.hostId);
+    const id = randomUUID();
+    server!.ctx.terminalSessions.set(id, { id, projectId: 'proj-1', title: 'Owned', profile: 'shell', cwd: projectRoot, status: 'running', createdAt: 1, hostId: a.hostId });
+    const send = (socket: WebSocket, hostId: string, instanceId: string, kind: 'terminal.output' | 'terminal.exited') => new Promise<any>(resolve => {
+      const listener = (raw: WebSocket.RawData) => { const value = JSON.parse(String(raw)); if (value.type === 'host.event-ack') { socket.off('message', listener); resolve(value); } };
+      socket.on('message', listener);
+      socket.send(JSON.stringify({ type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId, events: [{ terminalId: id, kind, payload: { data: 'owned output', exitCode: 9 } }] }));
+    });
+    expect(await send(bSocket, b.hostId, instanceB, 'terminal.output')).toMatchObject({ accepted: 0, rejected: [{ reason: 'unknown_terminal' }] });
+    expect(await send(bSocket, b.hostId, instanceB, 'terminal.exited')).toMatchObject({ accepted: 0 });
+    expect(server!.ctx.terminalSessions.get(id)).toMatchObject({ status: 'running' });
+    expect(server!.ctx.terminalSessions.get(id)?.outputText).toBeUndefined();
+    expect(await send(aSocket, a.hostId, instanceA, 'terminal.output')).toMatchObject({ accepted: 1 });
+    expect(server!.ctx.terminalSessions.get(id)?.outputText).toBe('owned output');
+  });
   it('sends host.hello-ok so waitUntilConnected resolves after hello', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-proj-'));
     const { enrollToken } = await startServer(projectRoot);
     const instanceId = randomUUID();
     const enrolled = await enrollHost(enrollToken, 'hello-ok', instanceId);
+    server!.ctx.pluginHostArtifacts.set('machine-proof', { path: '/private/not-sent', digest: 'a'.repeat(64), byteLength: 1, generation: 'current-generation' });
     const acks: Array<{ type?: string; hostId?: string }> = [];
     const url = new URL('internal/hosts/ws', server!.url.replace(/^http/, 'ws'));
     const socket = new WebSocket(url, {
@@ -286,6 +392,8 @@ describe('host enroll hub and thread create', () => {
     await expect.poll(
       () => acks.some((row) => row.type === 'host.hello-ok' && row.hostId === enrolled.hostId)
     ).toBe(true);
+    expect(acks.find(row => row.type === 'host.hello-ok')).toMatchObject({ pluginHostGenerations: expect.arrayContaining([{ pluginId: 'machine-proof', generation: 'current-generation' }]) });
+    expect(JSON.stringify(acks)).not.toContain('/private/not-sent');
   });
 
   it('rejects browser Origin on enroll and fails create when no host is connected', async () => {
@@ -320,7 +428,7 @@ describe('host enroll hub and thread create', () => {
     expect(harness).toMatchObject({ ok: false, code: 'UNAVAILABLE_DEFAULT' });
   });
 
-  it('creates a thread after enroll and rejects a second host without an explicit hostId', async () => {
+  it('keeps default launches on the registered primary after another machine joins', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-proj-'));
     const { enrollToken } = await startServer(projectRoot);
     const instanceA = randomUUID();
@@ -357,13 +465,13 @@ describe('host enroll hub and thread create', () => {
     await openHostSocket(hostB, instanceB, defaultRpcHandler(projectRoot));
     await waitForHost(hostB.hostId);
 
-    const ambiguous = await fetch(`${server!.url}api/v1/threads`, {
+    const defaulted = await fetch(`${server!.url}api/v1/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ projectId: 'proj-1', providerId: 'claude', input: ['two hosts'] })
     }).then(async (response) => ({ status: response.status, body: await response.json() }));
-    expect(ambiguous.status).toBe(409);
-    expect(ambiguous.body.code).toBe('ambiguous-host');
+    expect(defaulted.status).toBe(201);
+    expect(defaulted.body.value.hostId).toBe(hostA.hostId);
   });
 
   it('provisions a personal workspace when Default Project runs on another machine', async () => {
@@ -616,6 +724,9 @@ describe('host enroll hub and thread create', () => {
     expect(listed.docs).toEqual([expect.objectContaining({
       relPath: 'note.md',
       absPath: join(dataDir, 'library', 'note.md')
+    }), expect.objectContaining({
+      scope: 'project', projectId: 'proj-1', relPath: 'note.md',
+      absPath: join(projectRoot, '.zcc', 'library', 'note.md')
     })]);
 
     const escaped = await fetch(
@@ -1005,4 +1116,28 @@ describe('host enroll hub and thread create', () => {
     }).then((response) => response.status);
     expect(rejected).toBe(403);
   });
+});
+
+it('rejects pending RPCs on connection replacement and ignores late messages from the old socket', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-host-replace-'));
+  const { enrollToken } = await startServer(projectRoot);
+  const instanceId = randomUUID();
+  const enrolled = await enrollHost(enrollToken, 'alpha', instanceId);
+  await openHostSocket(enrolled, instanceId, () => {});
+  await waitForHost(enrolled.hostId);
+  const old = server!.ctx.hostHub.getSession(enrolled.hostId)!.socket;
+  const pending = server!.ctx.hostHub.callHostOnlineRpc({ hostId: enrolled.hostId, command: { type: 'host.list_branches', workspacePath: projectRoot, workspaceProvisionType: 'unmanaged' } });
+  const rejected = expect(pending).rejects.toThrow('disconnected');
+  let request: HostRpcRequestMessage | undefined;
+  let answer: ((ok: boolean, result?: unknown) => void) | undefined;
+  await openHostSocket(enrolled, instanceId, (next, reply) => { request = next; answer = reply; });
+  await expect.poll(() => server!.ctx.hostHub.getSession(enrolled.hostId)?.socket !== old).toBe(true);
+  await rejected;
+  const current = server!.ctx.hostHub.callHostOnlineRpc({ hostId: enrolled.hostId, command: { type: 'host.list_branches', workspacePath: projectRoot, workspaceProvisionType: 'unmanaged' } });
+  await expect.poll(() => Boolean(request)).toBe(true);
+  // Simulate already-buffered data being delivered after a replacement socket
+  // has acquired this host identity; it must not settle the new request.
+  old.emit('message', Buffer.from(JSON.stringify({ type: 'host-rpc.response', protocolVersion: HOST_RPC_PROTOCOL_VERSION, requestId: request!.requestId, commandType: 'host.list_branches', ok: true, result: { branches: ['forged-old'], truncated: false } })));
+  answer!(true, { branches: ['current'], truncated: false });
+  expect(await current).toEqual({ branches: ['current'], truncated: false });
 });

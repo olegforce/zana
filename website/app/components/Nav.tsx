@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { formatStarCount } from '../../lib/github-stars';
 import { site } from '../../lib/site';
+import { NavAccountLink, useNavAccount } from './NavAccount';
 
 const LINKS = [
   { href: '/', label: 'Product' },
@@ -67,6 +68,7 @@ function ThemeToggle({
 
 export function Nav({ starCount = null }: { starCount?: number | null }) {
   const pathname = usePathname();
+  const account = useNavAccount(pathname);
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<Theme | null>(null);
 
@@ -102,10 +104,12 @@ export function Nav({ starCount = null }: { starCount?: number | null }) {
           (pathname.startsWith('/marketplace') ||
             pathname.startsWith('/dashboard')));
 
+  const isDashboard = pathname === '/connect' || pathname.startsWith('/connect/');
+
   return (
-    <nav className="nav">
+    <nav className="nav" aria-label="Primary navigation">
       <div className="wrap">
-        <Link href="/" className="brand">
+        <Link href="/" className="brand" aria-label="Zana home">
           <Image
             className="brand-mark"
             src="/zana-mark.svg?v=fairy-2"
@@ -161,6 +165,7 @@ export function Nav({ starCount = null }: { starCount?: number | null }) {
             >
               Download
             </Link>
+            <NavAccountLink account={account} small current={isDashboard} />
           </div>
         </div>
 
@@ -215,6 +220,7 @@ export function Nav({ starCount = null }: { starCount?: number | null }) {
           <Link href="/download/" className="zcc-btn zcc-btn-primary">
             Download
           </Link>
+          <NavAccountLink account={account} current={isDashboard} />
         </div>
       )}
     </nav>
@@ -222,8 +228,10 @@ export function Nav({ starCount = null }: { starCount?: number | null }) {
 }
 
 export function Footer() {
+  const pathname = usePathname();
   const [year, setYear] = useState(2026);
   useEffect(() => setYear(new Date().getFullYear()), []);
+  if (pathname === '/connect' || pathname.startsWith('/connect/')) return null;
   return (
     <footer>
       <div className="wrap">

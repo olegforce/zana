@@ -3,7 +3,7 @@
  *
  * The Settings → Editor category shows, per editor, whether its CLI shim
  * (`cursor` / `code` / `idea`) resolves — the same "installed / not-installed"
- * affordance the Code Harness tab gives for the coding CLIs, but for the
+ * affordance the AI Harness tab gives for the coding CLIs, but for the
  * `OpenerButtons` "open in editor" bar. This is DISTINCT from harness
  * verification: the harness probes `cursor-agent` (the coding CLI), whereas this
  * probes `cursor` (the GUI-launch shim). Only the GUI editors are probed —

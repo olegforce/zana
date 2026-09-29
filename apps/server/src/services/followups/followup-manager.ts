@@ -1,3 +1,4 @@
+import type { MetadataPersistence } from '../projects/project-record-store.js';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { watch, existsSync, mkdirSync, type FSWatcher } from 'node:fs';
@@ -95,6 +96,7 @@ export interface FollowUpSessionInfo {
 
 type Deps = {
   store: typeof Store;
+  persistence?: MetadataPersistence<FollowUp>;
   inbox?: IInboxStore;
   logger?: Logger;
   /** Session metadata lookup; gates idle-driven creation. Null ⇒ session gone. */
@@ -130,6 +132,25 @@ export class FollowUpManager extends EventEmitter {
   private watchers = new Map<string, FSWatcher>();
   private watchDebounce: NodeJS.Timeout | null = null;
   private suppressWatchUntil = 0;
+  private remotePoll: NodeJS.Timeout | null = null;
+  private serialTail: Promise<unknown> = Promise.resolve();
+  private pending = 0;
+
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    if (this.pending >= 100) return Promise.reject(new Error('Too many pending follow-up operations'));
+    this.pending++;
+    const result = this.serialTail.then(work);
+    this.serialTail = result.then(() => { this.pending--; }, () => { this.pending--; });
+    return result;
+  }
+
+  create(input: FollowUpCreateInput): Promise<FollowUp> { return this.serial(() => this.createNow(input)); }
+  update(id: string, patch: FollowUpUpdateInput): Promise<FollowUp> { return this.serial(() => this.updateNow(id, patch)); }
+  setStatus(id: string, status: FollowUpStatus, resolution?: string): Promise<FollowUp | null> { return this.serial(() => this.setStatusNow(id, status, resolution)); }
+  markSpawned(id: string): Promise<FollowUp | null> { return this.serial(() => this.markSpawnedNow(id)); }
+  remove(id: string): Promise<void> { return this.serial(() => this.removeNow(id)); }
+  loadAll(projects: Project[]): Promise<void> { return this.serial(() => this.loadAllNow(projects)); }
+
 
   setDeps(deps: Deps) {
     this.deps = deps;
@@ -146,16 +167,16 @@ export class FollowUpManager extends EventEmitter {
   }
 
   /** Read every follow-up from disk. Called on boot and after external edits. */
-  loadAll(projects: Project[]) {
-    this.items.clear();
-    const all = listAllFollowUps(projects, (path, reason) =>
+  private async loadAllNow(projects: Project[]) {
+    const all = this.deps?.persistence ? await this.deps.persistence.load() : listAllFollowUps(projects, (path, reason) =>
       this.log(`load ${path}`, `invalid follow-up file dropped: ${reason}`)
     );
+    this.items.clear();
     for (const f of all) this.items.set(f.id, f);
     this.emit('changed');
   }
 
-  create(input: FollowUpCreateInput): FollowUp {
+  private async createNow(input: FollowUpCreateInput): Promise<FollowUp> {
     if (!input.title?.trim()) throw new Error('title is required');
     if (!input.projectId) throw new Error('projectId is required');
     const now = new Date().toISOString();
@@ -186,9 +207,9 @@ export class FollowUpManager extends EventEmitter {
       dedupeKey,
       source: input.scope ?? 'global'
     };
-    this.persist(followUp);
+    await this.persist(followUp);
     this.items.set(followUp.id, followUp);
-    this.evictTerminal(followUp.projectId);
+    await this.evictTerminal(followUp.projectId);
     this.emit('changed');
     return followUp;
   }
@@ -222,13 +243,13 @@ export class FollowUpManager extends EventEmitter {
    * none (never clobber a human-edited body), refresh the host-stamped origin,
    * and increment the `occurrences` counter that drives the `×N` chip.
    */
-  private coalesce(
+  private async coalesce(
     existing: FollowUp,
     input: FollowUpCreateInput,
     dedupeKey: string,
     origin: FollowUp['origin'],
     now: string
-  ): FollowUp {
+  ): Promise<FollowUp> {
     const detail = input.detail?.trim() || undefined;
     // Refresh the origin, but never DROP a resume target: if the session died
     // between the first parking and this re-file, `origin` has no coords while
@@ -247,13 +268,13 @@ export class FollowUpManager extends EventEmitter {
       occurrences: (existing.occurrences ?? 1) + 1,
       updatedAt: now
     };
-    this.persist(next);
+    await this.persist(next);
     this.items.set(next.id, next);
     this.emit('changed');
     return next;
   }
 
-  update(id: string, patch: FollowUpUpdateInput): FollowUp {
+  private async updateNow(id: string, patch: FollowUpUpdateInput): Promise<FollowUp> {
     const cur = this.items.get(id);
     if (!cur) throw new Error(`follow-up not found: ${id}`);
     const next: FollowUp = { ...cur };
@@ -261,7 +282,7 @@ export class FollowUpManager extends EventEmitter {
     if (patch.detail !== undefined) next.detail = patch.detail.trim() || undefined;
     if (patch.kind !== undefined) next.kind = patch.kind;
     next.updatedAt = new Date().toISOString();
-    this.persist(next);
+    await this.persist(next);
     this.items.set(id, next);
     this.emit('changed');
     return next;
@@ -272,7 +293,7 @@ export class FollowUpManager extends EventEmitter {
    * stamps `resolvedAt` and records an optional resolution note; reopening clears
    * both. Returns null if the id is unknown.
    */
-  setStatus(id: string, status: FollowUpStatus, resolution?: string): FollowUp | null {
+  private async setStatusNow(id: string, status: FollowUpStatus, resolution?: string): Promise<FollowUp | null> {
     const cur = this.items.get(id);
     if (!cur) return null;
     const now = new Date().toISOString();
@@ -287,9 +308,9 @@ export class FollowUpManager extends EventEmitter {
       next.spawnedAt = undefined;
       if (resolution !== undefined) next.resolution = resolution.trim() || undefined;
     }
-    this.persist(next);
+    await this.persist(next);
     this.items.set(id, next);
-    this.evictTerminal(next.projectId);
+    await this.evictTerminal(next.projectId);
     this.emit('changed');
     return next;
   }
@@ -300,28 +321,34 @@ export class FollowUpManager extends EventEmitter {
    * second agent can't be launched against the same follow-up within the window.
    * Only meaningful for open records; returns null if the id is unknown.
    */
-  markSpawned(id: string): FollowUp | null {
+  private async markSpawnedNow(id: string): Promise<FollowUp | null> {
     const cur = this.items.get(id);
     if (!cur) return null;
     const now = new Date().toISOString();
     const next: FollowUp = { ...cur, spawnedAt: now, updatedAt: now };
-    this.persist(next);
+    await this.persist(next);
     this.items.set(id, next);
     this.emit('changed');
     return next;
   }
 
-  remove(id: string) {
-    if (!this.items.has(id)) return;
+  private async removeNow(id: string) {
+    const record = this.items.get(id);
+    if (!record) return;
+    await this.deleteRecord(record);
     this.items.delete(id);
-    if (this.deps) {
-      this.suppressWatchUntil = Date.now() + 1_000;
-      deleteFollowUp(id, this.deps.store.listProjects());
-    }
     this.emit('changed');
   }
 
-  onProjectRemoved(projectId: string) {
+  private async deleteRecord(record: FollowUp) {
+    if (!this.deps) return;
+    this.suppressWatchUntil = Date.now() + 1_000;
+    if (this.deps.persistence) await this.deps.persistence.remove(record);
+    else deleteFollowUp(record.id, this.deps.store.listProjects());
+  }
+
+  onProjectRemoved(projectId: string): Promise<void> {
+    return this.serial(async () => {
     let dropped = 0;
     for (const [id, f] of [...this.items]) {
       if (f.projectId === projectId) {
@@ -330,6 +357,7 @@ export class FollowUpManager extends EventEmitter {
       }
     }
     if (dropped > 0) this.emit('changed');
+    });
   }
 
   // ----- idle-triage bridge ---------------------------------------------------
@@ -347,7 +375,7 @@ export class FollowUpManager extends EventEmitter {
    *
    * Returns the created/updated record, or null when gated out / not applicable.
    */
-  createFromIdle(result: IdleTriageResult): FollowUp | null {
+  async createFromIdle(result: IdleTriageResult): Promise<FollowUp | null> {
     if (result.resolution !== 'awaiting-reply') return null;
     if (this.deps?.followupsFromIdle && !this.deps.followupsFromIdle()) return null;
     const session = this.deps?.getSession?.(result.sessionId);
@@ -384,6 +412,13 @@ export class FollowUpManager extends EventEmitter {
 
   startWatching() {
     this.rebindWatchers();
+    if (this.deps?.persistence && !this.remotePoll) {
+      this.remotePoll = setInterval(() => {
+        if (this.pending || !this.deps) return;
+        void this.loadAll(this.deps.store.listProjects()).catch(error => this.log('refresh metadata', error));
+      }, 15_000);
+      this.remotePoll.unref();
+    }
   }
 
   rebindWatchers() {
@@ -396,11 +431,13 @@ export class FollowUpManager extends EventEmitter {
     }
     this.watchers.clear();
     const dirs = [globalDir()];
-    if (this.deps) for (const p of this.deps.store.listProjects()) dirs.push(projectDir(p));
+    if (this.deps) for (const p of this.deps.persistence?.localProjects() ?? this.deps.store.listProjects()) dirs.push(projectDir(p));
     for (const dir of dirs) this.attachWatcher(dir);
   }
 
   stopWatching() {
+    if (this.remotePoll) clearInterval(this.remotePoll);
+    this.remotePoll = null;
     for (const w of this.watchers.values()) {
       try {
         w.close();
@@ -444,33 +481,31 @@ export class FollowUpManager extends EventEmitter {
       this.watchDebounce = null;
       if (Date.now() < this.suppressWatchUntil) return;
       if (!this.deps) return;
-      this.loadAll(this.deps.store.listProjects());
+      void this.loadAll(this.deps.store.listProjects()).catch(error => this.log('refresh metadata', error));
     }, 250);
   }
 
   // ----- helpers --------------------------------------------------------------
 
-  private persist(followUp: FollowUp) {
+  private async persist(followUp: FollowUp) {
     if (!this.deps) return;
     this.suppressWatchUntil = Date.now() + 1_000;
-    saveFollowUp(followUp, this.deps.store.listProjects());
+    if (this.deps.persistence) await this.deps.persistence.save(followUp);
+    else saveFollowUp(followUp, this.deps.store.listProjects());
   }
 
   /**
    * Drop the oldest terminal (resolved/dismissed) records for a project beyond
    * the retention cap. Open records are never evicted. Deletes from disk + map.
    */
-  private evictTerminal(projectId: string) {
+  private async evictTerminal(projectId: string) {
     const terminal = [...this.items.values()]
       .filter((f) => f.projectId === projectId && f.status !== 'open')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (terminal.length <= MAX_TERMINAL_PER_PROJECT) return;
     for (const stale of terminal.slice(MAX_TERMINAL_PER_PROJECT)) {
-      this.items.delete(stale.id);
-      if (this.deps) {
-        this.suppressWatchUntil = Date.now() + 1_000;
-        deleteFollowUp(stale.id, this.deps.store.listProjects());
-      }
+      try { await this.deleteRecord(stale); this.items.delete(stale.id); }
+      catch (error) { this.log('follow-up retention', error); }
     }
   }
 }

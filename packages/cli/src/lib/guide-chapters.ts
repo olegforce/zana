@@ -163,6 +163,8 @@ Settings writes apply to subsequent launches only.
     title: 'Browser',
     content: `zcc browser is the experimental core API for automation integrations controlling ZCC desktop tabs. The Browser Automation plugin adds its own script/session commands; another plugin can use the same core connection independently.
 
+For a user-visible web app, dev server, or endpoint preview, use the in-app side panel by default. Use create with --url and --reveal, or reveal an existing tab. Do not launch Chrome or the OS default browser unless the user explicitly requests it. Disable dev-server auto-open options such as --open. If the desktop backend is unavailable, explain that and provide the URL instead of silently opening an external browser. Simple URL previews do not require a browser plugin.
+
 Start with \`zcc browser instances --host <host-id> --json\`. For every tab/control operation provide \`--host <host-id> --instance <instance-id> --generation <generation> --thread <thread-id>\`. The browser host can differ from the agent host. Never infer an active desktop window.
 
 - \`tabs\`: list native tabs and their control state.

@@ -428,9 +428,9 @@ export class TrayController {
     sub.push({ type: 'separator' });
     sub.push({
       label: 'Run now',
-      click: () => {
+      click: async () => {
         try {
-          this.deps.scheduler.runNow(task.id);
+          await this.deps.scheduler.runNow(task.id);
         } catch (err) {
           this.log(`runNow ${task.id}`, err);
         }
@@ -438,9 +438,9 @@ export class TrayController {
     });
     sub.push({
       label: task.enabled ? 'Pause' : 'Enable',
-      click: () => {
+      click: async () => {
         try {
-          this.deps.scheduler.setEnabled(task.id, !task.enabled);
+          await this.deps.scheduler.setEnabled(task.id, !task.enabled);
         } catch (err) {
           this.log(`setEnabled ${task.id}`, err);
         }

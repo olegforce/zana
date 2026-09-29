@@ -30,6 +30,9 @@ describe('runtime supervisor', () => {
       message: 'This session does not run a packaged host daemon'
     });
     await expect(runtime.listProjects()).resolves.toEqual([]);
+    await expect(runtime.projectMetadata({ action: 'list', kind: 'followups', projectId: 'p' })).rejects.toThrow('requires the product runtime');
+    await expect(runtime.libraryAgent({ action: 'list', projectId: 'p' })).rejects.toThrow('requires the product runtime');
+    await expect(runtime.libraryDocument({ action: 'list' })).rejects.toThrow('requires the product runtime');
     // No packaged server-runtime child here ⇒ the ACP thread-liveness probe
     // safe-defaults false (never rejects), so no loopback launch can pass on it.
     await expect(runtime.isThreadLive('thread-1', 'project-1')).resolves.toBe(false);

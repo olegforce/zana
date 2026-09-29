@@ -20,10 +20,11 @@ import {
   type DesktopBrowserStopFindInPageRequest,
   type DesktopBrowserRevealRequest,
   type DesktopBrowserViewBounds,
-  type DesktopBrowserViewportBounds
+  type DesktopBrowserViewportBounds,
+  IPC,
+  sameBrowserDocument
 } from '@zana-ai/zcc-desktop-contract';
 import type { AppCommandId, AppShortcutInput } from '@zana-ai/zcc-domain/thread-runtime';
-import { IPC } from '@zana-ai/zcc-desktop-contract';
 import {
   evaluatePopupRate,
   isAllowedBrowserPermission,
@@ -367,6 +368,12 @@ export function createDesktopBrowserViewManager(options?: {
   ): void {
     const webContents = entry.view.webContents;
 
+    // BB's scoped CDP bridge needs targetInfoChanged after initial navigation;
+    // otherwise automation waits forever on a freshly created tab's empty URL.
+    webContents.on('did-navigate', notifyAutomationTabs);
+    webContents.on('did-navigate-in-page', notifyAutomationTabs);
+    webContents.on('page-title-updated', notifyAutomationTabs);
+
     webContents.on('will-frame-navigate', (event) => {
       if (!event.isMainFrame) return;
       if (!isAllowedBrowserUrl(event.url)) event.preventDefault();
@@ -542,7 +549,9 @@ export function createDesktopBrowserViewManager(options?: {
 
   function loadIfNeeded(entry: BrowserViewEntry, url: string): void {
     if (url.length === 0) return;
-    if (entry.view.webContents.getURL() === url) return;
+    // Equivalent documents (trailing slash, localhost vs 127.0.0.1) stay put.
+    // A second load would drop the page's hot-reload socket.
+    if (sameBrowserDocument(entry.view.webContents.getURL(), url)) return;
     if (!isAllowedBrowserUrl(url)) return;
     entry.lastErrorText = null;
     entry.view.webContents.loadURL(url).catch(() => {

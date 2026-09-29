@@ -4,13 +4,18 @@ import {
   getEnvironment,
   listConversationThreadEvents,
   listConversationThreadEventsWindow,
+  conversationTimelineWindowStart,
+  conversationEventCursorExists,
+  hasConversationEventsBefore,
+  nextConversationEventSequence,
+  hydrateConversationOutputs,
+  conversationTimelineHeadEvents,
   type ConversationThreadEventRow,
   type ConversationThreadRow
 } from '@zana-ai/zcc-db';
 import {
   buildThreadTimelineFromEvents,
   buildThreadTimelineTurnDetailsFromEvents,
-  extractThreadTimelineActivePlanTurn,
   EMPTY_ACCEPTED_CLIENT_REQUEST_CONTEXT,
   type ThreadEventWithMeta
 } from '@zana-ai/zcc-thread-view';
@@ -35,6 +40,8 @@ import { getDurableThreadPlanView } from './conversation-plan.js';
 import { getThreadExecutionState } from '@zana-ai/zcc-db';
 import { isPlanExecutionMode } from './conversation-execution-mode.js';
 import { conversationNextTurnView } from './conversation-next-turn.js';
+import { activePlanTurnForConversation } from './conversation-thread-activity.js';
+import { decodeHistoryCursor, encodeHistoryCursor, pageTimelineRows, TIMELINE_PAGE_BYTES } from './timeline-content-page.js';
 
 export interface TimelineQuery {
   segmentLimit?: string | null;
@@ -46,24 +53,35 @@ export interface TimelineQuery {
 }
 
 const LATEST_ROWS_CACHE_CAP = 64;
-const latestRowsCache = new Map<string, { maxSeq: number; rows: TimelineRow[] }>();
+const LATEST_ROWS_CACHE_BYTES = 32 * 1024 * 1024;
+// Diff snapshots never produce timeline rows. Drop their payload in SQLite,
+// before crossing into V8; filtering in the projector is already too late.
+const TIMELINE_EVENT_READ = { omitPayloadTypes: ['turn/diff/updated'], inlineOutputChars: 32_768, maxBytes: TIMELINE_PAGE_BYTES };
+const latestRowsCache = new Map<string, { maxSeq: number; rows: TimelineRow[]; bytes: number }>();
+let latestRowsCacheBytes = 0;
 
 function latestRowsCacheKey(threadId: string, segmentLimit: number, includeNestedRows: boolean): string {
   return `${threadId}:${segmentLimit}:${includeNestedRows ? 'nested' : 'summary'}`;
 }
 
 function rememberLatestRows(key: string, entry: { maxSeq: number; rows: TimelineRow[] }): void {
-  if (latestRowsCache.has(key)) latestRowsCache.delete(key);
-  latestRowsCache.set(key, entry);
-  while (latestRowsCache.size > LATEST_ROWS_CACHE_CAP) {
+  latestRowsCacheBytes -= latestRowsCache.get(key)?.bytes ?? 0;
+  latestRowsCache.delete(key);
+  const bytes = Buffer.byteLength(JSON.stringify(entry.rows));
+  if (bytes > LATEST_ROWS_CACHE_BYTES) return;
+  latestRowsCache.set(key, { ...entry, bytes });
+  latestRowsCacheBytes += bytes;
+  while (latestRowsCache.size > LATEST_ROWS_CACHE_CAP || latestRowsCacheBytes > LATEST_ROWS_CACHE_BYTES) {
     const oldest = latestRowsCache.keys().next().value;
     if (oldest === undefined) break;
+    latestRowsCacheBytes -= latestRowsCache.get(oldest)!.bytes;
     latestRowsCache.delete(oldest);
   }
 }
 
 export function resetTimelineLatestRowsCache(): void {
   latestRowsCache.clear();
+  latestRowsCacheBytes = 0;
 }
 
 function parseBooleanFlag(raw: string | null | undefined): boolean | undefined {
@@ -112,6 +130,20 @@ function requireThread(ctx: ProductHttpContext, threadId: string) {
     throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
   }
   return thread;
+}
+
+function withBoundaryMessageContext(ctx: ProductHttpContext, threadId: string, rows: ConversationThreadEventRow[], tip: number) {
+  // A raw window may start halfway through a streamed message. Fetch that
+  // item's bounded context, rather than presenting only its most recent deltas.
+  const first = storedEventsToMeta(rows).find(({ event }) => event.type === 'item/agentMessage/delta');
+  if (!first || first.event.type !== 'item/agentMessage/delta' || !('turnId' in first.event.scope)) return rows;
+  const context = listConversationThreadEventsWindow(ctx.db, threadId, {
+    ...TIMELINE_EVENT_READ, limit: 50_001, maxBytes: 16 * 1024 * 1024, requireComplete: true, beforeSeq: tip + 1,
+    messageItem: { turnId: first.event.scope.turnId, itemId: first.event.itemId }
+  });
+  const byId = new Map(context.map(row => [row.id, row]));
+  for (const row of rows) byId.set(row.id, row);
+  return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
 function projectTimeline(
@@ -220,21 +252,50 @@ export function conversationTimeline(
   const includeNestedRows = parseBooleanFlag(query.includeNestedRows) ?? false;
   const summaryOnly = parseBooleanFlag(query.summaryOnly) ?? true;
   const turnMessageDetail = summaryOnly ? 'summary' : 'full';
-  const total = countConversationThreadEvents(ctx.db, threadId);
-  const rows = beforeSeq != null
-    ? listConversationThreadEventsWindow(ctx.db, threadId, { limit: segmentLimit, beforeSeq })
-    : listConversationThreadEventsWindow(ctx.db, threadId, { limit: segmentLimit });
+  const surface = `timeline:${includeNestedRows}:${summaryOnly}`;
+  const cursor = decodeHistoryCursor(query.beforeAnchorId, threadId, surface);
+  const tip = cursor?.tip ?? nextConversationEventSequence(ctx.db, threadId) - 1;
+  if (cursor && (beforeSeq !== cursor.start || !conversationEventCursorExists(ctx.db, threadId, cursor.start))) {
+    throw new ThreadCreateError(400, 'invalid-history-cursor', 'This history page is no longer available. Reload the conversation.');
+  }
+  const end = cursor?.beforeLeaf ? cursor.end : beforeSeq ?? tip + 1;
+  const start = cursor?.beforeLeaf ? cursor.start : conversationTimelineWindowStart(ctx.db, threadId, end, segmentLimit);
+  const rows = listConversationThreadEventsWindow(ctx.db, threadId, {
+    ...TIMELINE_EVENT_READ, limit: 50_000, beforeSeq: end, afterSeq: start - 1
+  });
   const oldest = rows[0];
-  const hasOlderRows = beforeSeq != null
-    ? (oldest ? oldest.sequence > 1 : total > 0)
-    : total > rows.length;
+  const hasOlderRows = !!oldest && hasConversationEventsBefore(ctx.db, threadId, oldest.sequence);
   const page = {
     kind: (beforeSeq != null ? 'older' : 'latest') as 'latest' | 'older',
     segmentLimit,
     hasOlderRows,
-    olderCursor: oldest ? { anchorSeq: oldest.sequence, anchorId: oldest.id } : null
+    olderCursor: oldest && hasOlderRows ? { anchorSeq: oldest.sequence, anchorId: encodeHistoryCursor({
+      threadId, surface, start: oldest.sequence, end, tip
+    }) } : null
   };
-  const full = projectTimeline(ctx, thread, rows, page, { includeNestedRows, turnMessageDetail });
+  const full = projectTimeline(ctx, thread, withBoundaryMessageContext(ctx, threadId, rows, tip), page, { includeNestedRows, turnMessageDetail });
+  if (page.kind === 'latest') {
+    // Old goal/usage snapshots must not widen the history window just to keep
+    // the header current. Their projection never contributes historical rows.
+    const headRows = conversationTimelineHeadEvents(ctx.db, threadId);
+    if (headRows.length) {
+      const head = projectTimeline(ctx, thread, headRows, { kind: 'latest', segmentLimit: 1, hasOlderRows: false, olderCursor: null },
+        { includeNestedRows: false, turnMessageDetail: 'summary' });
+      full.goal = head.goal;
+      full.contextWindowUsage = head.contextWindowUsage ?? full.contextWindowUsage;
+      full.pendingTodos = full.pendingTodos ?? head.pendingTodos;
+      full.modelFallback = head.modelFallback ?? full.modelFallback;
+    }
+  }
+  const content = pageTimelineRows(full.rows, cursor?.beforeLeaf);
+  full.rows = content.rows;
+  full.maxSeq = tip;
+  if (content.start > 0 && oldest) {
+    full.timelinePage.hasOlderRows = true;
+    full.timelinePage.olderCursor = { anchorSeq: oldest.sequence, anchorId: encodeHistoryCursor({
+      threadId, surface, start: oldest.sequence, end, tip, beforeLeaf: content.start
+    }) };
+  }
   if (page.kind !== 'latest') return full;
   const cacheKey = latestRowsCacheKey(threadId, segmentLimit, includeNestedRows);
   const cached = latestRowsCache.get(cacheKey);
@@ -299,12 +360,25 @@ export function conversationItemsFromRows(rows: Array<{
 export function conversationTimelineTurnSummaryDetails(
   ctx: ProductHttpContext,
   threadId: string,
-  query: { turnId: string; sourceSeqStart: string; sourceSeqEnd: string }
+  query: { turnId: string; sourceSeqStart: string; sourceSeqEnd: string; beforeCursor?: string }
 ) {
   const thread = requireThread(ctx, threadId);
   const sourceSeqStart = parseNonNegativeInt(query.sourceSeqStart) ?? 0;
   const sourceSeqEnd = parseNonNegativeInt(query.sourceSeqEnd) ?? 0;
-  const events = storedEventsToMeta(listConversationThreadEvents(ctx.db, threadId));
+  if (!query.turnId || sourceSeqStart > sourceSeqEnd) throw new ThreadCreateError(400, 'invalid-input', 'Invalid turn history range');
+  const surface = `details:${query.turnId}:${sourceSeqStart}:${sourceSeqEnd}`;
+  const cursor = decodeHistoryCursor(query.beforeCursor, threadId, surface);
+  if (query.beforeCursor && !cursor) throw new ThreadCreateError(400, 'invalid-history-cursor', 'Invalid turn history cursor');
+  if (cursor && !conversationEventCursorExists(ctx.db, threadId, cursor.start)) throw new ThreadCreateError(400, 'invalid-history-cursor', 'Reload the turn history');
+  const end = cursor ? (cursor.beforeLeaf ? cursor.end : cursor.start) : sourceSeqEnd + 1;
+  const rows = listConversationThreadEventsWindow(ctx.db, threadId, {
+    ...TIMELINE_EVENT_READ,
+    limit: 50_000,
+    afterSeq: cursor?.beforeLeaf ? cursor.start - 1 : Math.max(-1, sourceSeqStart - 1),
+    beforeSeq: end
+  });
+  const events = storedEventsToMeta(hydrateConversationOutputs(ctx.db,
+    withBoundaryMessageContext(ctx, threadId, rows, sourceSeqEnd), TIMELINE_PAGE_BYTES));
   const environment = thread.environmentId ? getEnvironment(ctx.db, thread.environmentId) : null;
   const result = buildThreadTimelineTurnDetailsFromEvents({
     events,
@@ -313,19 +387,31 @@ export function conversationTimelineTurnSummaryDetails(
       threadStatus: thread.status,
       threadName: thread.title ?? '',
       workspaceRoot: environment?.path ?? null,
-      sourceSeqStart,
-      sourceSeqEnd
+      sourceSeqStart: rows[0]?.sequence ?? sourceSeqStart,
+      sourceSeqEnd: rows.at(-1)?.sequence ?? sourceSeqEnd
     }
   });
-  if (result.kind === 'matched' || result.kind === 'ungrouped') {
-    return { rows: result.rows };
+  let detailRows = result.kind === 'matched' || result.kind === 'ungrouped' ? result.rows : [];
+  if (result.kind === 'missing-match') {
+    const projected = projectTimeline(ctx, thread, rows, { kind: 'older', segmentLimit: 1, hasOlderRows: false, olderCursor: null },
+      { includeNestedRows: true, turnMessageDetail: 'full' });
+    detailRows = projected.rows.flatMap(row => row.kind === 'turn' ? row.turnId === query.turnId ? row.children ?? [] : [] : [row]);
   }
-  return { rows: [] };
+  const content = pageTimelineRows(detailRows, cursor?.beforeLeaf);
+  const start = rows[0]?.sequence;
+  const older = start !== undefined && (content.start > 0 || (start > Math.max(1, sourceSeqStart)
+    && listConversationThreadEventsWindow(ctx.db, threadId, { ...TIMELINE_EVENT_READ, limit: 1, beforeSeq: start, afterSeq: sourceSeqStart - 1 }).length > 0));
+  return { rows: content.rows, olderCursor: older ? encodeHistoryCursor({
+    threadId, surface, start: start!, end, tip: sourceSeqEnd, ...(content.start > 0 ? { beforeLeaf: content.start } : {})
+  }) : null };
 }
 
 export function conversationOutline(ctx: ProductHttpContext, threadId: string) {
   const thread = requireThread(ctx, threadId);
-  const rows = listConversationThreadEvents(ctx.db, threadId);
+  const rows = listConversationThreadEvents(ctx.db, threadId, {
+    omitPayloadTypes: ['turn/diff/updated', 'item/commandExecution/outputDelta'],
+    onlyItemTypes: ['agentMessage', 'userMessage']
+  });
   const events = storedEventsToMeta(rows);
   const environment = thread.environmentId ? getEnvironment(ctx.db, thread.environmentId) : null;
   const timeline = buildThreadTimelineFromEvents({
@@ -352,11 +438,5 @@ export function conversationOutline(ctx: ProductHttpContext, threadId: string) {
 }
 
 export function resolveActivePlanTurn(ctx: ProductHttpContext, thread: ConversationThreadRow) {
-  const events = storedEventsToMeta(listConversationThreadEvents(ctx.db, thread.id));
-  return extractThreadTimelineActivePlanTurn({
-    events,
-    planCommand: planCommandForProvider(thread.providerId),
-    providerId: thread.providerId,
-    threadStatus: thread.status
-  });
+  return activePlanTurnForConversation(ctx, thread);
 }

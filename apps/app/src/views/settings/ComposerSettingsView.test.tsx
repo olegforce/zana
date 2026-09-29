@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { COMPOSER_LAUNCH_SURFACES_REV, type AppConfig } from '@zana-ai/zcc-domain/product';
 import { ComposerSettingsView } from './ComposerSettingsView.js';
+import { FULL_ACCESS_BY_DEFAULT_KEY } from '../../lib/composer-permission-preference.js';
+
+beforeEach(() => localStorage.clear());
+afterEach(cleanup);
 
 const config: AppConfig = {
   version: 1,
@@ -18,6 +24,24 @@ function switchButton(html: string, label: string): string {
 }
 
 describe('ComposerSettingsView', () => {
+  it('defaults Full access off and persists the opt-in across remounts', () => {
+    const props = { config, onUpdate: vi.fn().mockResolvedValue(undefined) };
+    const { unmount } = render(<ComposerSettingsView {...props} />);
+    const toggle = screen.getByRole('switch', { name: 'Full access by default' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText(/Off starts in Approve for me when available, otherwise Accept Edits/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(localStorage.getItem(FULL_ACCESS_BY_DEFAULT_KEY)).toBe('1');
+    unmount();
+    render(<ComposerSettingsView {...props} />);
+    const restored = screen.getByRole('switch', { name: 'Full access by default' });
+    expect(restored.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(restored);
+    expect(restored.getAttribute('aria-checked')).toBe('false');
+    expect(localStorage.getItem(FULL_ACCESS_BY_DEFAULT_KEY)).toBe('0');
+  });
+
   it('lists launch surfaces with CLI Agent first and one Team toggle', () => {
     const html = renderToStaticMarkup(
       <ComposerSettingsView config={config} onUpdate={vi.fn().mockResolvedValue(undefined)} />

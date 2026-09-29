@@ -46,7 +46,7 @@ function makeDoc(over: Partial<LibraryDoc> = {}): LibraryDoc {
 /** A stub agent API whose methods are vi.fn()s we can assert/override. */
 function makeApi(over: Partial<LibraryAgentApi> = {}): LibraryAgentApi {
   return {
-    agentList: vi.fn(() => [makeDoc()]),
+    agentList: vi.fn(async () => [makeDoc()]),
     agentRead: vi.fn(() => ({ ...makeDoc(), content: '# Auth\nbody' })),
     agentWrite: vi.fn(() => makeDoc()),
     agentRemove: vi.fn(() => true),
@@ -64,6 +64,18 @@ function makeOpts(over: Partial<RegisterLibraryToolsOpts> = {}): RegisterLibrary
 }
 
 describe('registerLibraryTools', () => {
+  it('awaits rejected async reads/listings/removals and formats plain error values', async () => {
+    const { server, tools } = fakeServer();
+    registerLibraryTools(server as never, makeOpts({ libraryAgentApi: makeApi({
+      agentRead: async () => { throw new Error('read owner offline'); },
+      agentList: async () => { throw 'list owner offline'; },
+      agentRemove: async () => { throw new Error('remove conflicted'); }
+    }) }));
+    for (const name of ['library_read', 'library_list', 'library_remove']) {
+      const result = await tools.get(name)!({ relPath: 'note.md' });
+      expect(result.isError).toBe(true); expect(text(result)).toContain(`${name} failed`);
+    }
+  });
   it('registers exactly the four library_* tools', () => {
     const { server, tools } = fakeServer();
     registerLibraryTools(server as never, makeOpts());
@@ -131,7 +143,7 @@ describe('registerLibraryTools', () => {
   });
 
   it('library_remove reports removed vs not-found', async () => {
-    const agentRemove = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const agentRemove = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const { server, tools } = fakeServer();
     registerLibraryTools(server as never, makeOpts({ libraryAgentApi: makeApi({ agentRemove }) }));
 
@@ -144,7 +156,7 @@ describe('registerLibraryTools', () => {
   });
 
   it('a throwing store surfaces as an isError result, not an exception', async () => {
-    const agentWrite = vi.fn(() => {
+    const agentWrite = vi.fn(async () => {
       throw new Error('confinement violation');
     });
     const { server, tools } = fakeServer();
@@ -155,7 +167,7 @@ describe('registerLibraryTools', () => {
   });
 
   it('forwards a missing sessionId as undefined (write still wired, store decides)', async () => {
-    const agentWrite = vi.fn(() => makeDoc());
+    const agentWrite = vi.fn(async () => makeDoc());
     const { server, tools } = fakeServer();
     registerLibraryTools(
       server as never,

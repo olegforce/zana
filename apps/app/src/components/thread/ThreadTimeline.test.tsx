@@ -414,6 +414,7 @@ describe('ThreadTimeline', () => {
         rows={rows}
         status="active"
         thinking={{ id: 'th1', text: 'Thinking…', startedAt: 1, updatedAt: 1 }}
+        forceExpandedRowIds={new Set(['c1'])}
       />
     );
     expect(html).toContain('data-testid="thread-work-row"');
@@ -484,7 +485,7 @@ describe('ThreadTimeline', () => {
       }
     ];
     const html = renderToStaticMarkup(
-      <ThreadTimeline rows={rows} status="idle" thinking={null} />
+      <ThreadTimeline rows={rows} status="idle" thinking={null} forceExpandedRowIds={new Set(['c2'])} />
     );
     expect(html).toContain('a.txt');
     expect(html).toContain('README.md');
@@ -520,7 +521,7 @@ describe('ThreadTimeline', () => {
       children: [assistant]
     }];
     const html = renderToStaticMarkup(
-      <ThreadTimeline rows={rows} status="starting" thinking={null} />
+      <ThreadTimeline rows={rows} status="starting" thinking={null} forceExpandedRowIds={new Set(['turn-wrap'])} />
     );
     expect(html).toContain('data-testid="thread-assistant-text"');
     expect(html).toContain('Done.');

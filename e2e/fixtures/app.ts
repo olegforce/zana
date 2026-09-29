@@ -44,6 +44,8 @@ import { fileURLToPath } from 'node:url';
 import { startLocalRegistry, type LocalRegistry, type DummyExtensionSpec } from './registry.js';
 import { EventRecorder } from '../sdk/events.js';
 import { linuxCiElectronArgs, linuxCiElectronEnv } from './linux-electron-launch.js';
+import { isolatedClaudePath, writeAppConfig } from './app-config.js';
+import { isolateTmuxEnvironment, cleanupTmuxEnvironment } from './tmux-isolation.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const MAIN_ENTRY = join(process.env.ZCC_E2E_APP_ROOT || REPO_ROOT, 'out/main/index.js');
@@ -66,19 +68,6 @@ export function writeRegistryConfig(home: string, cfg: RegistryConfig): void {
   const dir = join(home, '.zcc');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'extension-registry.json'), JSON.stringify(cfg, null, 2));
-}
-
-/** Seed first-run state that is not part of the UI behavior under test. */
-function writeAppConfig(home: string, initialConfig: Record<string, unknown> = {}): void {
-  const dir = join(home, '.zcc');
-  mkdirSync(dir, { recursive: true });
-  const configPath = join(dir, 'config.json');
-  if (!existsSync(configPath)) {
-    writeFileSync(
-      configPath,
-      JSON.stringify({ walkthroughCompleted: true, setupDismissed: true, ...initialConfig }, null, 2)
-    );
-  }
 }
 
 /**
@@ -269,6 +258,8 @@ export interface LaunchOptions {
   e2e?: boolean;
   /** Config fields written before app boot for startup-path coverage. */
   initialConfig?: Record<string, unknown>;
+  /** Explicit opt-in for tests that intentionally invoke an authenticated Claude. */
+  allowLiveClaude?: boolean;
 }
 
 /**
@@ -280,7 +271,7 @@ export interface LaunchOptions {
  * path without duplicating it.
  */
 export async function launchApp(home: string, opts: LaunchOptions = {}): Promise<AppHandle> {
-  writeAppConfig(home, opts.initialConfig);
+  writeAppConfig(home, opts.initialConfig, opts.allowLiveClaude);
   const preserveHome = opts.env?.ZCC_E2E_PRESERVE_HOME === '1';
   const dataDir = join(home, '.zcc');
   mkdirSync(dataDir, { recursive: true });
@@ -299,6 +290,10 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
     ...opts.env,
     ...linuxCiElectronEnv(),
   };
+  // `claude doctor` and legacy fallbacks use PATH instead of claudeBinary.
+  // Keep the guard ahead of inherited CLI directories for deterministic tests.
+  const isolatedPath = isolatedClaudePath(env.PATH, opts.allowLiveClaude);
+  if (isolatedPath !== undefined) env.PATH = isolatedPath;
   // A parent `electron-vite dev` / leftover diagnostic must not steal this
   // unpackaged E2E boot onto the live renderer or product server.
   if (!opts.env?.ELECTRON_RENDERER_URL) delete env.ELECTRON_RENDERER_URL;
@@ -317,7 +312,7 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
     // of bug as the ozone flag above), so it must ride in argv, not be appended
     // at runtime, or macOS pops a real Keychain prompt on a headless E2E run.
     args: [...linuxCiElectronArgs(), '--use-mock-keychain', `--user-data-dir=${userDataDir}`, MAIN_ENTRY],
-    env,
+    env: isolateTmuxEnvironment(home, env),
     timeout: 60_000
   });
   let stderrTail = '';
@@ -337,7 +332,9 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`${message}\n\nmain stderr:\n${stderr}`);
   } finally {
-    app.process()?.stderr?.off('data', captureStderr);
+    // Playwright may dispose its internal process handle during close(). Keep
+    // cleanup from replacing the useful launch error with an _object error.
+    try { app.process()?.stderr?.off('data', captureStderr); } catch {}
   }
 }
 
@@ -413,12 +410,13 @@ export const test = base.extend<Fixtures>({
   home: async ({}, use) => {
     const home = mkdtempSync(join(tmpdir(), 'zcc-e2e-home-'));
     if (process.env.ZCC_E2E_KEEP_HOME === '1') console.error(`[e2e] preserving HOME ${home}`);
-    await use(home);
-    if (process.env.ZCC_E2E_KEEP_HOME === '1') return;
     try {
-      rmSync(home, { recursive: true, force: true });
-    } catch {
-      /* best-effort */
+      await use(home);
+    } finally {
+      await cleanupTmuxEnvironment(home);
+      if (process.env.ZCC_E2E_KEEP_HOME !== '1') {
+        try { rmSync(home, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
     }
   },
 
@@ -460,7 +458,8 @@ export const test = base.extend<Fixtures>({
       caCertPath: registry?.caCertPath,
       e2e,
       env,
-      initialConfig
+      initialConfig,
+      allowLiveClaude: seedClaudeAuth,
     });
     try {
       await use(handle);

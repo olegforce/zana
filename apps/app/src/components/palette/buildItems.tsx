@@ -25,6 +25,7 @@ import { evaluateWhen, type WhenContext } from './whenContext.js';
 import { buildPluginPaletteItems } from './plugin-palette-actions.js';
 import type { PluginCommandPaletteActionRegistration } from '@zana-ai/zcc-plugin-sdk';
 import { cliAgentRestartConfirm } from '../agentCardActions.js';
+import { refreshModelsWithToast } from '../thread/pickers/model-refresh.js';
 
 /** A category a palette item belongs to, used for empty-query grouping. */
 export type PaletteCategory = 'Projects' | 'Threads' | 'Tabs' | 'Actions' | 'Extensions';
@@ -221,6 +222,19 @@ export function buildPaletteItems(ctx: PaletteBuildContext): PaletteItem[] {
       run: () => {
         useUi.getState().exitProjectFocus('/settings');
         onClose();
+      }
+    },
+    {
+      key: 'action:refresh-models',
+      icon: <RotateCw size={14} />,
+      label: 'Refresh models',
+      hint: 'Reload model lists for Modern and CLI agents',
+      keywords: ['reload', 'restore', 'retry', 'model', 'models', 'catalog', 'providers'],
+      category: 'Actions',
+      source: 'core',
+      run: () => {
+        onClose();
+        void refreshModelsWithToast(pushToast);
       }
     },
     {

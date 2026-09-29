@@ -248,7 +248,7 @@ describe('threadSecondaryPanelLogic', () => {
       async () => ({ content: 'host' }),
       't',
       '/a.ts'
-    )).resolves.toEqual({ content: 'hi' });
+    )).resolves.toEqual({ content: 'host' });
     await expect(loadFilePreview(
       async () => ({ ok: false }),
       async () => ({ content: 'host' }),
@@ -294,11 +294,11 @@ describe('threadSecondaryPanelLogic', () => {
     )).resolves.toEqual({ content: 'data:image/webp;base64,abc' });
     await expect(loadFilePreview(
       async () => ({ ok: true, binary: true }),
-      async () => ({ content: 'host-should-not-run' }),
+      async () => ({ content: 'host', encoding: 'base64' }),
       't',
       '/tmp/shot.png',
       { readDataUrl: async () => ({ ok: true, dataUrl: 'data:image/png;base64,local' }) }
-    )).resolves.toEqual({ content: 'data:image/png;base64,local' });
+    )).resolves.toEqual({ content: 'data:image/png;base64,host' });
     await expect(loadFilePreview(
       async () => ({ ok: true, binary: true }),
       async () => ({ content: 'iVBORw0KGgo=', encoding: 'base64', contentType: 'image/png' }),
@@ -385,4 +385,15 @@ describe('threadSecondaryPanelLogic', () => {
       remoteDirectory: null
     });
   });
+});
+
+it('never reads an identically named local file when the thread host is offline', async () => {
+  const local = vi.fn(async () => ({ ok: true, content: 'wrong-machine' }));
+  const image = vi.fn(async () => ({ ok: true, dataUrl: 'data:image/png;base64,wrong' }));
+  for (const path of ['/same/repo/README.md', '/same/repo/image.png']) {
+    const result = await loadFilePreview(local, async () => { throw new Error('Execution machine is offline'); }, 'remote-thread', path, { readDataUrl: image });
+    expect(result).toEqual({ error: 'Execution machine is offline' });
+  }
+  expect(local).not.toHaveBeenCalled(); expect(image).not.toHaveBeenCalled();
+  expect(await loadFilePreview(local, undefined, undefined, '/unscoped/note.md')).toEqual({ content: 'wrong-machine' });
 });

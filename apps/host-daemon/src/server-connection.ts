@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import NodeWebSocket from 'ws';
 import {
   HOST_RPC_PROTOCOL_VERSION,
   HostEventBatchMessageSchema,
@@ -7,9 +8,12 @@ import {
   type HostEventEnvelope
 } from '@zana-ai/zcc-contracts/host-rpc';
 import { createEventSink, type EventSink } from './event-sink.js';
+import { createEventDelivery } from './event-delivery.js';
+import { PluginHostManager } from './plugin-host-manager.js';
+import { hostFsWatcher } from './workspace-fs-watch.js';
 import { createCommandRuntime, type CommandRuntime } from './command-dispatch.js';
 import { handleHostRpcRequest } from './command-router.js';
-import { loadHostAppConfig } from './host-config.js';
+import { loadHostAppConfig, resolveZccDataDir } from './host-config.js';
 import { createRuntimeManager, type ThreadRuntimeAdapter } from './runtime-manager.js';
 import { createEnrolledPty, type EnrolledPty } from './enrolled-pty.js';
 import { createInteractiveRequestHttpClient } from './interactive-request-client.js';
@@ -20,6 +24,7 @@ import {
   InteractiveRequestRegistryError
 } from './interactive-request-registry.js';
 import { joinServerWsUrl } from './server-url.js';
+import { connectHostFetch } from './connect-access.js';
 import {
   startDesktopBrowserBroker,
   type DesktopBrowserBroker
@@ -39,17 +44,22 @@ export interface EnrolledHostConnection {
 
 export function startEnrolledHostConnection(options: {
   serverUrl: string;
+  connectCredential?: string;
   hostId: string;
   hostKey: string;
   instanceId?: string;
   runtime?: CommandRuntime;
   dataDir?: string;
   onSocketClose?: (code: number) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }): EnrolledHostConnection {
   const instanceId = options.instanceId ?? randomUUID();
   const wsUrl = joinServerWsUrl(options.serverUrl, '/internal/hosts/ws');
-  wsUrl.searchParams.set('hostId', options.hostId);
-  wsUrl.searchParams.set('hostKey', options.hostKey);
+  if (!options.connectCredential) {
+    wsUrl.searchParams.set('hostId', options.hostId);
+    wsUrl.searchParams.set('hostKey', options.hostKey);
+  }
+  const fetchFn = connectHostFetch(options.serverUrl, options.connectCredential);
 
   let socket: WebSocket | null = null;
   let closed = false;
@@ -58,6 +68,11 @@ export function startEnrolledHostConnection(options: {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let settleReady: ((error?: Error) => void) | null = null;
   let readySettled = false;
+  let helloAccepted = false;
+  const delivery = createEventDelivery({
+    onTimeout: () => socket?.close(1013, 'Host event acknowledgement timed out'),
+    onRejected: reasons => console.error('[host-events] Server rejected events:', reasons.join(', '))
+  });
   const ready = new Promise<void>((resolve, reject) => {
     settleReady = (error) => {
       if (error) reject(error);
@@ -71,38 +86,56 @@ export function startEnrolledHostConnection(options: {
     settleReady?.(error);
   }
 
+  let adapter: ThreadRuntimeAdapter | null = null;
+  let enrolledPty: EnrolledPty | null = null;
+  let desktopBrowserBroker: DesktopBrowserBroker | null = null;
   const sink: EventSink = createEventSink({
-    isSessionOpen: () => socket?.readyState === WebSocket.OPEN,
-    postEvents: async (events) => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error('host session is not open');
-      socket.send(JSON.stringify(HostEventBatchMessageSchema.parse({
+    isSessionOpen: () => helloAccepted && socket?.readyState === WebSocket.OPEN,
+    onOverflow: (error) => {
+      console.error('[host-events]', error.message);
+      void stopConnection(1013, 'Host event backlog exceeded capacity').catch(() => undefined);
+    },
+    postEvents: async (events, batchId) => {
+      const current = socket;
+      if (!helloAccepted || !current || current.readyState !== WebSocket.OPEN) throw new Error('host session is not open');
+      return delivery.send(batchId, events.length, () => current.send(JSON.stringify(HostEventBatchMessageSchema.parse({
         type: 'host.event',
         protocolVersion: HOST_RPC_PROTOCOL_VERSION,
         hostId: options.hostId,
         instanceId,
+        batchId,
         events
-      })));
+      }))));
     }
   });
 
-  let adapter: ThreadRuntimeAdapter | null = null;
-  let enrolledPty: EnrolledPty | null = null;
   const interactiveClient = createInteractiveRequestHttpClient({
+    fetchFn,
     serverUrl: options.serverUrl,
     hostId: options.hostId,
     hostKey: options.hostKey,
     sessionId: instanceId
   });
   const pluginToolCalls = createPluginToolCallHttpClient({
+    fetchFn,
     serverUrl: options.serverUrl,
     hostId: options.hostId,
     hostKey: options.hostKey,
     sessionId: instanceId
   });
   const pluginHostArtifacts = createPluginHostArtifactHttpClient({
+    fetchFn,
     serverUrl: options.serverUrl,
     hostId: options.hostId,
     hostKey: options.hostKey
+  });
+  const pluginHosts = new PluginHostManager({
+    dataDir: options.dataDir ?? resolveZccDataDir(),
+    fetchArtifact: args => pluginHostArtifacts.fetch(args),
+    logger: { debug() {}, info(meta, message) { console.info(message, meta); }, warn(meta, message) { console.warn(message, meta); } },
+    hostWatcher: hostFsWatcher(),
+    onWorkerExit: payload => sink.emit({ kind: 'plugin.host.worker-exited', payload }),
+    onSignal: payload => sink.emit({ kind: 'plugin.host.signal', payload })
   });
   const interactiveRequests = new InteractiveRequestRegistry({
     registerRequest: (request) => interactiveClient.registerRequest(request),
@@ -153,10 +186,11 @@ export function startEnrolledHostConnection(options: {
       }
     });
     enrolledPty = createEnrolledPty({
-      emit: (event) => sink.emit(event)
+      emit: (event) => runtime.emit(event)
     });
     return createCommandRuntime({
       dataDir: options.dataDir,
+      pluginHosts,
       emit: (event) => sink.emit(event),
       loadConfig,
       startWork: (input) => adapter!.startWork(input),
@@ -178,16 +212,20 @@ export function startEnrolledHostConnection(options: {
       clearGoal: (input) => adapter!.clearGoal(input),
       deliverInteractiveResolve: (input) => interactiveRequests.resolve(input),
       startTerminal: (input) => enrolledPty!.startTerminal(input),
-      writeTerminal: (input) => enrolledPty!.writeTerminal(input),
-      resizeTerminal: (input) => enrolledPty!.resizeTerminal(input),
-      stopTerminal: (input) => enrolledPty!.stopTerminal(input),
+      // Remote CLI Agents and multi-machine Teams are deferred. Leave the
+      // optional CLI handler absent so even authenticated host RPC rejects it.
+      writeTerminal: input => enrolledPty!.writeTerminal(input),
+      resizeTerminal: input => enrolledPty!.resizeTerminal(input),
+      stopTerminal: input => enrolledPty!.stopTerminal(input),
       listModels: (input) => adapter!.listModels(input),
       providerHealth: (input) => adapter!.providerHealth(input)
     });
   })();
-  runtime.emit = (event: HostEventEnvelope) => sink.emit(event);
+  runtime.emit = (event: HostEventEnvelope) => {
+    if (event.kind === 'terminal.exited' && event.terminalId) runtime.terminals.delete(event.terminalId);
+    sink.emit(event);
+  };
 
-  let desktopBrowserBroker: DesktopBrowserBroker | null = null;
   const brokerTask = !options.runtime && options.dataDir
     ? startDesktopBrowserBroker({
       dataDir: options.dataDir,
@@ -209,8 +247,14 @@ export function startEnrolledHostConnection(options: {
 
   function connect(): void {
     if (closed) return;
-    const next = new WebSocket(wsUrl);
+    const next = options.connectCredential ? new NodeWebSocket(wsUrl, { headers: {
+      'x-zcc-machine-credential': options.connectCredential,
+      'x-zcc-host-id': options.hostId,
+      authorization: `Bearer ${options.hostKey}`
+    }, followRedirects: false, handshakeTimeout: 10_000 }) as unknown as WebSocket : new WebSocket(wsUrl);
     socket = next;
+    helloAccepted = false;
+    next.addEventListener('error', () => { /* close owns reconnect; never close recursively from error. */ });
     next.addEventListener('open', () => {
       attempt = 0;
       next.send(JSON.stringify(HostHelloMessageSchema.parse({
@@ -225,9 +269,9 @@ export function startEnrolledHostConnection(options: {
           next.send(JSON.stringify({ type: 'heartbeat' }));
         }
       }, HEARTBEAT_MS);
-      void sink.flush();
     });
     next.addEventListener('message', (event) => {
+      if (socket !== next || closed) return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(String(event.data));
@@ -237,11 +281,22 @@ export function startEnrolledHostConnection(options: {
       if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'host.hello-ok') {
         const ack = HostHelloOkMessageSchema.safeParse(parsed);
         if (ack.success && ack.data.hostId === options.hostId) {
-          desktopBrowserBroker?.setConnected(true);
-          markReady();
+          // Offline removal/reload cannot reach this daemon. Reconcile the
+          // server's current generations before announcing this connection.
+          void (runtime.pluginHosts ?? pluginHosts).reconcileGenerations(ack.data.pluginHostGenerations).then(() => {
+            if (socket !== next || closed || next.readyState !== WebSocket.OPEN) return;
+            helloAccepted = true;
+            desktopBrowserBroker?.setConnected(true);
+            options.onConnectionChange?.(true);
+            markReady();
+            void sink.flush();
+          }).catch(() => {
+            if (socket === next && !closed) next.close(1011, 'Plugin worker reconciliation failed');
+          });
         }
         return;
       }
+      if (delivery.accept(parsed)) return;
       if (!parsed || typeof parsed !== 'object' || (parsed as { type?: string }).type !== 'host-rpc.request') {
         return;
       }
@@ -250,11 +305,15 @@ export function startEnrolledHostConnection(options: {
       });
     });
     next.addEventListener('close', (event) => {
+      if (socket !== next) return;
+      helloAccepted = false;
+      delivery.cancel();
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
       desktopBrowserBroker?.setConnected(false);
+      options.onConnectionChange?.(false);
       options.onSocketClose?.(event.code);
       if (!readySettled) {
         markReady(new Error('host websocket closed before hello'));
@@ -271,24 +330,30 @@ export function startEnrolledHostConnection(options: {
 
   connect();
 
+  async function stopConnection(code?: number, reason?: string): Promise<void> {
+    closed = true;
+    helloAccepted = false;
+    delivery.cancel();
+    options.onConnectionChange?.(false);
+    markReady(new Error('host connection closed before hello'));
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    await pluginHosts.shutdown();
+    adapter?.dispose();
+    enrolledPty?.dispose();
+    await sink.dispose();
+    socket?.close(code, reason);
+    socket = null;
+    const broker = desktopBrowserBroker ?? await brokerTask;
+    desktopBrowserBroker = null;
+    runtime.desktopBrowserBroker = undefined;
+    await broker?.close();
+  }
+
   return {
     runtime,
     sink,
     ready,
-    async close() {
-      closed = true;
-      markReady(new Error('host connection closed before hello'));
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      adapter?.dispose();
-      enrolledPty?.dispose();
-      await sink.dispose();
-      socket?.close();
-      socket = null;
-      const broker = desktopBrowserBroker ?? await brokerTask;
-      desktopBrowserBroker = null;
-      runtime.desktopBrowserBroker = undefined;
-      await broker?.close();
-    }
+    close: () => stopConnection()
   };
 }

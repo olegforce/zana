@@ -19,11 +19,11 @@ import {
 describe('machine pairing command', () => {
   it('builds the curl|sh one-liner from a public origin', () => {
     expect(pairingCommand({
-      publicAppUrl: 'https://box.tailnet.ts.net/',
+      publicAppUrl: 'https://machine.example.com/',
       joinCode: 'zcde_abc',
       hostId: 'host-1'
     })).toBe(
-      'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 https://box.tailnet.ts.net/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server https://box.tailnet.ts.net'
+      'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 https://machine.example.com/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server https://machine.example.com'
     );
   });
 
@@ -63,9 +63,9 @@ describe('machine pairing command', () => {
       now: 1_000
     })).toEqual({ url: 'https://zcc.herokuapp.com/t/zcrs_abcdefghijklmnopqr1234' });
     expect(resolveRelayPairingServerUrl({
-      publicAppUrl: 'https://box.tailnet.ts.net',
+      publicAppUrl: 'https://machine.example.com',
       relay: { state: 'unconfigured' }
-    }).url).toBe('https://box.tailnet.ts.net');
+    }).url).toBe('https://machine.example.com');
     expect(joinCountdownMs(10_000, 1_000)).toBe(9_000);
     expect(resolveRelayPairingServerUrl({
       publicAppUrl: 'https://zcc.herokuapp.com',

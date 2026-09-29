@@ -91,6 +91,7 @@ extraResources:
       - join.mjs
       - bb-provider-bridge-worker.mjs
       - bb-pi-bridge.mjs
+      - zcc-plugin-host-worker.mjs
   # First-party plugins (`plugins/<id>` with a package.json `zcc` block).
   # PluginService.reconcileBuiltins auto-installs from this tree; tests and
   # packaging scripts stay in the repo and are not shipped.

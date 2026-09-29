@@ -1,3 +1,4 @@
+import { ModelDiscoveryLane } from './model-discovery-lane.js';
 import { mkdirSync } from 'node:fs';
 import { createSkillSnapshotStore } from './skill-snapshots.js';
 import { join } from 'node:path';
@@ -279,6 +280,8 @@ export function createAgentRuntimeAdapter(options: {
   }) => void;
 }): ThreadRuntimeAdapter {
   const runtimes = new Map<string, AgentRuntime>();
+  const modelDiscovery = new ModelDiscoveryLane();
+  const discoveryRuntimes = new Set<AgentRuntime>();
   const runtimeMeta = new Map<string, { catalogHash: string; cwd: string }>();
   const threadLocation = new Map<string, { environmentId: string; cwd: string }>();
   const remoteProxyByThread = new Map<string, ThreadRemoteProxy>();
@@ -391,24 +394,28 @@ export function createAgentRuntimeAdapter(options: {
       bridgeLaunch: HostBridgeLaunch;
       cwd?: string;
     }): Promise<ProviderListModelsResult> {
-      syncProviderBridgeRecording();
-      const workspaceCwd = input.cwd ?? join(storageRoot, 'model-list', input.providerId);
-      if (!input.cwd) mkdirSync(workspaceCwd, { recursive: true });
-      const runtime = createEnvironmentRuntime(workspaceCwd);
-      try {
-        const listed = await runtime.listModels({
-          providerId: input.providerId,
-          bridgeLaunch: await resolveLaunch(input.bridgeLaunch),
-          ...(input.cwd ? { cwd: input.cwd } : {})
-        });
-        return {
-          models: listed.models,
-          selectedOnlyModels: listed.selectedOnlyModels,
-          ...(listed.acpMode ? { acpMode: listed.acpMode } : {})
-        };
-      } finally {
-        await runtime.shutdown();
-      }
+      return modelDiscovery.run(JSON.stringify(input), async () => {
+        syncProviderBridgeRecording();
+        const workspaceCwd = input.cwd ?? join(storageRoot, 'model-list', input.providerId);
+        if (!input.cwd) mkdirSync(workspaceCwd, { recursive: true });
+        const runtime = createEnvironmentRuntime(workspaceCwd);
+        discoveryRuntimes.add(runtime);
+        try {
+          const listed = await runtime.listModels({
+            providerId: input.providerId,
+            bridgeLaunch: await resolveLaunch(input.bridgeLaunch),
+            ...(input.cwd ? { cwd: input.cwd } : {})
+          });
+          return {
+            models: listed.models,
+            selectedOnlyModels: listed.selectedOnlyModels,
+            ...(listed.acpMode ? { acpMode: listed.acpMode } : {})
+          };
+        } finally {
+          discoveryRuntimes.delete(runtime);
+          await runtime.shutdown();
+        }
+      });
     },
     async providerHealth(input: {
       providerId: string;
@@ -652,7 +659,8 @@ export function createAgentRuntimeAdapter(options: {
       return [...runtimes.keys()];
     },
     dispose() {
-      void Promise.allSettled([...runtimes.values()].map(runtime => runtime.shutdown()))
+      modelDiscovery.dispose();
+      void Promise.allSettled([...runtimes.values(), ...discoveryRuntimes].map(runtime => runtime.shutdown()))
         .then(() => skillSnapshots.dispose()).catch(() => undefined);
       runtimes.clear();
       runtimeMeta.clear();

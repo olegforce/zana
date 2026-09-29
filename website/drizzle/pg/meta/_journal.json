@@ -8,6 +8,13 @@
       "when": 1784156829319,
       "tag": "0000_wooden_echo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790588908307,
+      "tag": "0001_early_ben_grimm",
+      "breakpoints": true
     }
   ]
 }

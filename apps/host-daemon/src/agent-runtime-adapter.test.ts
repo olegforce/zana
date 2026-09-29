@@ -1119,7 +1119,7 @@ describe('agent runtime thread adapter', () => {
     expect(first.source.kind).toBe('artifact');
     if (first.source.kind === 'artifact') {
       expect(first.source.artifactPath).toBe(
-        join(cwd, 'plugin-host-artifacts', 'provider-acp', digest, 'host.js')
+        join(cwd, 'plugin-host-artifacts', 'provider-acp', digest, 'host.mjs')
       );
       expect(first.source.artifactPath).not.toMatch(/bridge\.ts$/u);
     }

@@ -2,6 +2,8 @@
 // hosts and does not normalize paths consistently with the desktop runtime.
 import { URL } from 'whatwg-url-minimum';
 
+/** Includes retired private origins only so saved profiles remain readable.
+ * Network/session authorization is separately restricted to Zana Connect. */
 export function normalizeServerUrl(input: string): string {
   const url = new URL(input.trim());
   if (
@@ -68,56 +70,12 @@ export function externalUrl(url: string): boolean {
     return false;
   }
 }
-export interface PairingPayload {
-  version: 1;
-  serverUrl: string;
-  code: string;
-  expiresAt: number;
-}
-export function parsePairingPayload(raw: string, now = Date.now()): PairingPayload {
-  let input = raw.trim();
-  if (input.length > 4096) throw new Error('Pairing code is too long.');
-  let value: Partial<PairingPayload> | null;
-  try {
-    if (input.startsWith('zana:')) {
-      const link = new URL(input);
-      if (
-        link.host !== 'connect' ||
-        link.username ||
-        link.password ||
-        (link.pathname !== '' && link.pathname !== '/')
-      )
-        throw new Error('Not a pairing link');
-      input = link.searchParams.get('payload') ?? '';
-    }
-    value = JSON.parse(input);
-  } catch {
-    throw new Error('Scan a Zana pairing QR code generated on your computer.');
-  }
-  if (
-    !value ||
-    value.version !== 1 ||
-    typeof value.serverUrl !== 'string' ||
-    typeof value.code !== 'string' ||
-    !/^[\w-]{22}$/.test(value.code) ||
-    typeof value.expiresAt !== 'number' ||
-    !Number.isFinite(value.expiresAt) ||
-    value.expiresAt <= now
-  )
-    throw new Error('Pairing code is invalid or expired. Generate a new code on your computer.');
-  return {
-    version: 1,
-    serverUrl: normalizeServerUrl(value.serverUrl),
-    code: value.code,
-    expiresAt: value.expiresAt
-  };
-}
 /** Deep links choose a screen, never grant trust or start network requests. */
 export function nativeIntent(path: string): string {
   try {
     const url = new URL(path);
     if (url.protocol === 'zana:' && url.hostname === 'connect')
-      return `/connect?payload=${encodeURIComponent(url.searchParams.get('payload') ?? '')}`;
+      return '/connect';
     if (url.protocol === 'zana:' && url.hostname === 'open')
       return `/?server=${encodeURIComponent(normalizeServerUrl(url.searchParams.get('server') ?? ''))}&path=${encodeURIComponent(safePath(url.searchParams.get('path') ?? '/'))}`;
     if (url.protocol === 'https:' || url.protocol === 'http:')

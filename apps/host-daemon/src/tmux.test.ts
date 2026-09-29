@@ -209,10 +209,10 @@ describe('reapOrphanTmuxSessions', () => {
     });
   }
 
-  it('kills cc-* sessions with no live pty, keeps the live ones', async () => {
-    mockTmux(['cc-alive', 'cc-orphan', 'other-tool-session']);
+  it('kills only recorded orphan sessions, keeping live and other-instance workers', async () => {
+    mockTmux(['cc-alive', 'cc-orphan', 'cc-other-instance', 'other-tool-session']);
     const live = new Set(['alive']);
-    const reaped = await reapOrphanTmuxSessions((id) => live.has(id));
+    const reaped = await reapOrphanTmuxSessions(new Set(['alive', 'orphan']), (id) => live.has(id));
 
     // Only cc-orphan is reaped: cc-alive is live, other-tool-session isn't ours.
     expect(reaped).toEqual(['orphan']);
@@ -223,7 +223,7 @@ describe('reapOrphanTmuxSessions', () => {
 
   it('reaps nothing when every cc- session is live', async () => {
     mockTmux(['cc-a', 'cc-b']);
-    const reaped = await reapOrphanTmuxSessions(() => true);
+    const reaped = await reapOrphanTmuxSessions(new Set(['a', 'b']), () => true);
     expect(reaped).toEqual([]);
     expect(execFileMock.mock.calls.filter((c) => c[1][0] === 'kill-session')).toHaveLength(0);
   });
@@ -232,12 +232,12 @@ describe('reapOrphanTmuxSessions', () => {
     execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (e: unknown, out: string) => void) => {
       cb(new Error('no server running'), '');
     });
-    expect(await reapOrphanTmuxSessions(() => false)).toEqual([]);
+    expect(await reapOrphanTmuxSessions(new Set(['a']), () => false)).toEqual([]);
   });
 
   it('is a no-op on win32', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
-    expect(await reapOrphanTmuxSessions(() => false)).toEqual([]);
+    expect(await reapOrphanTmuxSessions(new Set(['a']), () => false)).toEqual([]);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 });

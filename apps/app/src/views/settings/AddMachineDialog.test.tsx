@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { AddMachineDialogView } from './AddMachineDialog.js';
 
-const command = 'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 https://box.tailnet.ts.net/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server https://box.tailnet.ts.net';
+const command = 'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 https://machine.example.com/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server https://machine.example.com';
 const loopbackCommand = 'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 http://127.0.0.1:8780/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server http://127.0.0.1:8780';
 const sshCommand = "ssh -o ExitOnForwardFailure=yes -R 18782:127.0.0.1:8780 limited-pony 'curl -fL --progress-meter --connect-timeout 10 --max-time 60 --retry 2 http://127.0.0.1:18782/install.sh | sh -s -- --join-code zcde_abc --host-id host-1 --server http://127.0.0.1:18782'";
 
@@ -57,7 +57,7 @@ describe('AddMachineDialogView', () => {
     expect(html).toContain('only reachable on this computer');
     expect(html).toContain('data-testid="add-machine-ssh-host"');
     expect(html).toContain('No remote projects or SSH hosts found.');
-    expect(html).not.toContain('Set a public app URL (Tailscale Serve) before pairing');
+    expect(html).not.toContain('Configure the machine-pairing relay before pairing');
   });
 
   it('copies an SSH reverse-tunnel command for a workspace host', () => {

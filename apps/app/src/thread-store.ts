@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { subscribeProductReconnect } from './lib/product-ws.js';
 import { product } from './lib/product-client.js';
 import type { ThreadActivityState } from '@zana-ai/zcc-domain/thread-runtime';
 
@@ -43,6 +44,7 @@ let subscribed = false;
 function ensureThreadUpdates(): void {
   if (subscribed) return;
   subscribed = true;
+  subscribeProductReconnect(() => useThreads.getState().load());
   product.threads.onUpdated((payload) => {
     if (isThreadListItem(payload)) {
       useThreads.getState().upsert(payload);

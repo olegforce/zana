@@ -14,6 +14,22 @@ const config = (executionState?: 'plan' | 'interactive' | 'accept-edits' | 'auto
 } as AppConfig);
 
 describe('production execution routing preflight', () => {
+  it('authorizes roles and models using the supplied machine discovery without running a local probe', async () => {
+    const provider = new OpenCodeProvider();
+    provider.discoverRoleTargets = vi.fn(async () => { throw new Error('wrong machine'); });
+    provider.discoverModelTargets = vi.fn(async () => { throw new Error('wrong machine'); });
+    const discovery = { roles: vi.fn(async () => [{ id: 'selected-role', label: 'Selected role', scope: ['local' as const] }]), models: vi.fn(async () => ['selected/model']) };
+    const services = { consentStore: { reserve: vi.fn() }, installedVersion: vi.fn(async () => '1.18.10'), provider, discovery };
+    const base = { config: config(), profile: 'opencode' as const, projectId: 'p', projectPath: '/selected/source', scope: 'local' as const, mode: 'interactive' as const, idempotencyKey: 'selected' };
+    for (const selection of [{ roleTargetId: 'selected-role' }, { modelTargetId: 'selected/model' }]) {
+      await expect(preflightTerminalExecution({ ...base, harnessRouting: { schemaVersion: 1, byAdapter: { opencode: selection } } }, services)).resolves.toEqual({ decision: 'allowed', scope: 'local' });
+    }
+    discovery.roles.mockResolvedValueOnce([]);
+    await expect(preflightTerminalExecution({ ...base, harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { roleTargetId: 'build' } } } }, services)).resolves.toEqual({ decision: 'blocked', reason: 'role target unavailable' });
+    discovery.models.mockRejectedValueOnce(new Error('selected machine offline'));
+    await expect(preflightTerminalExecution({ ...base, harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'selected/model' } } } }, services)).rejects.toThrow('selected machine offline');
+    expect(provider.discoverRoleTargets).not.toHaveBeenCalled(); expect(provider.discoverModelTargets).not.toHaveBeenCalled();
+  });
   const deps = () => ({
     consentStore: { reserve: vi.fn(async () => ({ outcome: 'denied' as const })) },
     installedVersion: vi.fn(async () => '1.18.10')

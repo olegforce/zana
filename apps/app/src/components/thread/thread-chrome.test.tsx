@@ -745,7 +745,7 @@ describe('expandable row and chips', () => {
     expect(source).toContain('createCoalescedRunner');
     expect(source).toContain('<ThreadDetail key={threadId} threadId={threadId} />');
     expect(source).toContain('resolveTimelinePollRows');
-    expect(source).toContain('Promise.allSettled');
+    expect(source).toContain('loadThreadDetailProgressively');
     expect(source).not.toContain('/* keep last */');
     const load = readFileSync(fileURLToPath(new URL('../../views/threads/thread-detail-load.ts', import.meta.url)), 'utf8');
     expect(load).toContain('applyTimelineDelta');
@@ -856,17 +856,23 @@ describe('expandable row and chips', () => {
     );
     expect(thinkingDetails).toContain('border-left: 1px solid var(--border);');
     const mentionPopover = css.slice(
-      css.indexOf('.thread-detail-view .mention-popover {'),
-      css.indexOf('.composer-typeahead-heading {')
+      css.indexOf('.thread-detail-view .mention-popover,'),
+      css.indexOf('.composer-typeahead-section + .composer-typeahead-section {')
     );
     expect(mentionPopover).toContain('top: auto;');
     expect(mentionPopover).toContain('bottom: calc(100% + 8px);');
+    expect(mentionPopover).toContain('.launch-modal .mention-popover');
+    expect(css).toContain('.composer-typeahead-heading {');
+    expect(css).toContain('.composer-typeahead-rows {');
+    expect(css).toContain('flex-shrink: 9999;');
     const assistantActions = css.slice(
       css.indexOf('.thread-timeline-row.is-assistant .thread-message-actions {'),
       css.indexOf('.thread-timeline-row:hover .thread-message-actions')
     );
     expect(assistantActions).toContain('position: absolute;');
-    expect(assistantActions).toContain('left: 0;');
+    expect(assistantActions).toContain('right: 0;');
+    expect(assistantActions).not.toContain('left: 0;');
+    expect(assistantActions).toContain('justify-content: flex-end;');
     expect(assistantActions).toContain('top: 100%;');
     expect(assistantActions).toContain('padding: 6px 0 4px;');
     const hiddenActions = css.slice(

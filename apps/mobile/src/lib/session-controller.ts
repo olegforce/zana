@@ -10,7 +10,7 @@ export interface SessionControllerDeps {
   onReady(): void;
   onError(error: unknown): void;
   onResume(): void;
-  create?: (profile: ServerProfile) => Promise<MobileSession | null>;
+  create?: (profile: ServerProfile) => Promise<MobileSession>;
   now?: () => number;
 }
 
@@ -47,18 +47,15 @@ export function connectNativeProfile(
     try {
       const session = await (deps.create ?? createSession)(profile);
       if (!live) return;
-      if (session) {
-        await deps.cookies.set(profile.serverUrl, session.cookie, false);
-        if (!live) return;
-        if (deps.platform === 'ios')
-          await deps.cookies.set(profile.serverUrl, session.cookie, true);
-        else await deps.cookies.flush();
-      }
+      await deps.cookies.set(profile.serverUrl, session.cookie, false);
       if (!live) return;
-      expiresAt = session?.expiresAt ?? Infinity;
+      if (deps.platform === 'ios')
+        await deps.cookies.set(profile.serverUrl, session.cookie, true);
+      else await deps.cookies.flush();
+      if (!live) return;
+      expiresAt = session.expiresAt;
       deps.onReady();
-      if (session)
-        timer = setTimeout(() => void refresh(), Math.max(1000, expiresAt - now() - 5 * 60_000));
+      timer = setTimeout(() => void refresh(), Math.max(1000, expiresAt - now() - 5 * 60_000));
     } catch (error) {
       if (live) deps.onError(error);
     } finally {

@@ -40,6 +40,7 @@ import { nextSuggestionIndex, typeaheadKeyAction } from './typeahead-keyboard.js
 import { composerTriggersForMentionProviders } from './composer-mention-triggers.js';
 import { type ActiveTrigger, type TypeaheadSuggestion } from './types.js';
 import { useComposerSuggestions, useMentionProviderRows } from './use-composer-suggestions.js';
+import { useComposerDraft } from './ComposerDraft.js';
 
 export type ComposerSlashKind = 'thread' | 'cli';
 
@@ -65,6 +66,7 @@ export interface UseComposerPromptFieldArgs {
   testId: string;
   ariaLabel?: string;
   projectId: string;
+  hostId?: string;
   threadId?: string;
   projectRoot?: string | null;
   projects: readonly Project[];
@@ -82,6 +84,7 @@ export function useComposerPromptField({
   testId,
   ariaLabel,
   projectId,
+  hostId,
   threadId,
   projectRoot,
   projects,
@@ -93,6 +96,7 @@ export function useComposerPromptField({
   interceptKeyDown,
   onError
 }: UseComposerPromptFieldArgs) {
+  const draft = useComposerDraft();
   const [markdownInPrompt] = useBooleanPreference(
     MARKDOWN_IN_PROMPT_KEY,
     MARKDOWN_IN_PROMPT_DEFAULT
@@ -210,6 +214,7 @@ export function useComposerPromptField({
 
   const editor = useEditor({
     immediatelyRender: false,
+    content: draft?.current,
     extensions: composerPromptExtensions(markdownInPrompt, placeholder),
     editorProps: {
       attributes: {
@@ -289,13 +294,14 @@ export function useComposerPromptField({
       }
     },
     onUpdate: ({ editor: next }) => {
+      if (draft) draft.current = next.getJSON();
       syncTrigger(next);
       setEditorRevision((current) => current + 1);
     },
     onSelectionUpdate: ({ editor: next }) => syncTrigger(next)
   }, [ariaLabel, markdownInPrompt, placeholder, testId]);
 
-  const seededInitialText = useRef(false);
+  const seededInitialText = useRef(draft?.current !== undefined);
   useEffect(() => {
     if (!editor || seededInitialText.current || !initialText) return;
     seededInitialText.current = true;
@@ -459,6 +465,7 @@ export function useComposerPromptField({
   const { suggestions, menuOpen } = useComposerSuggestions({
     trigger,
     projectId,
+    hostId,
     threadId,
     projects,
     commands,

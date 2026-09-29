@@ -64,6 +64,9 @@ export interface ThreadTimelineProps {
   loadError?: string | null;
   loading?: boolean;
   onRetryLoad?: () => void;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => Promise<void>;
 }
 
 function flattenForUnread(rows: ThreadTimelineViewRow[]): Array<{ id: string; sourceSeqStart?: number }> {
@@ -108,7 +111,10 @@ export function ThreadTimeline({
   planExecution,
   loading = false,
   loadError = null,
-  onRetryLoad
+  onRetryLoad,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder
 }: ThreadTimelineProps) {
   const [now, setNow] = useState(() => Date.now());
   const [retainedTerminalIds, setRetainedTerminalIds] = useState<string[]>([]);
@@ -241,6 +247,12 @@ export function ThreadTimeline({
     onReachedBottom?.();
   };
 
+  const onMessageExpand = useCallback(() => {
+    // Reading a prompt is scrollback: resizing it must not jump to the reply.
+    setPinnedAway(true);
+    setInitialOpen(false);
+  }, []);
+
   return (
     <div className="thread-detail-timeline-shell">
       <div className="thread-banner-stack">
@@ -255,6 +267,17 @@ export function ThreadTimeline({
         ref={paneRef}
         onScroll={onScroll}
       >
+        {hasOlder && !showLoading && <button type="button" disabled={loadingOlder}
+          data-testid="thread-load-older" onClick={() => {
+            const pane = paneRef.current;
+            const height = pane?.scrollHeight ?? 0;
+            const top = pane?.scrollTop ?? 0;
+            setPinnedAway(true);
+            setInitialOpen(false);
+            void onLoadOlder?.().then(() => requestAnimationFrame(() => {
+              if (pane && pane === paneRef.current) pane.scrollTop = top + pane.scrollHeight - height;
+            }));
+          }}>{loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>}
         {showLoading ? (
           <PaneEmptyState
             art="loading"
@@ -271,6 +294,7 @@ export function ThreadTimeline({
             expansion={expansionWithRetention}
             unreadRowId={unreadRowId}
             onCopy={onCopy}
+            onMessageExpand={onMessageExpand}
             onTitleAction={onTitleAction}
             onTitleLink={onTitleLink}
             onOpenDiff={onOpenDiff}

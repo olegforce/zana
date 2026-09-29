@@ -39,7 +39,8 @@ export function parseFileSource(input) {
       kind,
       threadId: typeof src.threadId === 'string' ? src.threadId : null,
       environmentId: typeof src.environmentId === 'string' ? src.environmentId : null,
-      projectId: typeof src.projectId === 'string' ? src.projectId : null
+      projectId: typeof src.projectId === 'string' ? src.projectId : null,
+      ...(typeof src.hostId === 'string' ? { hostId: src.hostId } : {})
     },
     content: typeof record.content === 'string' ? record.content : undefined,
     expectedSha256: typeof record.expectedSha256 === 'string' ? record.expectedSha256 : null

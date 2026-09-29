@@ -1,17 +1,8 @@
-/**
- * Host schedule_list / schedule_run_now / schedule_set_enabled for conversation
- * threads. List and setEnabled read/write `.zcc/schedules` JSON (the desktop
- * SchedulerManager watches those dirs). runNow emits a hub command the desktop
- * renderer forwards to the live SchedulerManager — it cannot spawn a PTY from
- * this process. projectId is closed over from the owning conversation row.
- */
-
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import * as os from 'node:os';
-import { join } from 'node:path';
-import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
+/** Agent schedule operations go directly to the instance owner, once per request.
+ * Browser subscriptions are notifications only and never execute commands. */
+import { asControlResult, callControlAsProductServer } from '../../http/cli-agent-ops.js';
 import type { DynamicTool, ToolCallResponse } from '@zana-ai/zcc-domain/thread-runtime';
-import type { Project, ScheduledTask } from '@zana-ai/zcc-domain/product';
+import type { Result, ScheduledTask } from '@zana-ai/zcc-domain/product';
 import { pluginToolResultToResponse } from '../../plugins/plugin-agent-tools.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import {
@@ -95,61 +86,10 @@ function row(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function globalSchedulesDir(): string {
-  return join(resolveZccDataDir(process.env, os.homedir()), 'schedules');
-}
-
-function projectSchedulesDir(project: Project): string {
-  return join(project.path, '.zcc', 'schedules');
-}
-
-function readTaskFile(path: string): ScheduledTask | null {
-  try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Partial<ScheduledTask>;
-    if (!raw || typeof raw !== 'object') return null;
-    if (typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
-    if (typeof raw.enabled !== 'boolean' || typeof raw.projectId !== 'string') return null;
-    return raw as ScheduledTask;
-  } catch {
-    return null;
-  }
-}
-
-function listInDir(dir: string, source: ScheduledTask['source']): ScheduledTask[] {
-  if (!existsSync(dir)) return [];
-  const out: ScheduledTask[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith('.json')) continue;
-    const task = readTaskFile(join(dir, name));
-    if (task) {
-      task.source = source;
-      out.push(task);
-    }
-  }
-  return out;
-}
-
-function listAll(projects: Project[]): ScheduledTask[] {
-  const out = listInDir(globalSchedulesDir(), 'global');
-  for (const project of projects) {
-    out.push(...listInDir(projectSchedulesDir(project), { projectId: project.id }));
-  }
-  return out;
-}
-
-function locateFile(id: string, projects: Project[]): string | null {
-  const candidates = [join(globalSchedulesDir(), `${id}.json`)];
-  for (const project of projects) candidates.push(join(projectSchedulesDir(project), `${id}.json`));
-  for (const candidate of candidates) if (existsSync(candidate)) return candidate;
-  return null;
-}
-
-function writeTaskAtomic(path: string, task: ScheduledTask): void {
-  const { source: _source, ...rest } = task;
-  void _source;
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(rest, null, 2));
-  renameSync(tmp, path);
+async function invokeOwner<T>(ctx: ProductHttpContext, method: string, args: unknown[]): Promise<T> {
+  const response = asControlResult<T>(await callControlAsProductServer(ctx.dataDir, 'product.invoke', { method, args }));
+  if (!response.ok) throw new Error(response.message);
+  return response.value;
 }
 
 export async function invokeHostScheduleTool(
@@ -159,9 +99,12 @@ export async function invokeHostScheduleTool(
   const { name, projectId, input } = args;
   const fields = row(input);
   try {
-    const projects = ctx.toProjects();
+    if (!ctx.toProjects().some(project => project.id === projectId)) throw new Error('Unknown project');
+    if (![SCHEDULE_LIST_NAME, SCHEDULE_RUN_NOW_NAME, SCHEDULE_SET_ENABLED_NAME].includes(name)) throw new Error(`Unsupported schedule tool: ${name}`);
     const widen = fields.allProjects === true;
-    const scoped = scopeSchedules(listAll(projects), projectId, widen);
+    const tasks = await invokeOwner<ScheduledTask[]>(ctx, 'scheduler.list', []);
+    if (!Array.isArray(tasks)) throw new Error('Invalid scheduler response');
+    const scoped = scopeSchedules(tasks, projectId, widen);
 
     if (name === SCHEDULE_LIST_NAME) {
       const hits = scoped.map(projectSchedule);
@@ -177,44 +120,16 @@ export async function invokeHostScheduleTool(
     const found = resolveSchedule(scoped, id);
     if (!found.ok) return fail(name, formatResolveError(found, id));
 
-    if (name === SCHEDULE_RUN_NOW_NAME) {
-      ctx.hub.emit('scheduler:command', { action: 'run-now', id: found.task.id });
-      const delivered = ctx.hub.size();
-      if (delivered === 0) {
-        return fail(name, 'No connected app window received the run-now command. Is the desktop app open?');
-      }
-      return pluginToolResultToResponse(name, {
-        ok: true,
-        action: 'run-now',
-        schedule: projectSchedule(found.task),
-        delivered
-      });
-    }
-
-    if (name === SCHEDULE_SET_ENABLED_NAME) {
-      if (typeof fields.enabled !== 'boolean') throw new Error('enabled is required');
-      const path = locateFile(found.task.id, projects);
-      if (!path) return fail(name, `schedule not found: ${id}`);
-      const next: ScheduledTask = {
-        ...found.task,
-        enabled: fields.enabled,
-        updatedAt: new Date().toISOString()
-      };
-      writeTaskAtomic(path, next);
-      ctx.hub.emit('scheduler:command', {
-        action: 'set-enabled',
-        id: found.task.id,
-        enabled: fields.enabled
-      });
-      ctx.hub.emit('scheduler:changed', listAll(projects));
-      return pluginToolResultToResponse(name, {
-        ok: true,
-        action: fields.enabled ? 'enable' : 'disable',
-        schedule: projectSchedule(next)
-      });
-    }
-
-    return fail(name, `Unsupported schedule tool: ${name}`);
+    if (name === SCHEDULE_SET_ENABLED_NAME && typeof fields.enabled !== 'boolean') throw new Error('enabled is required');
+    const result = await invokeOwner<Result<ScheduledTask>>(ctx,
+      name === SCHEDULE_RUN_NOW_NAME ? 'scheduler.runNow' : 'scheduler.setEnabled',
+      name === SCHEDULE_RUN_NOW_NAME ? [found.task.id] : [found.task.id, fields.enabled]);
+    if (!result.ok) return fail(name, result.message);
+    return pluginToolResultToResponse(name, {
+      ok: true,
+      action: name === SCHEDULE_RUN_NOW_NAME ? 'run-now' : fields.enabled ? 'enable' : 'disable',
+      schedule: projectSchedule(result.value)
+    });
   } catch (error) {
     return fail(name, error instanceof Error ? error.message : `${name} failed`);
   }

@@ -21,7 +21,7 @@ import { providerFor, registrationFor, renderRemoteCommand } from './harness/reg
 import { effectiveUnattendedProfile, profilePostureOf, unattendedExecutionRouting, withoutExecutionIntent } from './harness/unattended-launch.js';
 import type { AgentLiveness, HarnessAuthInjection, ProviderHookUrls } from './harness/launch-provider.js';
 import { probeAgentLiveness as probeAgentLivenessImpl } from './harness/agent-liveness.js';
-import { getHarnessAuth } from './harness-auth.js';
+import type { HarnessAuthCredential, HarnessAuthKey } from './harness-auth.js';
 import { resolveExecutionState, resolveModelTarget, resolveRoleTarget } from './harness/target-resolution.js';
 import {
   environmentFor,
@@ -384,7 +384,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Crash-on-start GET/stop still need the record after `live` drops. Rule 5 cap. */
 export const PTY_RECENT_EXITED_CAP = 32;
 
+/** Supplied by the process that owns execution. The standalone daemon must
+ * receive only a session credential, never the shared instance's signing key. */
+export interface PtyManagerHostServices {
+  resolveHarnessAuth?: (family: HarnessAuthKey) => HarnessAuthCredential;
+  sessionCredential?: (sessionId: string) => string;
+  /** Packed daemons prepare their own portable addon inside the spawn adapter. */
+  prepareNativePty?: () => void;
+}
+
 export class PtyManager extends EventEmitter {
+  constructor(private readonly hostServices: PtyManagerHostServices = {}) { super(); }
   private live = new Map<string, Live>();
   private recentExited = new Map<string, TerminalSession>();
   /** Base URL of the local MCP server, set after the http listener boots. */
@@ -1008,7 +1018,7 @@ export class PtyManager extends EventEmitter {
     // Used two ways below: claude env-substitutes it into its `--mcp-config` file
     // via `ZCC_MCP_URL`; a provider whose CLI carries MCP as ARGS (codex) bakes it
     // straight into `provider.mcpArgs`.
-    const sessionCredential = controlCredentialForSession(sessionId);
+    const sessionCredential = (this.hostServices.sessionCredential ?? controlCredentialForSession)(sessionId);
     const mcpServerUrl = this.mcpBaseUrl
       ? `${this.mcpBaseUrl}/mcp/${opts.projectId}/${sessionId}/${sessionCredential}`
       : null;
@@ -1144,9 +1154,9 @@ export class PtyManager extends EventEmitter {
     // a gateway/proxy or supply a key WITHOUT running the CLI's own `login`. The
     // provider owns the profile→family map (`authKey`, Rule 6) and its CLI's auth
     // dialect (`authInjection`): claude/cursor emit env only, codex also emits a
-    // `-c model_providers.*` block. `getHarnessAuth` reads main's own encrypted
-    // store (Rule 1 — never renderer-supplied) and returns `{}` when nothing is
-    // stored, so `authInjection` returns `{}` and a plain launch stays
+    // `-c model_providers.*` block. The execution owner supplies its credential
+    // resolver (never renderer-supplied); absent credentials return `{}`,
+    // so `authInjection` returns `{}` and a plain launch stays
     // byte-identical (guarded by the golden-argv net). `env` is merged into the
     // child env below; `args` splice into fullArgs alongside the other `-c` args.
     const authFamily = provider.authKey(effectiveProfile);
@@ -1163,7 +1173,7 @@ export class PtyManager extends EventEmitter {
           subagentStop: providerHookUrls.subagent ? `${providerHookUrls.subagent}/stop` : undefined
         }
       } : {}),
-      ...(authFamily ? { auth: getHarnessAuth(authFamily) } : {})
+      ...(authFamily ? { auth: this.hostServices.resolveHarnessAuth?.(authFamily) ?? {} } : {})
     });
     // Persona flags: inserted AFTER claudeMcpArgs so the persona's
     // append-system-prompt layers on TOP of the inbox guidance (personas can
@@ -1764,7 +1774,7 @@ export class PtyManager extends EventEmitter {
       : opts.scheduled && process.platform !== 'win32'
       ? this.scheduledSupervisor(inner.command, inner.args)
       : inner;
-    ensureNodePtySpawnHelperExecutable();
+    (this.hostServices.prepareNativePty ?? ensureNodePtySpawnHelperExecutable)();
     const proc = pty.spawn(spawnCmd.command, spawnCmd.args, {
       name: 'xterm-256color',
       cols: opts.cols,
@@ -2276,7 +2286,7 @@ export class PtyManager extends EventEmitter {
         // inline in `--mcp-config` (no remote file). Gated behind the config
         // flag; absent ⇒ the historical MCP-cut-off remote agent.
         if (opts.config.remoteMcpEnabled || wantsRemoteExecutionMcp) {
-          remoteMcpUrl = `${base}/mcp/${opts.projectId}/${sessionId}/${controlCredentialForSession(sessionId)}`;
+          remoteMcpUrl = `${base}/mcp/${opts.projectId}/${sessionId}/${(this.hostServices.sessionCredential ?? controlCredentialForSession)(sessionId)}`;
         }
       }
     }
@@ -2408,13 +2418,13 @@ export class PtyManager extends EventEmitter {
     const spawnEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ZCC_SESSION_ID: sessionId,
-      ZCC_SESSION_TOKEN: controlCredentialForSession(sessionId),
+      ZCC_SESSION_TOKEN: (this.hostServices.sessionCredential ?? controlCredentialForSession)(sessionId),
       TERM: 'xterm-256color'
     };
     spawnEnv.PATH = augmentPath(spawnEnv.PATH ?? process.env.PATH);
     ensureInteractiveTerminalEnv(spawnEnv);
 
-    ensureNodePtySpawnHelperExecutable();
+    (this.hostServices.prepareNativePty ?? ensureNodePtySpawnHelperExecutable)();
     const proc = pty.spawn('ssh', sshArgs, {
       name: 'xterm-256color',
       cols: opts.cols,
@@ -2660,7 +2670,7 @@ export class PtyManager extends EventEmitter {
         }
         let proc: pty.IPty;
         try {
-          ensureNodePtySpawnHelperExecutable();
+          (this.hostServices.prepareNativePty ?? ensureNodePtySpawnHelperExecutable)();
           proc = pty.spawn('ssh', live2.reattach.sshArgs, {
             name: 'xterm-256color',
             cols: live2.reattach.cols,

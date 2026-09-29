@@ -36,7 +36,7 @@ export type RelayStatus = {
   joinUntil?: number;
 };
 
-/** Prefer `/t/<sessionId>` when the Heroku relay is connected; Tailscale stays bare. */
+/** Prefer `/t/<sessionId>` when the Heroku relay is connected; direct HTTPS origins stay bare. */
 export function resolveRelayPairingServerUrl(input: {
   publicAppUrl?: string | null;
   relay?: RelayStatus | null;
@@ -178,5 +178,5 @@ export function formatJoinCountdown(remainingMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-export const TAILSCALE_SERVE_HINT =
-  'tailscale serve --bg --https=443 http://127.0.0.1:<zcc-port>';
+export const REMOTE_MACHINE_CONNECTION_HINT =
+  'Use the configured machine-pairing relay or an SSH reverse tunnel.';

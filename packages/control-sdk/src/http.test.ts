@@ -8,7 +8,7 @@ import { ProductHttpClient, probeHealth } from './http.js';
 import { resolveConnect } from './connect.js';
 import { Zcc } from './client.js';
 import { spawnThread } from './threads.js';
-import { assertRoleXorModel, launchCliAgent, rejectIsolatedCliAgent } from './cli-agents.js';
+import { assertRoleXorModel, CliAgentHandle, launchCliAgent, rejectIsolatedCliAgent } from './cli-agents.js';
 import { waitForThreadEvent, waitForThreadStatus, threadIsQuiet } from './wait.js';
 import { ensureLiveSandbox } from './projects.js';
 import { health, preflight } from './harness.js';
@@ -377,6 +377,40 @@ describe('cli agents', () => {
     }, { runId: 'run1', dataDir, tagged: false });
     expect(agent.id).toBe('s-op');
     expect(readJournal(dataDir, 'run1')).toBeNull();
+  });
+  it('forwards the chosen machine so the server can reject it instead of silently launching elsewhere', async () => {
+    const { url, calls } = await boot([{ method: 'POST', path: '/api/v1/cli-agents', status: 409,
+      body: { code: 'host-unsupported', message: 'Selected machine cannot run CLI Agents' } }]);
+    await expect(launchCliAgent(new ProductHttpClient(url), {
+      projectId: 'p1', hostId: 'secondary', profile: 'codex', prompt: 'task'
+    }, { runId: 'intent', dataDir: tmpData(), tagged: false })).rejects.toThrow('Selected machine');
+    expect(calls).toEqual([expect.objectContaining({ body: expect.objectContaining({ hostId: 'secondary' }) })]);
+  });
+  it.each(['value', 'agent'])('preserves machine ownership from a %s launch response', async key => {
+    const record = { id: 's', projectId: 'p', hostId: 'h', profile: 'shell', status: 'working' };
+    const { url } = await boot([{ method: 'POST', path: '/api/v1/cli-agents', body: { [key]: record } }]);
+    const agent = await launchCliAgent(new ProductHttpClient(url), { projectId: 'p', hostId: 'h', profile: 'shell' },
+      { runId: 'r', dataDir: tmpData(), tagged: false });
+    expect(agent.snapshot()).toEqual(record);
+  });
+  it('rejects a launch acknowledgement without an identity', async () => {
+    const { url } = await boot([{ method: 'POST', path: '/api/v1/cli-agents', body: {} }]);
+    await expect(launchCliAgent(new ProductHttpClient(url), { projectId: 'p', profile: 'shell' },
+      { runId: 'r', dataDir: tmpData(), tagged: false })).rejects.toThrow('did not return an id');
+  });
+  it.each([
+    ['working', 'working'], ['idle', 'done'], ['idle', 'exited'], ['done', 'done'], ['done', 'exited'], ['exited', 'exited']
+  ] as const)('waits until %s and accepts %s without losing the owning machine', async (until, status) => {
+    const record = { id: 's', projectId: 'p', hostId: 'h', profile: 'shell', status };
+    const { url } = await boot([{ method: 'GET', path: '/api/v1/cli-agents/s', body: { agent: record } }]);
+    const agent = new CliAgentHandle(new ProductHttpClient(url), 's', record);
+    await expect(agent.wait({ until })).resolves.toEqual(record);
+  });
+  it('keeps the last machine-owned snapshot if a refresh has no record', async () => {
+    const record = { id: 's', projectId: 'p', hostId: 'h', profile: 'shell', status: 'idle' };
+    const { url } = await boot([{ method: 'GET', path: '/api/v1/cli-agents/s', body: {} }]);
+    const agent = new CliAgentHandle(new ProductHttpClient(url), 's', record);
+    await expect(agent.wait()).resolves.toEqual(record);
   });
 });
 

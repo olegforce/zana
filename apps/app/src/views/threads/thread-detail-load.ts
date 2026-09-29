@@ -7,6 +7,35 @@ import {
 
 export const THREAD_DETAIL_LOAD_ERROR = 'Could not load the conversation.';
 
+/** Apply each response as it arrives; a slow metadata lookup must not hold up the conversation. */
+export async function loadThreadDetailProgressively<Detail, Timeline>(
+  detailRequest: Promise<Detail>,
+  timelineRequest: Promise<Timeline>,
+  callbacks: {
+    onDetail: (detail: Detail, timeline: Timeline | null) => void;
+    onTimeline: (timeline: Timeline, detail: Detail | null) => void;
+    onTimelineError: (error: unknown) => void;
+  }
+) {
+  let detail: Detail | null = null;
+  let timeline: Timeline | null = null;
+  return Promise.allSettled([
+    detailRequest.then((value) => {
+      detail = value;
+      callbacks.onDetail(value, timeline);
+      return value;
+    }),
+    timelineRequest.then((value) => {
+      timeline = value;
+      callbacks.onTimeline(value, detail);
+      return value;
+    }, (error: unknown) => {
+      callbacks.onTimelineError(error);
+      throw error;
+    })
+  ]);
+}
+
 export function threadDetailLoadError(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return THREAD_DETAIL_LOAD_ERROR;

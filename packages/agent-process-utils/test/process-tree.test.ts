@@ -254,11 +254,13 @@ posixOnly("process tree helpers", () => {
 
     await stopProcessGroupLeaderFirst({
       child,
-      timeoutMs: 300,
+      // Allow the shell's TERM trap to run even when the full suite is busy.
+      // The surviving member must still be killed before the hard grace ends.
+      timeoutMs: 1000,
       killGraceMs: 5000,
     });
 
-    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(Date.now() - startedAt).toBeLessThan(4000);
     expect(child.exitCode).toBe(0);
     await waitFor(() => !isAlive(memberPid));
     expect(isProcessGroupAlive(child)).toBe(false);

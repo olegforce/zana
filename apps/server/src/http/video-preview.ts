@@ -12,6 +12,7 @@ import { isSafeRelPath } from './library-via-host.js';
 import { confinePathToRoot } from '../services/threads/thread-path-confine.js';
 import { threadStorageRoot } from '../services/threads/thread-storage.js';
 import { projectAttachmentDir } from '../services/projects/attachments.js';
+import { resolveProjectHost } from './project-host.js';
 
 type RangeReader = (offset: number, length: number) => Promise<HostReadFileResult>;
 
@@ -48,7 +49,7 @@ function videoReader(ctx: ProductHttpContext, params: URLSearchParams): RangeRea
       if (source !== 'workspace' || !project?.path || project.remote) {
         throw new ProjectFsError(404, 'unknown-thread', 'thread is not registered');
       }
-      return hostReader(ctx.hostHub.resolveHostId(project.hostId), project.path, confined(project.path, candidate));
+      return hostReader(resolveProjectHost(ctx, project.hostId), project.path, confined(project.path, candidate));
     }
     if (source === 'thread-storage') return localReader(threadStorageRoot(ctx.dataDir, threadId));
     if (thread.projectId && isAbsolute(candidate)) {
@@ -64,7 +65,7 @@ function videoReader(ctx: ProductHttpContext, params: URLSearchParams): RangeRea
   if (!project || !project.relPath || !isSafeRelPath(project.relPath)) {
     throw new ProjectFsError(403, 'path-escape', 'path is not inside a known project');
   }
-  return hostReader(ctx.hostHub.resolveHostId(project.hostId), project.root, project.relPath);
+  return hostReader(resolveProjectHost(ctx, project.hostId), project.root, project.relPath);
 }
 
 /** Single HTTP byte ranges, including suffixes. Multipart ranges are rejected. */

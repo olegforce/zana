@@ -1,3 +1,4 @@
+import { installRuntimeLog } from '@zana-ai/zcc-process-utils';
 import { startHostDaemon } from './daemon.js';
 import { createLocalPtyTerminalManager } from './local-pty-host.js';
 import { startEnrolledHostDaemon, type EnrolledHostDaemon } from './enroll-runtime.js';
@@ -49,6 +50,7 @@ parentPort.on('message', async ({ data }) => {
     process.env.ZCC_GH_BINARY = message.ghBinary;
   }
   if (message.type === 'start' && message.token && message.signingKey && message.hostId && !close) {
+    if (message.dataDir) installRuntimeLog(message.dataDir, 'host-daemon', import.meta.url);
     try {
       const instanceId = randomUUID();
       terminalManager = createLocalPtyTerminalManager((event) => parentPort.postMessage({

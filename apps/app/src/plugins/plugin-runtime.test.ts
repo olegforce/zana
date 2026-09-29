@@ -22,3 +22,14 @@ describe('plugin realtime host wiring', () => {
     expect(source).toContain('[channel, pluginId]');
   });
 });
+
+describe('thread panel owner wiring', () => {
+  it('opens the visible conversation panel before the URL thread or session', () => {
+    const source = readFileSync(fileURLToPath(new URL('./plugin-runtime.tsx', import.meta.url)), 'utf8');
+    expect(source).toContain('resolveThreadPanelOwnerId([');
+    expect(source).toContain('panelOwnerId');
+    expect(source).toContain('options.threadId');
+    expect(source).toContain('route.threadId');
+    expect(source).toContain('route.sessionId');
+  });
+});

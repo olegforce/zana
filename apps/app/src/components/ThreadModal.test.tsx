@@ -84,6 +84,9 @@ describe('ThreadModal', () => {
       css.indexOf('.agent-terminal-modal.is-fullscreen {')
     );
     expect(inspectorModal).toContain('background: var(--bg-panel);');
+    expect(inspectorModal).toContain('min-width: min(1080px, 94vw);');
+    expect(inspectorModal).toContain('max-width: min(1080px, 94vw);');
+    expect(inspectorModal).toContain('min-height: 94vh;');
     expect(css).toContain('.thread-detail-view--modal .thread-timeline-current-turn > .thread-timeline-item.is-user {\n  background: var(--bg-panel);\n}');
   });
 
@@ -93,8 +96,8 @@ describe('ThreadModal', () => {
     expect(inspect).not.toContain('getThreadRoutePath');
     expect(app).toContain('<ThreadModalHost />');
     expect(app).toContain('<ThreadModal threadId={threadModal.threadId} onClose={close} />');
-    expect(app).toContain('if (classicSessionViewEnabled || !threadModal) return null');
-    expect(app).toContain('if (classicSessionViewEnabled || !agentModal) return null');
+    expect(app).toContain('if (fullPageView || !threadModal) return null');
+    expect(app).toContain('if (fullPageView || !agentModal) return null');
     expect(app).toContain('inspectRouteProjectId(agentModal.projectId)');
     expect(app).toContain('inspectRouteProjectId(null)');
     expect(app).not.toContain('getAgentSessionRoutePath(agentModal.sessionId, agentModal.projectId)');

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { ipcMain } from 'electron';
+import { productHandle, safeProductHandle } from './shared-product-registration.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { harnessVerifyState } from './shared.js';
@@ -14,8 +14,8 @@ export function registerConfigIpc(): void {
   // Config remains on the compatibility owner until its normalizer, canonical
   // harness projection, and atomic write transaction move together. A raw JSON
   // server reader would silently change persisted compatibility semantics.
-  ctx.safeHandle(IPC.config.get, () => presentAppConfig(store.getConfig()), () => presentAppConfig(store.getConfig()));
-  ctx.safeHandle<[Partial<AppConfig>], AppConfig>(
+  safeProductHandle(IPC.config.get, () => presentAppConfig(store.getConfig()), () => presentAppConfig(store.getConfig()));
+  safeProductHandle<[Partial<AppConfig>], AppConfig>(
     IPC.config.set,
     (patch) => {
       // Window state is main-owned. Renderer config writes cannot alter shared
@@ -92,12 +92,12 @@ export function registerConfigIpc(): void {
   // Recent Overseer decisions for the dry-run review pane. Read-only; bounded by
   // the audit ring's cap so the result can never be unbounded (Rule 5). Empty
   // on any error — the pane just shows nothing.
-  ctx.safeHandle<[number | undefined], OverseerAuditEntry[]>(
+  safeProductHandle<[number | undefined], OverseerAuditEntry[]>(
     IPC.overseer.recent,
     (limit) => ctx.overseerAudit.recent(limit),
     () => []
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.projectSettings.get,
     async (id: string) => ctx.runtimeSupervisor
       ? await ctx.runtimeSupervisor.getProjectSettings(id) as ProjectSettings
@@ -106,7 +106,7 @@ export function registerConfigIpc(): void {
   );
   // Mutations must reject on persistence failure so the renderer can roll back
   // its optimistic state and show the write error. Reads remain best-effort.
-  ipcMain.handle(IPC.projectSettings.set, (_event, id: string, patch: Partial<ProjectSettings>) =>
+  productHandle(IPC.projectSettings.set, (id: string, patch: Partial<ProjectSettings>) =>
     ctx.runtimeSupervisor
       ? ctx.runtimeSupervisor.setProjectSettings(id, patch)
       : (() => {

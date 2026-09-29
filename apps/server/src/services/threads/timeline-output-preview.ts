@@ -21,6 +21,12 @@ function buildTimelineOutputPreview(output: string): string {
 }
 
 function previewRow(row: TimelineRow): TimelineRow {
+  if (row.kind === 'turn' && row.children) {
+    return { ...row, children: row.children.map(previewRow) };
+  }
+  if (row.kind === 'work' && row.workKind === 'delegation') {
+    return { ...row, childRows: row.childRows.map(previewRow) };
+  }
   if (
     row.kind !== "work" ||
     (row.workKind !== "command" && row.workKind !== "tool") ||

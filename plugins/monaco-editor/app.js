@@ -21,10 +21,13 @@ function MonacoFileOpener(props) {
   const rpc = hostRpc();
   if (!React) return null;
   const Original = props.experimental_Original;
-  const { useCallback, useEffect, useRef, useState } = React;
+  const { useCallback, useEffect, useMemo, useRef, useState } = React;
+  const source = useMemo(() => props.source, [props.source.kind, props.source.projectId, props.source.environmentId, props.source.threadId, props.source.hostId]);
   const containerRef = useRef(null);
   const editorRef = useRef(null);
   const sha256Ref = useRef(null);
+  const savingRef = useRef(false);
+  const saveIdRef = useRef(0);
   const saveStateRef = useRef({ kind: 'clean' });
   const [status, setStatus] = useState({ kind: 'loading' });
   const [saveState, setSaveStateValue] = useState({ kind: 'clean' });
@@ -35,25 +38,32 @@ function MonacoFileOpener(props) {
 
   const save = useCallback(async () => {
     const editor = editorRef.current;
-    if (!editor || !rpc || saveStateRef.current.kind === 'saving') return;
+    if (!editor || !rpc || savingRef.current) return;
+    const content = editor.getValue();
+    const saveId = ++saveIdRef.current;
+    savingRef.current = true;
     setSaveState({ kind: 'saving' });
     try {
       const result = await rpc.call('write', {
         path: props.path,
-        source: props.source,
-        content: editor.getValue(),
+        source,
+        content,
         expectedSha256: sha256Ref.current
       });
+      if (saveId !== saveIdRef.current) return;
       if (result?.outcome === 'conflict') {
-        setSaveState({ kind: 'conflict' });
+        setSaveState({ kind: 'conflict', currentSha256: result.currentSha256 });
         return;
       }
+      if (result?.outcome !== 'written' || typeof result.sha256 !== 'string') throw new Error(result?.reason ?? 'The file was not saved');
       sha256Ref.current = result?.sha256 ?? null;
-      setSaveState({ kind: 'clean' });
+      setSaveState({ kind: editor.getValue() === content ? 'clean' : 'dirty' });
     } catch (error) {
-      setSaveState({ kind: 'error', message: errorMessage(error) });
+      if (saveId === saveIdRef.current) setSaveState({ kind: 'error', message: errorMessage(error) });
+    } finally {
+      if (saveId === saveIdRef.current) savingRef.current = false;
     }
-  }, [props.path, props.source, rpc, setSaveState]);
+  }, [props.path, source, rpc, setSaveState]);
 
   useEffect(() => {
     if (!rpc) {
@@ -65,7 +75,7 @@ function MonacoFileOpener(props) {
     let disposable = null;
     setStatus({ kind: 'loading' });
     void rpc
-      .call('read', { path: props.path, source: props.source })
+      .call('read', { path: props.path, source })
       .then(async (file) => {
         if (disposed) return;
         if (file?.kind !== 'text') {
@@ -93,7 +103,7 @@ function MonacoFileOpener(props) {
         });
         editorRef.current = editor;
         disposable = editor.onDidChangeModelContent(() => {
-          if (saveStateRef.current.kind !== 'dirty') setSaveState({ kind: 'dirty' });
+          if (!savingRef.current && saveStateRef.current.kind !== 'dirty') setSaveState({ kind: 'dirty' });
         });
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
           void save();
@@ -110,11 +120,13 @@ function MonacoFileOpener(props) {
       });
     return () => {
       disposed = true;
+      saveIdRef.current++;
+      savingRef.current = false;
       disposable?.dispose?.();
       editor?.dispose?.();
       editorRef.current = null;
     };
-  }, [props.path, props.source, props.lineNumber, rpc, save]);
+  }, [props.path, source, props.lineNumber, rpc, save]);
 
   if (status.kind === 'delegate') {
     return React.createElement(Original);
@@ -165,7 +177,7 @@ function MonacoFileOpener(props) {
           type: 'button',
           disabled: saveState.kind === 'saving' || saveState.kind === 'clean',
           onClick: () => {
-            if (saveState.kind === 'conflict') sha256Ref.current = null;
+            if (saveState.kind === 'conflict') sha256Ref.current = saveState.currentSha256;
             void save();
           }
         },

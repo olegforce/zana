@@ -4,6 +4,7 @@ import { getNativeShell, installNativeShellEvents } from './native-shell.js';
 import { fetchWithAppSurface } from './fetch-with-app-surface.js';
 import { getAppSurface } from './app-surface.js';
 import { buildBridgeInjectionScript, MOBILE_BRIDGE_VERSION } from '@zana-ai/zcc-mobile-bridge';
+vi.mock('./mobile-readiness.js', () => ({ reportMobileReadiness: () => () => {} }));
 const windowRecord = window as unknown as Record<string, unknown>;
 afterEach(() => {
   vi.unstubAllGlobals();

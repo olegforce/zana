@@ -669,6 +669,24 @@ export function retainLatestTimelineWindow<T>(
   return next;
 }
 
+/** Older pages can contain another part of a turn/delegation already loaded. */
+export function mergeTimelinePages(older: readonly TimelineRow[], newer: readonly TimelineRow[]): TimelineRow[] {
+  const byId = new Map(older.map(row => [row.id, row]));
+  for (const row of newer) {
+    const previous = byId.get(row.id);
+    let merged = row;
+    if (previous?.kind === 'turn' && row.kind === 'turn') {
+      merged = { ...row, sourceSeqStart: Math.min(previous.sourceSeqStart, row.sourceSeqStart),
+        sourceSeqEnd: Math.max(previous.sourceSeqEnd, row.sourceSeqEnd),
+        children: previous.children || row.children ? mergeTimelinePages(previous.children ?? [], row.children ?? []) : null };
+    } else if (previous?.kind === 'work' && previous.workKind === 'delegation' && row.kind === 'work' && row.workKind === 'delegation') {
+      merged = { ...row, childRows: mergeTimelinePages(previous.childRows, row.childRows) };
+    }
+    byId.set(row.id, merged);
+  }
+  return [...byId.values()].sort((a, b) => a.sourceSeqStart - b.sourceSeqStart);
+}
+
 /**
  * Apply a {@link TimelineDelta} to the rows the client currently holds,
  * yielding the new full window. Returns `null` when the delta references a row

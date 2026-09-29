@@ -48,6 +48,12 @@ const baseTask = {
 } as ScheduledTask;
 
 describe('ScheduleInfoPanel', () => {
+  it('shows a pending worker and disables actions that would start more work', () => {
+    render(<ScheduleInfoPanel task={{ ...baseTask, enabled: false, status: { runCount: 0, runs: [{ at: new Date().toISOString(), launchState: 'pending', sessionId: 'reserved', result: 'skipped' }] } }} />);
+    expect(screen.getByTestId('pending-worker-recovery')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Run now/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Resume/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
   afterEach(() => {
     cleanup();
     setEnabled.mockReset();

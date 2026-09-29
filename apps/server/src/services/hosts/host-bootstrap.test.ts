@@ -129,22 +129,22 @@ describe('host bootstrap helpers', () => {
   });
 
   it('allows bootstrap against a public origin when the relay is unconfigured', async () => {
-    const ctx = ctxWithRelay('https://box.tailnet.ts.net', {
+    const ctx = ctxWithRelay('https://machine.example.com', {
       state: () => 'unconfigured' as const,
       snapshot: () => ({ state: 'unconfigured' as const })
     });
-    await expect(requirePublicAppUrl(ctx as never)).resolves.toBe('https://box.tailnet.ts.net');
+    await expect(requirePublicAppUrl(ctx as never)).resolves.toBe('https://machine.example.com');
   });
 
   it('reads Settings when env and bake are empty', async () => {
     const ctx = {
-      config: { getConfig: () => ({ publicAppUrl: 'https://box.tailnet.ts.net' }) },
+      config: { getConfig: () => ({ publicAppUrl: 'https://machine.example.com' }) },
       pairingRelay: {
         state: () => 'unconfigured' as const,
         snapshot: () => ({ state: 'unconfigured' as const })
       }
     };
-    await expect(requirePublicAppUrl(ctx as never)).resolves.toBe('https://box.tailnet.ts.net');
+    await expect(requirePublicAppUrl(ctx as never)).resolves.toBe('https://machine.example.com');
   });
 
   it('prefixes the session origin when the relay is connected', async () => {

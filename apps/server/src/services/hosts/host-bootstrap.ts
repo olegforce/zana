@@ -390,7 +390,7 @@ async function installPeer(
   }
 ): Promise<void> {
   const primary = requirePrimaryHost(ctx);
-  const artifact = resolveHostArtifact();
+  const artifact = await resolveHostArtifact();
   input.emit({ type: 'log', text: 'Installing host daemon over SSH…' });
   try {
     const result = await ctx.hostHub.callHostOnlineRpc<{ ok: true; log: string }>({

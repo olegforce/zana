@@ -20,6 +20,8 @@ export interface LaunchLedgerEntry {
   principal?: LaunchPrincipalRef;
   binding?: LaunchAuthorizationBinding;
   state: LaunchLedgerState;
+  /** Startup observed an authorized claim before the durable spawn boundary. */
+  recoveryEvidence?: 'not-started';
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -159,6 +161,7 @@ export function createLaunchLedgerStore(opts: LaunchLedgerStoreOptions) {
         // before transition so a second crash retries rather than permits reuse.
         if (entry.consentReservationId) await hooks?.consumeConsent?.(entry.consentReservationId);
         if (entry.sessionId) await hooks?.reapSession?.(entry.sessionId);
+        if (entry.state === 'authorized') entry.recoveryEvidence = 'not-started';
         entry.state = 'interrupted';
         entry.revision += 1;
         entry.updatedAt = now();
@@ -197,6 +200,7 @@ function isEntryFields(value: unknown): boolean {
     && (entry.sessionId === undefined || typeof entry.sessionId === 'string')
     && (entry.consentReservationId === undefined || typeof entry.consentReservationId === 'string')
     && typeof entry.state === 'string' && entry.state in TRANSITIONS
+    && (entry.recoveryEvidence === undefined || entry.recoveryEvidence === 'not-started')
     && typeof entry.createdAt === 'number' && typeof entry.updatedAt === 'number'
     && (entry.principal === undefined || isPrincipalRef(entry.principal))
     && (entry.binding === undefined || isAuthorizationBinding(entry.binding));

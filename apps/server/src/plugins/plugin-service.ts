@@ -54,6 +54,7 @@ import {
   splitPluginMentionItemId,
   withDeadline
 } from './plugin-mentions.js';
+import { callPluginHostRpc, disposePluginHostWorkers } from './plugin-host-rpc.js';
 import { PluginHostArtifactRegistry } from './plugin-host-artifact-registry.js';
 import { loadPluginHostArtifactSnapshot } from './plugin-host-artifact.js';
 import { discoverPluginSkillNames } from './plugin-skills.js';
@@ -127,6 +128,7 @@ export interface PluginUpdateRow {
 }
 
 export interface PluginService {
+  emitHostEvent(event: import('./plugin-api.js').PluginHostEvent): Promise<void>;
   list(): InstalledPluginRow[];
   get(id: string): InstalledPluginRow | undefined;
   status(id: string): InstalledPluginRow['status'] | undefined;
@@ -819,6 +821,8 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       return;
     }
     live.delete(id);
+    const artifact = hostArtifacts.get(id);
+    if (artifact && opts.productContext) await disposePluginHostWorkers(opts.productContext, id, artifact.generation);
     hostArtifacts.delete(id);
     await current.handle?.dispose();
   }
@@ -921,6 +925,13 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       pushInbox: opts.pushInbox,
       listProjects: opts.listProjects,
       productContext: opts.productContext,
+      hostCall: opts.productContext ? async (method, input, hostId, signal, timeoutMs) => {
+        // Resolve only this plugin's active generation; renderer input cannot
+        // choose an artifact or invoke another plugin's host entry.
+        const artifact = hostArtifacts.get(row.id);
+        if (!artifact || artifact.generation !== hostArtifact?.generation) throw new Error('Plugin host generation is unavailable');
+        return callPluginHostRpc(opts.productContext!, { pluginId: row.id, artifact, method, input, hostId, signal, timeoutMs });
+      } : undefined,
       dataDir: opts.dataDir,
       onNeedsConfiguration: (message) => {
         configurationMessage = message;
@@ -974,6 +985,8 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       };
       live.set(row.id, { row: running, handle, rpc });
       await store.upsert(running);
+      const previousArtifact = hostArtifacts.get(row.id);
+      if (previousArtifact && opts.productContext) await disposePluginHostWorkers(opts.productContext, row.id, previousArtifact.generation);
       if (hostArtifact) hostArtifacts.set(row.id, hostArtifact);
       else hostArtifacts.delete(row.id);
       if (previous && previous.handle && previous.handle !== handle) {
@@ -1605,6 +1618,11 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       const route = routes.find((row) => row.method === request.method && row.path === request.path);
       if (!route) throw new Error(`unknown http ${pluginId} ${request.method} ${request.path}`);
       return route.handler(request);
+    },
+    async emitHostEvent(event) {
+      const artifact = hostArtifacts.get(event.pluginId);
+      if (!artifact || artifact.generation !== event.generation) return;
+      await live.get(event.pluginId)?.handle?.emitHostEvent(event);
     },
     async emitThreadEvent(event) {
       await Promise.all(

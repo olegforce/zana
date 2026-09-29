@@ -16,9 +16,10 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
   const rpc = useRpc();
   const navigate = useZccNavigate();
   const parsed = useMemo(() => parseDocumentPanelParams(props.params), [props.params]);
+  const revision = useMemo(() => ({ value: undefined as string | undefined }), [parsed]);
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const autosave = useRef(createLibraryAutosave(async () => undefined));
+  const autosave = useRef<ReturnType<typeof createLibraryAutosave> | null>(null);
 
   useEffect(() => {
     const saver = createLibraryAutosave(async (next) => {
@@ -27,15 +28,17 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
         path: parsed.path,
         scope: parsed.scope,
         content: next,
+        expectedSha256: revision.value,
         ...(parsed.projectId ? { projectId: parsed.projectId } : {})
-      })) as { ok?: boolean; message?: string };
+      })) as { ok?: boolean; message?: string; sha256?: string };
       if (result && result.ok === false) {
-        setError(result.message ?? 'Save failed');
+        throw new Error(result.message ?? 'Save failed');
       }
-    });
+      revision.value = result?.sha256;
+    }, undefined, error => setError(error instanceof Error ? error.message : String(error)));
     autosave.current = saver;
     return () => saver.flush();
-  }, [parsed, rpc]);
+  }, [parsed, rpc, revision]);
 
   useEffect(() => {
     if (!parsed) return;
@@ -50,11 +53,12 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
       })
       .then((result) => {
         if (cancelled) return;
-        const row = result as { ok?: boolean; content?: string; message?: string };
+        const row = result as { ok?: boolean; content?: string; message?: string; sha256?: string };
         if (!row?.ok) {
           setError(row?.message ?? 'Document not found');
           return;
         }
+        revision.value = row.sha256;
         setContent(row.content ?? '');
       })
       .catch((err: unknown) => {
@@ -64,7 +68,7 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [parsed, rpc]);
+  }, [parsed, rpc, revision]);
 
   if (!parsed) {
     return (
@@ -94,11 +98,8 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
           Open in Library
         </button>
       </header>
-      {error ? (
-        <div className="docs-document-panel-status" role="alert">
-          {error}
-        </div>
-      ) : content === null ? (
+      {error && <div className="docs-document-panel-status" role="alert">{error}</div>}
+      {error && content === null ? null : content === null ? (
         <div className="docs-document-panel-status">Loading…</div>
       ) : isHtmlLibraryPath(parsed.path) ? (
         <div className="docs-document-panel-body">
@@ -115,7 +116,7 @@ export function DocumentPanel(props: PluginThreadPanelProps) {
             value={content}
             onChange={(next) => {
               setContent(next);
-              autosave.current.schedule(next);
+              autosave.current?.schedule(next);
             }}
           />
         </div>

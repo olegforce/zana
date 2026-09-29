@@ -2875,3 +2875,78 @@
   color: color-mix(in srgb, var(--accent-gold) 70%, var(--text-primary));
   background: color-mix(in srgb, var(--accent-gold) 10%, var(--bg-panel));
 }
+
+/* Phone/tablet navigation is a list → full-page detail flow. Desktop keeps its board. */
+@media (max-width: 1024px) {
+  .prm-header { flex-wrap: nowrap; gap: 8px; padding: 8px 16px; }
+  .prm-header-title { min-width: 0; }
+  .prm-header-title h2 { font-size: 17px; }
+  .prm-header-subtitle { display: none; }
+  .prm-mobile-header-actions { display: flex; gap: 4px; }
+  .prm-panel .prm-btn, .prm-modal .prm-btn, .prm-tile-menu .prm-btn { min-height: 44px; font-size: 14px; }
+  .prm-mobile-header-actions .prm-btn { min-width: 44px; padding: 8px; }
+  .prm-panel .prm-list { min-height: 0; flex: 1; overflow: hidden; gap: 0; padding: 0; }
+  .prm-mobile-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; flex-shrink: 0; }
+  .prm-mobile-toolbar .prm-search { flex: 1; min-width: 0; min-height: 44px; padding: 0 10px; border-radius: 12px; }
+  .prm-mobile-toolbar .prm-search-input { font-size: 16px; min-width: 0; width: 100%; }
+  .prm-mobile-toolbar > .prm-btn { flex-shrink: 0; padding: 8px 10px; border-radius: 12px; }
+  .prm-mobile-filter-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-blue); }
+  .prm-mobile-summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 18px; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+  .prm-mobile-summary .prm-text-btn { align-self: auto; min-height: 44px; }
+  .prm-mobile-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px max(16px, env(safe-area-inset-bottom)); }
+  .prm-mobile-card { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: 100%; min-width: 0; padding: 16px 0; text-align: left; color: var(--text-primary); background: transparent; border: 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .prm-mobile-card:first-child { padding-top: 4px; }
+  .prm-mobile-card:hover { background: var(--bg-hover); }
+  .prm-mobile-card-repo { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+  .prm-mobile-card-repo > svg { flex-shrink: 0; }
+  .prm-mobile-card-repo > span:first-of-type { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prm-mobile-card-repo > span:last-of-type { margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .prm-mobile-card-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 16px; line-height: 1.45; font-weight: 500; }
+  .prm-mobile-card.is-unread .prm-mobile-card-title { font-weight: 650; }
+  .prm-mobile-card.is-unread .prm-mobile-card-repo > svg:first-child { color: var(--accent-blue); }
+  .prm-mobile-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
+  .prm-mobile-card-meta .prm-status-pill { font-size: 12px; padding: 4px 8px; }
+  .prm-mobile-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .prm-mobile-card-time { margin-left: auto; }
+  .prm-mobile-sync-error { display: flex; align-items: center; gap: 6px; color: var(--danger); font-size: 12px; }
+  .prm-mobile-filters { display: flex; flex-direction: column; gap: 20px; }
+  .prm-mobile-hosts { display: flex; flex-direction: column; gap: 8px; padding: 0; border: 0; margin: 0; min-width: 0; }
+  .prm-mobile-hosts legend { margin-bottom: 12px; }
+  .prm-mobile-hosts label { display: flex; gap: 12px; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
+  .prm-mobile-hosts input { width: 20px; height: 20px; flex-shrink: 0; }
+  .prm-mobile-actions .prm-header-actions { flex-direction: column; gap: 12px; }
+  .prm-mobile-actions .prm-header-actions > .prm-btn { justify-content: flex-start; gap: 12px; padding: 12px 16px; }
+  .prm-mobile-actions .prm-split-btn { width: 100%; }
+  .prm-mobile-actions .prm-split-primary { flex: 1; }
+  .prm-mobile-actions .prm-split-caret { min-width: 48px; }
+  .prm-modal-backdrop { padding: 0; }
+  .prm-modal-backdrop .prm-modal.modal[role="dialog"] { width: 100%; max-width: none; height: 100%; max-height: 100%; margin: 0; border: 0; border-radius: 0; }
+  .prm-modal-header, .prm-modal-body { padding: 16px; }
+  .prm-modal-header { padding-top: max(12px, env(safe-area-inset-top)); min-height: 60px; }
+  .prm-modal-header h3 { min-width: 0; font-size: 16px; overflow-wrap: anywhere; }
+  .prm-modal .prm-row-icon-btn, .prm-detail-footer .prm-tile-icon-btn { min-width: 44px; min-height: 44px; }
+  .prm-modal .prm-row-icon-btn svg, .prm-detail-footer .prm-tile-icon-btn svg { width: 18px; height: 18px; }
+  .prm-modal-body { min-height: 0; overscroll-behavior: contain; font-size: 15px; }
+  .prm-modal .prm-input { min-height: 48px; font-size: 16px; }
+  .prm-modal-footer { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+  .prm-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .prm-detail-sidebar { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 16px; }
+  .prm-detail-id { flex-wrap: wrap; min-width: 0; }
+  .prm-detail-repo { overflow-wrap: anywhere; }
+  .prm-detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prm-detail-footer-spacer { display: none; }
+  .prm-modal--detail .prm-detail-footer { flex-wrap: wrap; gap: 4px; }
+  .prm-detail-body .prm-text-btn, .prm-detail-body .prm-project-row { min-height: 44px; }
+  .prm-detail-pr-title { font-size: 22px; }
+  .prm-detail-desc { font-size: 15px; line-height: 1.6; }
+  .prm-sync-filter { inset: 0 !important; width: 100%; max-width: none; max-height: 100% !important; border-radius: 0; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); font-size: 15px; }
+  .prm-sync-filter .prm-project-menu-item { min-height: 48px; }
+  .prm-sync-filter-footer { flex-wrap: wrap; }
+  .prm-settings-body { flex-direction: column; }
+  .prm-settings-nav { width: 100%; flex-direction: row; gap: 12px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .prm-nav-group { flex-direction: row; }
+  .prm-nav-group-label { display: none; }
+  .prm-nav-row { white-space: nowrap; width: auto; min-height: 44px; }
+  .prm-settings-pane { padding: 16px; }
+  .prm-panel .prm-input { font-size: 16px; min-height: 44px; }
+}

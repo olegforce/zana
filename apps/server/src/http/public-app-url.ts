@@ -114,7 +114,7 @@ export function publicOriginHost(publicAppUrl: string | undefined): string | und
 /**
  * Host-internal enroll/WS accept loopback Host headers (local daemon), Docker
  * Desktop's host.docker.internal gateway, or the configured public origin
- * (Tailscale Serve / Heroku). DNS-rebinding Host headers that match none of
+ * (the configured HTTPS pairing relay). DNS-rebinding Host headers that match none of
  * those are refused.
  */
 export function isAllowedHostInternalHost(

@@ -25,3 +25,15 @@ describe('bounded terminal output', () => {
     expect(PRODUCT_TERMINAL_OUTPUT_MAX_BYTES).toBe(256 * 1024);
   });
 });
+
+it('does not inflate a byte cap or corrupt UTF-8 while trimming scrollback', () => {
+  const text = '🙂é';
+  for (let limit = 0; limit < 7; limit++) {
+    const appended = appendBoundedTerminalOutput(undefined, text, limit);
+    const tailed = terminalOutputSlice({ text, truncated: false }, limit);
+    for (const result of [appended, tailed]) {
+      expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(limit);
+      expect(result.text).not.toContain('�');
+    }
+  }
+});

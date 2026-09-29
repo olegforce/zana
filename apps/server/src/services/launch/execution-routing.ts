@@ -1,5 +1,5 @@
 import type { AppConfig, HarnessModelRoutingV1, LaunchProfileId, Persona, ProjectSettings } from '@zana-ai/zcc-domain/product';
-import type { HarnessPersonaFacet } from '@zana-ai/zcc-domain/harness-adapter';
+import type { HarnessPersonaFacet, HarnessRoleTarget } from '@zana-ai/zcc-domain/harness-adapter';
 import { harnessFamilyOf } from '@zana-ai/zcc-domain/launch-provider';
 import { executionEvidenceFor, executionTargetFor } from '@zana-ai/zcc-host-daemon/harness/evidence-registry';
 import type { ExecutionConsentService } from '@zana-ai/zcc-host-daemon/harness/execution-consent';
@@ -19,6 +19,11 @@ import type { ExecutionAuthorizationInput, ExecutionPreflightDecision } from './
 import { preflightExecutionAuthorization } from './preflight.js';
 
 type ExecutionConsentStore = ReturnType<typeof createExecutionConsentStore>;
+
+export interface TerminalExecutionDiscovery {
+  roles(): Promise<readonly HarnessRoleTarget[]>;
+  models(): Promise<readonly string[] | undefined>;
+}
 
 export interface TerminalExecutionPreflightInput {
   config: AppConfig;
@@ -47,6 +52,8 @@ export async function preflightTerminalExecution(
     consentService?: Pick<ExecutionConsentService, 'request'>;
     installedVersion: (adapterId: string) => Promise<string | undefined>;
     provider?: LaunchProvider;
+    /** If supplied, no provider discovery may run in the coordinator process. */
+    discovery?: TerminalExecutionDiscovery;
   }
 ): Promise<ExecutionPreflightDecision> {
   const effectiveProfile = input.persona?.baseProfile ?? input.profile;
@@ -80,7 +87,7 @@ export async function preflightTerminalExecution(
   let installedVersion: string | undefined;
   if (preflight.requested) {
     installedVersion = await deps.installedVersion(adapterId);
-    const unavailable = await preflightStructuredRouting(provider, input, installedVersion, preflight);
+    const unavailable = await preflightStructuredRouting(provider, input, installedVersion, preflight, deps.discovery);
     if (unavailable) return { decision: 'blocked', reason: unavailable };
   }
   if (resolved.origin === 'inherited-native-default' || (resolved.origin === 'explicit-native' && !resolved.targetId)) {
@@ -129,7 +136,8 @@ async function preflightStructuredRouting(
   provider: LaunchProvider,
   input: TerminalExecutionPreflightInput,
   installedVersion: string | undefined,
-  resolved: ReturnType<typeof resolveStructuredRouting>
+  resolved: ReturnType<typeof resolveStructuredRouting>,
+  discovery?: TerminalExecutionDiscovery
 ): Promise<string | undefined> {
   if (!installedVersion) return 'selected harness is unavailable or has no verifiable version';
   const registration = registrationFor(provider.adapter.descriptor.defaultProfileId ?? input.profile);
@@ -151,7 +159,7 @@ async function preflightStructuredRouting(
   if (role.targetId) {
     const authoritativeDynamicRoles = !!(provider.acceptsDynamicRoleTargets && provider.discoverRoleTargets && input.projectPath);
     const dynamicRoles = provider.discoverRoleTargets && input.projectPath
-      ? await provider.discoverRoleTargets({ cwd: input.projectPath, config: input.config })
+      ? await (discovery ? discovery.roles() : provider.discoverRoleTargets({ cwd: input.projectPath, config: input.config }))
       : [];
     const roleTargets = authoritativeDynamicRoles
       ? dynamicRoles
@@ -179,7 +187,7 @@ async function preflightStructuredRouting(
     // possible (no projectPath, or the provider can't list) do we fall back to the
     // snapshot rule (evidence for a snapshot id; live-listed allowance otherwise).
     const liveModels = provider.discoverModelTargets && input.projectPath
-      ? await provider.discoverModelTargets({ cwd: input.projectPath, config: input.config })
+      ? await (discovery ? discovery.models() : provider.discoverModelTargets({ cwd: input.projectPath, config: input.config }))
       : undefined;
     if (liveModels) {
       if (!liveModels.includes(model.targetId)) return 'model target unavailable';

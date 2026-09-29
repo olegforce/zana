@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { randomBytes } from 'node:crypto';
 import { buildAuthorizeUrl } from '@/lib/github';
 import { oauthStateCookieHeader } from '@/lib/auth';
+import { connectReturnCookie } from '@/lib/connect-return';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +16,12 @@ export async function GET(req: Request) {
   const state = randomBytes(16).toString('base64url');
 
   const clientId = process.env.GITHUB_CLIENT_ID ?? '';
-  const redirectUri = process.env.GITHUB_OAUTH_CALLBACK ?? `${new URL(req.url).origin}/api/auth/github/callback`;
+  const redirectUri = process.env.GITHUB_OAUTH_CALLBACK || `${new URL(process.env.PUBLIC_BASE_URL || req.url).origin}/api/auth/github/callback/`;
 
   const authorizeUrl = buildAuthorizeUrl({ clientId, redirectUri, state, scope: 'read:user' });
 
   const res = NextResponse.redirect(authorizeUrl, 302);
   res.headers.append('Set-Cookie', oauthStateCookieHeader(state));
+  res.headers.append('Set-Cookie', connectReturnCookie(new URL(req.url).searchParams.get('returnTo') ?? ''));
   return res;
 }

@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, PanelRight, X } from 'lucide-react';
 import type { AgentState, CliPlanFile, SessionStats, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { product } from '../lib/product-client.js';
 import { AgentDetailPanel } from './AgentDetailPanel.js';
+import { AgentSessionHeader } from './AgentSessionHeader.js';
 import { AgentDiffPanel } from './AgentDiffPanel.js';
 import { useSessionStats } from './AgentInsights.js';
 import { ThreadSecondaryPanel } from './thread/secondary-panel/ThreadSecondaryPanel.js';
@@ -29,6 +30,7 @@ import {
 import { getDesktopBrowserApi } from '../lib/desktop-browser.js';
 import { getBrowserUrlHost } from '../lib/browser-url.js';
 import { useOptionalPaneContext } from '../views/thread-detail/PaneContext.js';
+import { agentSessionPanelOwnerId, ThreadPanelOwnerProvider } from '../plugins/thread-panel-owner.js';
 
 /**
  * CLI-agent inspector split: live PTY on the left, the same secondary-panel
@@ -151,7 +153,8 @@ export function AgentSessionView({
   stageChrome,
   stageOverlay,
   focusDiffKey = 0,
-  modal = false
+  modal = false,
+  mobileTitleInShell = false
 }: {
   session: TerminalSession;
   projectId: string;
@@ -173,15 +176,17 @@ export function AgentSessionView({
   stageOverlay?: ReactNode;
   focusDiffKey?: number;
   modal?: boolean;
+  mobileTitleInShell?: boolean;
 }) {
   const pane = useOptionalPaneContext();
   const viewRef = useRef<HTMLElement>(null);
-  const panel = useSecondaryPanel(modal ? `${session.id}:modal` : session.id, {
+  const panelOwnerId = agentSessionPanelOwnerId(session.id, modal);
+  const panel = useSecondaryPanel(panelOwnerId, {
     defaultOpen: !modal,
     modal,
     getContainerWidthPx: () => viewRef.current?.clientWidth ?? 0
   });
-  useInAppBrowserPanel(modal ? `${session.id}:modal` : session.id, panel);
+  useInAppBrowserPanel(panelOwnerId, panel);
   useDesktopBrowserReveal({
     threadId: session.id,
     isFocused: !modal || pane?.isFocused !== false,
@@ -306,6 +311,7 @@ export function AgentSessionView({
     panelBody = (
       <ThreadFilePreviewTab
         threadId={session.id}
+        previewRevision={closable.previewRevision}
         path={closable.path}
         openerKey={closable.openerKey}
         projectId={projectId}
@@ -339,6 +345,7 @@ export function AgentSessionView({
   }
 
   return (
+    <ThreadPanelOwnerProvider ownerId={panelOwnerId}>
     <section
       ref={viewRef}
       className={viewClass}
@@ -347,11 +354,8 @@ export function AgentSessionView({
     >
       <div className="thread-detail-split">
       <div className="thread-detail-main agent-session-main">
-        <header className="thread-detail-header">
-          <div className="thread-detail-heading">
-            <h1>{session.title}</h1>
-          </div>
-          <div className="thread-detail-actions">
+        <AgentSessionHeader session={session} state={state} projectName={projectName}
+          useShellTitle={mobileTitleInShell && !modal && pane?.isFocused !== false}>
             {pane?.onToggleMaximize ? (
               <button
                 type="button"
@@ -388,8 +392,7 @@ export function AgentSessionView({
                 <PanelRight size={14} />
               </button>
             ) : null}
-          </div>
-        </header>
+        </AgentSessionHeader>
         {stageChrome}
         <div className="agent-session-terminal" id={terminalAnchorId} />
         {stageOverlay}
@@ -414,7 +417,7 @@ export function AgentSessionView({
           <BrowserTabDeck
             browserTabs={panel.state.tabs.filter((tab) => tab.kind === 'browser')}
             activeBrowserTabId={closable?.kind === 'browser' ? closable.id : null}
-            canShowNativeBrowserView={panelOpen && !modal}
+            canShowNativeBrowserView={panelOpen && (modal || pane?.isFocused !== false)}
             threadId={session.id}
             onUpdate={({ tabId, url, title }) => {
               const nextTitle = title && title.length > 0 ? title : getBrowserUrlHost(url) || 'Browser';
@@ -434,5 +437,6 @@ export function AgentSessionView({
       ) : null}
       </div>
     </section>
+    </ThreadPanelOwnerProvider>
   );
 }

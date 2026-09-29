@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { IPC, type DesktopBrowserControlState, type DesktopBrowserTarget } from "@zana-ai/zcc-desktop-contract";
+import {
+  browserPreviewIdentity,
+  IPC,
+  type DesktopBrowserControlState,
+  type DesktopBrowserTarget,
+} from "@zana-ai/zcc-desktop-contract";
 import { isRawThreadId } from "@zana-ai/zcc-domain/thread-runtime";
 import type {
   DesktopBrowserChanged,
@@ -80,6 +85,18 @@ export function createDesktopBrowserBroker(args: {
       hostWebContentsId: instance.webContentsId,
       threadId,
     });
+  }
+
+  function openPreviewTab(
+    instance: InstanceEntry,
+    threadId: string,
+    url: string,
+  ): DesktopBrowserNativeTab | undefined {
+    const identity = browserPreviewIdentity(url);
+    if (identity === null) return undefined;
+    return tabsFor(instance, threadId).find(
+      (tab) => browserPreviewIdentity(tab.url) === identity,
+    );
   }
 
   function wireTab(
@@ -233,6 +250,13 @@ export function createDesktopBrowserBroker(args: {
           throw new Error("Create automation pages in a dedicated profile");
         if (lease.tabs.size >= 100)
           throw new Error("Browser lease tab limit reached");
+        const open = openPreviewTab(lease.instance, lease.threadId, url);
+        if (open) {
+          lease.tabs.set(open.tabId, open.generation);
+          publish(lease.instance, lease.threadId);
+          reveal(lease.instance, lease.threadId, open.tabId);
+          return open.tabId;
+        }
         const tab = args.manager.createTab({
           hostWindow: lease.instance.window,
           threadId: lease.threadId,
@@ -417,6 +441,12 @@ export function createDesktopBrowserBroker(args: {
             ),
           };
         case "desktop.browser.create_tab": {
+          const open = openPreviewTab(instance, command.threadId, command.url);
+          if (open) {
+            if (command.presentation === "reveal")
+              reveal(instance, command.threadId, open.tabId);
+            return { tab: wireTab(instance, open) };
+          }
           const tab = args.manager.createTab({
             hostWindow: instance.window,
             tabId: command.tabId,

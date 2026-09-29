@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GitPullRequest, RefreshCw, Loader2, Settings as SettingsIcon, ChevronDown, Download, Trash2, ArrowLeft, AlertTriangle, WifiOff, CloudOff } from 'lucide-react';
+import { MoreHorizontal, GitPullRequest, RefreshCw, Loader2, Settings as SettingsIcon, ChevronDown, Download, Trash2, ArrowLeft, AlertTriangle, WifiOff, CloudOff } from 'lucide-react';
 import type { ModuleHost, ProjectInfo } from './host.js';
 import {
   type MonitoredPr,
@@ -28,6 +28,8 @@ import {
   MONITORED_PRS_CACHE_KEY,
   SETTINGS_STORAGE_KEY,
 } from '../../lib/types.js';
+import { Dialog } from './Dialog.js';
+import { usePrCompactLayout } from './PrMobile.js';
 import { SetupGate } from './SetupGate.js';
 import { PrTileList, TERMINAL_STATUSES, type SortField, type SortDir, type ListViewMode } from './PrTileList.js';
 import { PullPrModal } from './PullPrModal.js';
@@ -55,6 +57,8 @@ interface StoredSort {
 }
 
 export default function PrMonitorPanel({ host }: { host: ModuleHost }) {
+  const compact = usePrCompactLayout();
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [settings, setSettings] = useState<PrMonitorSettings | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [prs, setPrs] = useState<MonitoredPr[]>(
@@ -85,6 +89,7 @@ export default function PrMonitorPanel({ host }: { host: ModuleHost }) {
   // transient outageHosts); `getSyncHealth` is a cheap no-probe read used on
   // mount so the clue paints before the first poll completes.
   const [syncHealth, setSyncHealth] = useState<SyncHealth>(() => ({ ...EMPTY_SYNC_HEALTH }));
+  const mobileActionsBtnRef = useRef<HTMLButtonElement>(null);
   const syncBtnRef = useRef<HTMLButtonElement>(null);
   const aliveRef = useRef(true);
 
@@ -92,6 +97,7 @@ export default function PrMonitorPanel({ host }: { host: ModuleHost }) {
     aliveRef.current = true;
     return () => { aliveRef.current = false; };
   }, []);
+  useEffect(() => { if (!compact) setActionsOpen(false); }, [compact]);
   // `host.listProjects()` is a non-reactive store SNAPSHOT — at mount the
   // projects store may still be loading, so a single inline read can capture a
   // partial (or empty) list. We hold the list in state and re-read it on the
@@ -604,6 +610,86 @@ export default function PrMonitorPanel({ host }: { host: ModuleHost }) {
     );
   }
 
+  const headerActions = (
+    <div className="prm-header-actions">
+      {subTab === 'prs' && (
+        <>
+          <button
+            type="button"
+            className="prm-btn"
+            onClick={() => { setActionsOpen(false); setPullOpen(true); }}
+            title="Add a specific pull request to the monitored list"
+          >
+            <Download size={13} /> <span>Add PR</span>
+          </button>
+
+          {/* Sweep — dismiss all terminal (Merged/Closed) PRs (R-LIST-004).
+              Inert/hidden when none present (AC-LIST-4.3). */}
+          {sweepTargets.length > 0 && (
+            <button
+              type="button"
+              className="prm-btn"
+              onClick={() => void bulkDismiss(sweepTargets)}
+              title={`Sweep — dismiss the ${sweepTargets.length} Merged/Closed PR(s) from the list`}
+            >
+              <Trash2 size={13} /> <span>Sweep</span>
+            </button>
+          )}
+
+          {/* Sync split control (R-LIST-002): primary syncs all; dropdown opens
+              the Sync & Filter picker. */}
+          <div className="prm-split-btn">
+            <button
+              type="button"
+              className="prm-btn prm-btn--primary prm-split-primary"
+              onClick={() => void pollNow(repoScope)}
+              disabled={loading}
+              title={
+                repoScope.length > 0
+                  ? `Sync the ${repoScope.length} selected repositor${repoScope.length === 1 ? 'y' : 'ies'} now`
+                  : 'Sync all monitored PRs now'
+              }
+            >
+              {loading ? <Loader2 size={13} className="prm-spin" /> : <RefreshCw size={13} />}
+              <span>Sync</span>
+            </button>
+            <button
+              ref={syncBtnRef}
+              type="button"
+              className="prm-btn prm-btn--primary prm-split-caret"
+              onClick={() => { setActionsOpen(false); setSyncFilterOpen((v) => !v); }}
+              disabled={loading}
+              title="Sync & Filter — choose which repositories to show and sync"
+              aria-label="Open Sync & Filter picker"
+              aria-haspopup="menu"
+              aria-expanded={syncFilterOpen}
+            >
+              <ChevronDown size={13} />
+            </button>
+
+          </div>
+        </>
+      )}
+      <button
+        type="button"
+        className="prm-btn prm-header-mode"
+        aria-pressed={subTab === 'settings'}
+        onClick={() => { setActionsOpen(false); selectTab(subTab === 'settings' ? 'prs' : 'settings'); }}
+        title={subTab === 'settings' ? 'Back to pull requests' : 'Settings'}
+      >
+        {subTab === 'settings' ? (
+          <>
+            <ArrowLeft size={13} aria-hidden /> <span>PRs</span>
+          </>
+        ) : (
+          <>
+            <SettingsIcon size={13} aria-hidden /> <span>Settings</span>
+          </>
+        )}
+      </button>
+    </div>
+  );
+
   return (
     <section className="prm-panel">
       <header className="prm-header">
@@ -619,100 +705,35 @@ export default function PrMonitorPanel({ host }: { host: ModuleHost }) {
           </div>
           {subTab === 'prs' && <span className="prm-count-pill">{visiblePrs.length}</span>}
         </div>
-        <div className="prm-header-actions">
-          {subTab === 'prs' && (
-            <>
-              <button
-                type="button"
-                className="prm-btn"
-                onClick={() => setPullOpen(true)}
-                title="Add a specific pull request to the monitored list"
-              >
-                <Download size={13} /> <span>Add PR</span>
-              </button>
-
-              {/* Sweep — dismiss all terminal (Merged/Closed) PRs (R-LIST-004).
-                  Inert/hidden when none present (AC-LIST-4.3). */}
-              {sweepTargets.length > 0 && (
-                <button
-                  type="button"
-                  className="prm-btn"
-                  onClick={() => void bulkDismiss(sweepTargets)}
-                  title={`Sweep — dismiss the ${sweepTargets.length} Merged/Closed PR(s) from the list`}
-                >
-                  <Trash2 size={13} /> <span>Sweep</span>
-                </button>
-              )}
-
-              {/* Sync split control (R-LIST-002): primary syncs all; dropdown opens
-                  the Sync & Filter picker. */}
-              <div className="prm-split-btn">
-                <button
-                  type="button"
-                  className="prm-btn prm-btn--primary prm-split-primary"
-                  onClick={() => void pollNow(repoScope)}
-                  disabled={loading}
-                  title={
-                    repoScope.length > 0
-                      ? `Sync the ${repoScope.length} selected repositor${repoScope.length === 1 ? 'y' : 'ies'} now`
-                      : 'Sync all monitored PRs now'
-                  }
-                >
-                  {loading ? <Loader2 size={13} className="prm-spin" /> : <RefreshCw size={13} />}
-                  <span>Sync</span>
-                </button>
-                <button
-                  ref={syncBtnRef}
-                  type="button"
-                  className="prm-btn prm-btn--primary prm-split-caret"
-                  onClick={() => setSyncFilterOpen((v) => !v)}
-                  disabled={loading}
-                  title="Sync & Filter — choose which repositories to show and sync"
-                  aria-label="Open Sync & Filter picker"
-                  aria-haspopup="menu"
-                  aria-expanded={syncFilterOpen}
-                >
-                  <ChevronDown size={13} />
-                </button>
-                {syncFilterOpen && (
-                  <SyncFilterMenu
-                    anchorRef={syncBtnRef}
-                    host={host}
-                    selectedRepos={repoScope}
-                    onClose={() => setSyncFilterOpen(false)}
-                    onToggleRepo={(fullName) =>
-                      setRepoScope((prev) =>
-                        prev.includes(fullName) ? prev.filter((r) => r !== fullName) : [...prev, fullName]
-                      )
-                    }
-                    onSelectAll={() => setRepoScope([])}
-                    onSync={(repos) => void pollNow(repos)}
-                  />
-                )}
-              </div>
-            </>
-          )}
-          <button
-            type="button"
-            className="prm-btn prm-header-mode"
-            aria-pressed={subTab === 'settings'}
-            onClick={() => selectTab(subTab === 'settings' ? 'prs' : 'settings')}
-            title={subTab === 'settings' ? 'Back to pull requests' : 'Settings'}
-          >
-            {subTab === 'settings' ? (
-              <>
-                <ArrowLeft size={13} aria-hidden /> <span>PRs</span>
-              </>
-            ) : (
-              <>
-                <SettingsIcon size={13} aria-hidden /> <span>Settings</span>
-              </>
-            )}
-          </button>
-        </div>
+        {compact ? <div className="prm-mobile-header-actions">
+          {subTab === 'prs' && <button type="button" className="prm-btn" aria-label="Sync pull requests" disabled={loading} onClick={() => void pollNow(repoScope)}>
+            {loading ? <Loader2 size={18} className="prm-spin" /> : <RefreshCw size={18} />}
+          </button>}
+          {subTab === 'settings' && <button type="button" className="prm-btn" onClick={() => selectTab('prs')}><ArrowLeft size={18} /> PRs</button>}
+          <button type="button" className="prm-btn" ref={mobileActionsBtnRef} aria-label="PR Monitor actions" aria-haspopup="dialog" aria-expanded={actionsOpen} onClick={() => setActionsOpen(true)}><MoreHorizontal size={20} /></button>
+        </div> : headerActions}
       </header>
+      {compact && actionsOpen && <Dialog title="PR Monitor actions" closeLabel="Close PR actions" onClose={() => setActionsOpen(false)}>
+        <div className="prm-modal-body prm-mobile-actions">{headerActions}</div>
+      </Dialog>}
 
-      <div className={`prm-content${subTab === 'prs' && viewMode === 'board' ? ' prm-content--board' : ''}`}>
+      {syncFilterOpen && (
+        <SyncFilterMenu
+          anchorRef={compact ? mobileActionsBtnRef : syncBtnRef}
+          host={host}
+          selectedRepos={repoScope}
+          onClose={() => setSyncFilterOpen(false)}
+          onToggleRepo={(fullName) =>
+            setRepoScope((prev) =>
+              prev.includes(fullName) ? prev.filter((r) => r !== fullName) : [...prev, fullName]
+            )
+          }
+          onSelectAll={() => setRepoScope([])}
+          onSync={(repos) => void pollNow(repos)}
+        />
+      )}
+
+      <div className={`prm-content${subTab === 'prs' && !compact && viewMode === 'board' ? ' prm-content--board' : ''}`}>
         {error && <div className="prm-error">{error}</div>}
 
         {/* Single consolidated sync-health clue (AC-REPO-13.5) — at most one,

@@ -290,6 +290,7 @@ export interface PluginFileOpenerSource {
   threadId: string | null;
   environmentId: string | null;
   projectId: string | null;
+  hostId?: string;
 }
 
 export interface PluginFileOpenerProps {
@@ -696,7 +697,17 @@ export interface ZccNavigate {
   toProject(projectId: string, options?: ZccNavigateToProjectOptions): void;
   toPluginPanel(path: string, options?: { subPath?: string; replace?: boolean }): void;
   toCompose(options?: { initialPrompt?: string; focusPrompt?: boolean }): void;
-  openThreadPanel(options: { actionId: string; title?: string; params?: JsonValue }): boolean;
+  /**
+   * Open one of this plugin's thread-panel actions beside the conversation.
+   * `threadId` hints which conversation owns the panel when the URL does not.
+   * The host prefers the visible side panel over this hint.
+   */
+  openThreadPanel(options: {
+    actionId: string;
+    title?: string;
+    params?: JsonValue;
+    threadId?: string;
+  }): boolean;
 }
 
 export interface ThreadChatMessageAction {

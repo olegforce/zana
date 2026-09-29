@@ -1,3 +1,5 @@
+import { orderedCatalogSources } from '../projects/project-catalog-order.js';
+import type { ProjectCatalogSource } from '@zana-ai/zcc-contracts/project-metadata-records';
 import { app, shell } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
@@ -257,9 +259,9 @@ function ensureReadme(dir: string) {
   }
 }
 
-function readTemplateFile(path: string): ScheduleTemplate | null {
+function parseTemplate(content: string): ScheduleTemplate | null {
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Partial<ScheduleTemplate>;
+    const raw = JSON.parse(content) as Partial<ScheduleTemplate>;
     if (!raw || typeof raw !== 'object') return null;
     if (typeof raw.id !== 'string' || !raw.id.trim()) return null;
     if (typeof raw.name !== 'string' || !raw.name.trim()) return null;
@@ -291,6 +293,10 @@ function readTemplateFile(path: string): ScheduleTemplate | null {
   } catch {
     return null;
   }
+}
+
+function readTemplateFile(path: string): ScheduleTemplate | null {
+  try { return parseTemplate(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 function listInDir(
@@ -325,7 +331,7 @@ export class TemplateStore extends EventEmitter {
   private projectWatchers: Map<string, FSWatcher> = new Map();
   private debounce: NodeJS.Timeout | null = null;
 
-  constructor(projectsRef: () => Project[]) {
+  constructor(projectsRef: () => Project[], private readonly remoteSources: () => ProjectCatalogSource[] = () => [], private readonly projectOrder?: () => readonly string[]) {
     super();
     this.projectsRef = projectsRef;
   }
@@ -361,14 +367,19 @@ export class TemplateStore extends EventEmitter {
     const merged = new Map<string, ScheduleTemplate>();
     for (const t of BUILTIN) merged.set(t.id, { ...t, source: 'builtin' });
     for (const t of listInDir(userTemplatesDir(), 'user')) merged.set(t.id, t);
-    for (const project of this.projectsRef()) {
-      const projectSource: ScheduleTemplate['source'] = {
-        projectId: project.id,
-        projectName: project.name
-      };
-      for (const t of listInDir(projectTemplatesDir(project), projectSource)) {
-        merged.set(t.id, t);
+    for (const entry of orderedCatalogSources(this.projectsRef(), this.remoteSources(), this.projectOrder?.())) {
+      if (entry.kind === 'remote') {
+        const source = entry.source;
+        for (const record of source.records) {
+          const value = parseTemplate(record);
+          if (value) merged.set(value.id, { ...value, source: { projectId: source.projectId, projectName: source.projectName } });
+        }
+        continue;
       }
+      const project = entry.project;
+      const projectDir = projectTemplatesDir(project);
+      const projectSource: ScheduleTemplate['source'] = { projectId: project.id, projectName: project.name };
+      for (const t of listInDir(projectDir, projectSource)) merged.set(t.id, t);
     }
     this.cache = [...merged.values()];
     this.emit('changed');

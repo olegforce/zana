@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { ipcMain } from 'electron';
+import { LibraryDocumentRequestSchema } from '@zana-ai/zcc-contracts/library-documents';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import type { LibraryAddInput, LibraryDoc, LibraryScope, SavedRecord, SavedRecordInput } from '@zana-ai/zcc-domain/product';
@@ -25,22 +26,32 @@ export function registerSavedIpc(): void {
     ctx.safeSend(IPC.saved.onChanged, records);
   });
 
-  // Library: add/list/update/remove/reveal RPCs + full-list change pushes.
-  ctx.safeHandle(IPC.library.list, () => ctx.libraryStore.list(), () => []);
+  const document = (request: unknown) => {
+    const checked = LibraryDocumentRequestSchema.parse(request);
+    if (!ctx.runtimeSupervisor) throw new Error('Library runtime is unavailable');
+    return ctx.runtimeSupervisor.libraryDocument(checked);
+  };
+
+  // Library: main validates, then the selected product runtime resolves ownership.
+  ipcMain.handle(IPC.library.list, () => document({ action: 'list' }));
+  // Reject unavailable runtime reads; never represent a failed snapshot as an empty Library.
+  ipcMain.handle(IPC.library.snapshot, () => document({ action: 'snapshot' }));
+  ipcMain.handle(IPC.library.importFile, (_event, input: import('@zana-ai/zcc-domain/product').LibraryImportInput) => document({ ...input, action: 'import' }));
+  ctx.safeHandle(IPC.library.readAsset, (scope: LibraryScope, relPath: string, projectId?: string) => document({ action: 'asset', scope, relPath, projectId }), () => ({ ok: false, message: 'Library preview is unavailable' }));
   ctx.safeHandle(
     IPC.library.add,
-    (input: LibraryAddInput) => ctx.libraryStore.add(input),
+    (input: LibraryAddInput) => { const { source: _source, ...fields } = input; return document({ action: 'add', ...fields }); },
     () => null
   );
   ctx.safeHandle(
     IPC.library.update,
-    (id: string, patch: Partial<Pick<LibraryDoc, 'title' | 'summary' | 'tags'>>) =>
-      ctx.libraryStore.update(id, patch),
+    (id: string, patch: Partial<Pick<LibraryDoc, 'title' | 'summary' | 'tags'>>, location?: import('@zana-ai/zcc-domain/product').LibraryDocLocation) =>
+      document({ action: 'update', id, patch, location }),
     () => null
   );
   ctx.safeHandle(
     IPC.library.remove,
-    (id: string) => ctx.libraryStore.remove(id),
+    (id: string, location?: import('@zana-ai/zcc-domain/product').LibraryDocLocation) => document({ action: 'remove', id, location }),
     () => false
   );
   ctx.safeHandle(
@@ -50,7 +61,7 @@ export function registerSavedIpc(): void {
   );
   ctx.safeHandle(
     IPC.library.search,
-    (query: string) => ctx.libraryStore.search(query),
+    (query: string) => document({ action: 'search', query }),
     () => ({ hits: [], truncated: false })
   );
   // Read/write a library doc's content by SCOPE + relPath (not an absolute
@@ -61,13 +72,13 @@ export function registerSavedIpc(): void {
   ctx.safeHandle(
     IPC.library.read,
     (scope: LibraryScope, relPath: string, projectId?: string) =>
-      ctx.libraryStore.readContent(scope, relPath, projectId),
+      document({ action: 'read', scope, relPath, projectId }),
     () => ({ ok: false, message: 'Read failed' })
   );
   ctx.safeHandle(
     IPC.library.write,
-    (scope: LibraryScope, relPath: string, content: string, projectId?: string) =>
-      ctx.libraryStore.writeContent(scope, relPath, content, projectId),
+    (scope: LibraryScope, relPath: string, content: string, projectId?: string, expectedSha256?: string) =>
+      document({ action: 'write', scope, relPath, content, projectId, expectedSha256 }),
     () => ({ ok: false, message: 'Write failed' })
   );
   // Folder-tree CRUD (createFolder/move/delete) — the full-library explorer's
@@ -76,7 +87,7 @@ export function registerSavedIpc(): void {
   ctx.safeHandle(
     IPC.library.createFolder,
     (scope: LibraryScope, relPath: string, projectId?: string) =>
-      ctx.libraryStore.createFolder(scope, relPath, projectId),
+      document({ action: 'createFolder', scope, relPath, projectId }),
     () => ({ ok: false, message: 'Create folder failed' })
   );
   ctx.safeHandle(
@@ -84,18 +95,16 @@ export function registerSavedIpc(): void {
     (
       from: { scope: LibraryScope; relPath: string; projectId?: string },
       to: { scope: LibraryScope; relPath: string; projectId?: string }
-    ) => ctx.libraryStore.moveEntry(from, to),
+    ) => document({ action: 'move', from, to }),
     () => ({ ok: false, message: 'Move failed' })
   );
   ctx.safeHandle(
     IPC.library.deleteEntry,
     (scope: LibraryScope, relPath: string, projectId?: string) =>
-      ctx.libraryStore.deleteEntry(scope, relPath, projectId),
+      document({ action: 'deleteEntry', scope, relPath, projectId }),
     () => ({ ok: false, message: 'Delete failed' })
   );
   ctx.libraryStore.onChanged(() => {
-    const docs = ctx.libraryStore.list();
-    ctx.safeSend(IPC.library.onChanged, docs);
+    void ctx.invalidateLibrary();
   });
 }
-

@@ -118,16 +118,23 @@ export function commandName(name: string): string {
   return name.startsWith('/') ? name : `/${name}`;
 }
 
+export type ComposerCommandRow = {
+  name: string;
+  description: string;
+  source?: 'command' | 'skill';
+};
+
 export function commandsFromComposerActions(
   actions: readonly string[],
   displayName?: string
-): Array<{ name: string; description: string }> {
+): ComposerCommandRow[] {
   return actions.map((action) => {
     const name = commandName(action);
     const label = action.replace(/^\//, '');
     return {
       name,
-      description: displayName ? `${displayName} ${label}` : label
+      description: displayName ? `${displayName} ${label}` : label,
+      source: 'command' as const
     };
   });
 }
@@ -138,24 +145,31 @@ export function commandsFromPluginSkills(
     enabled?: boolean;
     skillNames?: readonly string[];
   }>
-): Array<{ name: string; description: string }> {
+): ComposerCommandRow[] {
   return plugins.flatMap((plugin) => {
     if (plugin.enabled === false) return [];
     return (plugin.skillNames ?? []).map((skillName) => ({
       name: commandName(skillName),
-      description: plugin.name
+      description: plugin.name,
+      source: 'skill' as const
     }));
   });
 }
 
 export function mergeCommandCatalogs(
-  groups: ReadonlyArray<ReadonlyArray<{ name: string; description: string }>>
-): Array<{ name: string; description: string }> {
-  const merged = new Map<string, { name: string; description: string }>();
+  groups: ReadonlyArray<ReadonlyArray<ComposerCommandRow>>
+): ComposerCommandRow[] {
+  const merged = new Map<string, ComposerCommandRow>();
   for (const group of groups) {
     for (const row of group) {
       const name = commandName(row.name);
-      if (!merged.has(name)) merged.set(name, { name, description: row.description });
+      if (!merged.has(name)) {
+        merged.set(name, {
+          name,
+          description: row.description,
+          ...(row.source ? { source: row.source } : {})
+        });
+      }
     }
   }
   return [...merged.values()];
@@ -169,19 +183,29 @@ export function isThreadWorkModeCommand(name: string): boolean {
 }
 
 export function filterCliComposerCommands(
-  commands: ReadonlyArray<{ name: string; description: string }>
-): Array<{ name: string; description: string }> {
+  commands: ReadonlyArray<ComposerCommandRow>
+): ComposerCommandRow[] {
   return commands.filter((row) => !isThreadWorkModeCommand(row.name));
 }
 
 export function buildCommandSuggestions(
-  commands: ReadonlyArray<{ name: string; description: string }>,
+  commands: ReadonlyArray<ComposerCommandRow>,
   query: string
 ): TypeaheadSuggestion[] {
   const items: TypeaheadSuggestion[] = commands.map((command) => ({
-    kind: 'command',
+    kind: 'command' as const,
     name: commandName(command.name),
-    description: command.description
+    description: command.description,
+    ...(command.source ? { source: command.source } : {})
   }));
-  return rankSuggestions(items, query.replace(/^\//, ''), COMPOSER_SUGGESTION_LIMIT);
+  // Rank within the catalog, then Commands before Skills so keyboard order
+  // matches the sectioned menu.
+  return rankSuggestions(items, query.replace(/^\//, ''), COMPOSER_SUGGESTION_LIMIT)
+    .slice()
+    .sort((left, right) => {
+      if (left.kind !== 'command' || right.kind !== 'command') return 0;
+      const leftSkill = left.source === 'skill' ? 1 : 0;
+      const rightSkill = right.source === 'skill' ? 1 : 0;
+      return leftSkill - rightSkill;
+    });
 }

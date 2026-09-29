@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
+import { createPerformanceSampler } from '../runtime/performance-sampler.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { productServerUrl } from '../window/renderer-url.js';
@@ -22,6 +23,11 @@ import {
 import { crashReportsDir, saveRendererCrashReport } from '../crash-report-store.js';
 
 export function registerAppIpc(): void {
+  const performanceSampler = createPerformanceSampler({
+    metrics: () => app.getAppMetrics(),
+    hostId: () => ctx.runtimeSupervisor?.hostId
+  });
+  ctx.safeHandleFromWindow(IPC.app.performance, () => performanceSampler.sample(), () => null);
   
   ctx.safeHandle(IPC.app.homedir, () => homedir(), () => '');
   ctx.safeHandle(IPC.app.version, () => ctx.runtimeSupervisor?.appVersion() ?? ctx.resolvedAppVersion(), () => '');
@@ -213,4 +219,3 @@ export function registerAppIpc(): void {
     () => ({ ok: false, message: 'Could not relaunch this machine' })
   );
 }
-

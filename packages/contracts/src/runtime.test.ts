@@ -13,6 +13,56 @@ const request = {
 };
 
 describe('server runtime contract', () => {
+  it('keeps feed access project-scoped and bounded without exposing file paths or host selection', () => {
+    const parse = (value: unknown) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'project-feed', request: value }).success;
+    const event = { projectId: 'p', kind: 'commit', ts: 1, title: 'Commit', dedupeKey: 'hash' };
+    expect(parse({ action: 'list', projectId: 'p' })).toBe(true);
+    expect(parse({ action: 'append', projectId: 'p', events: [event] })).toBe(true);
+    for (const value of [
+      { action: 'list', projectId: 'p', hostId: 'other' }, { action: 'list', projectId: 'p', path: '/private' },
+      { action: 'remove', projectId: 'p' }, { action: 'append', projectId: 'p', events: Array(101).fill(event) },
+      { action: 'append', projectId: 'p', events: [{ ...event, id: 'forged' }] },
+    ]) expect(parse(value)).toBe(false);
+  });
+  it('accepts only a bounded project identity for history reads', () => {
+    const parse = (value: unknown) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'project-history', request: value }).success;
+    expect(parse({ projectId: 'p', limit: 50 })).toBe(true);
+    for (const value of [{ projectId: 'p', limit: 101 }, { projectId: 'p', limit: 50, hostId: 'other' }, { projectId: 'p', limit: 50, path: '/private' }]) expect(parse(value)).toBe(false);
+  });
+  it('allows only a registered project identity for read-only catalogue requests', () => {
+    const parse = (value: unknown) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'project-catalogs', request: value }).success;
+    expect(parse({ projectId: 'p' })).toBe(true);
+    for (const value of [{ projectId: '' }, { projectId: 'p', hostId: 'other' }, { projectId: 'p', path: '/private' }, { projectId: 'p', action: 'write' }]) expect(parse(value)).toBe(false);
+  });
+  it('accepts empty watcher/reset invalidations but refuses snapshots and unregistered event channels', () => {
+    const parse = (channel: string, args: unknown[]) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'product-event', channel, args }).success;
+    for (const channel of ['library:changed', 'product:reset']) {
+      expect(parse(channel, [])).toBe(true);
+      expect(parse(channel, [{ forged: 'snapshot' }])).toBe(false);
+    }
+    expect(parse('config:onChanged', [{ theme: 'light' }])).toBe(true);
+    expect(parse('arbitrary:native-operation', [])).toBe(false);
+  });
+  it.each(['library-changed', 'projects-changed'])('accepts only the bounded runtime %s invalidation shape', type => {
+    const event = { type, protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION };
+    expect(RuntimeOutboundSchema.safeParse(event).success).toBe(true);
+    for (const patch of [{ protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION - 1 }, { rootPath: '/' }, { docs: [] }]) expect(RuntimeOutboundSchema.safeParse({ ...event, ...patch }).success).toBe(false);
+  });
+  it('confines desktop library commands to validated scope and read revisions', () => {
+    const value = { action: 'write', scope: 'project', projectId: 'p', relPath: 'note.md', content: 'text', expectedSha256: 'a'.repeat(64) };
+    const parse = (patch: Record<string, unknown>) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'library-document', request: { ...value, ...patch } }).success;
+    expect(parse({})).toBe(true);
+    for (const patch of [{ hostId: 'foreign' }, { relPath: '../outside' }, { expectedSha256: undefined }, { scope: 'global' }, { root: '/' }]) expect(parse(patch)).toBe(false);
+  });
+  it('accepts metadata revisions but never renderer-selected paths or hosts', () => {
+    const value = { projectId: 'project-1', kind: 'followups', action: 'write', id: 'record-1', content: '{}', expectedSha256: null };
+    const parse = (patch: Record<string, unknown>) => ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'project-metadata', request: { ...value, ...patch } }).success;
+    expect(parse({})).toBe(true);
+    expect(parse({ expectedSha256: 'a'.repeat(64) })).toBe(true);
+    for (const patch of [{ hostId: 'other' }, { path: '/etc/passwd' }, { id: '../escape' }, { content: 'x'.repeat(1024 * 1024 + 1) }, { expectedSha256: 'bad' }, { kind: 'arbitrary' }]) expect(parse(patch)).toBe(false);
+    expect(ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'project-metadata', request: { projectId: 'project-1', kind: 'goals', action: 'remove', id: 'goal', expectedSha256: null } }).success).toBe(false);
+  });
+
   it('validates project icon changes at the runtime boundary', () => {
     for (const [icon, expected] of [['Cloud', true], ['Circle', true], ['unknown', false], [null, false], [4, false]] as const) {
       expect(ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'projects-update', projectId: 'p1', patch: { icon } }).success).toBe(expected);

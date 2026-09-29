@@ -10,12 +10,15 @@ import { appendThreadRecentItem } from './threadRecentItems.js';
 import type { ClosableSecondaryTab } from './threadSecondaryPanelState.js';
 
 interface PanelCommands {
+  state: { tabs: readonly ClosableSecondaryTab[] };
   addTab: (tab: Omit<ClosableSecondaryTab, 'id'> & { id?: string }) => void;
 }
 
 export function useInAppBrowserPanel(ownerId: string, panel: PanelCommands): void {
   const addTabRef = useRef(panel.addTab);
   addTabRef.current = panel.addTab;
+  const tabsRef = useRef(panel.state.tabs);
+  tabsRef.current = panel.state.tabs;
 
   useEffect(() => {
     const api = getDesktopBrowserApi();
@@ -34,6 +37,9 @@ export function useInAppBrowserPanel(ownerId: string, panel: PanelCommands): voi
       }
     };
     const unsubScoped = api.onScopedOpenTab?.((request) => {
+      // Native popup events reach every pane; their source tab identifies the
+      // owning panel. An unrelated thread must not open a copy of the page.
+      if (!tabsRef.current.some((tab) => tab.kind === 'browser' && tab.id === request.tabId)) return;
       openUrl(request.url);
     });
     const unsubOpen = unsubScoped ? null : api.onOpenTab((request) => {

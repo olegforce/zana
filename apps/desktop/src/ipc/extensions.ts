@@ -2,6 +2,7 @@
 import { ipcMain } from 'electron';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
+import { registerSharedProduct } from './shared-product-registry.js';
 import { installFromArchiveFile, installFromBundled, installFromDir, installFromGit, locateManifestDir, stageInstallable, stripCreds, uninstallExtension } from '@zana-ai/zcc-server/services/extensions/extension-installer';
 import {
   bundledPluginByName,
@@ -45,6 +46,10 @@ export function registerExtensionsIpc(): void {
   // boot — so enabling one leaves `mainActive:false` until relaunch, and
   // disabling tears the live main module down now.
   ctx.safeHandle(IPC.extensions.list, () => ctx.extensionEntries, () => []);
+  registerSharedProduct(IPC.extensions.list, () => {
+    if (ctx.extensionEntries.length > 500) throw new Error('Desktop plugin inventory exceeds its display limit');
+    return ctx.extensionEntries;
+  });
   ctx.safeHandle(
     IPC.extensions.setEnabled,
     async (id: string, enabled: boolean): Promise<Result<true>> => {
@@ -816,4 +821,3 @@ export function registerExtensionsIpc(): void {
     () => []
   );
 }
-

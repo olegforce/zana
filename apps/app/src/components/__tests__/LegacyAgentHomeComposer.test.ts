@@ -24,7 +24,7 @@ describe('LegacyAgentHomeComposer', () => {
     expect(source).toContain('modelOptions={availableModelsToPickerOptions(models)}');
     expect(source).toContain('moreModelOptions={availableModelsToPickerOptions(moreModelOptions)}');
     expect(source).toContain('const preferHostModels = true');
-    expect(source).toContain('const catalogHostId = project?.hostId ?? executionHostId');
+    expect(source).toContain('const catalogHostId = project?.remote ? project.hostId : executionHostId ?? project?.hostId');
     expect(source).toContain('hostCatalog.ensureProvider');
     expect(source).toContain('threadModelCatalogForHost');
     expect(source).not.toContain('prefetchThreadModelCatalog');
@@ -234,7 +234,7 @@ describe('LegacyAgentHomeComposer', () => {
     expect(source).toContain('void hostCatalog.ensure()');
     expect(source).toContain('[hostCatalog, catalogHostId, hosts.length]');
     expect(source).toContain('if (!catalogHostId && hosts.length === 0) return');
-    expect(source).toContain('const catalogHostId = project?.hostId ?? executionHostId');
+    expect(source).toContain('const catalogHostId = project?.remote ? project.hostId : executionHostId ?? project?.hostId');
     expect(source).not.toContain('threadModelCatalogForHost(undefined)');
     expect(source).not.toContain('prefetchThreadModelCatalog');
     expect(source).toContain('cliRemoteHostCatalogEnabled\n      ? cliAgentCatalogProviders(catalog.providers)');

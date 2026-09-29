@@ -1,0 +1,88 @@
+name: Mobile TestFlight invitation
+
+# Operates on an existing verified build. Never builds, uploads or publishes an App Store release.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Check readiness, or submit beta review / enable the invitation after approval
+        type: choice
+        options: [check, publish]
+        default: check
+        required: true
+      build_id:
+        description: Exact App Store Connect build UUID from the verified release record
+        type: string
+        required: true
+      version:
+        description: Expected native version (for example 2.3.0)
+        type: string
+        required: true
+      build:
+        description: Expected native build number (for example 2)
+        type: string
+        required: true
+      tester_limit:
+        description: Maximum testers through the shared invitation (1–10000)
+        type: number
+        default: 1000
+        required: true
+
+permissions:
+  contents: read
+concurrency:
+  group: zana-mobile-ios-release
+  cancel-in-progress: false
+
+jobs:
+  invitation:
+    environment: mobile-ios-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+      ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
+      ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
+      ASC_API_KEY_PATH: ${{ runner.temp }}/zana-asc-invitation-key.p8
+      BETA_GROUP_ID: ${{ vars.ASC_BETA_GROUP_ID }}
+      INVITATION_ACTION: ${{ inputs.action }}
+      BUILD_ID: ${{ inputs.build_id }}
+      APP_VERSION: ${{ inputs.version }}
+      BUILD_NUMBER: ${{ inputs.build }}
+      TESTER_LIMIT: ${{ inputs.tester_limit }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Check release command syntax
+        run: node --check apps/mobile/scripts/testflight-public-link.mjs
+      - name: Prepare Apple API credentials
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          test -n "$ASC_API_KEY_P8"
+          umask 077
+          printf '%s\n' "$ASC_API_KEY_P8" > "$ASC_API_KEY_PATH"
+      - name: Check or publish the shared TestFlight invitation
+        run: |
+          node apps/mobile/scripts/testflight-public-link.mjs \
+            --action "$INVITATION_ACTION" --group-id "$BETA_GROUP_ID" \
+            --build-id "$BUILD_ID" --version "$APP_VERSION" --build "$BUILD_NUMBER" \
+            --limit "$TESTER_LIMIT" > invitation-status.json
+      - name: Report verified invitation status
+        if: ${{ always() }}
+        run: |
+          if test -s invitation-status.json; then
+            cat invitation-status.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain invitation status
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: testflight-invitation-status
+          path: invitation-status.json
+          if-no-files-found: ignore
+      - name: Remove temporary Apple key
+        if: ${{ always() }}
+        run: rm -f -- "$ASC_API_KEY_PATH"

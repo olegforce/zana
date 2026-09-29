@@ -31,7 +31,8 @@ function disconnected(message = 'Host is not connected') {
 export async function callControlAsProductServer(
   dataDir: string,
   op: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  timeoutMs = CONTROL_TIMEOUT_MS
 ): Promise<unknown> {
   const token = await readControlToken(dataDir);
   if (!token) return disconnected();
@@ -48,7 +49,7 @@ export async function callControlAsProductServer(
       socket.destroy();
       resolve(value);
     };
-    const timer = setTimeout(() => done(disconnected('CLI Agent operation timed out')), CONTROL_TIMEOUT_MS);
+    const timer = setTimeout(() => done(disconnected('CLI Agent operation timed out')), timeoutMs);
     socket.on('connect', () => {
       socket.write(JSON.stringify({
         token: token.token,
@@ -88,6 +89,7 @@ export async function callControlAsProductServer(
 
 export interface ProductCliAgentCreateInput {
   projectId: string;
+  hostId?: string;
   profile: string;
   prompt?: string;
   personaId?: string;
@@ -104,6 +106,7 @@ export interface ProductCliAgentCreateInput {
 export interface ProductCliAgentRecord {
   id: string;
   projectId: string;
+  hostId?: string;
   profile: string;
   title?: string;
   status: string;
@@ -111,6 +114,7 @@ export interface ProductCliAgentRecord {
 }
 
 export interface ProductCliAgentOps {
+  invalidateModelCatalog?(providerId: string): Promise<unknown>;
   create(input: ProductCliAgentCreateInput): Promise<unknown>;
   status(sessionId: string): Promise<unknown>;
   list(projectId?: string): Promise<unknown>;
@@ -121,6 +125,13 @@ export interface ProductCliAgentOps {
 
 export function createCliAgentOpsViaControl(dataDir: string): ProductCliAgentOps {
   return {
+    invalidateModelCatalog: async (providerId) => {
+      // Standalone servers have no desktop cache. The boot-only credential
+      // identifies the desktop-attached case without exposing it to renderers.
+      if (!process.env[PRODUCT_SERVER_CREDENTIAL_ENV]) return;
+      const result = asControlResult(await callControlAsProductServer(dataDir, 'harness.models.invalidate', { providerId }, 5_000));
+      if (!result.ok) throw new Error(`Desktop model cache could not be refreshed: ${result.message}`);
+    },
     create: (input) => callControlAsProductServer(dataDir, 'term.create', { ...input }),
     status: (sessionId) => callControlAsProductServer(dataDir, 'session.status', { sessionId }),
     list: (projectId) => callControlAsProductServer(dataDir, 'term.list', projectId ? { projectId } : {}),
@@ -136,12 +147,13 @@ export function asControlResult<T>(value: unknown): Result<T> {
 }
 
 export function sessionToCliAgent(
-  session: Pick<TerminalSession, 'id' | 'projectId' | 'profile' | 'title' | 'pid'>,
+  session: Pick<TerminalSession, 'id' | 'projectId' | 'hostId' | 'profile' | 'title' | 'pid'>,
   status: string
 ): ProductCliAgentRecord {
   return {
     id: session.id,
     projectId: session.projectId,
+    ...(session.hostId ? { hostId: session.hostId } : {}),
     profile: session.profile,
     title: session.title,
     status,

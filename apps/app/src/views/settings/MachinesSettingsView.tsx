@@ -1,3 +1,4 @@
+import { apiJson } from '../../lib/fetch-with-app-surface.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Plus } from 'lucide-react';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
@@ -16,7 +17,7 @@ import { MachineCard } from './MachineCard.js';
 import {
   defaultSshHost,
   sshHostOptionsFromProjects,
-  TAILSCALE_SERVE_HINT
+  REMOTE_MACHINE_CONNECTION_HINT
 } from './machine-pairing.js';
 import { reconnectMachine } from './machine-reconnect.js';
 import { runHostInstallWithDrawer } from '../../lib/host-install-run.js';
@@ -54,6 +55,13 @@ export function MachinesSettingsView({
   const [relaunchingId, setRelaunchingId] = useState<string | null>(null);
   const [relaunchError, setRelaunchError] = useState<{ hostId: string; message: string } | null>(null);
   const [sshPick, setSshPick] = useState<{ hostId: string; name: string } | null>(null);
+  const [repairPairing, setRepairPairing] = useState<{ id: string; name: string } | undefined>();
+  const [connectMachines, setConnectMachines] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    void apiJson<{ connectMachines: boolean }>('/system/instance').then(value => { if (!disposed) setConnectMachines(value.connectMachines); }).catch(() => {});
+    return () => { disposed = true; };
+  }, []);
   const now = Date.now();
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -199,7 +207,7 @@ export function MachinesSettingsView({
       >
         <Field
           label="Public app URL"
-          help={`Origin remotes use to enroll. Official builds bake this. For local/dev, ${TAILSCALE_SERVE_HINT}`}
+          help={`Origin remotes use to enroll. Official builds bake this. For local/dev, ${REMOTE_MACHINE_CONNECTION_HINT}`}
           mono
         >
           <input
@@ -269,6 +277,7 @@ export function MachinesSettingsView({
               relaunching={relaunchingId === host.id}
               relaunchError={relaunchError?.hostId === host.id ? relaunchError.message : null}
               onReconnect={() => void runReconnect(host.id)}
+              onRepairPairing={connectMachines ? () => setRepairPairing({ id: host.id, name: host.name }) : undefined}
               onRelaunch={() => void runRelaunch(host.id)}
               onRemove={() => {
                 if (window.confirm(`Remove ${host.name}?`)) {
@@ -299,8 +308,9 @@ export function MachinesSettingsView({
         />
       ) : null}
       <AddMachineDialog
-        open={adding}
-        onClose={() => setAdding(false)}
+        open={adding || !!repairPairing}
+        repairHost={repairPairing}
+        onClose={() => { setAdding(false); setRepairPairing(undefined); }}
         publicAppUrl={config.publicAppUrl}
         sshHosts={sshHostOptionsFromProjects(projects)}
         defaultSshHost={defaultSshHost(projects, config.lastProjectId)}

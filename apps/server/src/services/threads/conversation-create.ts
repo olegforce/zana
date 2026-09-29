@@ -1,3 +1,4 @@
+import { projectOnHost, ProjectSourceUnavailableError } from '@zana-ai/zcc-domain/project';
 import type { ThreadStartResult } from '@zana-ai/zcc-contracts/host-rpc';
 import {
   createConversationThread,
@@ -6,7 +7,7 @@ import {
   getConversationThread,
   getEnvironment,
   getPrimaryHost,
-  listConversationThreadEvents,
+  getLatestConversationCheckpoint,
   listHosts,
   updateEnvironmentDiscovery,
   updateEnvironmentStatus,
@@ -29,7 +30,7 @@ import type { ProductHttpContext } from '../../http/product-context.js';
 import { applyLoggedConversationLifecycleEvent } from './conversation-lifecycle-outcome.js';
 import { emitPluginThreadEvent } from '../../plugins/thread-events.js';
 import { unmanagedAttachRefusal } from './workspace-path-claims.js';
-import { resolveManagedTargetPath } from './worktree-paths.js';
+import { managedPathOnHost } from './host-managed-path.js';
 import { resolvePersonalTargetPathOnHost } from './host-personal-path.js';
 import {
   bridgeLaunchForProvider,
@@ -59,7 +60,6 @@ import {
   withResolvedPathMentionContext,
   workspacePathMentionReaders
 } from '../../plugins/path-mentions.js';
-import { latestProviderCheckpoint } from './conversation-edit-message.js';
 import { conversationThreadView } from './conversation-thread-view.js';
 import {
   requestedExecutionModeFromTurn,
@@ -208,7 +208,7 @@ async function startConversationOnHost(
     acpMode: args.input.acpMode
   });
   const checkpoint = getThreadProvider(providerId)?.capabilities.fork === 'checkpoint'
-    ? latestProviderCheckpoint(listConversationThreadEvents(ctx.db, args.thread.id))?.checkpoint
+    ? getLatestConversationCheckpoint(ctx.db, args.thread.id)?.checkpoint
     : undefined;
   const release = args.lease.retain();
   try {
@@ -306,7 +306,7 @@ export async function createConversationFromRequest(
     throw new ThreadCreateError(400, 'invalid-input', 'input is required');
   }
 
-  const project = requireProject(ctx, input.projectId);
+  let project = requireProject(ctx, input.projectId);
   const boundRemote = boundRemoteHostId(project);
   if (boundRemote === null) {
     throw new ThreadCreateError(409, REMOTE_HOST_DAEMON_REQUIRED, REMOTE_HOST_DAEMON_REQUIRED_MESSAGE);
@@ -324,9 +324,10 @@ export async function createConversationFromRequest(
       }
       hostId = ctx.hostHub.resolveHostId(primary.id);
     } else {
-      hostId = ctx.hostHub.resolveHostId(input.hostId ?? project.hostId);
+      hostId = ctx.hostHub.resolveHostId(input.hostId ?? project.hostId ?? primary?.id);
     }
     ctx.hostHub.ensureHostSessionReady(hostId);
+    project = projectOnHost(project, hostId, primary?.id);
     workspacePath = await resolveHarnessWorkspacePath({
       project,
       remoteToolProxy,
@@ -341,6 +342,7 @@ export async function createConversationFromRequest(
       }
     });
   } catch (error) {
+    if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
     if (error instanceof ThreadCreateError) throw error;
     throw mapHostError(error);
   }
@@ -484,7 +486,8 @@ export async function createConversationFromRequest(
         lease.assertCurrent();
         failConversationStart(ctx, thread);
         if (!canReuseReady) updateEnvironmentStatus(ctx.db, existing.id, 'failed');
-        if (error instanceof ThreadCreateError) throw error;
+        if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
+    if (error instanceof ThreadCreateError) throw error;
         throw mapHostError(error);
       }
     });
@@ -492,6 +495,7 @@ export async function createConversationFromRequest(
 
   let created: { environment: EnvironmentRow; thread: ConversationThreadRow };
   const environmentId = crypto.randomUUID();
+  const managedPath = choice.kind === 'worktree' ? await managedPathOnHost(ctx, hostId, primary?.id, environmentId, project.path) : undefined;
   let personalPath: string | undefined;
   if (choice.kind === 'personal') {
     try {
@@ -503,7 +507,7 @@ export async function createConversationFromRequest(
   try {
     created = ctx.db.transaction(() => {
       const path = choice.kind === 'worktree'
-        ? resolveManagedTargetPath({ dataDir: ctx.dataDir, environmentId, sourcePath: project.path })
+        ? managedPath!
         : choice.kind === 'personal'
           ? personalPath!
           : workspacePath;
@@ -629,7 +633,8 @@ export async function createConversationFromRequest(
       lease.assertCurrent();
       failConversationStart(ctx, created.thread);
       updateEnvironmentStatus(ctx.db, created.environment.id, 'failed');
-      if (error instanceof ThreadCreateError) throw error;
+      if (error instanceof ProjectSourceUnavailableError) throw new ThreadCreateError(400, 'host-workspace-mismatch', error.message);
+    if (error instanceof ThreadCreateError) throw error;
       throw mapHostError(error);
     }
   });

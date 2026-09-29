@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { ipcMain } from 'electron';
+import { productHandle, safeProductHandle } from './shared-product-registration.js';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { asSshHosts, asSshSyncResult, mergeSshHosts } from '../extensions/ssh-host-provider-registry.js';
@@ -15,7 +16,7 @@ export function registerProjectsIpc(): void {
   ctx.safeHandle(IPC.projects.list, async () => {
     const projects = await ctx.runtimeSupervisor?.listProjects();
     return ctx.runtimeSupervisor ? projects as Project[] : store.listProjects();
-  }, () => []);
+  }, (error) => { throw error; });
   ipcMain.handle(IPC.projects.add, async (_e, path: string): Promise<Result<Project>> => {
     try {
       // Once the runtime is active, the server is the only local-project writer.
@@ -87,7 +88,7 @@ export function registerProjectsIpc(): void {
       }
     }
   );
-  ipcMain.handle(
+  productHandle(
     IPC.projects.ensureQuickAgent,
     async (): Promise<Result<Project>> => {
       try {
@@ -146,7 +147,7 @@ export function registerProjectsIpc(): void {
     },
     () => ({ hosts: [] })
   );
-  ctx.safeHandle(
+  safeProductHandle(
     IPC.projects.remove,
     async (id: string) => {
       ctx.ptys.list(id).forEach((s) => ctx.ptys.close(s.id));
@@ -154,11 +155,11 @@ export function registerProjectsIpc(): void {
       // Never fall back after a server error: the request may have committed.
       if (ctx.runtimeSupervisor) await ctx.runtimeSupervisor.removeProject(id);
       else store.removeProject(id);
-      ctx.scheduler.onProjectRemoved(id);
+      await ctx.scheduler.onProjectRemoved(id);
       ctx.scheduler.rebindWatchers();
-      ctx.goals.onProjectRemoved(id);
+      await ctx.goals.onProjectRemoved(id);
       ctx.goals.rebindWatchers();
-      ctx.followups.onProjectRemoved(id);
+      await ctx.followups.onProjectRemoved(id);
       ctx.followups.rebindWatchers();
       ctx.feedStore.onProjectRemoved(id);
       ctx.templates.rebindProjects();
@@ -243,4 +244,3 @@ export function registerProjectsIpc(): void {
     () => null
   );
 }
-

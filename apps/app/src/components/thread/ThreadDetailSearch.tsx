@@ -1,5 +1,5 @@
 import { useRef, type FormEvent, type KeyboardEvent } from 'react';
-import { Search } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 
 export function threadDetailSearchClassName(draft: string): string {
   return draft.trim().length > 0 ? 'thread-detail-search has-query' : 'thread-detail-search';
@@ -8,9 +8,11 @@ export function threadDetailSearchClassName(draft: string): string {
 export function ThreadDetailSearch({
   value,
   onChange,
-  onSubmit
+  onSubmit,
+  mobileHeader = false
 }: {
   value: string;
+  mobileHeader?: boolean;
   onChange: (value: string) => void;
   onSubmit: (needle: string) => void;
 }) {
@@ -51,6 +53,17 @@ export function ThreadDetailSearch({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
       />
+      {mobileHeader && <button
+        type="button"
+        className="icon-btn thread-detail-search-close"
+        aria-label="Close search"
+        onClick={(event) => {
+          onChange('');
+          onSubmit('');
+          inputRef.current?.blur();
+          event.currentTarget.blur();
+        }}
+      ><X size={18} aria-hidden="true" /></button>}
     </form>
   );
 }

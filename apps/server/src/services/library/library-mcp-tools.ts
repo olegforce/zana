@@ -28,15 +28,17 @@ import type { LibraryDoc } from '@zana-ai/zcc-domain/product';
  * The project-locked slice of LibraryStore the tools call. `projectId`/`sessionId`
  * are supplied by the tool wiring (from the route), not the agent.
  */
+export type LibraryAgentDocument = Pick<LibraryDoc, 'relPath' | 'title' | 'summary' | 'tags' | 'kind' | 'updatedAt'> & { bytes?: number };
+type MaybeAsync<T> = T | Promise<T>;
 export interface LibraryAgentApi {
-  agentList(projectId: string): LibraryDoc[];
-  agentRead(projectId: string, relPath: string): (LibraryDoc & { content: string }) | null;
+  agentList(projectId: string): MaybeAsync<LibraryAgentDocument[]>;
+  agentRead(projectId: string, relPath: string): MaybeAsync<(LibraryAgentDocument & { content: string }) | null>;
   agentWrite(
     projectId: string,
     sessionId: string | undefined,
     input: { relPath: string; title?: string; content?: string; summary?: string; tags?: string[] }
-  ): LibraryDoc;
-  agentRemove(projectId: string, relPath: string): boolean;
+  ): MaybeAsync<LibraryAgentDocument>;
+  agentRemove(projectId: string, relPath: string): MaybeAsync<boolean>;
 }
 
 export const LIBRARY_WRITE_DESCRIPTION = [
@@ -108,7 +110,7 @@ export interface RegisterLibraryToolsOpts {
 }
 
 /** A LibraryDoc projected to the non-content fields the list/write tools echo. */
-function summarize(doc: LibraryDoc) {
+function summarize(doc: LibraryAgentDocument) {
   return {
     relPath: doc.relPath,
     title: doc.title,
@@ -138,7 +140,7 @@ export function registerLibraryTools(server: McpServer, opts: RegisterLibraryToo
     { description: LIBRARY_WRITE_DESCRIPTION, inputSchema: libraryWriteInputSchema },
     async ({ relPath, title, content, summary, tags }) => {
       try {
-        const doc = libraryAgentApi.agentWrite(projectId, sessionId, {
+        const doc = await libraryAgentApi.agentWrite(projectId, sessionId, {
           relPath,
           title,
           content,
@@ -164,7 +166,7 @@ export function registerLibraryTools(server: McpServer, opts: RegisterLibraryToo
     { description: LIBRARY_READ_DESCRIPTION, inputSchema: libraryReadInputSchema },
     async ({ relPath }) => {
       try {
-        const doc = libraryAgentApi.agentRead(projectId, relPath);
+        const doc = await libraryAgentApi.agentRead(projectId, relPath);
         if (!doc) return fail('library_read', new Error(`no such doc: ${relPath}`));
         return {
           content: [
@@ -185,7 +187,7 @@ export function registerLibraryTools(server: McpServer, opts: RegisterLibraryToo
     { description: LIBRARY_LIST_DESCRIPTION, inputSchema: {} },
     async () => {
       try {
-        const docs = libraryAgentApi.agentList(projectId).map(summarize);
+        const docs = (await libraryAgentApi.agentList(projectId)).map(summarize);
         return { content: [{ type: 'text' as const, text: JSON.stringify(docs, null, 2) }] };
       } catch (err) {
         return fail('library_list', err);
@@ -198,7 +200,7 @@ export function registerLibraryTools(server: McpServer, opts: RegisterLibraryToo
     { description: LIBRARY_REMOVE_DESCRIPTION, inputSchema: libraryRemoveInputSchema },
     async ({ relPath }) => {
       try {
-        const removed = libraryAgentApi.agentRemove(projectId, relPath);
+        const removed = await libraryAgentApi.agentRemove(projectId, relPath);
         return {
           content: [
             {

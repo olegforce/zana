@@ -3,8 +3,7 @@
 # and show up as connected on GET /api/v1/hosts.
 #
 # Product HTTP stays on 127.0.0.1. A throwaway TCP proxy on 0.0.0.0 is only for
-# this test so Docker Desktop can reach the loopback server (same role Tailscale
-# Serve plays on a real tailnet).
+# this test so Docker Desktop can reach the loopback server through a temporary test forward.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

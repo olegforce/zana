@@ -1,3 +1,5 @@
+import { orderedCatalogSources } from '../projects/project-catalog-order.js';
+import type { ProjectCatalogSource } from '@zana-ai/zcc-contracts/project-metadata-records';
 import { app, shell } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
@@ -616,9 +618,9 @@ export function projectPersonaFields(p: Persona): Persona {
   return res;
 }
 
-function readPersonaFile(path: string): Persona | null {
+function parsePersona(content: string): Persona | null {
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    const raw = JSON.parse(content);
     const sanitized = sanitizePersona(raw);
     if (!sanitized) return null;
     const migrated = migratePersonaIfNeeded(sanitized);
@@ -626,6 +628,10 @@ function readPersonaFile(path: string): Persona | null {
   } catch {
     return null;
   }
+}
+
+function readPersonaFile(path: string): Persona | null {
+  try { return parsePersona(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 function listInDir(dir: string, source: Persona['source']): Persona[] {
@@ -659,7 +665,7 @@ export class PersonaStore extends EventEmitter {
   private projectWatchers: Map<string, FSWatcher> = new Map();
   private debounce: NodeJS.Timeout | null = null;
 
-  constructor(projectsRef: () => Project[], registry?: PersonaTeamRegistry) {
+  constructor(projectsRef: () => Project[], registry?: PersonaTeamRegistry, private readonly remoteSources: () => ProjectCatalogSource[] = () => [], private readonly projectOrder?: () => readonly string[]) {
     super();
     this.projectsRef = projectsRef;
     this.registry = registry;
@@ -728,16 +734,20 @@ export class PersonaStore extends EventEmitter {
     // re-stamp every global `user` persona as project-scoped and hide them from
     // all other projects' launchers.
     const canonicalUserDir = canonicalDir(userDir);
-    for (const project of this.projectsRef()) {
+    for (const entry of orderedCatalogSources(this.projectsRef(), this.remoteSources(), this.projectOrder?.())) {
+      if (entry.kind === 'remote') {
+        const source = entry.source;
+        for (const record of source.records) {
+          const value = parsePersona(record);
+          if (value) merged.set(value.id, { ...value, source: { projectId: source.projectId, projectName: source.projectName } });
+        }
+        continue;
+      }
+      const project = entry.project;
       const projectDir = projectPersonasDir(project);
       if (canonicalDir(projectDir) === canonicalUserDir) continue;
-      const projectSource: Persona['source'] = {
-        projectId: project.id,
-        projectName: project.name
-      };
-      for (const p of listInDir(projectDir, projectSource)) {
-        merged.set(p.id, p);
-      }
+      const projectSource: Persona['source'] = { projectId: project.id, projectName: project.name };
+      for (const p of listInDir(projectDir, projectSource)) merged.set(p.id, p);
     }
     this.cache = [...merged.values()];
     this.emit('changed');

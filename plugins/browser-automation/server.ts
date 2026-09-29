@@ -286,7 +286,7 @@ export default async function browserAutomationPlugin(zcc: ZccPluginApi) {
           expiresAt: session.expiresAt,
           idleTimeoutMs,
         },
-        { hostId: session.hostId, signal },
+        { hostId: session.hostId, signal, timeoutMs: 45_000 },
       );
       signal.throwIfAborted();
       if (record.desktop) {
@@ -340,7 +340,7 @@ export default async function browserAutomationPlugin(zcc: ZccPluginApi) {
             script: input.script,
             timeoutMs: input.timeoutMs,
           },
-          { hostId: record.session.hostId, signal },
+          { hostId: record.session.hostId, signal, timeoutMs: input.timeoutMs + 10_000 },
         ),
       );
       if (result.exitCode === 124) await finish(record, "stopped");

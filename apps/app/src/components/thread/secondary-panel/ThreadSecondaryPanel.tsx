@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useEffect, useRef } from 'react';
+import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { GitCompare, Info, ListTodo, Maximize2, Minimize2, PanelRight, Plus, X } from 'lucide-react';
 import {
   activeClosableTab,
@@ -8,6 +8,9 @@ import {
   type ThreadSecondaryPanelState
 } from './threadSecondaryPanelState.js';
 import { startColumnResize } from './threadSecondaryPanelLogic.js';
+import { useCompactLayout } from '../../../hooks/useCompactLayout.js';
+import { MobilePanelNavigation } from './MobilePanelNavigation.js';
+import './mobile-panel.css';
 
 export function ThreadSecondaryPanel({
   state,
@@ -42,10 +45,19 @@ export function ThreadSecondaryPanel({
   onHide: () => void;
   onResize: (widthPx: number, containerWidthPx: number) => void;
 }) {
+  const compact = useCompactLayout();
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const viewToggleRef = useRef<HTMLButtonElement>(null);
+  const toggleViews = () => { setViewsOpen((open) => !open); viewToggleRef.current?.focus(); };
   const panelRef = useRef<HTMLElement>(null);
   const activeTabRef = useRef<HTMLSpanElement>(null);
   const pin = activePinnedView(state);
   const activeTab = activeClosableTab(state);
+
+  useEffect(() => {
+    if (compact) viewToggleRef.current?.focus({ preventScroll: true });
+    else setViewsOpen(false);
+  }, [compact]);
 
   useEffect(() => {
     activeTabRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
@@ -68,8 +80,20 @@ export function ThreadSecondaryPanel({
       ref={panelRef}
       className={`thread-secondary-panel${state.isMaximized ? ' is-maximized' : ''}`}
       data-testid="thread-secondary-panel"
+      data-mobile-panel={compact || undefined}
+      aria-label="Agent panel"
+      onKeyDown={(event) => {
+        if (!compact || event.defaultPrevented || event.key !== 'Escape') return;
+        event.stopPropagation();
+        if (viewsOpen) toggleViews();
+        else if ((event.target as Element).closest('.mobile-panel-header')) onHide();
+      }}
       style={{ ['--thread-secondary-width' as string]: `${Math.max(SECONDARY_PANEL_MIN_WIDTH_PX, state.widthPx)}px` }}
     >
+      {compact ? <MobilePanelNavigation state={state} open={viewsOpen} toggleRef={viewToggleRef} onToggle={toggleViews}
+        showInfoPin={showInfoPin} showDiffPin={showDiffPin} showPlanPin={showPlanPin}
+        onSelectInfo={onSelectInfo} onSelectDiff={onSelectDiff} onSelectPlan={onSelectPlan}
+        onActivateTab={onActivateTab} onCloseTab={onCloseTab} onNewTab={onNewTab} onHide={onHide} /> : <>
       <div
         className="thread-secondary-resizer"
         role="separator"
@@ -159,17 +183,18 @@ export function ThreadSecondaryPanel({
           <button
             type="button"
             className="thread-secondary-pin"
-            aria-label="Hide right panel"
+            aria-label={compact ? 'Close panel' : 'Hide right panel'}
             data-testid="thread-secondary-hide"
             onClick={onHide}
           >
-            <PanelRight size={15} />
+            {compact ? <X size={18} /> : <PanelRight size={15} />}
           </button>
         </div>
       </div>
-      <div className="thread-secondary-body">{children}</div>
+      </>}
+      <div className="thread-secondary-body" hidden={compact && viewsOpen}>{children}</div>
       {footer && secondaryPanelShowsInspectorFooter(state) ? (
-        <div className="thread-secondary-footer" data-testid="thread-secondary-footer">
+        <div className="thread-secondary-footer" data-testid="thread-secondary-footer" hidden={compact && viewsOpen}>
           {footer}
         </div>
       ) : null}

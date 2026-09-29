@@ -11,12 +11,13 @@ export async function withQueuedLock<T>(key: string, run: () => Promise<T>): Pro
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  tails.set(key, previous.then(() => current));
+  const tail = previous.then(() => current);
+  tails.set(key, tail);
   await previous;
   try {
     return await run();
   } finally {
     release();
-    if (tails.get(key) === current) tails.delete(key);
+    if (tails.get(key) === tail) tails.delete(key);
   }
 }

@@ -1,6 +1,7 @@
 import type { DesktopBrowserApi } from '@zana-ai/zcc-desktop-contract';
 
 export interface BrowserViewVisibilityCoordinator {
+  owns(tabId: string): boolean;
   show(tabId: string, syncBounds: () => void): void;
   hide(tabId: string): void;
   release(tabId: string): void;
@@ -12,30 +13,45 @@ interface BrowserViewRecord {
 }
 
 const browserViewRecords = new Map<string, BrowserViewRecord>();
+// A thread can be mounted in both its regular pane and an inspector. Only the
+// foreground host may hide or reposition their shared native tab.
+let visibleOwners = new WeakMap<DesktopBrowserApi, Map<string, symbol>>();
 
 export function createBrowserViewVisibilityCoordinator(
   desktopBrowser: DesktopBrowserApi
 ): BrowserViewVisibilityCoordinator {
   let visibleTabId: string | null = null;
+  const owner = Symbol('browser-view-host');
+  let owners = visibleOwners.get(desktopBrowser);
+  if (!owners) {
+    owners = new Map();
+    visibleOwners.set(desktopBrowser, owners);
+  }
+  const ownedTabs = owners;
+  const hide = (tabId: string) => {
+    if (visibleTabId === tabId) visibleTabId = null;
+    const currentOwner = ownedTabs.get(tabId);
+    if (currentOwner !== undefined && currentOwner !== owner) return;
+    ownedTabs.delete(tabId);
+    desktopBrowser.setVisible({ tabId, visible: false });
+  };
   return {
+    owns: (tabId) => ownedTabs.get(tabId) === owner,
     show(tabId, syncBounds) {
       if (visibleTabId !== null && visibleTabId !== tabId) {
-        desktopBrowser.setVisible({ tabId: visibleTabId, visible: false });
+        hide(visibleTabId);
       }
       visibleTabId = tabId;
+      ownedTabs.set(tabId, owner);
       syncBounds();
       desktopBrowser.setVisible({ tabId, visible: true });
     },
-    hide(tabId) {
-      if (visibleTabId === tabId) {
-        visibleTabId = null;
-      }
-      desktopBrowser.setVisible({ tabId, visible: false });
-    },
+    hide,
     release(tabId) {
       if (visibleTabId === tabId) {
         visibleTabId = null;
       }
+      if (ownedTabs.get(tabId) === owner) ownedTabs.delete(tabId);
     }
   };
 }
@@ -50,6 +66,7 @@ export function destroyPersistedBrowserView(args: {
 }): void {
   args.desktopBrowser.setVisible({ tabId: args.tabId, visible: false });
   args.desktopBrowser.detach(args.tabId);
+  visibleOwners.get(args.desktopBrowser)?.delete(args.tabId);
   browserViewRecords.delete(args.tabId);
 }
 
@@ -67,4 +84,5 @@ export function destroyPersistedBrowserViewsForThread(args: {
 
 export function resetBrowserViewPersistence(): void {
   browserViewRecords.clear();
+  visibleOwners = new WeakMap();
 }

@@ -59,16 +59,27 @@ export async function harnessVerify(hub: HostHub, hostId?: string): Promise<Harn
   return status ? asVerifyResults(status) : [];
 }
 
-export async function harnessVerifyBundle(hub: HostHub, hostId?: string): Promise<{
+type VerifyBundle = {
   availability: HarnessVerifyResult[];
   extraInstalled: Record<string, boolean>;
-}> {
-  const status = await providerStatus(hub, hostId);
-  if (!status) return { availability: [], extraInstalled: {} };
-  return {
+};
+const pendingBundles = new WeakMap<HostHub, Map<string, Promise<VerifyBundle>>>();
+
+/** Share concurrent probes, but never cache unavailable hosts as an empty roster. */
+export async function harnessVerifyBundle(hub: HostHub, hostId?: string): Promise<VerifyBundle> {
+  const resolved = hub.resolveHostId(hostId);
+  let pending = pendingBundles.get(hub);
+  if (!pending) { pending = new Map(); pendingBundles.set(hub, pending); }
+  const existing = pending.get(resolved);
+  if (existing) return existing;
+  const request = hub.callHostOnlineRpc<ProviderStatusResult>({
+    hostId: resolved, command: { type: 'provider.status' }
+  }).then((status) => ({
     availability: asVerifyResults(status),
     extraInstalled: extraInstalledFromStatus(status)
-  };
+  })).finally(() => { pending.delete(resolved); });
+  pending.set(resolved, request);
+  return request;
 }
 
 export async function harnessDescriptors(hub: HostHub, hostId?: string): Promise<HarnessAdapterDescriptor[]> {

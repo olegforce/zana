@@ -368,6 +368,8 @@ section .section-lede { color: var(--muted); margin: 0; font-size: 15px; }
   color: var(--text); background: var(--bg-elevated); border-color: var(--border);
 }
 .nav-cta { display: flex; align-items: center; gap: 8px; margin-left: 6px; }
+.nav .nav-account-link { gap: 0.35em; min-width: 0; white-space: nowrap; }
+.nav-account-name { max-width: 12ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .nav-icon-link, .nav-star-link {
   display: grid; place-items: center; width: 32px; height: 32px; border-radius: 7px;
   color: var(--muted);

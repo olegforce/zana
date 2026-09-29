@@ -117,9 +117,10 @@ export interface AutoCloseIdleDeps {
   /**
    * Turn a cached `awaiting-reply` idle-triage verdict into a durable follow-up
    * BEFORE closing, so a parked question survives the close. Returns true when a
-   * follow-up was created/refreshed, false otherwise. Never throws.
+   * follow-up was created/refreshed, false when no question needs preserving.
+   * Rejection keeps the session alive.
    */
-  preserveParkedQuestion: (sessionId: string) => boolean;
+  preserveParkedQuestion: (sessionId: string) => boolean | Promise<boolean>;
   /** Push an inbox breadcrumb so a silent close is never invisible. Never throws. */
   pushInbox: (input: {
     projectId: string;
@@ -297,7 +298,7 @@ export class AutoCloseIdleService extends EventEmitter {
    * foreground may have changed during the dwell), apply the two-clock guard,
    * preserve any parked question, then close once.
    */
-  private fire(sessionId: string): void {
+  private async fire(sessionId: string): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     entry.timer = null;
@@ -319,14 +320,24 @@ export class AutoCloseIdleService extends EventEmitter {
 
     entry.closing = true; // claim the one-shot before any external call
 
-    // Preserve a parked question first (best-effort, zero tokens — cached verdict).
+    // Preserve a parked question first (zero tokens — cached verdict).
     let preserved = false;
     try {
-      preserved = this.deps.preserveParkedQuestion(sessionId);
+      const result = this.deps.preserveParkedQuestion(sessionId);
+      preserved = typeof result === 'boolean' ? result : await result;
     } catch {
-      /* never let preservation crash the timer callback */
+      // A parked question must be durable before the only live copy is closed.
+      entry.closing = false;
+      return;
     }
 
+    // Remote persistence yields: a keystroke/state change during that wait wins.
+    const current = this.deps.getSession(sessionId);
+    if (this.entries.get(sessionId) !== entry || entry.lastState !== 'idle' || !this.eligible(sessionId) || !current ||
+        ((current.lastInputAt ?? 0) > 0 && this.deps.now() - current.lastInputAt! < this.delayMs())) {
+      entry.closing = false;
+      return;
+    }
     const closed = this.deps.closeSession(sessionId);
     if (!closed) {
       // Session vanished between the gate and the close — nothing to do; drop it.

@@ -34,6 +34,7 @@
     "@zana-ai/zcc-domain": "workspace:*",
     "@zana-ai/zcc-host-daemon": "workspace:*",
     "@zana-ai/zcc-host-daemon-contract": "workspace:*",
+    "@zana-ai/zcc-host-workspace": "workspace:*",
     "@zana-ai/zcc-llm": "workspace:*",
     "@zana-ai/zcc-path-confine": "workspace:*",
     "@zana-ai/zcc-plugin-sdk": "workspace:*",
@@ -44,7 +45,8 @@
     "@zana-ai/zcc-thread-view": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "jiti": "^2.6.1",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "@zana-ai/zcc-process-utils": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

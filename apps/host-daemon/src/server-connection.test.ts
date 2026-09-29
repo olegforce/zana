@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,7 @@ describe('enrolled host websocket', () => {
   const OriginalWebSocket = globalThis.WebSocket;
   afterEach(() => {
     globalThis.WebSocket = OriginalWebSocket;
+    vi.useRealTimers();
   });
 
   it('does not close() from error — Node undici re-enters error and overflows', async () => {
@@ -132,6 +133,9 @@ describe('enrolled host websocket', () => {
   });
 
   it('resolves ready only after host.hello-ok, not on websocket open', async () => {
+    vi.useFakeTimers();
+    const changes: boolean[] = [];
+    const sockets: HelloOkSocket[] = [];
     const hostId = '11111111-1111-4111-8111-111111111111';
     class HelloOkSocket {
       static readonly CONNECTING = 0;
@@ -141,6 +145,7 @@ describe('enrolled host websocket', () => {
       readyState = 1;
       private readonly handlers = new Map<string, Array<(event?: unknown) => void>>();
       constructor() {
+        sockets.push(this);
         queueMicrotask(() => this.dispatch('open'));
       }
       addEventListener(type: string, fn: (event?: unknown) => void) {
@@ -155,7 +160,8 @@ describe('enrolled host websocket', () => {
           data: JSON.stringify({
             type: 'host.hello-ok',
             protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-            hostId: parsed.hostId
+            hostId: parsed.hostId,
+            pluginHostGenerations: [{ pluginId: 'test', generation: 'current' }]
           })
         }));
       }
@@ -166,15 +172,27 @@ describe('enrolled host websocket', () => {
     }
     globalThis.WebSocket = HelloOkSocket as unknown as typeof WebSocket;
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-hello-ok-'));
+    const runtime = stubRuntime(dataDir);
+    const reconcile = vi.fn().mockResolvedValue(undefined);
+    runtime.pluginHosts = { reconcileGenerations: reconcile } as unknown as NonNullable<CommandRuntime['pluginHosts']>;
     const connection = startEnrolledHostConnection({
       serverUrl: 'http://127.0.0.1:1/',
       hostId,
       hostKey: 'key-1',
       dataDir,
-      runtime: stubRuntime(dataDir)
+      runtime,
+      onConnectionChange: connected => changes.push(connected)
     });
     await expect(connection.ready).resolves.toBeUndefined();
+    expect(changes).toEqual([true]);
+    expect(reconcile).toHaveBeenCalledWith([{ pluginId: 'test', generation: 'current' }]);
+    sockets[0]!.dispatch('close', { code: 1006 });
+    expect(changes).toEqual([true, false]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(changes).toEqual([true, false, true]);
+    expect(reconcile).toHaveBeenCalledTimes(2);
     await connection.close();
+    expect(changes.at(-1)).toBe(false);
   });
 
   it('does not mark ready on websocket open before hello-ok', async () => {

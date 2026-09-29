@@ -13,6 +13,16 @@ afterEach(async () => {
 });
 
 describe('product /ws', () => {
+  it('answers client heartbeats without exposing arbitrary client messages to the hub', async () => {
+    server = await startProductServer({ dataDir: mkdtempSync(join(tmpdir(), 'zcc-product-ping-')), origins: { serverPort: 0, devAppPort: 5173 } });
+    const reply = await new Promise<unknown>((resolve, reject) => {
+      const ws = new WebSocket(server!.url.replace(/^http/, 'ws') + 'ws', { origin: 'http://localhost:5173' });
+      ws.on('open', () => { ws.send('{"type":"scheduler:command"}'); ws.send('{"type":"ping"}'); });
+      ws.on('message', raw => { resolve(JSON.parse(String(raw))); ws.close(); });
+      ws.on('error', reject);
+    });
+    expect(reply).toEqual({ type: 'pong' });
+  });
   it('accepts a loopback upgrade and rejects a foreign Origin', async () => {
     server = await startProductServer({
       dataDir: mkdtempSync(join(tmpdir(), 'zcc-product-ws-')),

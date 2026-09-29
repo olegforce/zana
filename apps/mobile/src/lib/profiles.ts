@@ -1,5 +1,6 @@
 import { URL } from 'whatwg-url-minimum';
 import { normalizeServerUrl } from './urls';
+import { isConnectServer } from './connect-discovery';
 export interface ServerProfile {
   id: string;
   label: string;
@@ -7,8 +8,45 @@ export interface ServerProfile {
   credential?: string;
   deviceId?: string;
   pushEnabled?: boolean;
+  connectDomain?: string;
+  accountUrl?: string;
+}
+export const CONNECT_ACCOUNT_URL = 'https://zana-ide.com';
+export interface AccountAccess {
+  credential: string;
+  deviceId: string;
+  connectDomain: string;
+  accountUrl: string;
+}
+export interface PhoneLogin {
+  deviceCode: string;
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: number;
+}
+export function validAccount(value: unknown): value is AccountAccess {
+  const a = value as AccountAccess | undefined;
+  try {
+    return !!a && typeof a.credential === 'string' && /^[\w-]{43}$/.test(a.credential)
+      && typeof a.deviceId === 'string' && /^[\w-]{1,64}$/.test(a.deviceId)
+      && typeof a.connectDomain === 'string' && isConnectServer(`https://s-${'a'.repeat(24)}.${a.connectDomain}`, a.connectDomain)
+      && typeof a.accountUrl === 'string' && a.accountUrl.startsWith('https://') && normalizeServerUrl(a.accountUrl) === a.accountUrl;
+  } catch { return false; }
+}
+export function validPhoneLogin(value: unknown): value is PhoneLogin {
+  const p = value as PhoneLogin | undefined;
+  return !!p && typeof p.deviceCode === 'string' && /^[\w-]{43}$/.test(p.deviceCode)
+    && typeof p.userCode === 'string' && /^[\w-]{22}$/.test(p.userCode)
+    && p.verificationUrl === `${CONNECT_ACCOUNT_URL}/connect/?phone=${p.userCode}`
+    && Number.isFinite(p.expiresAt) && p.expiresAt > 0;
+}
+/** Legacy profiles remain readable for migration, but must never make requests. */
+export function isOnlineProfile(profile: ServerProfile): boolean {
+  return validAccount(profile) && isConnectServer(profile.serverUrl, profile.connectDomain!);
 }
 export interface MobileState {
+  account?: AccountAccess;
+  phoneLogin?: PhoneLogin;
   profiles: ServerProfile[];
   activeId: string | null;
   haptics: boolean;
@@ -36,6 +74,8 @@ export function parseMobileState(raw: string | null): MobileState {
     !['system', 'light', 'dark'].includes(state.appearance)
   )
     throw new Error('Saved servers are invalid.');
+  if ((state.account !== undefined && !validAccount(state.account)) ||
+      (state.phoneLogin !== undefined && !validPhoneLogin(state.phoneLogin))) throw new Error('Saved account is invalid.');
   for (const p of state.profiles) {
     if (
       typeof p.id !== 'string' ||
@@ -43,7 +83,8 @@ export function parseMobileState(raw: string | null): MobileState {
       typeof p.label !== 'string' ||
       p.label.length > 80 ||
       normalizeServerUrl(p.serverUrl) !== p.serverUrl ||
-      (p.credential !== undefined && !/^[\w-]{43}$/.test(p.credential))
+      (p.credential !== undefined && !/^[\w-]{43}$/.test(p.credential)) ||
+      (p.connectDomain !== undefined && (!p.credential || !isConnectServer(p.serverUrl, p.connectDomain) || typeof p.accountUrl !== 'string' || !p.accountUrl.startsWith('https://') || normalizeServerUrl(p.accountUrl) !== p.accountUrl))
     )
       throw new Error('Saved server is invalid.');
   }

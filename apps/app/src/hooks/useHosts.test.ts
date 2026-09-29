@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
-import { defaultHostId } from './useHosts.js';
+import { connectedHosts, defaultHostId, primaryHost } from './useHosts.js';
 
 function host(patch: Partial<Host> & Pick<Host, 'id' | 'name'>): Host {
   return {
@@ -33,6 +33,15 @@ describe('defaultHostId', () => {
   it('keeps local projects on their bound host or the primary', () => {
     expect(defaultHostId([primary, remote])).toBe('h-primary');
     expect(defaultHostId([primary, remote], { hostId: 'h-remote' })).toBe('h-remote');
+  });
+  it('keeps a bound machine when its row is absent instead of silently selecting another machine', () => {
+    for (const hosts of [[], [primary], [remote]]) {
+      expect(defaultHostId(hosts, { hostId: 'missing-owner' })).toBe('missing-owner');
+      expect(defaultHostId(hosts, { hostId: 'missing-owner', remote: {} })).toBe('missing-owner');
+    }
+    expect(defaultHostId([remote])).toBeUndefined();
+    expect(primaryHost([remote])).toBeUndefined();
+    expect(connectedHosts([primary, { ...remote, status: 'disconnected' }])).toEqual([primary]);
   });
 });
 

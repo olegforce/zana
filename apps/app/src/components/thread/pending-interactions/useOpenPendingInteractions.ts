@@ -1,3 +1,4 @@
+import { subscribeProductReconnect } from '../../../lib/product-ws.js';
 import { useEffect, useState } from 'react';
 import type { PendingInteraction } from '@zana-ai/zcc-domain/thread-runtime';
 import { product } from '../../../lib/product-client.js';
@@ -37,6 +38,7 @@ export function useOpenPendingInteractions(threadId: string | null): PendingInte
       }
     };
     void load();
+    const stopReconnect = subscribeProductReconnect(load);
     const stopUpdated = product.threads.onUpdated((payload) => {
       if (isOpenThreadUpdate(payload, threadId)) void load();
     });
@@ -47,6 +49,7 @@ export function useOpenPendingInteractions(threadId: string | null): PendingInte
       cancelled = true;
       stopUpdated();
       stopEvents();
+      stopReconnect();
     };
   }, [threadId]);
   return items;

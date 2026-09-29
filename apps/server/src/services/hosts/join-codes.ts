@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto';
-import { createHostId } from '@zana-ai/zcc-db';
+import { createHash, randomBytes } from 'node:crypto';
+import { createHostId, type ZccDatabase } from '@zana-ai/zcc-db';
 
 export const JOIN_CODE_TTL_MS = 15 * 60 * 1000;
 export const JOIN_CODE_PREFIX = 'zcde_';
@@ -21,6 +21,9 @@ export interface JoinCodeStore {
   mintForHost(hostId: string, now?: number): IssuedJoinCode;
   peek(joinCode: string, now?: number): JoinCodeRecord | null;
   redeem(joinCode: string, now?: number): IssuedJoinCode | null;
+  recovered(joinCode: string, now?: number): IssuedJoinCode | null;
+  invalidateHost(hostId: string): void;
+  status(enrollmentId: string, now?: number): { hostId: string; expiresAt: number; redeemedAt: number | null } | null;
 }
 
 function mintToken(): string {
@@ -31,24 +34,40 @@ function mintToken(): string {
  * Short-lived enroll keys for Settings → Add machine. Minting does not insert
  * a host row — redeem happens at `/internal/hosts/enroll`.
  */
-export function createJoinCodeStore(): JoinCodeStore {
-  const codes = new Map<string, JoinCodeRecord>();
+export function createJoinCodeStore(db?: ZccDatabase): JoinCodeStore {
+  type Stored = Omit<JoinCodeRecord, 'joinCode'>;
+  const codes = new Map<string, Stored>();
+  const digest = (code: string) => createHash('sha256').update(code).digest('hex');
+  const lookup = (code: string): JoinCodeRecord | null => {
+    const hash = digest(code);
+    const row = db ? db.sqlite.prepare('SELECT host_id AS hostId,expires_at AS expiresAt,redeemed_at AS redeemedAt FROM host_join_codes WHERE hash=?').get(hash) as Stored | undefined : codes.get(hash);
+    return row ? { ...row, joinCode: code } : null;
+  };
+  const invalidateHost = (hostId: string) => {
+    if (db) db.sqlite.prepare('DELETE FROM host_join_codes WHERE host_id=?').run(hostId);
+    else for (const [hash, row] of codes) if (row.hostId === hostId) codes.delete(hash);
+  };
 
   function prune(now: number): void {
     for (const [key, row] of codes) {
-      if (row.redeemedAt !== null || row.expiresAt <= now) codes.delete(key);
+      if (row.expiresAt <= now) codes.delete(key);
     }
+    if (db) db.sqlite.prepare('DELETE FROM host_join_codes WHERE expires_at<=?').run(now);
   }
 
   function issue(hostId: string, now: number): IssuedJoinCode {
     prune(now);
+    invalidateHost(hostId);
+    const size = db ? (db.sqlite.prepare('SELECT COUNT(*) AS n FROM host_join_codes').get() as { n: number }).n : codes.size;
+    if (size >= 500) throw new Error('Too many pending machine enrollments');
     const record: JoinCodeRecord = {
       joinCode: mintToken(),
       hostId,
       expiresAt: now + JOIN_CODE_TTL_MS,
       redeemedAt: null
     };
-    codes.set(record.joinCode, record);
+    if (db) db.sqlite.prepare('INSERT INTO host_join_codes(hash,host_id,expires_at,redeemed_at) VALUES(?,?,?,NULL)').run(digest(record.joinCode), hostId, record.expiresAt);
+    else codes.set(digest(record.joinCode), { hostId, expiresAt: record.expiresAt, redeemedAt: null });
     return {
       joinCode: record.joinCode,
       hostId: record.hostId,
@@ -65,20 +84,33 @@ export function createJoinCodeStore(): JoinCodeStore {
       return issue(hostId, now);
     },
     peek(joinCode: string, now = Date.now()): JoinCodeRecord | null {
-      const row = codes.get(joinCode);
+      const row = lookup(joinCode);
       if (!row || row.redeemedAt !== null || row.expiresAt <= now) return null;
       return row;
     },
     redeem(joinCode: string, now = Date.now()): IssuedJoinCode | null {
-      const row = codes.get(joinCode);
+      const row = lookup(joinCode);
       if (!row || row.redeemedAt !== null || row.expiresAt <= now) return null;
       row.redeemedAt = now;
-      codes.delete(joinCode);
+      if (db) {
+        const result = db.sqlite.prepare('UPDATE host_join_codes SET redeemed_at=? WHERE hash=? AND redeemed_at IS NULL').run(now, digest(joinCode));
+        if (result.changes !== 1) return null;
+      } else codes.set(digest(joinCode), { hostId: row.hostId, expiresAt: row.expiresAt, redeemedAt: now });
       return {
         joinCode: row.joinCode,
         hostId: row.hostId,
         expiresAt: row.expiresAt
       };
-    }
+    },
+    recovered(joinCode: string, now = Date.now()): IssuedJoinCode | null {
+      const row = lookup(joinCode);
+      return row && row.redeemedAt !== null && row.expiresAt > now ? { joinCode, hostId: row.hostId, expiresAt: row.expiresAt } : null;
+    },
+    status(enrollmentId: string, now = Date.now()) {
+      if (!/^[a-f0-9]{64}$/.test(enrollmentId)) return null;
+      const row = db ? db.sqlite.prepare('SELECT host_id AS hostId,expires_at AS expiresAt,redeemed_at AS redeemedAt FROM host_join_codes WHERE hash=?').get(enrollmentId) as Stored | undefined : codes.get(enrollmentId);
+      return row && row.expiresAt > now ? { hostId: row.hostId, expiresAt: row.expiresAt, redeemedAt: row.redeemedAt } : null;
+    },
+    invalidateHost
   };
 }

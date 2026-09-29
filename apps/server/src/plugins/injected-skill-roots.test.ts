@@ -25,6 +25,12 @@ describe('builtinSkillsRootPath', () => {
     expect(existsSync(join(root, 'zcc-cli', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(root, 'zcc-inbox', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(root, 'zcc-preview', 'SKILL.md'))).toBe(true);
+    const browser = readFileSync(join(root, 'zcc-browser', 'SKILL.md'), 'utf8');
+    expect(browser).toMatch(/^---\nname: zcc-browser\n/);
+    expect(browser).toContain('zcc browser create');
+    expect(browser).toContain('--reveal');
+    expect(browser).toContain('have been retired');
+    expect(browser).toContain('Do not silently switch to an external browser');
     expect(readFileSync(join(root, 'zcc-preview', 'SKILL.md'), 'utf8')).toMatch(/^---\nname: zcc-preview\n/);
     expect(existsSync(join(root, 'zcc-terminal', 'SKILL.md'))).toBe(true);
     expect(readFileSync(join(root, 'zcc-terminal', 'SKILL.md'), 'utf8')).toMatch(/^---\nname: zcc-terminal\n/);

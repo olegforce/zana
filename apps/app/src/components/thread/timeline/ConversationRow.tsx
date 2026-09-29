@@ -1,4 +1,6 @@
-import { memo, useMemo, useState, useSyncExternalStore } from 'react';
+import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCompactLayout } from '../../../hooks/useCompactLayout.js';
+import { MobileMessagePreview } from './MobileMessagePreview.js';
 import { MarkdownContent } from '../../MarkdownContent.js';
 import type { ThreadTimelineViewRow } from '@zana-ai/zcc-thread-view';
 import { mentionPillLabel } from './mention-pills.js';
@@ -52,7 +54,9 @@ export const ConversationRow = memo(function ConversationRow({
   messageActions,
   includePluginMessageActions = true,
   planExecution,
-  filePathHints
+  filePathHints,
+  forceExpanded = false,
+  onMessageExpand
 }: {
   row: Extract<ThreadTimelineViewRow, { kind: 'conversation' }>;
   onCopy?: (text: string) => void;
@@ -66,10 +70,17 @@ export const ConversationRow = memo(function ConversationRow({
   includePluginMessageActions?: boolean;
   planExecution?: { title: string; tasks: readonly PlanExecutionTask[] } | null;
   filePathHints?: readonly string[];
+  forceExpanded?: boolean;
+  onMessageExpand?: () => void;
 }) {
+  const compact = useCompactLayout();
+  const mobileUser = compact && row.role === 'user';
   const testId = row.role === 'assistant' ? 'thread-assistant-text' : 'thread-user-text';
   const mentions = row.role === 'user' ? row.mentions : [];
   const [expanded, setExpanded] = useState(false);
+  useLayoutEffect(() => {
+    if (mobileUser && forceExpanded) setExpanded(true);
+  }, [mobileUser, forceExpanded]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(row.text ?? '');
   const [saving, setSaving] = useState(false);
@@ -210,6 +221,14 @@ export const ConversationRow = memo(function ConversationRow({
         </span>
       ) : null}
       <div className="thread-timeline-bubble">
+        <MobileMessagePreview
+          enabled={mobileUser && !editing}
+          expanded={expanded}
+          onExpandedChange={(next) => {
+            onMessageExpand?.();
+            setExpanded(next);
+          }}
+        >
           {imageRefs.length > 0 ? (
             <div className="composer-image-thumbs" aria-label="Attached images">
               {imageRefs.map((image) => {
@@ -335,7 +354,7 @@ export const ConversationRow = memo(function ConversationRow({
             )
           ) : null}
           {(threadId && previewPaths.length > 0 && !editing)
-            || (extracted.text.length > MESSAGE_OVERFLOW_CAP && !editing) ? (
+            || (extracted.text.length > MESSAGE_OVERFLOW_CAP && !editing && !mobileUser) ? (
             <div className="thread-message-overflow-row">
               {threadId && previewPaths.length > 0 && !editing ? (
                 previewPaths.map((path) => (
@@ -345,7 +364,7 @@ export const ConversationRow = memo(function ConversationRow({
                   />
                 ))
               ) : null}
-              {extracted.text.length > MESSAGE_OVERFLOW_CAP && !editing ? (
+              {extracted.text.length > MESSAGE_OVERFLOW_CAP && !editing && !mobileUser ? (
                 <button
                   type="button"
                   className="thread-message-overflow"
@@ -357,6 +376,7 @@ export const ConversationRow = memo(function ConversationRow({
               ) : null}
             </div>
           ) : null}
+        </MobileMessagePreview>
       </div>
       {editing ? null : (
         <MessageActionBar

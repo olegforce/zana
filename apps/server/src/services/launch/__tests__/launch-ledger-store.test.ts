@@ -91,6 +91,9 @@ describe('launch ledger store', () => {
     const reconciled = await restarted.reconcileStartup();
     expect(reconciled.map((entry) => entry.id).sort()).toEqual([authorized.entry.id, committing.entry.id, launched.entry.id].sort());
     expect(reconciled.every((entry) => entry.state === 'interrupted')).toBe(true);
+    expect((await restarted.get(authorized.entry.id))?.recoveryEvidence).toBe('not-started');
+    expect((await restarted.get(committing.entry.id))?.recoveryEvidence).toBeUndefined();
+    expect((await restarted.get(launched.entry.id))?.recoveryEvidence).toBeUndefined();
     expect((await restarted.get(launched.entry.id))?.state).toBe('interrupted');
   }));
 

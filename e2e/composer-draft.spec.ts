@@ -1,0 +1,87 @@
+import { test, expect, dismissConsentOverlays } from './fixtures/app.js';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+test.use({
+  launchEnv: { ZCC_FAKE_PROVIDER: '1' },
+  initialConfig: { sponsorPromptDismissed: true }
+});
+
+for (const surface of ['home', 'dialog'] as const) {
+  test(`${surface} keeps the latest draft through CLI Agent, Modern, and Squad switches`, async ({ app }) => {
+    const { window } = app;
+    await dismissConsentOverlays(window);
+    await window.getByTestId('nav-home').click();
+    if (surface === 'dialog') {
+      await window.getByTestId('nav-agents').click();
+      await window.getByTestId('agents-board-new-thread').click();
+    }
+    const composer = surface === 'dialog' ? window.getByTestId('launch-modal') : window.locator('.home-agent-composer');
+    const modes = composer.getByRole('group', { name: 'Launch mode' });
+    await modes.getByRole('button', { name: 'CLI Agent', exact: true }).click();
+    const cli = composer.getByTestId('legacy-agent-command-input');
+    await cli.fill('Keep this draft');
+    await cli.press('Shift+Enter');
+    await cli.pressSequentially('and this second line');
+    const original = await cli.innerText();
+    await modes.getByRole('button', { name: 'Modern', exact: true }).click();
+    const modern = composer.getByTestId('thread-command-input');
+    await expect.poll(() => modern.innerText()).toBe(original);
+    await modern.fill('Edited in Modern');
+    await modes.getByRole('button', { name: 'Squad', exact: true }).click();
+    const squad = composer.getByTestId('team-command-input');
+    await expect(squad).toHaveText('Edited in Modern');
+    await squad.fill('Edited in Squad');
+    await modes.getByRole('button', { name: 'CLI Agent', exact: true }).click();
+    await expect(cli).toHaveText('Edited in Squad');
+    await cli.fill('');
+    await modes.getByRole('button', { name: 'Modern', exact: true }).click();
+    await expect(modern).toHaveText('');
+  });
+}
+
+test('Composer settings default to Auto and persist a Full access opt-in for both agent composers', async ({ app }) => {
+  const { window, home } = app;
+  const binary = join(home, 'composer-claude');
+  writeFileSync(binary, '#!/bin/sh\nprintf "2.1.220 (Claude Code)\\n"\n');
+  chmodSync(binary, 0o755);
+  await window.evaluate(async (claudeBinary) => {
+    await window.cc.config.set({ claudeBinary, defaultHarness: 'claude' });
+    await window.cc.harness.verify();
+  }, binary);
+  await dismissConsentOverlays(window);
+  await window.getByTestId('nav-home').click();
+  const modes = window.getByRole('group', { name: 'Launch mode' });
+  for (const mode of ['Modern', 'CLI Agent']) {
+    await modes.getByRole('button', { name: mode, exact: true }).click();
+    await window.getByTestId('model-reasoning-picker-trigger').click();
+    await window.getByTestId('model-reasoning-provider-claude-code').click();
+    await window.getByTestId('model-reasoning-picker-trigger').click();
+    await expect(window.getByRole('button', { name: 'Permission mode', exact: true })).toContainText('Auto');
+  }
+  await window.getByRole('link', { name: 'Settings', exact: true }).click();
+  await window.getByTestId('settings-nav-composer').click();
+  const toggle = window.getByRole('switch', { name: 'Full access by default' });
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await window.reload();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await window.getByRole('link', { name: 'Back to app' }).click();
+  await window.getByTestId('nav-home').click();
+  for (const mode of ['CLI Agent', 'Modern']) {
+    await modes.getByRole('button', { name: mode, exact: true }).click();
+    await expect(window.getByRole('button', { name: 'Permission mode', exact: true })).toContainText('Full');
+  }
+  await window.getByRole('link', { name: 'Settings', exact: true }).click();
+  await window.getByTestId('settings-nav-composer').click();
+  await toggle.click();
+  await window.reload();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await window.getByRole('link', { name: 'Back to app' }).click();
+  await window.getByTestId('nav-home').click();
+  for (const mode of ['Modern', 'CLI Agent']) {
+    await modes.getByRole('button', { name: mode, exact: true }).click();
+    await expect(window.getByRole('button', { name: 'Permission mode', exact: true })).toContainText('Auto');
+  }
+});

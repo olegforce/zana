@@ -25,6 +25,7 @@ import {
   type SessionWorktree,
   type TeamCoordinationMode
 } from '@zana-ai/zcc-domain/product';
+import { IN_APP_PREVIEW_GUIDANCE } from '@zana-ai/zcc-domain';
 
 /**
  * Appended to the agent's system prompt so it knows the `inbox_push` MCP
@@ -234,6 +235,7 @@ const FOLLOWUP_USAGE_GUIDANCE = [
 export function buildSystemPromptGuidance(scheduled: boolean, coordinationMode?: TeamCoordinationMode): string {
   const guidanceBlocks = [
     INBOX_USAGE_GUIDANCE,
+    IN_APP_PREVIEW_GUIDANCE,
     ...(scheduled ? [SCHEDULE_REPORT_GUIDANCE] : []),
     ...(coordinationMode === 'job-team' || coordinationMode === 'structured' || coordinationMode === 'freeform' ? [] : [AGENT_MESH_GUIDANCE]),
     PROJECT_AWARENESS_GUIDANCE,

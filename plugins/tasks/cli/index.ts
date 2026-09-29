@@ -155,10 +155,11 @@ async function resolveClientHostId(
   if (machine !== undefined) return resolveMachineId(domain, machine);
   if (!ctx.threadId) return undefined;
   const thread = await bb.sdk.threads.get({ threadId: ctx.threadId });
-  if (!thread.environmentId) return undefined;
+  if (!thread.environmentId) throw new CliError("Thread has no execution machine. Choose --machine explicitly.");
   const environment = await bb.sdk.environments.get({
     environmentId: thread.environmentId,
   });
+  if (!environment.hostId) throw new CliError("Thread execution machine is unavailable. Choose --machine explicitly.");
   return environment.hostId;
 }
 

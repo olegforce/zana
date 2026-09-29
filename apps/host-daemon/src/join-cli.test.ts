@@ -7,12 +7,12 @@ describe('join CLI flags', () => {
       'join',
       '--join-code', 'zcde_abc',
       '--host-id', 'host-1',
-      '--server-url', 'https://box.tailnet.ts.net/',
+      '--server-url', 'https://machine.example.com/',
       '--auto-update'
     ], { ZCC_DATA_DIR: '/tmp/machine' })).toEqual({
       joinCode: 'zcde_abc',
       hostId: 'host-1',
-      serverUrl: 'https://box.tailnet.ts.net',
+      serverUrl: 'https://machine.example.com',
       hostDaemonPort: 38888,
       autoUpdate: true,
       dataDir: '/tmp/machine'

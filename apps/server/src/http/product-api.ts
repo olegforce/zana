@@ -1,8 +1,22 @@
+import { libraryDocumentOperation } from '../services/library/library-documents.js';
+import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
+import { recoverFailedTerminalStart } from './terminal-start-recovery.js';
+import { registerProductTerminal } from './terminal-retention.js';
+import { readProjectImage, ProjectFsError } from './project-fs-via-host.js';
+import { projectGit } from './project-git.js';
+import { usesConnect } from '../services/hosts/connect-enrollment.js';
+import { handleSharedProductApi } from './shared-product-api.js';
+import { projectSources } from '@zana-ai/zcc-domain/project';
+import { getPrimaryHost } from '@zana-ai/zcc-db';
+import { handleProjectSourcesApi } from './project-sources-api.js';
+import { resolveProjectHost } from './project-host.js';
+import { mutateProjectFile } from './project-file-mutations.js';
+import { invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
 import { assertPlanRevision, planImplementationMode, planImplementationPrompt } from '../services/threads/conversation-plan-implementation.js';
 import { readPluginHttpBody, PluginHttpBodyTooLarge } from './plugin-http-body.js';
 import { conversationHistory } from '../services/threads/conversation-history.js';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, sep, posix } from 'node:path';
 import { homedir } from 'node:os';
 import { realpathSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -116,9 +130,9 @@ import { normalizeRepoUrl } from '../services/projects/git-clone.js';
 import { harnessAgentDescriptors, harnessDescriptors, harnessEffectiveDefault, harnessVerify, harnessVerifyBundle } from './harness-via-rpc.js';
 import { mergeHealthIntoExtraInstalled, probeInstalledProviderHealth } from '../services/threads/provider-health-probe.js';
 import { isSafeRelPath, listLibraryDocs, listQuickPrompts, readLibraryDoc } from './library-via-host.js';
-import { listProjectDir, listProjectPaths, readProjectFile } from './project-fs-via-host.js';
+import { listProjectDir, listProjectPaths, readProjectFile, parseProjectFileScope } from './project-fs-via-host.js';
 import { listHostFiles, listHostPaths, mkdirHostPath, moveHostPath, readHostFile, removeHostPath, writeHostFile } from './files-via-host.js';
-import { getConversationThread, getEnvironment, getHost, listConversationThreadEvents, listConversationThreadsByProject, listHosts, listVisibleConversationThreads, nextConversationEventSequence, pinConversationThread, reorderPinnedConversationThread, unpinConversationThread, updateConversationThreadTitle } from '@zana-ai/zcc-db';
+import { getConversationThread, getEnvironment, getHost, getConversationThreadEventAfter, listConversationThreadEventsWindow, ConversationHistoryReadLimitError, listConversationThreadsByProject, listHosts, listVisibleConversationThreads, nextConversationEventSequence, pinConversationThread, reorderPinnedConversationThread, unpinConversationThread, updateConversationThreadTitle } from '@zana-ai/zcc-db';
 import { handleHostsApi } from './hosts-api.js';
 import { handleDesktopBrowsersApi } from './desktop-browsers-api.js';
 import { handleCliAgentsApi } from './cli-agents-api.js';
@@ -296,16 +310,15 @@ async function resolveExecutionOptionsScope(args: {
   }
   if (!project) return { ok: true, hostId: requestedHostId };
   if (!project.remote) {
-    let cwd: string | undefined;
-    try {
-      cwd = confineCwd(ctx, project.path, undefined) ?? undefined;
-    } catch {
-      cwd = undefined;
-    }
-    return cwd
-      ? { ok: true, hostId: project.hostId, cwd }
-      : { ok: false, status: 400, code: 'path-unavailable', message: 'project path is unavailable' };
+    const primary = getPrimaryHost(ctx.db);
+    const hostId = requestedHostId ?? project.hostId ?? primary?.id;
+    const source = projectSources(project, primary?.id).find(row => row.hostId === hostId);
+    if (!source) return { ok: false, status: 409, code: 'source-unavailable', message: 'Add a checkout for this project on the selected machine' };
+    const cwd = hostId === primary?.id ? confineCwd(ctx, source.path, undefined) : source.path;
+    if (!cwd) return { ok: false, status: 409, code: 'path-unavailable', message: 'Project checkout is unavailable' };
+    return { ok: true, hostId, cwd };
   }
+
   if (!project.hostId) {
     return { ok: false, status: 409, code: 'host-unavailable', message: 'remote project has no bound host' };
   }
@@ -354,7 +367,7 @@ function routeParams(pathname: string, pattern: string): Record<string, string> 
 }
 
 function publicTerminal(record: ProductTerminalRecord): TerminalSession {
-  const { hostId: _hostId, outputText: _outputText, outputTruncated: _outputTruncated, ...session } = record;
+  const { outputText: _outputText, outputTruncated: _outputTruncated, ...session } = record;
   return session;
 }
 
@@ -439,6 +452,10 @@ export async function handleProductHttp(
       }
       return true;
     }
+    if (path === '/api/v1/system/instance' && method === 'GET') {
+      sendJson(response, 200, { instanceId: ctx.productInstanceId, sharedProductServices: Boolean(process.env.ZCC_PRODUCT_SERVER_CREDENTIAL), projectSources: true, connectMachines: usesConnect(ctx) });
+      return true;
+    }
     if (path === '/api/v1/health' && (method === 'GET' || method === 'HEAD')) {
       sendJson(response, 200, { ok: true });
       return true;
@@ -455,6 +472,9 @@ export async function handleProductHttp(
     if (await handleCliAgentsApi(request, response, ctx, path, method, requestUrl)) {
       return true;
     }
+
+    if (await handleSharedProductApi(request, response, ctx, path, method)) return true;
+    if (await handleProjectSourcesApi(request, response, ctx, path, method)) return true;
 
     if (path === '/api/v1/projects' && method === 'GET') {
       sendJson(response, 200, { projects: ctx.projects.list() });
@@ -860,6 +880,14 @@ export async function handleProductHttp(
       return true;
     }
 
+    if (path === '/api/v1/library/documents' && method === 'POST') {
+      const parsed = LibraryDocumentRequestSchema.safeParse(await readJsonBody(request, LIBRARY_DOCUMENT_BODY_LIMIT));
+      if (!parsed.success) { sendJson(response, 400, { error: 'Invalid library request' }); return true; }
+      try { sendJson(response, 200, { value: await libraryDocumentOperation(ctx, parsed.data) }); }
+      catch (error) { sendHostFailure(response, error); }
+      return true;
+    }
+
     if (path === '/api/v1/library' && method === 'GET') {
       try {
         const docs = await listLibraryDocs(ctx);
@@ -903,9 +931,9 @@ export async function handleProductHttp(
     }
 
     if (path === '/api/v1/fs/list-dir' && method === 'POST') {
-      const body = (await readJsonBody(request)) as { path?: unknown };
+      const body = (await readJsonBody(request)) as { path?: unknown; scope?: unknown };
       try {
-        const entries = await listProjectDir(ctx, typeof body.path === 'string' ? body.path : '');
+        const entries = await listProjectDir(ctx, typeof body?.path === 'string' ? body.path : '', parseProjectFileScope(body?.scope));
         sendJson(response, 200, { entries });
       } catch (error) {
         sendHostFailure(response, error);
@@ -913,10 +941,31 @@ export async function handleProductHttp(
       return true;
     }
 
-    if (path === '/api/v1/fs/read' && method === 'POST') {
-      const body = (await readJsonBody(request)) as { path?: unknown };
+    if (path === '/api/v1/git' && method === 'POST') {
+      try { sendJson(response, 200, await projectGit(ctx, await readJsonBody(request))); }
+      catch (error) { sendHostFailure(response, error); }
+      return true;
+    }
+
+    if (path === '/api/v1/fs/mutate' && method === 'POST') {
+      try { sendJson(response, 200, await mutateProjectFile(ctx, await readJsonBody(request))); }
+      catch (error) { sendHostFailure(response, error); }
+      return true;
+    }
+
+    if (path === '/api/v1/fs/image' && method === 'POST') {
+      const body = await readJsonBody(request) as { path?: unknown; scope?: unknown };
       try {
-        const result = await readProjectFile(ctx, typeof body.path === 'string' ? body.path : '');
+        if (typeof body?.path !== 'string') throw new ProjectFsError(400, 'invalid-path', 'path is required');
+        sendJson(response, 200, await readProjectImage(ctx, body.path, parseProjectFileScope(body.scope)));
+      } catch (error) { sendHostFailure(response, error); }
+      return true;
+    }
+
+    if (path === '/api/v1/fs/read' && method === 'POST') {
+      const body = (await readJsonBody(request)) as { path?: unknown; scope?: unknown };
+      try {
+        const result = await readProjectFile(ctx, typeof body?.path === 'string' ? body.path : '', parseProjectFileScope(body?.scope));
         sendJson(response, result.ok ? 200 : 404, result);
       } catch (error) {
         sendHostFailure(response, error);
@@ -1209,8 +1258,7 @@ export async function handleProductHttp(
         : 30_000;
       const deadline = Date.now() + waitMs;
       while (true) {
-        const match = listConversationThreadEvents(ctx.db, thread.id)
-          .find((event) => event.type === type && event.sequence > afterSeq);
+        const match = getConversationThreadEventAfter(ctx.db, thread.id, type, afterSeq);
         if (match) {
           sendJson(response, 200, match);
           return true;
@@ -1230,7 +1278,21 @@ export async function handleProductHttp(
         sendJson(response, 404, { error: 'unknown-thread', message: 'thread is not registered' });
         return true;
       }
-      sendJson(response, 200, { events: listConversationThreadEvents(ctx.db, thread.id) });
+      const limitRaw = requestUrl.searchParams.get('limit');
+      const beforeRaw = requestUrl.searchParams.get('beforeSeq');
+      const limit = limitRaw === null ? 500 : Number(limitRaw);
+      const beforeSeq = beforeRaw === null ? undefined : Number(beforeRaw);
+      if (!Number.isSafeInteger(limit) || limit < 1
+        || (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 1))) {
+        sendJson(response, 400, { error: 'invalid-input', message: 'limit and beforeSeq must be positive integers' });
+        return true;
+      }
+      const events = listConversationThreadEventsWindow(ctx.db, thread.id, {
+        limit: Math.min(limit, 1000),
+        ...(beforeSeq !== undefined ? { beforeSeq } : {})
+      });
+      const hasOlder = Boolean(events[0] && events[0].sequence > 1);
+      sendJson(response, 200, { events, hasOlder, nextBeforeSeq: hasOlder ? events[0]!.sequence : null });
       return true;
     }
 
@@ -1292,7 +1354,8 @@ export async function handleProductHttp(
         sendJson(response, 200, conversationTimelineTurnSummaryDetails(ctx, threadTurnDetails.id, {
           turnId: requestUrl.searchParams.get('turnId') ?? '',
           sourceSeqStart: requestUrl.searchParams.get('sourceSeqStart') ?? '',
-          sourceSeqEnd: requestUrl.searchParams.get('sourceSeqEnd') ?? ''
+          sourceSeqEnd: requestUrl.searchParams.get('sourceSeqEnd') ?? '',
+          beforeCursor: requestUrl.searchParams.get('beforeCursor') ?? undefined
         }));
       } catch (error) {
         if (error instanceof ThreadCreateError) {
@@ -2343,6 +2406,7 @@ export async function handleProductHttp(
         const limitRaw = requestUrl.searchParams.get('limit');
         const parsedLimit = limitRaw ? Number(limitRaw) : undefined;
         sendJson(response, 200, await listProjectPaths(ctx, projectPaths.id, {
+          hostId: requestUrl.searchParams.get('hostId') ?? undefined,
           query: requestUrl.searchParams.get('query') ?? requestUrl.searchParams.get('q') ?? undefined,
           limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
           includeFiles: requestUrl.searchParams.get('includeFiles') !== 'false',
@@ -2588,14 +2652,16 @@ export async function handleProductHttp(
         return true;
       }
       try {
-        const hostId = ctx.hostHub.resolveHostId(
+        const hostId = resolveProjectHost(ctx,
           requestUrl.searchParams.get('hostId') ?? project.hostId ?? undefined
         );
+        const source = projectSources(project, getPrimaryHost(ctx.db)?.id).find(row => row.hostId === hostId);
+        if (!source) { sendJson(response, 409, { error: 'source-unavailable', message: 'Register a checkout on this machine first' }); return true; }
         const result = await ctx.hostHub.callHostOnlineRpc<{ branches: string[]; truncated: boolean }>({
           hostId,
           command: {
             type: 'host.list_branches',
-            workspacePath: project.path,
+            workspacePath: source.path,
             workspaceProvisionType: 'unmanaged',
             limit: 200
           }
@@ -2975,6 +3041,8 @@ export async function handleProductHttp(
         return true;
       }
       let cwd: string;
+      let terminalRoot: string | undefined;
+      let executionHostId: string | undefined;
       let workspaceEnvironmentId: string | undefined;
       const workspaceChoice = body.workspace === undefined
         ? undefined
@@ -2984,8 +3052,22 @@ export async function handleProductHttp(
         return true;
       }
       try {
-        if (!statSync(project.path).isDirectory()) throw new Error('not a directory');
-        if (workspaceChoice?.data && workspaceChoice.data.kind !== 'unmanaged' && !body.isolateScratch) {
+        if (body.hostId !== undefined || project.hostId) {
+          if (body.hostId !== undefined && (typeof body.hostId !== 'string' || !body.hostId)) throw new ThreadCreateError(400, 'invalid-host', 'hostId is required');
+          const environment = await provisionProjectEnvironment(ctx, {
+            projectId: project.id, hostId: body.hostId ?? project.hostId,
+            choice: body.isolateScratch ? { kind: 'personal' } : workspaceChoice?.data ?? { kind: 'unmanaged' }
+          });
+          if (!environment.path) throw new ThreadCreateError(409, 'environment-unavailable', 'The selected checkout is unavailable');
+          executionHostId = environment.hostId;
+          terminalRoot = environment.path;
+          cwd = body.cwd ?? terminalRoot;
+          if (typeof cwd !== 'string' || !posix.isAbsolute(cwd) || /[\x00-\x1f]/.test(cwd)) throw new ThreadCreateError(403, 'cwd-escape', 'cwd must be inside the selected checkout');
+          const rel = posix.relative(terminalRoot, cwd);
+          if (rel === '..' || rel.startsWith('../') || posix.isAbsolute(rel)) throw new ThreadCreateError(403, 'cwd-escape', 'cwd must be inside the selected checkout');
+          workspaceEnvironmentId = environment.id;
+        } else if (workspaceChoice?.data && workspaceChoice.data.kind !== 'unmanaged' && !body.isolateScratch) {
+          if (!statSync(project.path).isDirectory()) throw new Error('not a directory');
           const environment = await provisionProjectEnvironment(ctx, {
             projectId: project.id,
             hostId: typeof body.hostId === 'string' ? body.hostId : undefined,
@@ -3007,6 +3089,7 @@ export async function handleProductHttp(
           cwd = confined;
           workspaceEnvironmentId = environment.id;
         } else {
+          if (!statSync(project.path).isDirectory()) throw new Error('not a directory');
           const confined = confineCwd(ctx, project.path, body.cwd);
           if (!confined) {
             sendJson(response, 403, {
@@ -3039,27 +3122,11 @@ export async function handleProductHttp(
         return true;
       }
       try {
-        const hostId = ctx.hostHub.resolveHostId();
+        const hostId = ctx.hostHub.resolveHostId(executionHostId ?? project.hostId ?? getPrimaryHost(ctx.db)?.id);
         const sessionId = randomUUID();
         const cols = typeof body.cols === 'number' ? body.cols : 80;
         const rows = typeof body.rows === 'number' ? body.rows : 24;
         const launchCommand = launchStringFromBody(body);
-        const started = await ctx.hostHub.callHostOnlineRpc<{
-          sessionId: string;
-          started: true;
-          pid?: number;
-        }>({
-          hostId,
-          command: {
-            type: 'terminal.start',
-            sessionId,
-            root: realpathSync(cwd),
-            cwd,
-            cols,
-            rows,
-            ...(launchCommand ? { command: launchCommand } : {})
-          }
-        });
         const title = typeof body.title === 'string' && body.title.length > 0
           ? body.title
           : (launchCommand ?? 'Terminal');
@@ -3069,14 +3136,43 @@ export async function handleProductHttp(
           title,
           profile: (typeof body.profile === 'string' ? body.profile : 'shell') as LaunchProfileId,
           cwd,
-          pid: started.pid,
-          status: 'running',
+          status: 'starting',
           createdAt: Date.now(),
           hostId,
+          daemonInstanceId: ctx.hostHub.getSession(hostId)?.instanceId,
           ...(workspaceEnvironmentId ? { workspaceEnvironmentId } : {}),
           ...(launchCommand ? { launchCommand } : {})
         };
-        ctx.terminalSessions.set(sessionId, record);
+        registerProductTerminal(ctx.terminalSessions, record);
+        try {
+          const started = await ctx.hostHub.callHostOnlineRpc<{
+          sessionId: string;
+          started: true;
+          pid?: number;
+        }>({
+          hostId,
+          command: {
+            type: 'terminal.start',
+            sessionId,
+            root: terminalRoot ?? realpathSync(cwd),
+            cwd,
+            cols,
+            rows,
+            ...(launchCommand ? { command: launchCommand } : {})
+          }
+        });
+          record.pid = started.pid;
+          if (record.status === 'starting') record.status = 'running';
+          ctx.terminalSessions.set(sessionId, record);
+        } catch (error) {
+          await recoverFailedTerminalStart(record, () => ctx.hostHub.callHostOnlineRpc({
+            hostId, command: { type: 'terminal.stop', sessionId }, timeoutMs: 5_000
+          }));
+          ctx.terminalSessions.set(sessionId, record);
+          ctx.hub.emit('terminals:updated', publicTerminal(record));
+          throw error;
+        }
+
         ctx.hub.emit('terminals:updated', publicTerminal(record));
         sendJson(response, 201, { ok: true, value: publicTerminal(record) });
       } catch (error) {
@@ -3102,12 +3198,14 @@ export async function handleProductHttp(
         }
         tailBytes = parsed;
       }
-      sendJson(response, 200, terminalOutputSlice(
+      const output = terminalOutputSlice(
         session.outputText !== undefined
           ? { text: session.outputText, truncated: session.outputTruncated ?? false }
           : undefined,
         tailBytes
-      ));
+      );
+      const endOffset = session.outputEndOffset ?? session.outputText?.length ?? 0;
+      sendJson(response, 200, { ...output, startOffset: endOffset - output.text.length, endOffset });
       return true;
     }
 
@@ -3189,6 +3287,7 @@ export async function handleProductHttp(
         });
         session.status = 'exited';
         session.finishedAt = Date.now();
+        ctx.terminalSessions.set(session.id, session);
         ctx.hub.emit('terminals:updated', publicTerminal(session));
         if (session.workspaceEnvironmentId) {
           await destroyEnvironmentIfIdle(ctx, session.workspaceEnvironmentId);
@@ -3223,9 +3322,9 @@ export async function handleProductHttp(
             artifacts: ctx.pluginHostArtifacts
           })
         );
-      } catch {
-        availability = [];
-        extraInstalled = {};
+      } catch (error) {
+        sendHostFailure(response, error);
+        return true;
       }
       let listed: ProviderListModelsResult | null = null;
       let listError: ThreadModelLoadErrorCode | null = null;
@@ -3247,6 +3346,10 @@ export async function handleProductHttp(
               ...(scope.cwd ? { cwd: scope.cwd } : {})
             }
           });
+          invalidateHarnessModelCatalog(providerId);
+          // Desktop owns an independent preflight cache. Complete its invalidation
+          // before returning so a launch immediately after Refresh uses fresh ids.
+          await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
         } catch (error) {
           listed = null;
           listError = classifyModelListError(error);
@@ -3334,6 +3437,10 @@ export async function handleProductHttp(
     sendJson(response, 404, { error: 'not found' });
     return true;
   } catch (error) {
+    if (error instanceof ConversationHistoryReadLimitError) {
+      sendHostFailure(response, error);
+      return true;
+    }
     sendJson(response, 500, {
       error: error instanceof Error ? error.message : String(error)
     });

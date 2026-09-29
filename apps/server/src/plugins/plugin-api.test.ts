@@ -1,4 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { openDatabase, upsertHost } from '@zana-ai/zcc-db';
+import { createCommandRuntime, dispatchHostCommand } from '../../../host-daemon/src/command-dispatch.js';
+import { HostRpcCommandSchema } from '@zana-ai/zcc-contracts/host-rpc';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -392,34 +396,27 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
 
   it('wires sdk.library list/read/write through productContext', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-sdk-library-'));
+    const db = openDatabase(join(dir, 'data/zcc.sqlite'));
+    upsertHost(db, { id: 'host-1', name: 'Primary', hostKeyHash: 'hash', isPrimary: true });
+    const projectPath = join(dir, 'alpha');
+    mkdirSync(join(projectPath, '.zcc/library/findings'), { recursive: true });
+    writeFileSync(join(projectPath, '.zcc/library/findings/auth.md'), '# Auth\n');
+    const runtime = createCommandRuntime({ dataDir: join(dir, 'daemon') });
     try {
       const productContext = {
-        dataDir: '/tmp/zcc-data',
+        db,
+        hub: { emit: vi.fn() },
+        dataDir: join(dir, 'data'),
         toProjects: () => [{
           id: 'p1',
           name: 'Alpha',
-          path: '/tmp/alpha',
+          path: projectPath,
           createdAt: 1,
           lastActiveAt: 1
         }],
         hostHub: {
           resolveHostId: (hostId?: string) => hostId ?? 'host-1',
-          callHostOnlineRpc: async (input: { command: { type: string } }) => {
-            if (input.command.type === 'host.list_files') {
-              return {
-                files: [{
-                  root: '/tmp/alpha/.zcc/library',
-                  relPath: 'findings/auth.md',
-                  bytes: 4,
-                  kind: 'file'
-                }]
-              };
-            }
-            if (input.command.type === 'host.read_file') {
-              return { content: '# Auth\n', encoding: 'utf8' };
-            }
-            return { outcome: 'written', sha256: 'x', sizeBytes: 4 };
-          }
+          callHostOnlineRpc: async (input: { command: unknown }) => dispatchHostCommand(runtime, HostRpcCommandSchema.parse(input.command))
         }
       };
       const handle = createPluginApi('docs', dir, { productContext: productContext as never });
@@ -430,18 +427,22 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
         scope: 'project',
         relPath: 'findings/auth.md',
         projectId: 'p1'
-      })).resolves.toEqual({ ok: true, content: '# Auth\n' });
+      })).resolves.toEqual({ ok: true, content: '# Auth\n', sha256: createHash('sha256').update('# Auth\n').digest('hex') });
       await expect(handle.api.sdk.library.write({
         scope: 'project',
         relPath: 'findings/auth.md',
         projectId: 'p1',
-        content: '# Next\n'
-      })).resolves.toEqual({ ok: true });
+        content: '# Next\n',
+        expectedSha256: createHash('sha256').update('# Auth\n').digest('hex')
+      })).resolves.toMatchObject({ ok: true, sha256: createHash('sha256').update('# Next\n').digest('hex') });
       const bare = createPluginApi('bare', dir);
       await expect(bare.api.sdk.library.list()).rejects.toThrow(/not available/);
+      await expect(bare.api.sdk.files.readProject({ path: 'file.ts', source: { kind: 'workspace', projectId: 'p1', environmentId: null, threadId: null } })).rejects.toThrow(/not available/);
+      await expect(bare.api.sdk.files.writeProject({ path: 'file.ts', source: { kind: 'workspace', projectId: 'p1', environmentId: null, threadId: null }, content: 'x', expectedSha256: null })).rejects.toThrow(/not available/);
       await handle.dispose();
       await bare.dispose();
     } finally {
+      db.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -894,5 +895,37 @@ describe('agents.registerTool', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('machine plugin host API', () => {
+  it('routes schema-validated calls and lifetime notifications without local fallback', async () => {
+    const { z } = await import('zod');
+    const dir = mkdtempSync(join(tmpdir(), 'plugin-machine-api-'));
+    const hostCall = vi.fn().mockResolvedValue('ok');
+    const handle = createPluginApi('fixture', dir, { hostCall });
+    try {
+      const client = handle.api.host.experimental_client({ contract: { ping: { input: z.string(), output: z.string() } } });
+      const signal = new AbortController().signal;
+      expect(await client.call('ping', 'input', { hostId: 'b', signal, timeoutMs: 50 })).toBe('ok');
+      expect(hostCall).toHaveBeenCalledExactlyOnceWith('ping', 'input', 'b', signal, 50);
+      await expect(client.call('missing', null)).rejects.toThrow('Unknown');
+      await expect(client.call('ping', 3)).rejects.toThrow('validation');
+      hostCall.mockResolvedValue(4); await expect(client.call('ping', 'x')).rejects.toThrow('validation');
+      const exit = vi.fn(), changed = vi.fn();
+      const offExit = client.experimental_onWorkerExit(exit), offSignal = client.experimental_onSignal('changed', changed);
+      const identity = { pluginId: 'fixture', generation: 'g1', hostId: 'b' };
+      await handle.emitHostEvent({ ...identity, kind: 'plugin.host.worker-exited' });
+      await handle.emitHostEvent({ ...identity, kind: 'plugin.host.signal', signal: 'changed', payload: 7 });
+      expect(exit).toHaveBeenCalledExactlyOnceWith({ hostId: 'b' });
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ hostId: 'b', payload: 7 });
+      offExit(); offSignal();
+      await handle.emitHostEvent({ ...identity, kind: 'plugin.host.worker-exited' }); expect(exit).toHaveBeenCalledOnce();
+      await handle.dispose(); await handle.emitHostEvent({ ...identity, kind: 'plugin.host.signal' });
+      expect(() => client.experimental_onWorkerExit(exit)).toThrow('stale');
+      const legacy = createPluginApi('compat', dir);
+      await expect(legacy.api.host.experimental_client().call('ping', null, { hostId: 'b' })).rejects.toThrow('Selected');
+      await legacy.dispose();
+    } finally { await handle.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

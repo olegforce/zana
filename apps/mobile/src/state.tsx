@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { ProfileStore, EMPTY_STATE, type MobileState } from './lib/profiles';
 const store = new ProfileStore({
@@ -36,16 +36,17 @@ export function ProfilesProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, []);
+  const update = useCallback(async (change: (state: MobileState) => MobileState) => {
+    const next = await store.update(change);
+    setState(next);
+  }, []);
   return (
     <Context.Provider
       value={{
         state,
         ready,
         error,
-        update: async (change) => {
-          const next = await store.update(change);
-          setState(next);
-        }
+        update
       }}
     >
       {children}

@@ -13,6 +13,7 @@ export const BUNDLED_PRODUCT_SKILLS = [
   { id: 'brainstorm', label: 'Brainstorm' },
   { id: 'saved-reports', label: 'Saved reports' },
   { id: 'zcc-preview', label: 'Preview' },
+  { id: 'zcc-browser', label: 'In-app browser' },
   { id: 'zcc-terminal', label: 'In-app terminals' }
 ] as const;
 

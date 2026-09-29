@@ -1,17 +1,22 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   createReadStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 import { HOST_RPC_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/host-rpc';
 import { createRequire } from 'node:module';
 
@@ -34,10 +39,11 @@ export interface HostArtifactLocator {
 
 const JOIN_DAEMON_SOURCE_FILES = [
   'src/join-cli.ts',
+  'src/protocol-self-update.ts',
   'src/enroll.ts',
   'src/enroll-runtime.ts',
   'src/server-url.ts',
-  'src/pty-pipe-shim.ts',
+  'src/packed-native-pty.ts',
   'src/better-sqlite3-stub.ts',
   'scripts/build-join.mjs',
   'src/server-connection.ts',
@@ -56,7 +62,8 @@ const JOIN_REPO_SOURCE_FILES = [
 const PREBUILT_JOIN_FILES = [
   'join.mjs',
   'bb-provider-bridge-worker.mjs',
-  'bb-pi-bridge.mjs'
+  'bb-pi-bridge.mjs',
+  'zcc-plugin-host-worker.mjs'
 ] as const;
 
 function unique(paths: string[]): string[] {
@@ -141,6 +148,7 @@ function hostDaemonVersion(): string {
 
 interface ArtifactInputs {
   joinCli: string;
+  selfUpdate: string;
   enroll: string;
   enrollRuntime: string;
   serverUrl: string;
@@ -172,10 +180,11 @@ function locateArtifactInputs(
     return found;
   };
   const joinCli = daemon('src/join-cli.ts');
+  const selfUpdate = daemon('src/protocol-self-update.ts');
   const enroll = daemon('src/enroll.ts');
   const enrollRuntime = daemon('src/enroll-runtime.ts');
   const serverUrl = daemon('src/server-url.ts');
-  const shim = daemon('src/pty-pipe-shim.ts');
+  const shim = daemon('src/packed-native-pty.ts');
   const sqliteStub = daemon('src/better-sqlite3-stub.ts');
   const bundleScript = daemon('scripts/build-join.mjs');
   const serverConnection = daemon('src/server-connection.ts');
@@ -188,7 +197,7 @@ function locateArtifactInputs(
   const providerRegistry = repo('packages/agent-runtime/src/provider-registry.ts');
   if (
     missing.length > 0
-    || !joinCli || !enroll || !enrollRuntime || !serverUrl || !shim || !sqliteStub || !bundleScript
+    || !joinCli || !selfUpdate || !enroll || !enrollRuntime || !serverUrl || !shim || !sqliteStub || !bundleScript
     || !workerEntry || !piBridge || !serverConnection || !pluginHostArtifactClient
     || !pluginToolCallClient || !interactiveRequestClient
     || !acpLaunchSpecs || !providerRegistry
@@ -202,6 +211,7 @@ function locateArtifactInputs(
     ok: true,
     inputs: {
       joinCli,
+      selfUpdate,
       enroll,
       enrollRuntime,
       serverUrl,
@@ -220,31 +230,6 @@ function locateArtifactInputs(
   };
 }
 
-function artifactStamp(inputs: ArtifactInputs): string {
-  const hash = createHash('sha256');
-  hash.update(readFileSync(inputs.joinCli));
-  hash.update(readFileSync(inputs.enroll));
-  hash.update(readFileSync(inputs.enrollRuntime));
-  hash.update(readFileSync(inputs.serverUrl));
-  hash.update(readFileSync(inputs.shim));
-  hash.update(readFileSync(inputs.sqliteStub));
-  hash.update(readFileSync(inputs.bundleScript));
-  hash.update(readFileSync(inputs.workerEntry));
-  hash.update(readFileSync(inputs.piBridge));
-  hash.update(readFileSync(inputs.serverConnection));
-  hash.update(readFileSync(inputs.pluginHostArtifactClient));
-  hash.update(readFileSync(inputs.pluginToolCallClient));
-  hash.update(readFileSync(inputs.interactiveRequestClient));
-  // join.mjs inlines BUILT_IN_ACP_LAUNCH_SPECS. A Codex row added there must
-  // bust the cached tarball or enrolled remotes keep packing thread/start
-  // without acpLaunchSpec and the ACP bridge rejects the turn.
-  hash.update(readFileSync(inputs.acpLaunchSpecs));
-  hash.update(readFileSync(inputs.providerRegistry));
-  hash.update(String(HOST_RPC_PROTOCOL_VERSION));
-  hash.update('join-bridge-worker');
-  return hash.digest('hex').slice(0, 8);
-}
-
 function prebuiltStamp(bundleDir: string): string {
   const hash = createHash('sha256');
   for (const file of PREBUILT_JOIN_FILES) {
@@ -252,11 +237,20 @@ function prebuiltStamp(bundleDir: string): string {
   }
   hash.update(String(HOST_RPC_PROTOCOL_VERSION));
   hash.update('prebuilt-join-bundle');
-  return hash.digest('hex').slice(0, 8);
+  return hash.digest('hex');
 }
 
+let privateArtifactCache: string | null = null;
 function cachedTarballPath(version: string, stamp: string): string {
-  return join(tmpdir(), `zcc-host-artifact-${version}-${HOST_RPC_PROTOCOL_VERSION}-${stamp}.tgz`);
+  if (privateArtifactCache === null) {
+    // A predictable file in a shared tmp directory could have been planted
+    // before startup. Keep executable downloads in a private process-owned dir.
+    const directory = mkdtempSync(join(tmpdir(), 'zcc-host-cache-'));
+    chmodSync(directory, 0o700);
+    privateArtifactCache = directory;
+    process.once('exit', () => { try { rmSync(directory, { recursive: true, force: true }); } catch { /* OS temp cleanup remains available */ } });
+  }
+  return join(privateArtifactCache, `zcc-host-${version}-${HOST_RPC_PROTOCOL_VERSION}-${stamp}.tgz`);
 }
 
 function writeJoinPackageJson(dir: string): void {
@@ -271,28 +265,29 @@ function writeJoinPackageJson(dir: string): void {
   );
 }
 
-function tarJoinDir(tarball: string, dir: string): void {
-  const packed = spawnSync(
-    'tar',
-    ['-czf', tarball, '-C', dir, 'package.json', ...PREBUILT_JOIN_FILES],
-    { encoding: 'utf8' }
-  );
-  if (packed.status !== 0 || !existsSync(tarball)) {
-    throw new Error(packed.stderr || 'failed to pack zcc-host artifact');
-  }
+async function tarJoinDir(tarball: string, dir: string): Promise<void> {
+  const temporary = `${tarball}.${randomUUID()}.tmp`;
+  try {
+    await execFileAsync('tar', ['-czf', temporary, '-C', dir, 'package.json', ...PREBUILT_JOIN_FILES], {
+      encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024
+    });
+    if (!existsSync(temporary)) throw new Error('failed to pack zcc-host artifact');
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, tarball);
+  } finally { rmSync(temporary, { force: true }); }
 }
 
 /**
  * Serve the host-daemon join artifact this server was built with so a remote
  * machine cannot be stranded on a different protocol. The tarball is an
  * esbuild bundle of join-cli (Node ESM, no tsx) plus the provider-bridge
- * worker and Pi bridge, with node-pty swapped for a pipe shim so Linux
- * remotes do not need this laptop's native addon.
+ * worker and Pi bridge. Portable node-pty prebuilds are carried inside the
+ * join bundle; remotes never load this laptop's rebuilt native addon.
  */
-export function resolveHostArtifact(
+export async function resolveHostArtifact(
   env: NodeJS.ProcessEnv = process.env,
   locator: HostArtifactLocator = defaultHostArtifactLocator()
-): HostArtifactInfo {
+): Promise<HostArtifactInfo> {
   const override = env.ZCC_HOST_ARTIFACT?.trim();
   if (override && existsSync(override)) {
     return {
@@ -304,23 +299,26 @@ export function resolveHostArtifact(
   const version = hostDaemonVersion();
   const located = locateArtifactInputs(locator);
   if (located.ok) {
-    const stamp = artifactStamp(located.inputs);
-    const cached = cachedTarballPath(version, stamp);
-    if (!existsSync(cached)) {
-      packJoinArtifact(cached, located.inputs.bundleScript);
+    // Build the source snapshot once per server lifetime. The old hand-picked
+    // source hash missed transitive changes and served an obsolete daemon even
+    // after a fresh app build. Cache by the actual bundled bytes instead.
+    const key = located.inputs.bundleScript;
+    let pending = sourceBuilds.get(key);
+    if (!pending) {
+      pending = packJoinArtifact(version, key).catch(error => { sourceBuilds.delete(key); throw error; });
+      sourceBuilds.set(key, pending);
+      if (sourceBuilds.size > 8) sourceBuilds.delete(sourceBuilds.keys().next().value!);
     }
-    return {
-      version,
-      protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-      tarballPath: cached
-    };
+    const result = await pending;
+    if (!existsSync(result.tarballPath)) { sourceBuilds.delete(key); return resolveHostArtifact(env, locator); }
+    return result;
   }
   const prebuilt = resolvePrebuiltJoinBundleDir(locator);
   if (prebuilt) {
     const stamp = prebuiltStamp(prebuilt);
     const cached = cachedTarballPath(version, stamp);
     if (!existsSync(cached)) {
-      packPrebuiltArtifact(cached, prebuilt);
+      await packPrebuiltArtifact(cached, prebuilt);
     }
     return {
       version,
@@ -333,30 +331,39 @@ export function resolveHostArtifact(
   );
 }
 
-function packJoinArtifact(tarball: string, bundleScript: string): void {
+const sourceBuilds = new Map<string, Promise<HostArtifactInfo>>();
+
+async function packJoinArtifact(version: string, bundleScript: string): Promise<HostArtifactInfo> {
   const dir = mkdtempSync(join(tmpdir(), 'zcc-host-artifact-'));
-  mkdirSync(dir, { recursive: true, mode: 0o755 });
-  writeJoinPackageJson(dir);
-  const outfile = join(dir, 'join.mjs');
-  const packedJs = spawnSync(process.execPath, [bundleScript, '--outfile', outfile], {
-    encoding: 'utf8'
-  });
-  const worker = join(dir, 'bb-provider-bridge-worker.mjs');
-  const piBridge = join(dir, 'bb-pi-bridge.mjs');
-  if (packedJs.status !== 0 || !existsSync(outfile) || !existsSync(worker) || !existsSync(piBridge)) {
-    throw new Error(packedJs.stderr || packedJs.stdout || 'failed to bundle zcc-host join.mjs');
-  }
-  tarJoinDir(tarball, dir);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    writeJoinPackageJson(dir);
+    const outfile = join(dir, 'join.mjs');
+    await execFileAsync(process.execPath, [bundleScript, '--outfile', outfile], {
+      encoding: 'utf8', timeout: 120_000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    });
+    const worker = join(dir, 'bb-provider-bridge-worker.mjs');
+    const piBridge = join(dir, 'bb-pi-bridge.mjs');
+    if (!existsSync(outfile) || !existsSync(worker) || !existsSync(piBridge) || !existsSync(join(dir, 'zcc-plugin-host-worker.mjs'))) {
+      throw new Error('failed to bundle zcc-host join.mjs');
+    }
+    const tarball = cachedTarballPath(version, prebuiltStamp(dir));
+    if (!existsSync(tarball)) await tarJoinDir(tarball, dir);
+    return { version, protocolVersion: HOST_RPC_PROTOCOL_VERSION, tarballPath: tarball };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-function packPrebuiltArtifact(tarball: string, bundleDir: string): void {
+async function packPrebuiltArtifact(tarball: string, bundleDir: string): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'zcc-host-artifact-'));
-  mkdirSync(dir, { recursive: true, mode: 0o755 });
-  writeJoinPackageJson(dir);
-  for (const file of PREBUILT_JOIN_FILES) {
-    copyFileSync(join(bundleDir, file), join(dir, file));
-  }
-  tarJoinDir(tarball, dir);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    writeJoinPackageJson(dir);
+    for (const file of PREBUILT_JOIN_FILES) {
+      copyFileSync(join(bundleDir, file), join(dir, file));
+    }
+    await tarJoinDir(tarball, dir);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 export function createHostArtifactReadStream(path: string): ReturnType<typeof createReadStream> {

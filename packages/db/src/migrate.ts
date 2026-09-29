@@ -1,4 +1,5 @@
 import type { SqliteDatabase } from './connection.js';
+import { CONVERSATION_PRUNING_INDEXES } from './data/conversation-pruning-sql.js';
 
 const CREATE_TABLES_V1 = [
   `CREATE TABLE hosts (
@@ -361,6 +362,50 @@ export function migrate(database: SqliteDatabase): void {
     'ALTER TABLE deferred_thread_messages ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE deferred_thread_messages ADD COLUMN retry_at INTEGER',
     'CREATE INDEX deferred_thread_messages_retry_idx ON deferred_thread_messages(status, paused, retry_at)'
+  ]);
+  if (!applied.has(20)) applyVersion(database, 20, [
+    'CREATE TABLE host_join_codes (hash TEXT PRIMARY KEY, host_id TEXT NOT NULL, expires_at INTEGER NOT NULL, redeemed_at INTEGER)',
+    'CREATE INDEX host_join_codes_expiry_idx ON host_join_codes(expires_at)',
+    'CREATE INDEX host_join_codes_host_idx ON host_join_codes(host_id)'
+  ]);
+  if (!applied.has(21)) applyVersion(database, 21, [
+    `CREATE TABLE product_terminal_sessions (
+      id TEXT PRIMARY KEY,
+      record_json TEXT NOT NULL CHECK (length(record_json) <= 2097152)
+    )`
+  ]);
+  if (!applied.has(22)) applyVersion(database, 22, [
+    `CREATE TABLE host_event_receipts (
+      host_id TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+      instance_id TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      ack_json TEXT NOT NULL
+    )`
+  ]);
+  if (!applied.has(23)) applyVersion(database, 23, [
+    `CREATE TABLE conversation_event_outputs (
+      event_id TEXT PRIMARY KEY REFERENCES thread_events(id) ON DELETE CASCADE,
+      output_path TEXT NOT NULL, value TEXT NOT NULL, expires_at INTEGER NOT NULL
+    )`,
+    'CREATE INDEX conversation_event_outputs_expiry_idx ON conversation_event_outputs(expires_at)',
+    'CREATE TABLE conversation_history_maintenance (key TEXT PRIMARY KEY, thread_id TEXT NOT NULL, sequence INTEGER NOT NULL)',
+    `CREATE INDEX thread_events_diff_cleanup_idx ON thread_events(thread_id, sequence)
+      WHERE type = 'turn/diff/updated'`
+  ]);
+  if (!applied.has(24)) applyVersion(database, 24, [
+    `CREATE TABLE conversation_event_pruning_cursors (
+      policy TEXT PRIMARY KEY, thread_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+      upper_sequence INTEGER NOT NULL, phase INTEGER NOT NULL,
+      root_id TEXT, capacity_id TEXT
+    )`,
+    ...CONVERSATION_PRUNING_INDEXES
+  ]);
+  if (!applied.has(25)) applyVersion(database, 25, [
+    // Performance polling must not sort all connections or scan idle history.
+    'CREATE INDEX host_sessions_recent_idx ON host_sessions(host_id, created_at)',
+    `CREATE INDEX threads_live_host_idx ON threads(host_id)
+      WHERE status IN ('starting', 'active', 'stopping')`
   ]);
 }
 

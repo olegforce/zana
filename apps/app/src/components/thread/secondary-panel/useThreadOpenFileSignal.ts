@@ -9,15 +9,27 @@ export type ThreadOpenFileIntent = {
 };
 
 const pendingByThread = new Map<string, ThreadOpenFileIntent[]>();
+export const MAX_PENDING_PREVIEW_THREADS = 64;
+export const MAX_PENDING_PREVIEWS_PER_THREAD = 16;
+const consumersByThread = new Map<string, Set<(file: ThreadOpenFileIntent) => void>>();
+let collectorUsers = 0;
+let stopCollector: (() => void) | undefined;
 
 export function resetThreadOpenFileBuffer(): void {
   pendingByThread.clear();
 }
 
 export function bufferThreadOpenFile(threadId: string, file: ThreadOpenFileIntent): void {
-  const queued = pendingByThread.get(threadId) ?? [];
+  // Coalesce repeat requests, retaining their latest line and ordering.
+  const queued = (pendingByThread.get(threadId) ?? []).filter(
+    (pending) => pending.path !== file.path || pending.source !== file.source
+  );
   queued.push(file);
-  pendingByThread.set(threadId, queued);
+  pendingByThread.delete(threadId);
+  pendingByThread.set(threadId, queued.slice(-MAX_PENDING_PREVIEWS_PER_THREAD));
+  while (pendingByThread.size > MAX_PENDING_PREVIEW_THREADS) {
+    pendingByThread.delete(pendingByThread.keys().next().value!);
+  }
 }
 
 export function consumePendingOpenFile(threadId: string): ThreadOpenFileIntent | null {
@@ -28,13 +40,39 @@ export function consumePendingOpenFile(threadId: string): ThreadOpenFileIntent |
   return next;
 }
 
-export const THREAD_OPEN_FILE_EVENT = 'zcc-thread-open-file';
+function deliverThreadOpenFile(threadId: string, file: ThreadOpenFileIntent): void {
+  const consumers = consumersByThread.get(threadId);
+  if (!consumers?.size) {
+    bufferThreadOpenFile(threadId, file);
+    return;
+  }
+  // Each mounted view receives the same request once, including two views of
+  // one thread. Views must not enqueue copies into a shared queue.
+  for (const consume of consumers) consume(file);
+}
+
+/** Installed by App, so requests survive navigation away from agent views. */
+export function installThreadOpenFileSignals(): () => void {
+  if (collectorUsers++ === 0) {
+    stopCollector = product.threads.onOpen((payload) => {
+      const parsed = parseThreadOpenFilePayload(payload);
+      if (parsed?.file) deliverThreadOpenFile(parsed.threadId, parsed.file);
+    });
+  }
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (--collectorUsers === 0) {
+      stopCollector?.();
+      stopCollector = undefined;
+    }
+  };
+}
 
 export function dispatchThreadOpenFile(threadId: string, path: string, lineNumber: number | null = null): void {
   if (!threadId || !path) return;
-  bufferThreadOpenFile(threadId, { source: 'workspace', path, lineNumber });
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent(THREAD_OPEN_FILE_EVENT, { detail: { threadId } }));
+  deliverThreadOpenFile(threadId, { source: 'workspace', path, lineNumber });
 }
 export function parseThreadOpenFilePayload(payload: unknown): {
   threadId: string;
@@ -78,11 +116,12 @@ export function openWorkspaceFileForThread(
 export function tabFromOpenFile(file: ThreadOpenFileIntent): Omit<ClosableSecondaryTab, 'id'> {
   const parts = file.path.split(/[/\\]/);
   const title = parts[parts.length - 1] || file.path;
-  const lineNumber = file.lineNumber != null && file.lineNumber > 0 ? file.lineNumber : undefined;
+  // A new whole-file request must clear an earlier line-focused preview.
+  const lineNumber = file.lineNumber != null && file.lineNumber > 0 ? file.lineNumber : null;
   if (file.source === 'thread-storage') {
-    return { kind: 'storage-preview', title, path: file.path, ...(lineNumber ? { lineNumber } : {}) };
+    return { kind: 'storage-preview', title, path: file.path, lineNumber };
   }
-  return { kind: 'file-preview', title, path: file.path, ...(lineNumber ? { lineNumber } : {}) };
+  return { kind: 'file-preview', title, path: file.path, lineNumber };
 }
 
 export function useThreadOpenFileSignal({
@@ -98,32 +137,16 @@ export function useThreadOpenFileSignal({
   openTabRef.current = openTab;
 
   useEffect(() => {
-    return product.threads.onOpen((payload) => {
-      const parsed = parseThreadOpenFilePayload(payload);
-      if (!parsed?.file) return;
-      bufferThreadOpenFile(parsed.threadId, parsed.file);
-    });
-  }, []);
-
-  useEffect(() => {
     if (threadId == null || environmentId === undefined) return;
-    const drain = () => {
-      const file = consumePendingOpenFile(threadId);
-      if (file) openTabRef.current(tabFromOpenFile(file));
-    };
-    drain();
-    const onLocal = (event: Event) => {
-      const detail = (event as CustomEvent<{ threadId?: string }>).detail;
-      if (detail?.threadId === threadId) drain();
-    };
-    window.addEventListener(THREAD_OPEN_FILE_EVENT, onLocal);
-    const stopHost = product.threads.onOpen((payload) => {
-      const parsed = parseThreadOpenFilePayload(payload);
-      if (parsed?.threadId === threadId) drain();
-    });
+    const consume = (file: ThreadOpenFileIntent) => openTabRef.current(tabFromOpenFile(file));
+    const consumers = consumersByThread.get(threadId) ?? new Set();
+    consumers.add(consume);
+    consumersByThread.set(threadId, consumers);
+    let pending;
+    while ((pending = consumePendingOpenFile(threadId))) consume(pending);
     return () => {
-      window.removeEventListener(THREAD_OPEN_FILE_EVENT, onLocal);
-      stopHost();
+      consumers.delete(consume);
+      if (!consumers.size) consumersByThread.delete(threadId);
     };
   }, [environmentId, threadId]);
 }

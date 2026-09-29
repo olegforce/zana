@@ -370,7 +370,7 @@ describe('AutoCloseIdleService', () => {
     expect(pushInbox).not.toHaveBeenCalled(); // no breadcrumb for a no-op close
   });
 
-  it('does not throw if preserveParkedQuestion throws; still closes', () => {
+  it('keeps the live question when durable preservation fails', () => {
     const { deps, clock, closeSession } = makeDeps({
       preserveParkedQuestion: vi.fn(() => {
         throw new Error('boom');
@@ -379,7 +379,7 @@ describe('AutoCloseIdleService', () => {
     const svc = new AutoCloseIdleService(deps);
     svc.observe('s1', 'idle');
     expect(() => clock.fireNext()).not.toThrow();
-    expect(closeSession).toHaveBeenCalledWith('s1');
+    expect(closeSession).not.toHaveBeenCalled();
   });
 
   it('remove() clears a pending timer and prevents a later close', () => {
@@ -420,5 +420,33 @@ describe('AutoCloseIdleService', () => {
     svc.observe('s1', 'idle');
     clock.fireNext();
     expect(onClosed).toHaveBeenCalledWith('s1', { preserved: true });
+  });
+});
+
+
+describe('remote parked-question persistence', () => {
+  it('awaits the durable write and rechecks human activity before closing', async () => {
+    let commit!: (value: boolean) => void;
+    const preserved = new Promise<boolean>(resolve => { commit = resolve; });
+    const session = { ...baseSession };
+    const { deps, clock, closeSession, getNow } = makeDeps({ getSession: () => session, preserveParkedQuestion: () => preserved });
+    const service = new AutoCloseIdleService(deps);
+    service.observe('s1', 'idle'); clock.fireNext();
+    expect(closeSession).not.toHaveBeenCalled();
+    session.lastInputAt = getNow();
+    commit(true); await preserved; await Promise.resolve();
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+  it('closes only after a successful commit, and leaves a question alive on rejection', async () => {
+    for (const success of [true, false]) {
+      let finish!: () => void;
+      const preserved = new Promise<boolean>((resolve, reject) => { finish = () => success ? resolve(true) : reject(new Error('host offline')); });
+      const { deps, clock, closeSession } = makeDeps({ preserveParkedQuestion: () => preserved });
+      const service = new AutoCloseIdleService(deps);
+      service.observe('s1', 'idle'); clock.fireNext();
+      expect(closeSession).not.toHaveBeenCalled(); finish();
+      await preserved.catch(() => {}); await Promise.resolve();
+      expect(closeSession).toHaveBeenCalledTimes(success ? 1 : 0);
+    }
   });
 });

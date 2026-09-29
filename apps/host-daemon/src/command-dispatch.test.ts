@@ -1024,7 +1024,7 @@ describe('host command dispatch', () => {
     await expect(dispatchHostCommand(runtime, {
       type: 'peer_daemon.status',
       remote: { host: 'devbox' },
-      serverHost: 'box.tailnet.ts.net'
+      serverHost: 'machine.example.com'
     })).resolves.toEqual({ state: 'connected' });
   });
 
@@ -1043,7 +1043,7 @@ describe('host command dispatch', () => {
     await expect(dispatchHostCommand(runtime, {
       type: 'peer_daemon.logs',
       remote: { host: 'devbox' },
-      serverHost: 'box.tailnet.ts.net'
+      serverHost: 'machine.example.com'
     })).resolves.toEqual({ log: '--- host-daemon.log ---\njoined' });
   });
 
@@ -1075,3 +1075,55 @@ function git(cwd: string, args: string[]): void {
     throw new Error(result.stderr || `git ${args.join(' ')} failed`);
   }
 }
+
+it('does not retain ownership after fast terminal exit or failed spawn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'zcc-fast-term-'));
+  try {
+    const sessionId = randomUUID();
+    const runtime = createCommandRuntime({ startTerminal: async () => {
+      runtime.emit({ terminalId: sessionId, kind: 'terminal.exited', payload: { exitCode: 0 } });
+      return { pid: 8 };
+    } });
+    const command = { type: 'terminal.start' as const, sessionId, root, cwd: root };
+    await dispatchHostCommand(runtime, command);
+    expect(runtime.terminals.size).toBe(0);
+    await dispatchHostCommand(runtime, { type: 'terminal.stop', sessionId });
+    runtime.startTerminal = async () => { throw new Error('spawn failed'); };
+    await expect(dispatchHostCommand(runtime, command)).rejects.toThrow('spawn failed');
+    expect(runtime.terminals.size).toBe(0);
+    runtime.startTerminal = undefined;
+    await expect(dispatchHostCommand(runtime, command)).rejects.toMatchObject({ code: 'unsupported' });
+    runtime.startTerminal = async () => ({ pid: 9 });
+    await dispatchHostCommand(runtime, command);
+    await expect(dispatchHostCommand(runtime, command)).rejects.toMatchObject({ code: 'terminal_exists' });
+    for (let i = 0; i < 128; i++) runtime.terminals.set(String(i), { cwd: root });
+    await expect(dispatchHostCommand(runtime, { ...command, sessionId: randomUUID() })).rejects.toMatchObject({ code: 'terminal_limit' });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('reserves CLI ownership before spawn, cleans failures and rejects unsupported, escaping and duplicate launches', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'zcc-cli-dispatch-'));
+  try {
+    const sessionId = randomUUID();
+    const runtime = createCommandRuntime({ startCliTerminal: async input => {
+      expect(runtime.terminals.has(input.grant.sessionId)).toBe(true);
+      runtime.emit({ terminalId: sessionId, kind: 'terminal.exited', payload: { exitCode: 0 } });
+      return { pid: 8 };
+    } });
+    const command = { type: 'terminal.start_cli' as const, grant: { sessionId, projectId: 'p', credential: 'a'.repeat(64) },
+      root, cwd: root, cols: 80, rows: 24, profile: 'claude' as const, config: {} };
+    expect(await dispatchHostCommand(runtime, command)).toEqual({ sessionId, started: true, pid: 8 });
+    expect(runtime.terminals.size).toBe(0);
+    runtime.startCliTerminal = async () => { throw new Error('CLI spawn failed'); };
+    await expect(dispatchHostCommand(runtime, command)).rejects.toThrow('CLI spawn failed');
+    expect(runtime.terminals.size).toBe(0);
+    runtime.startCliTerminal = undefined;
+    await expect(dispatchHostCommand(runtime, command)).rejects.toMatchObject({ code: 'unsupported' });
+    runtime.startCliTerminal = async () => ({});
+    await expect(dispatchHostCommand(runtime, { ...command, cwd: tmpdir() })).rejects.toMatchObject({ code: 'cwd-escape' });
+    await dispatchHostCommand(runtime, command);
+    await expect(dispatchHostCommand(runtime, command)).rejects.toMatchObject({ code: 'terminal_exists' });
+    for (let i = 0; i < 128; i++) runtime.terminals.set(String(i), { cwd: root });
+    await expect(dispatchHostCommand(runtime, { ...command, grant: { ...command.grant, sessionId: randomUUID() } })).rejects.toMatchObject({ code: 'terminal_limit' });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

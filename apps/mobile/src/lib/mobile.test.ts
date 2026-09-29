@@ -4,7 +4,6 @@ import {
   safePath,
   isSameServer,
   externalUrl,
-  parsePairingPayload,
   nativeIntent
 } from './urls';
 import {
@@ -14,7 +13,7 @@ import {
   saveProfile,
   removeProfile
 } from './profiles';
-import { pairServer, createSession, probeDirect, PairingRequired } from './client';
+import { createSession, PairingRequired } from './client';
 import { handleBridgeMessage } from './bridge-handler';
 const profile = { id: 'one', label: 'Mac', serverUrl: 'https://mac.example' };
 const response = (value: unknown, status = 200, type = 'application/json') =>
@@ -38,7 +37,7 @@ describe('mobile URLs and links', () => {
         expiresAt: Date.now() + 60_000
       });
       expect(nativeIntent(`zana://connect?payload=${encodeURIComponent(payload)}`)).toBe(
-        `/connect?payload=${encodeURIComponent(payload)}`
+        '/connect'
       );
       expect(normalizeServerUrl('https://MAC.example/')).toBe(profile.serverUrl);
       expect(safePath('/threads/../internal/hosts')).toBe('/');
@@ -91,47 +90,12 @@ describe('mobile URLs and links', () => {
     expect(externalUrl('javascript:alert(1)')).toBe(false);
     expect(externalUrl('not-url')).toBe(false);
   });
-  it('validates pairing expiry and routes links without implicitly pairing', () => {
-    const payload = {
-      version: 1,
-      serverUrl: profile.serverUrl,
-      code: 'a'.repeat(22),
-      expiresAt: Date.now() + 10_000
-    };
-    const raw = JSON.stringify(payload);
-    expect(parsePairingPayload(raw)).toEqual(payload);
-    const link = `zana://connect?payload=${encodeURIComponent(raw)}`;
-    expect(parsePairingPayload(link)).toEqual(payload);
-    expect(nativeIntent(link)).toContain('/connect?payload=');
-    expect(() => parsePairingPayload(raw, payload.expiresAt + 1)).toThrow();
-    expect(() => parsePairingPayload('x'.repeat(5000))).toThrow();
-    expect(
-      nativeIntent(`zana://open?server=${encodeURIComponent(profile.serverUrl)}&path=/threads/1`)
-    ).toContain('path=%2Fthreads%2F1');
+  it('routes retired pairing links to account sign-in without retaining their secret', () => {
+    expect(nativeIntent('zana://connect?payload=old-secret')).toBe('/connect');
+    expect(nativeIntent('zana://open?server=https://mac.example&path=/threads/1')).toContain('path=%2Fthreads%2F1');
     expect(nativeIntent('https://mac.example/threads/t1')).toContain('server=https');
     expect(nativeIntent('javascript:x')).toBe('/');
     expect(nativeIntent('malformed')).toBe('/');
-  });
-  it('rejects malformed QR contents and lookalike pairing links with readable errors', () => {
-    const raw = JSON.stringify({
-      version: 1,
-      serverUrl: profile.serverUrl,
-      code: 'a'.repeat(22),
-      expiresAt: Date.now() + 10_000
-    });
-    for (const prefix of [
-      'zana://connect.evil',
-      'zana://user@connect',
-      'zana://connect:123',
-      'zana://connect/other'
-    ])
-      expect(() => parsePairingPayload(`${prefix}?payload=${encodeURIComponent(raw)}`)).toThrow(
-        'Scan a Zana pairing QR'
-      );
-    for (const raw of ['null', '[]', '123', '{}', '{"version":1,"code":"bad"}'])
-      expect(() => parsePairingPayload(raw)).toThrow('invalid or expired');
-    expect(() => parsePairingPayload('not JSON')).toThrow('Scan a Zana pairing QR');
-    expect(() => parsePairingPayload('zana://connect')).toThrow('Scan a Zana pairing QR');
   });
 });
 describe('saved servers', () => {
@@ -179,99 +143,34 @@ describe('saved servers', () => {
   });
 });
 describe('mobile client', () => {
-  it('probes, pairs and validates the session cookie without exposing credentials in URLs', async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(response({ ok: true }))
-      .mockResolvedValueOnce(response({ credential: 'c'.repeat(43), deviceId: 'device' }))
-      .mockResolvedValueOnce(
-        response({
-          cookie: {
-            name: 'zcc_mobile_session',
-            value: 's'.repeat(43),
-            path: '/',
-            httpOnly: true,
-            secure: true,
-            expires: new Date(Date.now() + 60_000).toISOString()
-          },
-          expiresAt: Date.now() + 60_000
-        })
-      );
-    await probeDirect(profile.serverUrl, fetcher);
-    const credential = await pairServer(profile.serverUrl, 'code', 'Phone', fetcher);
-    expect((await createSession({ ...profile, ...credential }, fetcher))?.cookie.httpOnly).toBe(
-      true
-    );
-    expect(fetcher.mock.calls[2]?.[1]?.headers).toMatchObject({
-      Authorization: `Bearer ${credential.credential}`
-    });
-    expect(String(fetcher.mock.calls[2]?.[0])).not.toContain(credential.credential);
-    expect(await createSession(profile, vi.fn().mockResolvedValue(response({ ok: true })))).toBe(
-      null
-    );
+  const online = { ...profile, serverUrl: 'https://s-aaaaaaaaaaaaaaaaaaaaaaaa.connect.example.com', credential: 'c'.repeat(43), deviceId: 'phone', connectDomain: 'connect.example.com', accountUrl: 'https://example.com' };
+  it('never fetches local, unauthenticated or non-Connect profiles', async () => {
+    const fetcher = vi.fn();
+    for (const old of [profile, { ...online, connectDomain: undefined }, { ...online, serverUrl: 'http://192.168.1.2' }, { ...online, credential: undefined }]) {
+      await expect(createSession(old, fetcher)).rejects.toBeInstanceOf(PairingRequired);
+    }
+    expect(fetcher).not.toHaveBeenCalled();
   });
-  it('handles expired/revoked auth, HTML login redirects, malformed payloads and errors', async () => {
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response({}, 401)))
-    ).rejects.toBeInstanceOf(PairingRequired);
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response({}, 429)))
-    ).rejects.toThrow('Too many');
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response({}, 500)))
-    ).rejects.toThrow('500');
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response({}, 200, 'text/html')))
-    ).rejects.toThrow('not a Zana');
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response({ ok: false })))
-    ).rejects.toThrow();
-    await expect(
-      pairServer(
-        profile.serverUrl,
-        'code',
-        'Phone',
-        vi.fn().mockResolvedValue(response({ credential: 'bad' }))
-      )
-    ).rejects.toThrow('Invalid');
-    await expect(
-      createSession(
-        { ...profile, credential: 'c'.repeat(43) },
-        vi.fn().mockResolvedValue(response({ cookie: {} }))
-      )
-    ).rejects.toThrow('Invalid');
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(response('x'.repeat(20_000))))
-    ).rejects.toThrow('too large');
-    const redirect = response({ ok: true });
-    Object.defineProperty(redirect, 'url', { value: 'https://other.example' });
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockResolvedValue(redirect))
-    ).rejects.toThrow('redirected');
-    await expect(
-      probeDirect(profile.serverUrl, vi.fn().mockRejectedValue(new Error('offline')))
-    ).rejects.toThrow('Could not reach your Zana server');
+  it('handles revoked credentials, malformed cookies, redirects and bounded errors', async () => {
+    for (const [result, message] of [
+      [response({}, 401), 'Sign in with GitHub again'], [response({}, 429), 'Too many'],
+      [response({}, 500), '500'], [response({}, 200, 'text/html'), 'not a Zana'],
+      [response({ cookie: {} }), 'Invalid session'], [response('x'.repeat(20_000)), 'too large']
+    ] as const) await expect(createSession(online, vi.fn(async () => result))).rejects.toThrow(message);
+    const redirect = response({}); Object.defineProperty(redirect, 'url', { value: 'https://other.example' });
+    await expect(createSession(online, vi.fn(async () => redirect))).rejects.toThrow('redirected');
+    await expect(createSession(online, vi.fn(async () => { throw new Error('offline'); }))).rejects.toThrow('Could not reach');
   });
-  it('bounds an unresponsive connection and gives a readable timeout', async () => {
+  it('bounds an unresponsive authenticated connection', async () => {
     vi.useFakeTimers();
     try {
-      const fetcher = vi.fn<typeof fetch>().mockImplementation(
-        (_url, init) =>
-          new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => reject(new Error('native timeout')), {
-              once: true
-            });
-          })
-      );
-      const failed = expect(probeDirect(profile.serverUrl, fetcher)).rejects.toThrow(
-        'connection timed out'
-      );
-      await vi.advanceTimersByTimeAsync(12_000);
-      await failed;
+      const fetcher = vi.fn<typeof fetch>().mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('timeout')), { once: true });
+      }));
+      const failed = expect(createSession(online, fetcher)).rejects.toThrow('connection timed out');
+      await vi.advanceTimersByTimeAsync(12_000); await failed;
       expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    } finally { vi.useRealTimers(); }
   });
 });
 describe('native bridge dispatcher', () => {
@@ -282,6 +181,8 @@ describe('native bridge dispatcher', () => {
       share: vi.fn().mockResolvedValue('shared'),
       openExternal: vi.fn().mockResolvedValue(undefined),
       openSettings: vi.fn(),
+      openMenu: vi.fn(),
+      shellChrome: vi.fn(),
       authRequired: vi.fn(),
       ready: vi.fn(),
       inject: vi.fn()
@@ -292,6 +193,16 @@ describe('native bridge dispatcher', () => {
     expect(actions.openSettings).not.toHaveBeenCalled();
     await send({ type: 'open-native', screen: 'device-settings' });
     expect(actions.openSettings).toHaveBeenCalledOnce();
+    await send({ type: 'open-native', screen: 'connection-menu' }, 'https://evil.example');
+    await send({ type: 'shell-chrome', visible: true }, 'https://evil.example');
+    expect(actions.openMenu).not.toHaveBeenCalled();
+    expect(actions.shellChrome).not.toHaveBeenCalled();
+    await send({ type: 'open-native', screen: 'connection-menu' });
+    expect(actions.openMenu).toHaveBeenCalledOnce();
+    expect(actions.openSettings).toHaveBeenCalledOnce();
+    await send({ type: 'shell-chrome', visible: true });
+    await send({ type: 'shell-chrome', visible: false });
+    expect(actions.shellChrome.mock.calls).toEqual([[true], [false]]);
     await send({ type: 'auth-required' });
     expect(actions.authRequired).toHaveBeenCalledOnce();
     await send({ type: 'ready', path: '//evil' });
@@ -338,15 +249,5 @@ describe('notification routes and registration', () => {
       { serverUrl: profile.serverUrl, path: '/internal/hosts' }
     ])
       expect(notificationRoute(data, [profile])).toBeNull();
-  });
-  it('registers and unregisters only using a paired credential', async () => {
-    const { registerPush } = await import('./client');
-    await expect(registerPush(profile, 'ExpoPushToken[token]')).rejects.toThrow('paired');
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async () => response({ enabled: true }));
-    await registerPush({ ...profile, credential: 'c'.repeat(43) }, 'ExpoPushToken[token]', fetcher);
-    await registerPush({ ...profile, credential: 'c'.repeat(43) }, null, fetcher);
-    expect(fetcher.mock.calls.map((call) => call[1]?.method)).toEqual(['PUT', 'DELETE']);
   });
 });
