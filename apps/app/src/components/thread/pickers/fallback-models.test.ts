@@ -14,11 +14,17 @@ describe('fallback thread catalogs', () => {
     const models = fallbackModelsForProvider('claude-code');
     expect(models.map((row) => row.displayName)).toEqual([
       'Fable 5',
-      'Opus 5 (1M)',
+      'Opus 5.5 (1M)',
+      'Opus 5.5',
       'Opus 4.8 (1M)',
       'Opus 4.7 (1M)',
       'Sonnet 5'
     ]);
+    expect(models.map((row) => row.model)).toEqual(expect.arrayContaining([
+      'claude-opus-5-5[1m]',
+      'claude-opus-5-5'
+    ]));
+    expect(models.map((row) => row.model)).not.toContain('claude-opus-5[1m]');
     expect(models.find((row) => row.isDefault)?.model).toBe('claude-sonnet-5');
     expect(models[0]?.supportedReasoningEfforts.map((effort) => effort.reasoningEffort)).toEqual([
       'none',

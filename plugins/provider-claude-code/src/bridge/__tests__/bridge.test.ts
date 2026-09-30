@@ -2601,15 +2601,15 @@ describe("bridge", () => {
         models: [
           {
             value: "default",
-            resolvedModel: "claude-opus-5[1m]",
+            resolvedModel: "claude-opus-5-5[1m]",
             displayName: "Default (recommended)",
-            description: "Opus 5 with 1M context",
+            description: "Opus 5.5 with 1M context",
           },
           {
             value: "opus[1m]",
-            resolvedModel: "claude-opus-5[1m]",
+            resolvedModel: "claude-opus-5-5[1m]",
             displayName: "Opus",
-            description: "Opus 5 with 1M context",
+            description: "Opus 5.5 with 1M context",
           },
           {
             value: "sonnet",
@@ -2627,15 +2627,16 @@ describe("bridge", () => {
     });
     expect(models.map((model) => model.model)).toEqual([
       "claude-fable-5-1",
-      "claude-opus-5[1m]",
+      "claude-opus-5-5[1m]",
+      "claude-opus-5-5",
       "claude-opus-4-8[1m]",
       "claude-opus-4-7[1m]",
       "claude-sonnet-5",
     ]);
     expect(models.filter((model) => model.isDefault)).toEqual([
       expect.objectContaining({
-        model: "claude-opus-5[1m]",
-        displayName: "Opus 5 (1M)",
+        model: "claude-opus-5-5[1m]",
+        displayName: "Opus 5.5 (1M)",
       }),
     ]);
     expect(selectedOnlyModels.map((model) => model.model)).toEqual([

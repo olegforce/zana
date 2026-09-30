@@ -18,13 +18,24 @@ const config = (): AppConfig => ({
  * Cursor ACP primary list).
  */
 const THREAD_CATALOG_BY_FAMILY = {
-  claude: ['claude-fable-5', 'claude-opus-5[1m]', 'claude-sonnet-5'],
+  claude: ['claude-fable-5', 'claude-opus-5-5[1m]', 'claude-opus-5-5', 'claude-sonnet-5'],
   cursor: ['default', 'grok-4.6', 'gpt-5.6-sol', 'claude-opus-5', 'claude-fable-5', 'composer-2.5'],
   codex: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.6-sol'],
   grok: ['grok-4.5', 'grok-4.6']
 } as const;
 
 describe('thread catalog ↔ CLI Agent PTY launch alignment', () => {
+  it.each(['local', 'remote'] as const)('passes the exact Opus 5.5 1M model to %s launches', (scope) => {
+    const resolved = resolveModelTarget(providerFor('claude'), {
+      config: config(),
+      profile: 'claude',
+      extraArgs: [],
+      perTabRouting: { schemaVersion: 1, byAdapter: { claude: { modelTargetId: 'claude-opus-5-5[1m]' } } },
+      scope
+    });
+    expect(resolved.contribution.args).toEqual(['--model', 'claude-opus-5-5[1m]']);
+  });
+
   it('resolves every shared thread-catalog id without Unknown model target', () => {
     for (const [family, ids] of Object.entries(THREAD_CATALOG_BY_FAMILY)) {
       const provider = providerFor(family as 'claude' | 'cursor' | 'codex' | 'grok');

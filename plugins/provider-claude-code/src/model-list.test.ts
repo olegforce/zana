@@ -5,15 +5,15 @@ import { buildClaudeCodeModels } from "./model-list.js";
 const DISCOVERED_MODELS: ModelInfo[] = [
   {
     value: "default",
-    resolvedModel: "claude-opus-5[1m]",
+    resolvedModel: "claude-opus-5-5[1m]",
     displayName: "Default (recommended)",
-    description: "Opus 5 with 1M context",
+    description: "Opus 5.5 with 1M context",
   },
   {
     value: "opus[1m]",
-    resolvedModel: "claude-opus-5[1m]",
+    resolvedModel: "claude-opus-5-5[1m]",
     displayName: "Opus",
-    description: "Opus 5 with 1M context",
+    description: "Opus 5.5 with 1M context",
   },
   {
     value: "claude-fable-5-1[1m]",
@@ -37,13 +37,38 @@ const DISCOVERED_MODELS: ModelInfo[] = [
 
 const CURATED_MODELS = [
   "claude-fable-5-1",
-  "claude-opus-5[1m]",
+  "claude-opus-5-5[1m]",
+  "claude-opus-5-5",
   "claude-opus-4-8[1m]",
   "claude-opus-4-7[1m]",
   "claude-sonnet-5",
 ];
 
 describe("buildClaudeCodeModels", () => {
+  it("offers Opus 5.5 1M when discovery only reports standard-context Opus", () => {
+    const result = buildClaudeCodeModels([
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default", description: "Opus" },
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "Opus" },
+    ]);
+
+    expect(result.models.filter((model) => model.model.startsWith("claude-opus-5")))
+      .toEqual([
+        expect.objectContaining({ id: "claude-opus-5-5[1m]", model: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)", isDefault: false }),
+        expect.objectContaining({ id: "claude-opus-5-5", model: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true }),
+      ]);
+    expect(result.models.filter((model) => model.isDefault)).toHaveLength(1);
+  });
+
+  it("preserves older Opus versions when the provider explicitly reports them", () => {
+    const result = buildClaudeCodeModels([
+      { value: "default", resolvedModel: "claude-opus-5[1m]", displayName: "Default", description: "Older installation" },
+    ]);
+
+    expect(result.models.find((model) => model.isDefault)?.model).toBe("claude-opus-5[1m]");
+    expect(result.models.filter((model) => model.model === "claude-opus-5[1m]")).toHaveLength(1);
+    expect(result.models.map((model) => model.model)).toContain("claude-opus-5-5[1m]");
+  });
+
   it("always offers the curated catalog and appends discovered extras", () => {
     const result = buildClaudeCodeModels(DISCOVERED_MODELS);
 
@@ -52,7 +77,7 @@ describe("buildClaudeCodeModels", () => {
       "claude-haiku-4-5-20251001",
     ]);
     expect(result.models.find((model) => model.isDefault)?.model).toBe(
-      "claude-opus-5[1m]",
+      "claude-opus-5-5[1m]",
     );
     expect(result.selectedOnlyModels.map((model) => model.model)).toEqual([
       "opus[1m]",
@@ -71,7 +96,7 @@ describe("buildClaudeCodeModels", () => {
 
     expect(result.models.map((model) => model.model)).toEqual(CURATED_MODELS);
     expect(result.models.find((model) => model.isDefault)?.model).toBe(
-      "claude-opus-5[1m]",
+      "claude-opus-5-5[1m]",
     );
     expect(result.selectedOnlyModels).toEqual([]);
   });

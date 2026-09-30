@@ -206,9 +206,15 @@ describe('product HTTP', () => {
     expect(options.providers.find((row) => row.id === 'codex')?.composerActions).toEqual(['plan', 'goal']);
     expect(options.models.map((row) => row.displayName)).toEqual(expect.arrayContaining([
       'Fable 5',
-      'Opus 5 (1M)',
+      'Opus 5.5 (1M)',
+      'Opus 5.5',
       'Sonnet 5'
     ]));
+    expect(options.models.map((row) => row.model)).toEqual(expect.arrayContaining([
+      'claude-opus-5-5[1m]',
+      'claude-opus-5-5'
+    ]));
+    expect(options.models.map((row) => row.model)).not.toContain('claude-opus-5[1m]');
     expect(options.selectedOnlyModels?.map((row) => row.displayName)).toEqual(expect.arrayContaining([
       'Opus Alias (1M, Current)',
       'Sonnet Alias (Legacy)',

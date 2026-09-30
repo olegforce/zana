@@ -238,8 +238,8 @@ describe('ThreadCommandComposer submit path', () => {
     expect(source).toContain('<ThreadContextMeter');
     expect(source).toContain('contextWindowUsage');
     expect(source).toContain('onCompact=');
-    expect(source.indexOf('<ThreadContextMeter')).toBeLessThan(source.indexOf('Attach files'));
-    expect(source.indexOf('Attach files')).toBeLessThan(source.indexOf('Start voice input'));
+    expect(source.indexOf('Attach files')).toBeLessThan(source.indexOf('<ThreadContextMeter'));
+    expect(source.indexOf('<ThreadContextMeter')).toBeLessThan(source.indexOf('Start voice input'));
     expect(source).not.toContain('thread-command-context-group');
     expect(source).toContain('onTranscript');
     expect(source).not.toContain('Queue if active');

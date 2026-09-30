@@ -5,11 +5,19 @@
  * selectedOnly aliases and the mode chip sits left of the harness trigger.
  */
 import { test, expect, launchApp } from './fixtures/app.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
+import { makeFakeAgentBinary } from './sdk/harness.js';
 
 const PTY_ALIAS_IDS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
+const catalogAgent = makeFakeAgentBinary({ script: [
+  'if [ "$1" = "--version" ]; then echo "2.1.284 (Claude Code)"; exit 0; fi',
+  'exit 78'
+].join('\n') });
+
+test.use({ initialConfig: { claudeBinary: catalogAgent.path, defaultHarness: 'claude' } });
+test.afterAll(() => catalogAgent.cleanup());
 
 async function openCliAgentLauncher(window: Page) {
   await window.locator('[data-testid="nav-agents"]').click();
@@ -57,6 +65,67 @@ test('CLI Agent mode sits left of harness and uses the Thread catalog, not PTY a
 
   await window.getByTestId('model-reasoning-more-toggle').click();
   await expect(window.getByTestId('model-reasoning-more-menu')).toBeVisible();
+});
+
+test('CLI Agent offers Opus 5.5 1M and launches its exact model id', async ({ home }) => {
+  const projectPath = join(home, 'opus-project');
+  mkdirSync(projectPath, { recursive: true });
+  mkdirSync(join(home, '.zcc'), { recursive: true });
+  writeFileSync(join(home, '.zcc', 'projects.json'), JSON.stringify([
+    { id: 'opus-project', name: 'Opus project', path: projectPath }
+  ]));
+  const agent = makeFakeAgentBinary({ script: [
+    'if [ "$1" = "--version" ]; then echo "2.1.284 (Claude Code)"; exit 0; fi',
+    'printf "%s\\n" "$@" > .claude-launch-argv',
+    'while [ "$#" -gt 0 ]; do',
+    '  if [ "$1" = "--model" ]; then shift; picked_model="$1"; fi',
+    '  shift',
+    'done',
+    '[ "$picked_model" = "claude-opus-5-5[1m]" ] || exit 64',
+    'printf "\\033]2;\\342\\240\\211 Opus 5.5 ready\\007"',
+    'cat'
+  ].join('\n') });
+  const app = await launchApp(home, {
+    initialConfig: { claudeBinary: agent.path, defaultHarness: 'claude', lastProjectId: 'opus-project' }
+  });
+  try {
+    const { window } = app;
+    const catalog = await window.evaluate(async () => {
+      const response = await fetch('/api/v1/system/execution-options?providerId=claude-code&projectId=opus-project');
+      if (!response.ok) throw new Error(`Execution options: ${response.status}`);
+      return response.json();
+    });
+    expect(catalog.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'claude-opus-5-5[1m]', model: 'claude-opus-5-5[1m]', displayName: 'Opus 5.5 (1M)' }),
+      expect.objectContaining({ id: 'claude-opus-5-5', displayName: 'Opus 5.5' })
+    ]));
+    expect(catalog.models.some((row: { id: string }) => row.id === 'claude-opus-5[1m]')).toBe(false);
+
+    const modal = await openCliAgentLauncher(window);
+    await modal.getByTestId('model-reasoning-picker-trigger').click();
+    const model = window.getByTestId('model-reasoning-model-claude-opus-5-5[1m]');
+    await expect(model).toContainText('Opus 5.5 (1M)');
+    await model.click();
+    await modal.getByTestId('legacy-agent-command-input').fill('Check the selected model');
+    await modal.getByTestId('legacy-agent-command-send').click();
+    await expect(modal).toBeHidden({ timeout: 30_000 });
+    await expect.poll(() => {
+      try { return readFileSync(join(projectPath, '.claude-launch-argv'), 'utf8'); }
+      catch { return ''; }
+    }).toContain('--model\nclaude-opus-5-5[1m]\n');
+    await expect(window.getByTestId('agent-modal-state')).toHaveAttribute('data-state', 'working');
+  } finally {
+    try {
+      await app.window.evaluate(async () => {
+        for (const session of await window.cc.terminals.list('opus-project')) {
+          await window.cc.terminals.close(session.id);
+        }
+      });
+      await app.electron.close();
+    } finally {
+      agent.cleanup();
+    }
+  }
 });
 
 test('local project switches reuse models while remote discovery remains pending', async ({ home }) => {

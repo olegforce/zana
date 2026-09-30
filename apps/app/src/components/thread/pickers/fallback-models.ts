@@ -36,10 +36,17 @@ const CLAUDE_FALLBACK_MODELS: ReadonlyArray<{
     defaultReasoningEffort: 'high'
   },
   {
-    id: 'claude-opus-5[1m]',
-    model: 'claude-opus-5[1m]',
-    displayName: 'Opus 5 (1M)',
-    description: 'Opus 5 with 1M context for complex long coding sessions',
+    id: 'claude-opus-5-5[1m]',
+    model: 'claude-opus-5-5[1m]',
+    displayName: 'Opus 5.5 (1M)',
+    description: 'Opus 5.5 with 1M context; requires Claude Code v2.1.280+',
+    defaultReasoningEffort: 'high'
+  },
+  {
+    id: 'claude-opus-5-5',
+    model: 'claude-opus-5-5',
+    displayName: 'Opus 5.5',
+    description: 'Opus 5.5 for complex coding tasks; requires Claude Code v2.1.280+',
     defaultReasoningEffort: 'high'
   },
   {
