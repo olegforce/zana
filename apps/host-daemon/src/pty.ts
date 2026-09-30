@@ -148,6 +148,11 @@ interface Live {
    * swapped in after the backend boots.
    */
   proc: pty.IPty | ExecutionSession;
+  /**
+   * The TUI has advertised bracketed-paste support. Treat injected multi-line
+   * text as one paste so the following synthetic Return is a discrete submit.
+   */
+  bracketedPasteEnabled?: boolean;
   /** Local tmux owns the inner process; app shutdown should drop only our client. */
   localTmuxBacked?: boolean;
   /**
@@ -1950,6 +1955,15 @@ export class PtyManager extends EventEmitter {
   ): void {
     proc.onData((data) => {
       this.bufferData(session.id, data);
+      // Applications that opt into bracketed paste emit these standard terminal
+      // mode controls. Remember the current mode so an injected multi-line
+      // assignment is delivered like a real terminal paste, not as a sequence
+      // of newline keypresses. The prompt's Return stays outside the envelope.
+      const live = this.live.get(session.id);
+      if (live?.proc === proc) {
+        if (data.includes('\x1b[?2004h')) live.bracketedPasteEnabled = true;
+        if (data.includes('\x1b[?2004l')) live.bracketedPasteEnabled = false;
+      }
     });
     const diagnosticFile = this.diagnosticFiles.get(session.id);
     if (diagnosticFile) {
@@ -2991,11 +3005,15 @@ export class PtyManager extends EventEmitter {
    * as a premature Enter and a worker assignment submits only its truncated
    * first line (`turnCount: 0`). The deferred CR still submits the buffered
    * paste. Gated by provider so the Claude path stays byte-identical.
+   *
+   * Other TUIs, including current Codex, advertise bracketed-paste mode at
+   * runtime. Honor that standard mode too. The 200ms gap gives a large pasted
+   * assignment time to leave the TUI paste buffer before Return is delivered.
    */
   reply(id: string, text: string): boolean {
     const live = this.live.get(id);
     if (!live) return false;
-    const bracketed = providerFor(live.session.profile).submitViaBracketedPaste;
+    const bracketed = providerFor(live.session.profile).submitViaBracketedPaste || live.bracketedPasteEnabled === true;
     const body = bracketed ? `\x1b[200~${text}\x1b[201~` : text;
     // Mid-reconnect gap: when a tmux-backed remote drops, the old proc may be
     // dead while the detached agent still runs in tmux. In this window
@@ -3010,7 +3028,7 @@ export class PtyManager extends EventEmitter {
       // Re-resolve: the session may have exited during the delay.
       const stillLive = this.live.get(id);
       stillLive?.proc.write('\r');
-    }, 50);
+    }, 200);
     return true;
   }
 

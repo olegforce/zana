@@ -87,7 +87,7 @@ describe('PtyManager stdin-after-ready opening prompt', () => {
       vi.advanceTimersByTime(500);
       expect(proc.writes).toEqual(['analyse the repo']);
 
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
       expect(proc.writes).toEqual(['analyse the repo', '\r']);
     } finally {
       vi.useRealTimers();
@@ -133,7 +133,7 @@ describe('PtyManager stdin-after-ready opening prompt', () => {
       emit('04h> ');
       // Some execution backends cannot unsubscribe an already-queued chunk.
       readinessCallback('\x1b[?2004h');
-      vi.advanceTimersByTime(550);
+      vi.advanceTimersByTime(700);
       expect(proc.writes).toEqual(['analyse the repo', '\r']);
       expect(proc.dataCbs).toHaveLength(1);
       emit('\x1b[?2004h');

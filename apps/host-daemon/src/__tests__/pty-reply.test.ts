@@ -7,6 +7,7 @@ interface FakeProc {
   pid: number;
   writes: string[];
   exitCb?: (e: { exitCode: number }) => void;
+  dataCbs: Array<(d: string) => void>;
   write: (data: string) => void;
   onData: (cb: (d: string) => void) => void;
   onExit: (cb: (e: { exitCode: number }) => void) => void;
@@ -21,11 +22,12 @@ vi.mock('node-pty', () => ({
     const proc: FakeProc = {
       pid: 1000 + spawned.length,
       writes: [],
+      dataCbs: [],
       write(data: string) {
         this.writes.push(data);
       },
-      onData() {
-        // no-op; reply tests don't exercise the data stream
+      onData(cb: (d: string) => void) {
+        this.dataCbs.push(cb);
       },
       onExit(cb: (e: { exitCode: number }) => void) {
         // Record the handler so kill() can drive the exit path, which is what
@@ -84,6 +86,17 @@ function makeOpenCodeSession(mgr: PtyManager) {
   });
 }
 
+function makeCodexSession(mgr: PtyManager) {
+  return mgr.create({
+    projectId: 'p1',
+    profile: 'codex',
+    cwd: '/tmp',
+    cols: 80,
+    rows: 24,
+    config: { ...CONFIG, harnessCodexEnabled: true }
+  });
+}
+
 describe('PtyManager.reply', () => {
   beforeEach(() => {
     spawned.length = 0;
@@ -103,7 +116,11 @@ describe('PtyManager.reply', () => {
       expect(ok).toBe(true);
       expect(proc.writes).toEqual(['yes, proceed']);
 
-      vi.runAllTimers();
+      // A short timer can fire before a large paste has left Codex's input
+      // buffer. Return stays independently observable and arrives after 200ms.
+      vi.advanceTimersByTime(199);
+      expect(proc.writes).toEqual(['yes, proceed']);
+      vi.advanceTimersByTime(1);
       expect(proc.writes).toEqual(['yes, proceed', '\r']);
     } finally {
       vi.useRealTimers();
@@ -159,6 +176,29 @@ describe('PtyManager.reply', () => {
       vi.runAllTimers();
 
       // The whole multi-line body is one paste; a single trailing CR submits it.
+      expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`, '\r']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses advertised bracketed-paste mode for a multi-line Codex worker assignment', () => {
+    vi.useFakeTimers();
+    try {
+      const mgr = new PtyManager();
+      const session = makeCodexSession(mgr);
+      const proc = spawned[0];
+      const startWrites = proc.writes.length;
+      const assignment = 'You are assigned work unit `x`.\nTask: do it\n\nClose the unit.';
+
+      // Codex opts into the standard terminal bracketed-paste protocol when its
+      // composer is ready. Its long assignment must be a single paste, then a
+      // separate synthetic Return after the paste buffer has drained.
+      for (const cb of proc.dataCbs) cb('\x1b[?2004h');
+      mgr.reply(session.id, assignment);
+      expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`]);
+
+      vi.advanceTimersByTime(200);
       expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`, '\r']);
     } finally {
       vi.useRealTimers();
