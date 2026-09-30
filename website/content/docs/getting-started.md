@@ -30,7 +30,7 @@ page and open it. macOS is available today; Windows and Linux are on the way.
 matches CI and is required on remotes), `git`, and at least one supported
 harness CLI on your `PATH`: Claude Code, Cursor, OpenCode, Codex, or Pi. If
 the harness works in your terminal, ZCC can launch it. Remote execution hosts
-need **Node 22+** — see [Using Zana on multiple machines](/docs/multiple-devices/).
+need **Node 22+** — see [Using Zana on multiple machines](./multiple-devices.md).
 
 On first launch the app opens to an empty cockpit — no projects yet. That's the
 next step.
@@ -48,9 +48,10 @@ terminals, agents, and file explorer.
   add a remote SSH box.
 - Repeat for every codebase you work in — they all live in the same window.
 
-Enrolled machines are paired from **Settings → Machines** (a host daemon on the
-other box). SSH remotes stay a separate path. See
-[Using Zana on multiple machines](/docs/multiple-devices/).
+To work from another laptop or run Threads on it, follow
+[Using Zana on multiple machines](./multiple-devices.md). The guide covers your
+remote address, **Settings → Machines** pairing, project checkouts, and opening
+the same Zana in another desktop app. SSH remotes stay a separate path.
 
 You can group projects by category in the sidebar so a large fleet stays
 navigable.
@@ -115,9 +116,8 @@ letting the agents carry the rest.
 
 - **[Using Zana](/docs/using-zana/)** — a fuller tour of the
   Inbox, Agents, Teams, and the day-to-day workflows.
-- **[Using Zana on multiple machines](/docs/multiple-devices/)** — pair another
-  computer from Settings → Machines (public origin / relay; SSH reverse-tunnel
-  when this build has no public origin).
+- **[Using Zana on multiple machines](./multiple-devices.md)** — connect a second
+  laptop and control its Threads, terminals, and files from your Zana address.
 - **[The `zcc` CLI](/docs/cli/)** — a command-line companion that talks to the
   running app over the product HTTP API.
 - **[Plugins overview](/docs/extensions/)** — add panels, tabs, commands,

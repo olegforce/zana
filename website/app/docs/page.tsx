@@ -33,6 +33,7 @@ export default async function DocsIndex() {
           <div className="docs-hub-paths" data-reveal-stagger>
             <Link className="zcc-panel" href="/docs/getting-started/"><span>New to Zana</span><strong>Set up your first project <b aria-hidden="true">→</b></strong></Link>
             <Link className="zcc-panel" href="/docs/using-zana/"><span>Using Zana</span><strong>Operate projects and agents <b aria-hidden="true">→</b></strong></Link>
+            <Link className="zcc-panel" href="/docs/multiple-devices/"><span>Multiple machines</span><strong>Connect a second laptop <b aria-hidden="true">→</b></strong></Link>
             <Link className="zcc-panel" href="/extensions/"><span>Build or install</span><strong>Open the plugins hub <b aria-hidden="true">→</b></strong></Link>
           </div>
         </div>
