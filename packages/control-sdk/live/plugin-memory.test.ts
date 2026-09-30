@@ -263,6 +263,7 @@ describe.skipIf(!enabled)('live memory plugin CLI', () => {
         projectId: project.id,
         providerId: 'codex',
         permissionMode: 'accept-edits',
+        reasoningLevel: 'low',
         visibility: 'hidden',
         prompt: [
           'Do not use tools.',

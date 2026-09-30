@@ -89,6 +89,14 @@ test('Codex writer contention retries through the built provider and composer', 
     await expect(timeline.getByText(REPLY, { exact: true })).toHaveCount(2, { timeout: 30_000 });
     const requests = readFileSync(join(home, 'codex-requests.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(requests.filter((entry) => entry.method === 'thread/resume').length).toBeGreaterThanOrEqual(2);
+    // Omitting a model in product HTTP must preserve Codex's configured default,
+    // including after recovery. The host's internal "default" is not a model id.
+    for (const method of ['thread/start', 'thread/resume', 'turn/start']) {
+      const nativeRequests = requests.filter(entry => entry.method === method);
+      expect(nativeRequests.length).toBeGreaterThan(0);
+      for (const request of nativeRequests) expect(request.params.model).not.toBe('default');
+    }
+    expect(requests.find(entry => entry.method === 'thread/start').params).not.toHaveProperty('model');
     await expect(window.locator('.thread-status-badge.is-error')).toHaveCount(0);
   } finally {
     if (existsSync(lock)) unlinkSync(lock);
