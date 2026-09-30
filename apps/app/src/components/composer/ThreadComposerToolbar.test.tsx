@@ -13,7 +13,8 @@ function toolbar(overrides: Partial<Parameters<typeof ThreadComposerToolbar>[0]>
       model={<button>Model</button>}
       reasoning={<button>Thinking effort</button>}
       sendMode={<button>Send mode</button>}
-      secondaryActions={<button>Attach files</button>}
+      primaryActions={<button>Attach files</button>}
+      secondaryActions={<button>Voice input</button>}
       stop={null}
       send={<button>Send</button>}
       {...overrides}
@@ -95,10 +96,21 @@ it('keeps permission changes outside the options disclosure beside the model', (
   expect(screen.getByRole('button', { name: 'Composer options' }).getAttribute('aria-expanded')).toBe('false');
 });
 
+it('keeps primary actions visible outside the options disclosure', () => {
+  const attach = vi.fn();
+  render(toolbar({ primaryActions: <button onClick={attach}>Attach files</button> }));
+  const button = screen.getByRole('button', { name: 'Attach files' });
+  expect(button.closest('.thread-command-options')).toBeNull();
+  expect(button.closest('.thread-command-secondary-actions')).toBeNull();
+  fireEvent.click(button);
+  expect(attach).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Composer options' }).getAttribute('aria-expanded')).toBe('false');
+});
+
 it('supports unavailable optional controls and distinct instances', () => {
   render(
     <>
-      {toolbar({ mode: null, reasoning: null, sendMode: null, secondaryActions: null })}
+      {toolbar({ mode: null, reasoning: null, sendMode: null, primaryActions: null, secondaryActions: null })}
       {toolbar()}
     </>
   );
