@@ -1388,11 +1388,9 @@ export class PtyManager extends EventEmitter {
       : [];
     // `inbox_search` is read-only (never mutates the inbox), so it's safe to
     // pre-approve alongside the other read tools — same rationale as `agent_inbox`.
-    const inboxAllow = !mcpConfigPath
+    const narrowInboxAllow = !mcpServerUrl
       ? []
-      : trustAllZcc
-        ? ['mcp__zcc-inbox', ...alwaysOnPluginMcpAllowlist()]
-        : opts.scheduled
+      : opts.scheduled
           ? [
               'mcp__zcc-inbox__inbox_push',
               'mcp__zcc-inbox__inbox_search',
@@ -1418,6 +1416,11 @@ export class PtyManager extends EventEmitter {
               ...remoteFsAllow,
               ...runInTerminalAllow
             ];
+    const inboxAllow = !mcpConfigPath
+      ? []
+      : trustAllZcc
+        ? ['mcp__zcc-inbox', ...alwaysOnPluginMcpAllowlist()]
+        : narrowInboxAllow;
     // Per-tab Claude session id. Forcing `--session-id <uuid>` at first launch
     // gives each claude tab a *stable, distinct* transcript id, so restore can
     // resume that exact conversation (`--resume <id>`) rather than the blunt
@@ -1499,8 +1502,9 @@ export class PtyManager extends EventEmitter {
     // Job Team's MCP allowlist and AskUserQuestion denial use Claude-only argv
     // flags. Passing them to another harness makes its CLI reject the launch
     // before it can consume the already-bound kickoff prompt.
-    const claudeJobTeamPolicy = (isDurableCoordination(opts.coordinationMode)) && caps.injectsClaudeMcpConfig;
-    const jobTeamAllow = claudeJobTeamPolicy
+    const durableJobTeam = isDurableCoordination(opts.coordinationMode);
+    const claudeJobTeamPolicy = durableJobTeam && caps.injectsClaudeMcpConfig;
+    const jobTeamAllow = durableJobTeam
       ? [
           'mcp__zcc-inbox__execution.snapshot',
           'mcp__zcc-inbox__execution.source.list',
@@ -1526,6 +1530,20 @@ export class PtyManager extends EventEmitter {
     const jobTeamArgs = claudeJobTeamPolicy
       ? ['--disallowedTools', 'AskUserQuestion']
       : [];
+    // Codex supports native MCP approval configuration via `-c`. Keep ordinary
+    // sessions on their configured on-request policy; durable Job Teams get only
+    // the same safe tools Claude already receives. The explicit Trust-all switch
+    // is intentionally broader and maps to Codex's server-wide approval mode.
+    const mcpApprovalArgs = !mcpServerUrl
+      ? []
+      : trustAllZcc
+        ? provider.mcpApprovalArgs(effectiveProfile, { defaultToolsApprovalMode: 'approve' })
+        : durableJobTeam
+          ? provider.mcpApprovalArgs(effectiveProfile, {
+              tools: [...narrowInboxAllow, ...jobTeamAllow]
+                .map((tool) => tool.replace(/^mcp__zcc-inbox__/, ''))
+            })
+          : [];
     // Precedence order (lowest → highest):
     //   base profile args → AppConfig globals (already in `args`)
     //   → claudeMcpArgs → providerMcpArgs → providerGuidanceArgs → providerHookArgs
@@ -1553,6 +1571,7 @@ export class PtyManager extends EventEmitter {
           ...nativeMintArgs,
           ...claudeMcpArgs,
            ...(providerIntegration.mcpArgs ?? []),
+          ...mcpApprovalArgs,
            ...(providerIntegration.guidanceArgs ?? []),
            ...(providerIntegration.hookArgs ?? []),
            ...(providerIntegration.authArgs ?? []),
@@ -1566,7 +1585,7 @@ export class PtyManager extends EventEmitter {
            ...lifecycleContribution.args,
           ...cleanedExtra
         ],
-        [...inboxAllow, ...jobTeamAllow]
+        [...inboxAllow, ...(claudeJobTeamPolicy ? jobTeamAllow : [])]
       ),
       opts.remoteToolProxy && caps.injectsClaudeMcpConfig
         ? [...REMOTE_TOOL_PROXY_DISALLOWED_TOOLS]

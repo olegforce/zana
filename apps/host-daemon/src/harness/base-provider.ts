@@ -33,6 +33,7 @@ import {
 import type {
   AutoModeInput,
   HarnessAuthInjection,
+  McpToolApproval,
   LaunchProvider,
   ProviderHookUrls,
   RemoteCommandInput,
@@ -132,6 +133,10 @@ export abstract class BaseLaunchProvider implements LaunchProvider {
    * no such surface. See the interface doc for the full rationale.
    */
   mcpArgs(_profile: LaunchProfileId, _mcpUrl: string): string[] {
+    return [];
+  }
+
+  mcpApprovalArgs(_profile: LaunchProfileId, _approval: McpToolApproval): string[] {
     return [];
   }
 

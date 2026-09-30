@@ -373,6 +373,23 @@ describe('CodexProvider — the three -c bridges (exact argv + TOML escaping)', 
     });
   });
 
+  describe('mcpApprovalArgs', () => {
+    it('uses Codex native per-tool approval overrides and deduplicates tools', () => {
+      expect(p.mcpApprovalArgs('codex', {
+        tools: ['execution.work.complete', 'inbox_push', 'execution.work.complete']
+      })).toEqual([
+        '-c', 'mcp_servers.zcc-inbox.tools."execution.work.complete".approval_mode="approve"',
+        '-c', 'mcp_servers.zcc-inbox.tools."inbox_push".approval_mode="approve"'
+      ]);
+    });
+
+    it('uses the native server-wide approval mode only when requested', () => {
+      expect(p.mcpApprovalArgs('codex', { defaultToolsApprovalMode: 'approve' })).toEqual([
+        '-c', 'mcp_servers.zcc-inbox.default_tools_approval_mode="approve"'
+      ]);
+    });
+  });
+
   describe('guidanceArgs (G3 — developer_instructions over -c)', () => {
     it('returns [] for empty guidance (nothing to inject)', () => {
       expect(p.guidanceArgs('codex', '')).toEqual([]);

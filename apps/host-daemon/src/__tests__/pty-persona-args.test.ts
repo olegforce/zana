@@ -487,6 +487,61 @@ describe('PtyManager.create — trustZccToolsEnabled (whole-server pre-approval)
   });
 });
 
+describe('PtyManager.create — Codex MCP approval overrides', () => {
+  beforeEach(() => {
+    spawned.length = 0;
+  });
+
+  it('keeps workspace-write + on-request and pre-approves only safe durable Job Team tools', () => {
+    const mgr = new PtyManager();
+    mgr.setMcpBaseUrl('http://127.0.0.1:3000');
+    mgr.create({
+      projectId: 'proj1',
+      profile: 'codex',
+      cwd: '/tmp',
+      cols: 80,
+      rows: 24,
+      coordinationMode: 'job-team',
+      config: {
+        ...CONFIG,
+        defaultCodexSandbox: 'workspace-write',
+        defaultCodexApproval: 'on-request',
+        trustZccToolsEnabled: false
+      }
+    });
+    const argv = spawned[0].args;
+    expect(argv).toEqual(expect.arrayContaining(['-s', 'workspace-write', '-a', 'on-request']));
+    expect(argv).toContain('mcp_servers.zcc-inbox.tools."execution.work.complete".approval_mode="approve"');
+    expect(argv).toContain('mcp_servers.zcc-inbox.tools."execution.work.block".approval_mode="approve"');
+    expect(argv).toContain('mcp_servers.zcc-inbox.tools."inbox_push".approval_mode="approve"');
+    expect(argv).not.toContain('--allowedTools');
+    expect(argv).not.toContain('mcp_servers.zcc-inbox.tools."remote_exec".approval_mode="approve"');
+    expect(argv).not.toContain('mcp_servers.zcc-inbox.tools."library_remove".approval_mode="approve"');
+  });
+
+  it('maps Trust all ZCC tools to Codex server-wide approval mode', () => {
+    const mgr = new PtyManager();
+    mgr.setMcpBaseUrl('http://127.0.0.1:3000');
+    mgr.create({
+      projectId: 'proj1',
+      profile: 'codex',
+      cwd: '/tmp',
+      cols: 80,
+      rows: 24,
+      coordinationMode: 'job-team',
+      config: {
+        ...CONFIG,
+        defaultCodexSandbox: 'workspace-write',
+        defaultCodexApproval: 'on-request',
+        trustZccToolsEnabled: true
+      }
+    });
+    const argv = spawned[0].args;
+    expect(argv).toContain('mcp_servers.zcc-inbox.default_tools_approval_mode="approve"');
+    expect(argv.some((arg) => arg.includes('mcp_servers.zcc-inbox.tools.'))).toBe(false);
+  });
+});
+
 describe('PtyManager.create — isolated-worktree self-awareness layer', () => {
   beforeEach(() => {
     spawned.length = 0;
