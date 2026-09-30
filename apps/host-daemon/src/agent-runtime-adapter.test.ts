@@ -33,6 +33,51 @@ describe('agent runtime thread adapter', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it('reports preparing, live, completed and failed work and removes stopped work from reconnect inventory', async () => {
+    const threadId = randomUUID(), environmentId = randomUUID();
+    let finish!: (value: { providerThreadId: string }) => void;
+    let runtime!: ReturnType<typeof createAgentRuntimeWithAdapters>;
+    let runtimeOptions!: Parameters<typeof createAgentRuntimeWithAdapters>[0];
+    const adapter = createAgentRuntimeAdapter({ dataDir: cwd, emit: () => {}, createRuntime: options => {
+      runtimeOptions = options;
+      runtime = createAgentRuntimeWithAdapters({ ...options, adapterFactory: () => createFakeAdapter({ scriptPath: fakeProviderScriptPath }) });
+      vi.spyOn(runtime, 'startThread').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      return runtime;
+    } });
+    const status = () => adapter.getRuntimeSnapshot!().threads.find(thread => thread.threadId === threadId)?.status;
+    const starting = adapter.startWork({ threadId, environmentId, projectId: 'fixture', providerId: 'fake', input: [], cwd });
+    try {
+      expect(status()).toBe('active');
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      finish({ providerThreadId: 'provider-thread' }); await starting;
+      expect(status()).toBe('idle');
+      const live = vi.spyOn(runtime, 'getLiveThreadIds').mockReturnValue([threadId]);
+      expect(status()).toBe('active');
+      live.mockReturnValue([]);
+      runtimeOptions.onEvent({ type: 'turn/completed', threadId, scope: { kind: 'turn', turnId: 'failed' }, providerThreadId: null, status: 'failed' });
+      expect(status()).toBe('error');
+      vi.spyOn(runtime, 'runTurn').mockRejectedValueOnce(new Error('provider failed'));
+      await expect(adapter.submitTurn({ threadId, input: [] })).rejects.toThrow('provider failed');
+      expect(status()).toBe('error');
+      vi.spyOn(runtime, 'stopThread').mockResolvedValue(undefined);
+      await adapter.stopWork({ threadId });
+      expect(adapter.getRuntimeSnapshot!()).toEqual({ threads: [], loadedEnvironments: [environmentId] });
+    } finally { adapter.dispose(); }
+  });
+
+  it.each(['start', 'resume'] as const)('reports %s preparation failure instead of resurrecting work on reconnect', async method => {
+    const adapter = createAgentRuntimeAdapter({ dataDir: cwd, emit: () => {}, createRuntime: options => {
+      const runtime = createAgentRuntimeWithAdapters({ ...options, adapterFactory: () => createFakeAdapter({ scriptPath: fakeProviderScriptPath }) });
+      vi.spyOn(runtime, method === 'start' ? 'startThread' : 'resumeThread').mockRejectedValue(new Error('launch failed'));
+      return runtime;
+    } });
+    const input = { threadId: randomUUID(), environmentId: randomUUID(), projectId: 'fixture', providerId: 'fake', input: [], providerThreadId: 'provider-thread', cwd };
+    try {
+      await expect(method === 'start' ? adapter.startWork(input) : adapter.resumeWork(input)).rejects.toThrow('launch failed');
+      expect(adapter.getRuntimeSnapshot!().threads).toEqual([{ threadId: input.threadId, status: 'error' }]);
+    } finally { adapter.dispose(); }
+  });
+
   it('merges plugin tools with remote proxy tooling', () => {
     expect(mergeSessionTooling({
       remoteProxy: false,
@@ -1093,6 +1138,8 @@ describe('agent runtime thread adapter', () => {
       }
     });
     expect(health).toEqual({ supported: false });
+    expect(adapter.getRuntimeSnapshot!()).toEqual({ threads: [], loadedEnvironments: [] });
+    expect(adapter.listLoadedEnvironments()).toEqual([]);
     adapter.dispose();
   });
 

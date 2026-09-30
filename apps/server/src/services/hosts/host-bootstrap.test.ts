@@ -95,8 +95,8 @@ describe('host bootstrap helpers', () => {
     })).toEqual({ kind: 'repair', hostId: 'h-remote' });
   });
 
-  it('refreshes a connected daemon instead of treating the websocket as healthy', () => {
-    expect(resolveRepairPlan('connected')).toBe('install');
+  it('restarts existing installations and installs only when missing', () => {
+    expect(resolveRepairPlan('connected')).toBe('restart');
     expect(resolveRepairPlan('not_installed')).toBe('install');
     expect(resolveRepairPlan('disconnected')).toBe('restart');
   });

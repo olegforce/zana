@@ -1,4 +1,4 @@
-import type { HostBridgeLaunch, ProviderHealthResult, ProviderListModelsResult } from '@zana-ai/zcc-contracts/host-rpc';
+import type { HostBridgeLaunch, HostRuntimeSnapshot, ProviderHealthResult, ProviderListModelsResult } from '@zana-ai/zcc-contracts/host-rpc';
 import type { PromptInput, ReasoningLevel } from '@zana-ai/zcc-domain/thread-runtime';
 import type { ReapIdleProviderSessionsArgs, ReapIdleProviderSessionsResult } from '@zana-ai/zcc-agent-runtime';
 import type {
@@ -48,6 +48,7 @@ export interface ThreadRuntimeAdapter {
   clearGoal(input: { threadId: string }): Promise<{ cleared: boolean }>;
   reapIdleProviderSessions(args: ReapIdleProviderSessionsArgs): Promise<ReapIdleProviderSessionsResult>;
   refreshSkillCatalog(): Promise<void>;
+  getRuntimeSnapshot?(): HostRuntimeSnapshot;
   listLoadedEnvironments(): string[];
   dispose(): void;
 }

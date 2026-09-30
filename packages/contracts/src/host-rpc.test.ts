@@ -7,6 +7,10 @@ import {
   HostEnrollResponseSchema,
   HostEventBatchMessageSchema,
   HostHelloOkMessageSchema,
+  HostReadyMessageSchema,
+  HostReadyOkMessageSchema,
+  HostHeartbeatMessageSchema,
+  HostHeartbeatAckMessageSchema,
   HostRpcCommandSchema,
   HostRpcRequestMessageSchema,
   HostRpcResponseMessageSchema,
@@ -19,6 +23,31 @@ const threadId = randomUUID();
 const environmentId = randomUUID();
 
 describe('host-rpc contract', () => {
+  it('requires a bounded runtime inventory before readiness and binds the acknowledgement to the lifetime', () => {
+    const ready = { type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId,
+      runtime: { threads: [{ threadId, status: 'active' }], loadedEnvironments: [environmentId] } };
+    expect(HostReadyMessageSchema.safeParse(ready).success).toBe(true);
+    for (const patch of [
+      { runtime: undefined }, { instanceId: 'invalid' }, { protocolVersion: HOST_RPC_PROTOCOL_VERSION - 1 },
+      { runtime: { ...ready.runtime, threads: Array(4097).fill({ threadId, status: 'active' }) } },
+      { runtime: { ...ready.runtime, loadedEnvironments: Array(4097).fill(environmentId) } },
+      { runtime: { ...ready.runtime, threads: [{ threadId, status: 'invented' }] } }
+    ]) expect(HostReadyMessageSchema.safeParse({ ...ready, ...patch }).success).toBe(false);
+    const ack = { type: 'host.ready-ok', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId };
+    expect(HostReadyOkMessageSchema.safeParse(ack).success).toBe(true);
+    expect(HostReadyOkMessageSchema.safeParse({ ...ack, instanceId: undefined }).success).toBe(false);
+  });
+  it('advertises bounded heartbeat leases and validates heartbeat replies', () => {
+    const hello = { type: 'host.hello-ok', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId };
+    expect(HostHelloOkMessageSchema.parse(hello)).toMatchObject({ heartbeatIntervalMs: 5000, leaseTimeoutMs: 30000 });
+    for (const patch of [{ heartbeatIntervalMs: 0 }, { heartbeatIntervalMs: 30001 }, { leaseTimeoutMs: 29999 }, { leaseTimeoutMs: 120001 }]) {
+      expect(HostHelloOkMessageSchema.safeParse({ ...hello, ...patch }).success).toBe(false);
+    }
+    expect(HostHeartbeatMessageSchema.safeParse({ type: 'heartbeat' }).success).toBe(true);
+    expect(HostHeartbeatAckMessageSchema.safeParse({ type: 'heartbeat-ack' }).success).toBe(true);
+    expect(HostHeartbeatMessageSchema.safeParse({ type: 'heartbeat', hostId: 'forged' }).success).toBe(false);
+    expect(HostHeartbeatAckMessageSchema.safeParse({ type: 'heartbeat-ack', extra: true }).success).toBe(false);
+  });
   it('bounds read-only checkout history commands and validates returned rows', () => {
     const command = { type: 'host.git_history', root: '/project', limit: 50 };
     expect(HostRpcCommandSchema.safeParse(command).success).toBe(true);
@@ -54,7 +83,9 @@ describe('host-rpc contract', () => {
       type: 'host.hello-ok',
       protocolVersion: HOST_RPC_PROTOCOL_VERSION,
       hostId,
-      pluginHostGenerations: []
+      pluginHostGenerations: [],
+      heartbeatIntervalMs: 5000,
+      leaseTimeoutMs: 30000
     });
   });
 
@@ -789,7 +820,7 @@ describe('host-rpc contract', () => {
   });
 
   it('parses desktop.browser commands, results, and a non-UUID thread payload', () => {
-    expect(HOST_RPC_PROTOCOL_VERSION).toBe(38);
+    expect(HOST_RPC_PROTOCOL_VERSION).toBe(39);
     expect(HostRpcCommandSchema.parse({
       type: 'desktop.browser.list_instances'
     }).type).toBe('desktop.browser.list_instances');

@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -115,6 +115,50 @@ describe('peer-daemon commands', () => {
       hostId: 'dd727df2-6d9a-43be-9af3-342abe864245'
     });
     expect(parsePeerDaemonStatusOutput('connected\n', 0)).toEqual({ state: 'connected' });
+  });
+
+  it.each([
+    ['disconnected', 1, 'disconnected'],
+    ['SSH banner\ndisconnected dd727df2-6d9a-43be-9af3-342abe864245\n', 1, 'disconnected'],
+    ['disconnected', 0, 'disconnected'],
+    ['not connected to SSH', 255, 'disconnected'],
+    ['', 0, 'disconnected'],
+    ['', null, 'disconnected'],
+    ['', 2, 'not_installed'],
+    ['connected bad-id', 0, 'connected']
+  ] as const)('parses status exactly: %s / %s', (stdout, code, state) => {
+    const parsed = parsePeerDaemonStatusOutput(stdout, code);
+    expect(parsed.state).toBe(state);
+    if (stdout.includes('bad-id')) expect(parsed.hostId).toBeUndefined();
+  });
+
+  it('can restart an unmanaged installation without another join code', () => {
+    const command = peerRestartCommand('machine.example.com');
+    expect(command).toContain('"$join_bin" restart');
+    expect(command).toContain('ZCC_DATA_DIR="$data_dir"');
+    expect(command).toContain('export PATH="$(dirname "$node_bin"):$PATH"');
+    expect(command).not.toContain('--join-code');
+    expect(command).toContain('/nix/store/*-nodejs-22.*/bin/node');
+  });
+
+  it('runs child tools with the selected Node even when the SSH PATH starts with an older Node', () => {
+    const home = mkdtempSync(join(tmpdir(), 'zcc-peer-path-'));
+    const oldBin = join(home, 'old'), selectedBin = join(home, 'selected');
+    mkdirSync(oldBin); mkdirSync(selectedBin);
+    writeFileSync(join(oldBin, 'node'), '#!/bin/sh\necho 20\n', { mode: 0o700 });
+    writeFileSync(join(oldBin, 'uname'), '#!/bin/sh\necho Linux\n', { mode: 0o700 });
+    writeFileSync(join(oldBin, 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+    const selected = join(selectedBin, 'node');
+    // The selected launcher invokes a child via env, just like a CLI shebang.
+    writeFileSync(selected, '#!/bin/sh\nif [ "$1" = -p ]; then echo 22; else /usr/bin/env node -p version; fi\n', { mode: 0o700 });
+    try {
+      const result = execFileSync('/bin/sh', ['-c', peerRestartCommand('fixture.test')], {
+        env: { HOME: home, PATH: `${oldBin}:/usr/bin:/bin`, ZCC_NODE: selected }, encoding: 'utf8', timeout: 10000
+      });
+      expect(result.trim()).toBe('22');
+    } catch (error) {
+      throw new Error(`${String(error)}\n${String((error as { stderr?: unknown }).stderr ?? '')}`);
+    } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
   it('restart requires an existing install', async () => {

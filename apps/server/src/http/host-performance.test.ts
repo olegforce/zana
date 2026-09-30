@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import { hashHostKey } from './host-hub.js';
 import { PERFORMANCE_WORKLOAD_CAP, PERFORMANCE_THREAD_LIST_CAP, PERFORMANCE_WORKLOAD_SQL } from './host-performance.js';
 
 let server: ProductServer;
+let serverClosed = false;
 let dir: string;
 const sockets: WebSocket[] = [];
 const key = 'test-performance-host-key-with-enough-bytes';
@@ -20,12 +21,14 @@ const terminal = (id: string, hostId: string, status: 'running' | 'exited') => (
   id, hostId, status, projectId: 'project', title: 'Shell', profile: 'shell', cwd: '/tmp', createdAt: Date.now()
 });
 beforeEach(async () => {
+  serverClosed = false;
   dir = mkdtempSync(join(tmpdir(), 'zcc-performance-'));
   server = await startProductServer({ dataDir: dir, origins: { serverPort: 0, devAppPort: 5173 } });
 });
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.terminate();
-  await server.close();
+  if (!serverClosed) await server.close();
+  vi.useRealTimers();
   rmSync(dir, { recursive: true, force: true });
 });
 const host = (name: string) => upsertHost(server.ctx.db, { name, hostKeyHash: hashHostKey(key), isPrimary: false });
@@ -36,8 +39,12 @@ async function connect(id: string) {
   sockets.push(socket);
   await once(socket, 'open');
   const hello = once(socket, 'message');
-  socket.send(JSON.stringify({ type: 'host.hello', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: id, instanceId: randomUUID() }));
+  const instanceId = randomUUID();
+  socket.send(JSON.stringify({ type: 'host.hello', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: id, instanceId }));
   await hello;
+  const ready = once(socket, 'message');
+  socket.send(JSON.stringify({ type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: id, instanceId, runtime: { threads: [], loadedEnvironments: [] } }));
+  await ready;
   return socket;
 }
 
@@ -109,7 +116,9 @@ describe('host performance HTTP', () => {
     expect(connected).toMatchObject({ connected: true, lastHeartbeatAt: null });
     expect(connected.connectedAt).toBeGreaterThan(0);
     const lastSeen = getHost(server.ctx.db, a.id)!.lastSeenAt;
+    const acknowledged = once(socket, 'message');
     socket.send(JSON.stringify({ type: 'heartbeat' }));
+    expect(JSON.parse(String((await acknowledged)[0]))).toEqual({ type: 'heartbeat-ack' });
     await expect.poll(async () => (await read(a.id)).lastHeartbeatAt).not.toBeNull();
     expect(getHost(server.ctx.db, a.id)!.lastSeenAt).toBe(lastSeen);
     socket.close(); await once(socket, 'close');
@@ -117,5 +126,23 @@ describe('host performance HTTP', () => {
     expect((await read(a.id)).recentConnections[0]).toMatchObject({ reason: 'socket-closed' });
     await connect(a.id);
     expect(await read(a.id)).toMatchObject({ connected: true, lastHeartbeatAt: null });
+  });
+
+  it('expires an unresponsive host lease and releases the sweep on server shutdown', async () => {
+    await server.close();
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    server = await startProductServer({ dataDir: dir, origins: { serverPort: 0, devAppPort: 5173 } });
+    const h = host('silent'); const socket = await connect(h.id);
+    expect(server.ctx.hostHub.connectedHostIds()).toContain(h.id);
+    socket.send(JSON.stringify({ type: 'heartbeat', forged: true }));
+    await vi.advanceTimersByTimeAsync(35000);
+    expect(server.ctx.hostHub.connectedHostIds()).not.toContain(h.id);
+    expect((await read(h.id)).recentConnections[0]).toMatchObject({ reason: 'heartbeat-timeout' });
+    await connect(h.id);
+    const closed = server.close();
+    for (const s of sockets) s.terminate();
+    await closed;
+    serverClosed = true;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
