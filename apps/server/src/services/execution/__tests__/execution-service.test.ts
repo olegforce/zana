@@ -2517,6 +2517,9 @@ describe('SquadExecutionService', () => {
   }));
 
   it('re-arms an active deadline on idempotent start replay', async () => fixture(async (filePath) => {
+    let now = 1_000;
+    const clock = () => now;
+    const makeStore = () => createExecutionStore({ filePath, id: () => 'execution-1', now: clock });
     const timers = new Map<number, () => void>();
     let nextTimer = 1;
     const setTimer = vi.fn((fn: () => void) => {
@@ -2525,14 +2528,18 @@ describe('SquadExecutionService', () => {
       return id as unknown as NodeJS.Timeout;
     });
     const clearTimer = vi.fn((timer: NodeJS.Timeout) => timers.delete(timer as unknown as number));
-    const service = new SquadExecutionService(deps(filePath, { setTimer, clearTimer }));
-    await service.start('session-1', 'project-1', { ...request, policy: { deadlineMs: 1_000 } });
+    const service = new SquadExecutionService(deps(filePath, { store: makeStore(), now: clock, setTimer, clearTimer }));
+    await expect(service.start('session-1', 'project-1', { ...request, policy: { deadlineMs: 1_000 } })).resolves.toMatchObject({ ok: true });
+    expect(timers.size).toBe(1);
     service.dispose();
     expect(timers.size).toBe(0);
 
-    const replayService = new SquadExecutionService(deps(filePath, { setTimer, clearTimer }));
-    await replayService.start('session-1', 'project-1', { ...request, policy: { deadlineMs: 1_000 } });
+    // Replay with time remaining, regardless of how long CI takes to read disk.
+    now += 500;
+    const replayService = new SquadExecutionService(deps(filePath, { store: makeStore(), now: clock, setTimer, clearTimer }));
+    await expect(replayService.start('session-1', 'project-1', { ...request, policy: { deadlineMs: 1_000 } })).resolves.toMatchObject({ ok: true });
     expect(timers.size).toBe(1);
+    expect(setTimer).toHaveBeenLastCalledWith(expect.any(Function), 500);
     replayService.dispose();
   }));
 
