@@ -1,10 +1,11 @@
 import { test, expect, launchApp } from './fixtures/app.js';
 import { createServer, request } from 'node:https';
+import { createServer as createDevServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { once } from 'node:events';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createHmac } from 'node:crypto';
 import { chromium } from '@playwright/test';
 import { openConnectDatabase } from '../website/connect/database.mjs';
@@ -15,12 +16,17 @@ import { phonePortEnv } from './fixtures/phone-port.js';
 test('Connect enrolls through desktop IPC and serves authenticated phone traffic at the Electron boundary', async ({ home }, testInfo) => {
   test.setTimeout(180_000);
   const cert = join(home, 'connect-cert.pem'), key = join(home, 'connect-key.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:*.connect.zana.test,DNS:*.zana.test,IP:127.0.0.1'], { stdio: 'ignore' });
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:*.connect.zana.localhost,DNS:*.zana.localhost,IP:127.0.0.1'], { stdio: 'ignore' });
   let gateway: ReturnType<typeof createConnectGateway>;
   const edge = createServer({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => { req.headers['x-forwarded-proto'] = 'https'; void gateway.handleHttp(req, res); });
   edge.on('upgrade', (req, socket, head) => { req.headers['x-forwarded-proto'] = 'https'; void gateway.handleUpgrade(req, socket, head); });
   edge.listen(0, '127.0.0.1'); await once(edge, 'listening');
   const port = (edge.address() as { port: number }).port;
+  // RFC 6761 localhost subdomains resolve in the product utility too. Serve
+  // both loopback families; no public DNS or machine-wide hosts edits.
+  const edge6 = createServer({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => { req.headers['x-forwarded-proto'] = 'https'; void gateway.handleHttp(req, res); });
+  edge6.on('upgrade', (req, socket, head) => { req.headers['x-forwarded-proto'] = 'https'; void gateway.handleUpgrade(req, socket, head); });
+  edge6.listen(port, '::1'); await once(edge6, 'listening');
   const origin = `https://127.0.0.1:${port}`;
   const db = await openConnectDatabase(':memory:', { production: false }); await db.migrate();
   await db.query('CREATE TABLE users(id TEXT PRIMARY KEY,github_login TEXT)');
@@ -28,7 +34,7 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
   await db.query('INSERT INTO users VALUES($1,$1)', ['fixture-owner']);
   await db.query('INSERT INTO sessions VALUES($1,$2,$3)', ['browser-fixture', 'fixture-owner', Date.now() + 180_000]);
   const accountCookie = `zcc_session=browser-fixture.${createHmac('sha256', 'test-account-secret').update('browser-fixture').digest('base64url')}`;
-  const registry = createRegistry(db, { domain: `connect.zana.test:${port}`, browserDomain: `zana.test:${port}`, accountUrl: origin });
+  const registry = createRegistry(db, { domain: `connect.zana.localhost:${port}`, browserDomain: `zana.localhost:${port}`, accountUrl: origin });
   gateway = createConnectGateway({ db, registry, sessionSecret: 'test-account-secret' });
   const lookup = (_hostname: string, options: any, callback: any) => callback(null, options?.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4);
   function remote(url: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
@@ -38,6 +44,22 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
       }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
     });
   }
+  const devHeaders: unknown[] = [];
+  const dev = createDevServer((req, res) => {
+    devHeaders.push(req.headers);
+    if (req.url === '/large') { res.end('x'.repeat(32_768)); return; }
+    res.setHeader('content-type', 'text/html');
+    res.end(`<h1>Private shared preview</h1><p id="asset"></p><p id="reload"></p><script>
+      fetch('/large').then(r => r.text()).then(t => document.querySelector('#asset').textContent = 'Asset bytes: ' + t.length);
+      const ws = new WebSocket('wss://' + location.host + '/hmr', ['vite-hmr']);
+      ws.onmessage = e => document.querySelector('#reload').textContent = e.data;
+      ws.onclose = () => document.querySelector('#reload').textContent = 'Share stopped';
+    </script>`);
+  });
+  const devWs = new WebSocketServer({ server: dev });
+  devWs.on('connection', ws => ws.send('Hot reload connected'));
+  dev.listen(0, '127.0.0.1'); await once(dev, 'listening');
+  const devPort = (dev.address() as { port: number }).port;
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   let ws: WebSocket | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -60,7 +82,7 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     // still verifies the generated certificate for the selected laptop host.
     await app.electron.evaluate(({ shell }) => {
       const dns = process.getBuiltinModule('dns'); const original = dns.lookup;
-      dns.lookup = ((hostname: string, options: any, callback: any) => hostname.endsWith('.zana.test') ? callback(null, options?.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4) : original(hostname, options, callback)) as typeof dns.lookup;
+      dns.lookup = ((hostname: string, options: any, callback: any) => hostname.endsWith('.zana.localhost') ? callback(null, options?.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4) : original(hostname, options, callback)) as typeof dns.lookup;
       shell.openExternal = async url => { (globalThis as any).__connectApprovalUrl = url; };
     });
     const win = app.window;
@@ -100,9 +122,9 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     await expect.poll(() => win.evaluate(() => window.cc.mobile.status())).toMatchObject({ running: true, relayState: 'connected' });
     await expect(win.getByRole('status').filter({ hasText: /^Connected$/ })).toBeVisible();
     await win.screenshot({ path: testInfo.outputPath('remote-access-desktop.png') });
-    expect(browserUrl).toBe(`https://my-computer.zana.test:${port}`);
-    expect(new URL(publicUrl).hostname).toMatch(/^s-[a-f0-9]{24}\.connect\.zana\.test$/);
-    browser = await chromium.launch({ args: ['--host-resolver-rules=MAP *.zana.test 127.0.0.1'] });
+    expect(browserUrl).toBe(`https://my-computer.zana.localhost:${port}`);
+    expect(new URL(publicUrl).hostname).toMatch(/^s-[a-f0-9]{24}\.connect\.zana\.localhost$/);
+    browser = await chromium.launch({ args: ['--host-resolver-rules=MAP *.zana.localhost 127.0.0.1'] });
     const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } });
     browserContext = context;
     const browserPage = await context.newPage();
@@ -133,9 +155,36 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     expect(await browserPage.evaluate(async () => (await fetch('/api/v1/projects')).status)).toBe(200);
     expect(await browserPage.evaluate(async () => (await fetch('/internal/hosts')).status)).toBe(404);
     const browserCookies = await context.cookies(browserUrl);
-    expect(browserCookies.find(item => item.name === 'zcc_connect_session')).toMatchObject({ domain: 'my-computer.zana.test', httpOnly: true, secure: true });
+    expect(browserCookies.find(item => item.name === 'zcc_connect_session')).toMatchObject({ domain: 'my-computer.zana.localhost', httpOnly: true, secure: true });
     expect(browserCookies.some(item => item.name === 'zcc_connect_state')).toBe(false);
     await browserPage.screenshot({ path: testInfo.outputPath('connect-browser-address.png') });
+    // Shared preview: real Settings → product service → outbound preview lane →
+    // account login → HTTP assets + WebSocket HMR in a real browser.
+    await win.getByLabel('Port', { exact: true }).fill(String(devPort));
+    await win.getByRole('button', { name: 'Share preview', exact: true }).click();
+    const sharedUrl = `https://my-computer--${devPort}.zana.localhost:${port}`;
+    await expect(win.getByText(sharedUrl, { exact: true })).toBeVisible({ timeout: 40_000 });
+    await expect(win.getByRole('status').filter({ hasText: /^Ready$/ })).toBeVisible({ timeout: 15_000 });
+    const previewPage = await context.newPage();
+    await previewPage.goto(sharedUrl);
+    await expect(previewPage).toHaveURL(new RegExp('/connect/\\?browser='));
+    const previewCode = new URL(previewPage.url()).searchParams.get('browser');
+    const previewApproval = await remote(`${origin}/api/connect/browser/approve`, 'POST', { code: previewCode }, { cookie: accountCookie, origin });
+    expect(previewApproval.status).toBe(200);
+    await previewPage.goto(JSON.parse(previewApproval.body).location);
+    await expect(previewPage.getByRole('heading', { name: 'Private shared preview' })).toBeVisible();
+    await expect(previewPage.locator('#asset')).toHaveText('Asset bytes: 32768');
+    await expect(previewPage.locator('#reload')).toHaveText('Hot reload connected');
+    expect(JSON.stringify(devHeaders)).not.toMatch(/zcc_connect_session|x-zcc-|Bearer/);
+    await previewPage.screenshot({ path: testInfo.outputPath('shared-preview.png') });
+    const protectedPort = Number(new URL(win.url()).port);
+    expect(await win.evaluate(async port => (await fetch('/api/v1/previews', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ port }) })).status, protectedPort)).toBe(409);
+    await win.getByRole('button', { name: `Stop sharing ${devPort}` }).click();
+    await expect(previewPage.locator('#reload')).toHaveText('Share stopped');
+    const stoppedPreview = await remote(sharedUrl);
+    expect(stoppedPreview.status).toBe(503);
+    expect(JSON.parse(stoppedPreview.body).error).toBe('preview_offline');
+    await previewPage.close();
     await db.query('DELETE FROM sessions WHERE id=$1', ['browser-fixture']);
     expect(await browserPage.evaluate(async () => (await fetch('/api/v1/projects')).status)).toBe(401);
     // The integration dispatch must cross the real tunnel, loopback gateway and
@@ -198,6 +247,6 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     throw error;
   } finally {
     await browserContext?.tracing.stop({ path: testInfo.outputPath('connect-browser-trace.zip') });
-    ws?.terminate(); await browser?.close(); await app?.electron.close(); await gateway.close(); edge.closeAllConnections(); await new Promise<void>(resolve => edge.close(() => resolve())); await db.close();
+    ws?.terminate(); for (const socket of devWs.clients) socket.terminate(); devWs.close(); dev.closeAllConnections(); await new Promise<void>(resolve => dev.close(() => resolve())); await browser?.close(); await app?.electron.close(); await gateway.close(); edge6.closeAllConnections(); await new Promise<void>(resolve => edge6.close(() => resolve())); edge.closeAllConnections(); await new Promise<void>(resolve => edge.close(() => resolve())); await db.close();
   }
 });

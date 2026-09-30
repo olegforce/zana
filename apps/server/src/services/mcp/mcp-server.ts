@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../../../services/mobile-relay/protected-ports.mjs';
 /**
  * Local MCP server for project-scoped agent -> user push.
  *
@@ -1218,6 +1219,7 @@ function isAddrInUse(error: unknown): boolean {
 function listenLoopback(server: Server, port: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     server.once('error', reject);
+    protectPreviewServer(server);
     server.listen(port, '127.0.0.1', () => {
       server.off('error', reject);
       resolve();

@@ -7,6 +7,7 @@
 export const RESERVED_ZCC_CLI_COMMANDS: readonly string[] = [
   'agent',
   'browser',
+  'connect',
   'environment',
   'file',
   'followup',

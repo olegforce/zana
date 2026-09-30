@@ -241,3 +241,74 @@ it('shows an offline page only after browser authorization and refuses unknown C
   expect((await call(a.host, '/_connect/missing')).status).toBe(404);
   expect((await call('not.valid.connect.example.com', '/')).status).toBe(404);
 });
+
+async function previewLane(server: any, port = 5173, machineCredential?: string) {
+  const ws = socket(server, '/_relay/previews', { authorization: `Bearer ${server.credential}`, 'x-zcc-preview-version': '1', ...(machineCredential ? { 'x-zcc-machine-credential': machineCredential } : {}) });
+  const hello = once(ws, 'message'); await once(ws, 'open');
+  expect(JSON.parse((await hello)[0].toString()).previewVersion).toBe(1);
+  ws.send(JSON.stringify({ type: 'preview-targets', id: 0, targets: [{ port, expiresAt: Date.now() + 60_000 }] }));
+  const requests: any[] = [];
+  ws.on('message', raw => {
+    const frame = JSON.parse(raw.toString());
+    if (frame.type === 'request') requests.push(frame);
+    if (frame.type === 'request-end') {
+      ws.send(JSON.stringify({ type: 'response', id: frame.id, status: 200, headers: { 'content-type': 'application/json', 'set-cookie': ['app=value; Domain=.example.com', 'zcc_session=evil'] } }));
+      ws.send(JSON.stringify({ type: 'response-data', id: frame.id, data: Buffer.from(JSON.stringify(requests.at(-1))).toString('base64') }));
+      ws.send(JSON.stringify({ type: 'response-end', id: frame.id }));
+    }
+  });
+  return ws;
+}
+async function previewCookie(host: string) {
+  const login = await call(host, '/_connect/login?returnTo=%2Fapp');
+  expect(login.status).toBe(303);
+  const code = new URL(login.headers.location).searchParams.get('browser');
+  expect((await call('example.com', '/api/connect/browser/approve', { code }, { cookie: cookie('bob'), origin: 'https://example.com' })).status).toBe(403);
+  const approval = await call('example.com', '/api/connect/browser/approve', { code }, { cookie: cookie('alice'), origin: 'https://example.com' });
+  const callback = new URL(approval.body.location);
+  const redeemed = await call(host, callback.pathname + callback.search, undefined, { cookie: login.headers['set-cookie'][0].split(';')[0] });
+  expect(redeemed.status).toBe(303);
+  return redeemed.headers['set-cookie'][0].split(';')[0];
+}
+it('isolates preview origins, authenticates their owner and strips credentials before forwarding', async () => {
+  const a = await enroll('alice'); await laptop(a, 'A'); await registry.claimAddress('alice', a.serverId, 'alice-mac');
+  const lane = await previewLane(a); const host = 'alice-mac--5173.example.com';
+  await expect.poll(async () => (await call(host, '/')).status).toBe(401);
+  expect(gateway.matches({ headers: { host }, url: '/' })).toBe(true);
+  const auth = await previewCookie(host);
+  const result = await call(host, '/app', undefined, { cookie: `${auth}; app=hello`, authorization: 'Bearer secret', 'x-zcc-host-id': 'forged' });
+  expect(result.status).toBe(200); expect(result.body.target).toBe(5173); expect(result.body.headers.cookie).toBe('app=hello');
+  expect(JSON.stringify(result.body)).not.toMatch(/secret|forged|zcc_connect_session/);
+  expect(result.headers['set-cookie']).toEqual(['app=value']);
+  expect((await call('alice-mac.example.com', '/', undefined, { cookie: auth })).status).toBe(401);
+  expect((await call('alice-mac--5174.example.com', '/', undefined, { cookie: auth })).status).toBe(404);
+  expect((await call(host, '/api/v1/hosts', undefined, { 'x-zcc-machine-credential': 'forged' })).status).toBe(403);
+  expect((await call(host, '/internal/hosts', undefined, { cookie: auth })).status).toBe(404);
+  lane.send(JSON.stringify({ type: 'preview-targets', id: 0, targets: [] }));
+  await expect.poll(async () => (await call(host, '/', undefined, { cookie: auth })).status).toBe(404);
+});
+it('keeps two execution-machine previews on the same port separate and revokes just one machine', async () => {
+  const { randomUUID, randomBytes } = await import('node:crypto');
+  const { machinePreviewKey } = await import('../relay/mobile/preview-policy.mjs');
+  const a = await enroll('alice'); await laptop(a, 'A'); await registry.claimAddress('alice', a.serverId, 'alice-mac');
+  const principal = await registry.authenticateServer(a.credential); const instanceId = randomUUID();
+  const machines = [];
+  for (let i = 0; i < 2; i++) {
+    const hostId = randomUUID(); const issued = await registry.createMachineCode(principal, { hostId, instanceId, name: `Machine ${i}`, enrollToken: `zcde_${randomBytes(18).toString('base64url')}` });
+    const joined = await registry.redeemMachineCode(issued.code, randomBytes(32).toString('base64url'));
+    const lane = await previewLane(a, 5173, joined.credential); const host = `alice-mac--${machinePreviewKey(hostId)}--5173.example.com`;
+    await expect.poll(async () => (await call(host, '/')).status).toBe(401);
+    machines.push({ host, hostId, lane, auth: await previewCookie(host) });
+  }
+  for (const machine of machines) expect((await call(machine.host, '/', undefined, { cookie: machine.auth })).status).toBe(200);
+  expect((await call(machines[0].host, '/', undefined, { cookie: machines[1].auth })).status).toBe(401);
+  const closed = once(machines[0].lane, 'close'); await registry.revokeMachine(principal, machines[0].hostId); await closed;
+  expect((await call(machines[0].host, '/', undefined, { cookie: machines[0].auth })).status).toBe(503);
+  expect((await call(machines[1].host, '/', undefined, { cookie: machines[1].auth })).status).toBe(200);
+});
+it('fails closed for incompatible preview versions and unauthorized preview publishers', async () => {
+  const a = await enroll('alice'); const b = await enroll('bob'); await laptop(a, 'A');
+  for (const [headers, status] of [[{ authorization: `Bearer ${a.credential}` }, 409], [{ authorization: `Bearer ${b.credential}`, 'x-zcc-preview-version': '1' }, 401]] as const) {
+    const ws = socket(a, '/_relay/previews', headers); expect((await once(ws, 'unexpected-response'))[1].statusCode).toBe(status); ws.terminate();
+  }
+});

@@ -137,6 +137,9 @@ export async function runCli(argv: string[], deps?: Partial<CliDeps>): Promise<C
     } else if (command === 'guide') {
       const { runGuideCommand } = await import('./commands/guide.js');
       return await runGuideCommand(subcommand, jsonOutput);
+    } else if (command === 'connect') {
+      const { runConnectCommand } = await import('./commands/connect.js');
+      return await runConnectCommand(subcommand, rest, jsonOutput, httpDeps);
     } else if (command === 'thread') {
       const { runThreadCommand } = await import('./commands/thread.js');
       return await runThreadCommand(subcommand, rest, jsonOutput, httpDeps, dataDir);
@@ -313,6 +316,7 @@ PRODUCT API (app must be running — ZCC_SERVER_URL, default http://127.0.0.1:87
   thread show|log|tell|wait|stop|fork|archive|unarchive|interactions <id>
   thread background list|stop <id>
   thread open <id> [--file PATH] [--source workspace|thread-storage] [--line N]
+  connect shares|expose|unexpose  Manage private dev-server previews
   machine list|show|join-code|rename|remove|provider-cli
   project list|show|create|files|content|skills|processes
   projects ls              Alias of project list

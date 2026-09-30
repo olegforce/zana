@@ -26,7 +26,8 @@ const HELP_GROUPS = [
   'team',
   'live',
   'browser',
-  'file'
+  'file',
+  'connect'
 ] as const;
 
 describe('cli / guide / skill keep-in-sync', () => {
@@ -62,6 +63,7 @@ describe('cli / guide / skill keep-in-sync', () => {
     const ids = GUIDE_CHAPTERS.map((row) => row.id);
     expect(ids).toEqual([
       'overview',
+      'connect',
       'threads',
       'projects',
       'machines',

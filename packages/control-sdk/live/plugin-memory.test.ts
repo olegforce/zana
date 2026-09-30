@@ -223,7 +223,7 @@ describe.skipIf(!enabled)('live memory plugin CLI', () => {
     const created: MemoryRow[] = [];
     try {
       if (!(await requireRunningMemory(zcc, 'memory model'))) return;
-      const pre = await preflightOrSkip(zcc, { surface: 'thread', providerId: 'claude-code' });
+      const pre = await preflightOrSkip(zcc, { surface: 'thread', providerId: 'codex' });
       if (isSkip(pre)) {
         console.warn(`[live] skip memory model: ${pre.reason}`);
         return;
@@ -261,7 +261,7 @@ describe.skipIf(!enabled)('live memory plugin CLI', () => {
 
       const thread = await zcc.threads.spawn({
         projectId: project.id,
-        providerId: 'claude-code',
+        providerId: 'codex',
         permissionMode: 'accept-edits',
         visibility: 'hidden',
         prompt: [

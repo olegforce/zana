@@ -1,3 +1,4 @@
+import { PREVIEW_TARGET, PREVIEW_PATH, parsePreviewLabel, machinePreviewKey, previewPathAllowed } from '../relay/mobile/preview-policy.mjs';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { createRelay } from '../relay/mobile/server.mjs';
@@ -17,6 +18,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
   const navigation = req => req.method === 'GET' && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
   const wantsHtml = req => req.method === 'GET' && String(req.headers.accept ?? '').includes('text/html');
   const entries = new Map();
+  const previewEntries = new Map();
   const visitors = new Map();
   const responses = new Map();
   let checking = null; let closed = false;
@@ -27,6 +29,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
   };
   const onRevoke = (kind, id) => {
     if (kind === 'server') closeEntry(id);
+    for (const [key, entry] of previewEntries) if ((kind === 'server' && entry.server.id === id) || (kind === 'machine' && entry.machine?.id === id)) { entry.relay.close(); previewEntries.delete(key); }
     for (const [ws, value] of visitors) if ((kind === 'device' && value.kind === 'device' && value.deviceId === id) || (kind === 'machine' && value.kind === 'machine' && value.id === id) || (kind === 'server' && value.serverId === id)) ws.close(1008, 'Access revoked');
     for (const [res, value] of responses) if ((kind === 'device' && value.kind === 'device' && value.deviceId === id) || (kind === 'machine' && value.kind === 'machine' && value.id === id) || (kind === 'server' && value.serverId === id)) res.destroy();
   };
@@ -36,7 +39,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
     for (const domain of [registry.domain, registry.browserDomain]) {
       const suffix = `.${domain}`;
       const label = host.endsWith(suffix) ? host.slice(0, -suffix.length) : '';
-      if (/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(label)) return label;
+      if (/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(label) || parsePreviewLabel(label)) return label;
     }
     return null;
   };
@@ -68,12 +71,22 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
   const getServer = async req => {
     const label = hostLabel(req);
     if (!label) throw new ConnectError('unknown_server', 404);
-    const server = await registry.resolveServer(label);
+    const server = await registry.resolveServer(parsePreviewLabel(label)?.base ?? label);
     if (!server) throw new ConnectError('unknown_server', 404);
     // A label is served on exactly one canonical host. In particular, a public
     // alias cannot reuse its cookie/callback on the transport namespace.
     if (req.headers.host !== new URL(registry.browserUrl(label)).host) throw new ConnectError('unknown_server', 404);
     return server;
+  };
+  const previewFor = (req, server) => {
+    const target = parsePreviewLabel(hostLabel(req));
+    if (!target) return null;
+    if (!entries.get(server.id)?.relay.connected()) throw new ConnectError('computer_offline', 503);
+    const entry = previewEntries.get(`${server.id}:${target.machine ?? ''}`);
+    if (!entry?.relay.connected()) throw new ConnectError('preview_offline', 503);
+    if (!entry.relay.hasPreview(target.port)) throw new ConnectError('preview_not_shared', 404);
+    req[PREVIEW_TARGET] = target.port;
+    return entry;
   };
   const getDevice = async (req, server) => {
     const device = await registry.authenticateDevice(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
@@ -97,7 +110,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
     const credential = req.headers[MACHINE_CREDENTIAL_HEADER];
     delete req.headers[MACHINE_CREDENTIAL_HEADER];
     if (credential !== undefined) {
-      if (req.headers.origin || !isMachinePath(req.method, req.url, upgrade)) throw new ConnectError('machine_route_denied', 403);
+      if (parsePreviewLabel(hostLabel(req)) || req.headers.origin || !isMachinePath(req.method, req.url, upgrade)) throw new ConnectError('machine_route_denied', 403);
       const machine = await registry.authenticateMachine(server, credential);
       if (!machine) throw new ConnectError('unauthorized_machine', 403);
       req.headers[MACHINE_HOST_HEADER] = machine.host_id;
@@ -130,6 +143,10 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
         if (entry.relay.connected()) await registry.markSeen(id);
         else if (Date.now() - entry.createdAt > 15_000) closeEntry(id);
       }
+      for (const [key, entry] of previewEntries) {
+        const active = await registry.resolveServer(entry.server.label);
+        if (!active || active.credential_hash !== entry.server.credential_hash || !entries.get(entry.server.id)?.relay.connected() || (entry.machine && !await registry.authorizeMachineGrant(entry.server, entry.machine))) { entry.relay.close(); previewEntries.delete(key); }
+      }
       // A DB-backed check also covers revocations from another web process.
       for (const [ws, value] of visitors) if (!await authorizeVisitor(value)) ws.close(1008, 'Session expired or revoked');
       for (const [res, value] of responses) if (!await authorizeVisitor(value)) res.destroy();
@@ -151,7 +168,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
       return dispatchPluginRequest(entry.relay, registry.serverUrl(server.label), pluginId, payload, timeoutMs);
     },
     matches: req => apiPath(req) || String(req.headers.host ?? '').endsWith(`.${registry.domain}`) ||
-      (req.headers.host !== accountOrigin.host && addressError(hostLabel(req)) === null),
+      (req.headers.host !== accountOrigin.host && (addressError(hostLabel(req)) === null || !!parsePreviewLabel(hostLabel(req)))),
     async handleHttp(req, res) {
       try {
         if (closed) throw new ConnectError('connect_unavailable', 503);
@@ -161,6 +178,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
           return await reply(await api.dispatch(toRequest(req), key), res);
         }
         const server = await getServer(req);
+        const preview = parsePreviewLabel(hostLabel(req)) ? previewFor(req, server) : null;
         const path = (req.url ?? '/').split('?')[0];
         if (path === '/_connect/login' && req.method === 'GET') {
           rate(server.id);
@@ -175,6 +193,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
           return await reply(redirect(result.returnPath, [browserCookie(BROWSER_COOKIE, result.value, accountOrigin.protocol === 'https:', result.maxAge), browserCookie(STATE_COOKIE, '', accountOrigin.protocol === 'https:', 0)]), res);
         }
         if (path.startsWith('/_connect')) throw new ConnectError('not_found', 404);
+        if (preview && !previewPathAllowed(req.url)) throw new ConnectError('not_found', 404);
         if (path === '/_mobile/health' && req.method === 'GET') return await reply(json({ product: 'zcc', mobileGateway: 1, connect: true }), res);
         if (path === '/_mobile/pair' && req.method === 'POST') {
           rate(server.id); const input = await readJson(toRequest(req));
@@ -199,7 +218,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
         }
         if (closed) throw new ConnectError('connect_unavailable', 503);
         if (res.destroyed) return;
-        const entry = entries.get(server.id);
+        const entry = preview ?? entries.get(server.id);
         if (!entry?.relay.connected()) throw new ConnectError('computer_offline', 503);
         if (device.kind === 'machine' && !entry.machines) throw new ConnectError('server_update_required', 409);
         responses.set(res, { ...device, server, serverId: server.id, deviceId: device.id });
@@ -219,7 +238,28 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
       try {
         if (!trusted(req) || closed) throw new ConnectError('untrusted_origin', 403);
         const server = await getServer(req);
-        if (req.url === '/_relay/connect') {
+        if (req.url === PREVIEW_PATH && !parsePreviewLabel(hostLabel(req))) {
+          if (req.headers['x-zcc-preview-version'] !== '1') throw new ConnectError('update_required', 409);
+          let machine = null;
+          if (req.headers[MACHINE_CREDENTIAL_HEADER]) machine = await registry.authenticateMachine(server, req.headers[MACHINE_CREDENTIAL_HEADER]);
+          else { const principal = await registry.authenticateServer(String(req.headers.authorization ?? '').replace(/^Bearer /, '')); if (!principal || principal.id !== server.id) throw new ConnectError('unauthorized', 401); }
+          if (req.headers[MACHINE_CREDENTIAL_HEADER] && !machine) throw new ConnectError('unauthorized_machine', 403);
+          if (closed || socket.destroyed) return;
+          const key = `${server.id}:${machine ? machinePreviewKey(machine.host_id) : ''}`;
+          if (!previewEntries.has(key) && previewEntries.size >= maxTunnels) throw new ConnectError('busy', 503);
+          previewEntries.get(key)?.relay.close();
+          const token = randomBytes(32).toString('base64url');
+          const relay = createRelay({ token, publicUrl: registry.serverUrl(server.label), allowLocal, preview: true, onVisitor(ws, request) {
+            const device = request[principalKey];
+            if (!device) { ws.close(1008); return; }
+            visitors.set(ws, { ...device, server, serverId: server.id, deviceId: device.id });
+            ws.once('close', () => visitors.delete(ws));
+          } });
+          previewEntries.set(key, { relay, server, machine });
+          req.url = '/_relay/connect'; req.headers.authorization = `Bearer ${token}`;
+          routeToTunnel(req, server); relay.handleUpgrade(req, socket, head); return;
+        }
+        if (req.url === '/_relay/connect' && !parsePreviewLabel(hostLabel(req))) {
           const principal = await registry.authenticateServer(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
           if (!principal || principal.id !== server.id) throw new ConnectError('unauthorized', 401);
           const machines = req.headers['x-zcc-relay-machine-version'] === '1';
@@ -243,16 +283,18 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
           relay.handleUpgrade(req, socket, head);
           return;
         }
-        if (!['/ws', '/ws/'].includes(req.url) && !isMachinePath('GET', req.url, true)) throw new ConnectError('not_found', 404);
+        const preview = parsePreviewLabel(hostLabel(req)) ? previewFor(req, server) : null;
+        if (preview && !previewPathAllowed(req.url)) throw new ConnectError('not_found', 404);
+        if (!preview && !['/ws', '/ws/'].includes(req.url) && !isMachinePath('GET', req.url, true)) throw new ConnectError('not_found', 404);
         req[principalKey] = await visitor(req, server, true);
         if (closed) throw new ConnectError('connect_unavailable', 503);
-        const entry = entries.get(server.id);
+        const entry = preview ?? entries.get(server.id);
         if (!entry?.relay.connected()) throw new ConnectError('computer_offline', 503);
         if (req[principalKey].kind === 'machine' && !entry.machines) throw new ConnectError('server_update_required', 409);
         if (!socket.destroyed) { routeToTunnel(req, server); entry.relay.handleUpgrade(req, socket, head); }
       } catch (error) { if (!socket.destroyed) rejectSocket(socket, error instanceof ConnectError ? error.status : 503); }
     },
-    async close() { closed = true; clearInterval(timer); await checking; for (const id of entries.keys()) closeEntry(id); for (const ws of visitors.keys()) ws.terminate(); visitors.clear(); for (const res of responses.keys()) res.destroy(); responses.clear(); },
+    async close() { closed = true; clearInterval(timer); await checking; for (const id of entries.keys()) closeEntry(id); for (const entry of previewEntries.values()) entry.relay.close(); previewEntries.clear(); for (const ws of visitors.keys()) ws.terminate(); visitors.clear(); for (const res of responses.keys()) res.destroy(); responses.clear(); },
     connectionCount: () => entries.size
   };
 }

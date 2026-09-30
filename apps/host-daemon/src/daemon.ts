@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
@@ -234,6 +235,7 @@ export async function startHostDaemon(options: StartHostDaemonOptions): Promise<
 
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once('error', rejectListen);
+    protectPreviewServer(server);
     server.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => {
       server.off('error', rejectListen);
       resolveListen();

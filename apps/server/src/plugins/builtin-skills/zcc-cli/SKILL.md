@@ -297,3 +297,10 @@ agent terminal (`FORBIDDEN_AGENT`). Details: `docs/control-sdk.md`.
 - Don't treat `zcc run` / `zcc agent send` / `zcc term` as the documented names.
 - Don't invent verbs. If the user needs a new capability, use `zcc-plugin-authoring`.
 - Don't use `extension-creator` unless you are already inside an in-app local plugin working dir.
+
+## Shared previews
+
+From a host shell: `zcc connect expose 5173`, `zcc connect shares --json`,
+and `zcc connect unexpose 5173`. Use `--host <name-or-id>` to select an enrolled
+execution machine. In Modern threads use `share_preview`, which derives the
+machine from the authenticated thread. Read `zcc guide connect`.

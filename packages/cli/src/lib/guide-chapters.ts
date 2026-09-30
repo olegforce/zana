@@ -21,9 +21,26 @@ Core concepts:
 Prefer --json when command output will drive follow-up work.
 Run zcc guide <chapter> for command details.
 
-Chapters: threads, projects, machines, terminals, plugins, automations, agent-configuration, environments, browser.
+Chapters: threads, projects, machines, terminals, plugins, automations, agent-configuration, environments, browser, connect.
 
 Live control (attach to a running app, no Playwright): zcc thread spawn and zcc agent launch share @zana-ai/zcc-control. Operator launches are untagged. Flags: thread --provider --model --acp-mode --reasoning-level --permission-mode; agent --execution-state --model-level --role (XOR model-level) --wait. zcc agent wait|reply|stop drive a CLI Agent. zcc browser instances|tabs|create|acquire|connection|release|reveal|capture|close|import-sources share the same client (pnpm live:browser). zcc live cleanup --stale janitors tagged [zcc-live:<runId>] test sessions. See docs/control-sdk.md.
+`
+  },
+  {
+    id: 'connect',
+    title: 'Shared previews',
+    content: `Share an existing HTTP dev server using your private Connect account.
+
+  zcc connect expose 5173 [--host <name-or-id>] [--json]
+  zcc connect shares [--json]
+  zcc connect unexpose 5173 [--host <name-or-id>]
+
+Run these operator commands from a host shell. In a Modern thread use the
+share_preview tool; its machine comes from the authenticated thread.
+Enable Remote access and choose a browser address first. Shares last eight
+hours; expose renews them. Stop removes all leases on that machine/port.
+Enrolled execution machines need compatible desktop, daemon and Connect versions.
+Open desktop previews in the in-app browser; give the private URL for phone access.
 `
   },
   {
