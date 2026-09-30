@@ -41,6 +41,23 @@ async function link(owner = 'alice', user = 'U123456') {
   expect((await api('activate', {}, grant.credential)).status).toBe(200);
   return { ...grant, serverId: computer.serverId, link: await service.registry.owner(user) };
 }
+it.each(["Acme Engineering", undefined])("enriches only the matching workspace with its known name (%s) and keeps account lists private", async teamName => {
+  const current = await link();
+  const previous = await link("alice", "U234567");
+  await link("bob", "U345678");
+  await db.query("UPDATE slack_links SET team_id=$1 WHERE id=$2", ["T987654", previous.link.id]);
+  await service.close();
+  service = await createSlackService({ db, connect, dispatchPlugin: dispatch, pluginId: "test-plugin", sessionSecret: secret, signingSecret: signing, identity: { ...identity, teamName }, call, now: () => clock, intervalMs: 100_000 });
+  call.mockClear();
+  const response = await api("links");
+  expect(response.status).toBe(200);
+  const { links } = await response.json();
+  expect(links).toHaveLength(2);
+  expect(links.find((row: any) => row.id === current.link.id)).toMatchObject({ team_id: identity.team, team_name: teamName ?? null });
+  expect(links.find((row: any) => row.id === previous.link.id)).toMatchObject({ team_id: "T987654", team_name: null });
+  expect((await api("links", undefined, undefined, "unknown")).status).toBe(401);
+  expect(call).not.toHaveBeenCalled();
+});
 function event(user = 'U123456', id = 'Ev1', root?: string) {
   return { type: 'event_callback', event_id: id, team_id: identity.team, api_app_id: identity.app, event: { type: 'app_mention', user, channel: 'C123456', ts: `${Math.floor(clock / 1000)}.000001`, text: '<@U999999> run hello', ...(root ? { thread_ts: root } : {}) } };
 }
