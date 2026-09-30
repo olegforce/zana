@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HostCommandError } from './host-command-error.js';
 import {
   browseHostDirectory,
@@ -406,17 +406,29 @@ describe('host filesystem discovery', () => {
 it('serializes revision-checked removal with a concurrent write and preserves newer bytes', async () => {
   const root = realpathSync(tmpRoot()), path = join(root, 'note.md');
   writeFileSync(path, 'old');
-  const { withFileMutationLock } = await import('@zana-ai/zcc-host-workspace');
+  const workspace = await import('@zana-ai/zcc-host-workspace');
   let unlock!: () => void, acquired!: () => void;
   const ready = new Promise<void>(resolve => { acquired = resolve; });
-  const holding = withFileMutationLock(path, async () => { acquired(); await new Promise<void>(resolve => { unlock = resolve; }); });
+  const holding = workspace.withFileMutationLock(path, async () => { acquired(); await new Promise<void>(resolve => { unlock = resolve; }); });
   await ready;
-  const writing = writeHostFile({ path, rootPath: root, content: 'new', contentEncoding: 'utf8', createParents: false, expectedSha256: sha256('old') });
-  const removing = removeHostPath({ path, rootPath: root, recursive: false, expectedSha256: sha256('old') });
-  // Allow both calls to resolve the same canonical lock before releasing it.
-  await new Promise(resolve => setTimeout(resolve, 20));
-  unlock(); await holding; await writing;
-  await expect(removing).rejects.toMatchObject({ code: 'conflict' });
+  const lockSpy = vi.spyOn(workspace, 'withFileMutationLock');
+  const pending: Promise<unknown>[] = [holding];
+  try {
+    const writing = writeHostFile({ path, rootPath: root, content: 'new', contentEncoding: 'utf8', createParents: false, expectedSha256: sha256('old') });
+    pending.push(writing);
+    // Path resolution is asynchronous: starting the write first does not ensure
+    // it queues first. Observe each enqueue before starting the next operation.
+    await expect.poll(() => lockSpy.mock.calls.filter(([lockedPath]) => lockedPath === path).length).toBe(1);
+    const removing = removeHostPath({ path, rootPath: root, recursive: false, expectedSha256: sha256('old') });
+    pending.push(removing);
+    await expect.poll(() => lockSpy.mock.calls.filter(([lockedPath]) => lockedPath === path).length).toBe(2);
+    const conflict = expect(removing).rejects.toMatchObject({ code: 'conflict' });
+    unlock(); await holding; await writing; await conflict;
+  } finally {
+    unlock();
+    lockSpy.mockRestore();
+    await Promise.allSettled(pending);
+  }
   expect(readFileSync(path, 'utf8')).toBe('new');
   await removeHostPath({ path, rootPath: root, recursive: false, expectedSha256: sha256('new') });
   await expect(removeHostPath({ path: root, rootPath: root, recursive: true })).rejects.toMatchObject({ code: 'invalid_path' });
