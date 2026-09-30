@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent as ReactDragEvent } from 'react';
 import { useEditor } from '@tiptap/react';
 import type { Project } from '@zana-ai/zcc-domain/product';
 import { apiJson } from '../../lib/fetch-with-app-surface.js';
@@ -134,6 +134,7 @@ export function useComposerPromptField({
   const dropOverRef = useRef(false);
   dropOverRef.current = dropOver;
   const [images, setImages] = useState<ComposerImageAttachment[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef(images);
   imagesRef.current = images;
   useEffect(() => () => {
@@ -414,9 +415,14 @@ export function useComposerPromptField({
     return chain.insertContent(mentionContentForDroppedPaths(paths)).run();
   }, [addImageFiles, editor, projectRoot, projects, disabled]);
 
-  const canAttach = hasDesktopBridge();
+  const canAttach = !disabled && !!editor;
   const attachPickedFiles = useCallback(() => {
     if (!canAttach || !editor) return;
+    if (!hasDesktopBridge()) {
+      // Keep the picker in the tap handler so mobile browsers retain user activation.
+      imageInputRef.current?.click();
+      return;
+    }
     void product.fs.pickFiles().then((picked) => {
       const paths = droppedPathsFromAbsolutePaths(picked, projectRoot);
       if (paths.length === 0) return;
@@ -551,6 +557,20 @@ export function useComposerPromptField({
 
   return {
     editor,
+    imageInputProps: {
+      ref: imageInputRef,
+      type: 'file' as const,
+      accept: 'image/*',
+      multiple: true,
+      hidden: true,
+      disabled: !canAttach,
+      onChange: (event: ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(event.currentTarget.files ?? []);
+        // Allow selecting the same screenshot again after removing it or sending.
+        event.currentTarget.value = '';
+        if (canAttach) addImageFiles(files);
+      }
+    },
     images,
     removeImage,
     dropOver,

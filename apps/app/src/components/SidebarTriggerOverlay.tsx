@@ -5,6 +5,7 @@ import { useEnsureThreads } from '../hooks/useEnsureThreads.js';
 import { getNewThreadRoutePath } from '../lib/route-paths.js';
 import { SidebarHistoryControls } from './SidebarHistoryControls.js';
 import { CollapsedUnreadThreads } from './CollapsedUnreadThreads.js';
+import { MobileAgentsBack } from './MobileAgentsBack.js';
 
 /**
  * Persistent title-bar chrome: sidebar restore + back/forward. It is a shell
@@ -37,6 +38,7 @@ export function SidebarTriggerOverlay({
       >
         {collapsed ? <PanelLeft size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
       </button>
+      <MobileAgentsBack hidden={!collapsed} />
       <SidebarHistoryControls />
       {collapsed ? (
         <div className="sidebar-trigger-actions" data-testid="sidebar-trigger-collapsed-actions">

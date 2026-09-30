@@ -8,9 +8,15 @@ connecting a second client does not copy or relocate the server.
 
 Multi-machine sharing is being qualified. The current implementation supports
 account-bound machine enrollment, shared desktop selection, project checkout
-sources, Modern thread routing and host-scoped file operations. Secondary-host
-CLI Agent execution and the complete Explorer/Git source UI remain unfinished.
-Do not infer full desktop feature parity from successful browser sign-in.
+sources, Modern thread routing, ordinary terminals and files/Git on the selected
+machine. Public two-machine recovery and rollout qualification remain open.
+
+For the first release, **CLI Agents and Squad/Team workers execute on the primary
+machine**. You can control them from the shared interface on another device.
+Their definitions and history stay shared. Launching those workers on a secondary
+machine, or spreading a Squad/Team across machines, is deferred; choose a project
+on the primary for those launches. Modern threads can use registered secondary
+machines.
 
 To add execution capacity to that same instance:
 
@@ -29,6 +35,23 @@ transfer workflow moves code between them. Repository instructions and provider
 credentials belong to the execution machine; project metadata has one canonical
 owner. Library remains at the original project location, so that host must be
 reachable when it owns the metadata.
+
+Library files and folders can be moved between projects or between a project and
+the global Library. Both owners must be reachable. Zana verifies the destination
+before removing the source and preserves document identities and binary files.
+An interrupted transfer resumes when Library refreshes; conflicting external
+edits preserve the files and report a recovery problem. A transfer is limited to
+1,000 entries and 64 MiB.
+
+If a Goal or Schedule shows **Check worker**, that action checks the instance's
+session inventory and durable launch records. It can reattach a known worker or
+resolve a confirmed exit or a launch that never started. It leaves work paused
+and never starts a replacement. Missing or ambiguous evidence remains blocked.
+
+Installed plugins use the shared instance. Older plugins that require the native
+module bridge are listed as **Owner desktop** in shared clients; use or manage
+them on that computer. New plugin installation also remains on the owner's
+desktop. Supported installed plugins remain available through the shared client.
 
 Use **Pair again** to repair an enrolled Connect machine while retaining its
 host ID. Removing one machine revokes its execution access. Removing an extra

@@ -1,6 +1,23 @@
 .thread-command-project, .composer-run-setting { display: contents; }
 .thread-command-project-label, .composer-run-setting-label { display: none; }
 
+/* Leave room for the phone header and keep actions inside the keyboard viewport.
+   Settings can scroll; attaching several screenshots must not grow the card. */
+.app-shell[data-mobile='true'] .thread-command-card {
+  max-height: calc(var(--mobile-viewport-height, 100dvh) - var(--titlebar-h) - 24px);
+}
+.app-shell[data-mobile='true'] .thread-command-card > .composer-image-thumbs {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.app-shell[data-mobile='true'] .thread-command-editor-slot { flex-shrink: 0; }
+.app-shell[data-mobile='true'] .thread-command-toolbar { min-height: 0; }
+.app-shell[data-mobile='true'] .thread-command-toolbar[data-options-expanded='true'] {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.app-shell[data-mobile='true'] .thread-command-options { min-height: 0; align-self: stretch; }
+
 /* A quiet, thumb-reachable create surface. The editor stays in its original tree. */
 .app-shell[data-mobile='true'] .new-thread-view {
   padding: 24px 16px max(16px, env(safe-area-inset-bottom));
@@ -93,6 +110,9 @@
   .app-shell[data-mobile='true'] .thread-command-toolbar:has(.thread-command-permission) {
     --composer-options-row: 3;
     --composer-actions-row: 4;
+  }
+  .app-shell[data-mobile='true'] .thread-command-toolbar[data-options-expanded='true']:has(.thread-command-permission) {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
   }
   .app-shell[data-mobile='true'] .thread-command-toolbar:has(.thread-command-permission) .thread-command-model { grid-column: 1 / 4; }
   .app-shell[data-mobile='true'] .thread-command-toolbar:has(.thread-command-permission) .thread-command-permission { grid-column: 4 / -1; }
@@ -232,6 +252,7 @@
 .app-shell[data-mobile='true'] .thread-command-composer[data-mobile-expanded='true'] > .thread-command-card {
   flex: 1;
   min-height: 0;
+  max-height: none;
   border: 0;
   border-radius: 0;
   box-shadow: none;

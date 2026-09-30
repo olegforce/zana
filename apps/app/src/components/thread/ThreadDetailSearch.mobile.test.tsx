@@ -14,7 +14,9 @@ it('focuses search, submits the query and clears it with the mobile close action
   }
   render(<Fixture />);
   const input = screen.getByRole('searchbox') as HTMLInputElement;
-  fireEvent.click(screen.getByRole('button', { name: 'Search in thread' }));
+  const toggle = screen.getByRole('button', { name: 'Search in thread' });
+  expect(fireEvent.pointerDown(toggle)).toBe(false);
+  fireEvent.click(toggle);
   expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: '  mobile  ' } });
   fireEvent.submit(input.closest('form')!);
@@ -33,6 +35,7 @@ it('retains Escape behavior and leaves desktop without the extra close control',
   const change = vi.fn();
   const submit = vi.fn();
   render(<ThreadDetailSearch value="query" onChange={change} onSubmit={submit} />);
+  expect(fireEvent.pointerDown(screen.getByRole('button', { name: 'Search in thread' }))).toBe(true);
   expect(screen.queryByRole('button', { name: 'Close search' })).toBeNull();
   const input = screen.getByRole('searchbox');
   input.focus();

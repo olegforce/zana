@@ -9,6 +9,8 @@ import { reopenInboxThread, sendInboxThreadReply } from '../lib/inbox-thread.js'
 import { getThreadRoutePath } from '../lib/route-paths.js';
 import { InboxMobileActions } from './InboxMobileActions.js';
 import { InboxMobileDocument } from './InboxMobileDocument.js';
+import { videoContentType } from '@zana-ai/zcc-domain';
+import { ThreadVideoPreview, videoPreviewUrl } from './thread/secondary-panel/ThreadVideoPreview.js';
 import { inboxQuestions } from '@zana-ai/zcc-domain/product';
 import type { InboxQuestion, Suggestion } from '@zana-ai/zcc-domain/product';
 import {
@@ -1133,6 +1135,7 @@ function DocPreview({
 
   useEffect(() => {
     let cancelled = false;
+    const videoRequest = new AbortController();
     setResult(null);
     setResolvedPath(doc.path);
     setRelocated(false);
@@ -1144,6 +1147,32 @@ function DocPreview({
     }
     const projectPath = project.path;
     const load = async () => {
+      if (videoContentType(doc.path)) {
+        // Resolve metadata only: the authenticated range endpoint streams bytes
+        // without passing binary files through the bounded text reader.
+        try {
+          const response = await fetch(videoPreviewUrl(joinPath(projectPath, doc.path)), {
+            method: 'HEAD', signal: videoRequest.signal
+          });
+          if (cancelled) return;
+          if (response.ok) {
+            setResult({ ok: true, content: '' });
+            return;
+          }
+          const found = await product.fs.resolveDoc(projectPath, doc.path, originCwd);
+          if (cancelled) return;
+          if (found.ok && found.rel) {
+            setResolvedPath(found.rel);
+            setRelocated(!!found.relocated);
+            setResult({ ok: true, content: '' });
+          } else {
+            setResult({ ok: false, message: 'Video file not found' });
+          }
+        } catch (err) {
+          if (!cancelled) setResult({ ok: false, message: err instanceof Error ? err.message : 'Video preview unavailable' });
+        }
+        return;
+      }
       const abs = joinPath(projectPath, doc.path);
       let r: FsReadResult;
       try {
@@ -1175,6 +1204,7 @@ function DocPreview({
     void load();
     return () => {
       cancelled = true;
+      videoRequest.abort();
     };
   }, [project, doc.path, originCwd]);
 
@@ -1224,6 +1254,8 @@ function DocPreview({
       <div className="inbox-doc-body">
         {result === null ? (
           <StencilLines label="Loading document" widths={['75%', '100%', '83%', '67%']} />
+        ) : result.ok && absResolved && videoContentType(resolvedPath) ? (
+          <ThreadVideoPreview key={absResolved} src={videoPreviewUrl(absResolved)} path={resolvedPath} />
         ) : canPreview ? (
           <DocContent path={resolvedPath} content={result!.content as string} exportable />
         ) : (

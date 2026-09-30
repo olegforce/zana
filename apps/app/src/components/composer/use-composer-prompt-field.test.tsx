@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@zana-ai/zcc-domain/product';
 import type { DragEvent as ReactDragEvent } from 'react';
@@ -9,6 +9,7 @@ import { useComposerPromptField } from './use-composer-prompt-field.js';
 import { PROJECT_DRAG_MIME } from '../../lib/project-drag.js';
 import { serializePromptEditor } from './serialize-prompt-editor.js';
 
+const attachments = vi.hoisted(() => ({ desktop: false, pickFiles: vi.fn(async (): Promise<string[]> => []) }));
 const editorState = vi.hoisted(() => ({
   json: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'before' }] }] } as unknown,
   options: undefined as undefined | {
@@ -52,7 +53,7 @@ vi.mock('../../lib/thread-composer-preferences.js', () => ({
   MARKDOWN_IN_PROMPT_KEY: 'markdown'
 }));
 vi.mock('../../lib/fetch-with-app-surface.js', () => ({ apiJson: async () => ({}) }));
-vi.mock('../../lib/app-surface.js', () => ({ hasDesktopBridge: () => false }));
+vi.mock('../../lib/app-surface.js', () => ({ hasDesktopBridge: () => attachments.desktop }));
 vi.mock('../../lib/product-client.js', () => ({
   product: {
     pluginApps: { onChanged: () => () => {} },
@@ -60,7 +61,7 @@ vi.mock('../../lib/product-client.js', () => ({
     threads: { commands: async () => ({ commands: [] }) },
     commands: { list: async () => [] },
     files: { pathForFile: () => '' },
-    fs: { pickFiles: async () => [] }
+    fs: { pickFiles: attachments.pickFiles }
   }
 }));
 vi.mock('./use-composer-suggestions.js', () => ({
@@ -81,8 +82,14 @@ function Probe() {
 }
 
 describe('useComposerPromptField', () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => cleanup());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    attachments.desktop = false;
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('rerenders consumers with updated serialized editor text', () => {
     render(<Probe />);
@@ -181,5 +188,88 @@ describe('useComposerPromptField', () => {
     });
     expect(result.current.dropOver).toBe(false);
     expect(chain.insertContent).not.toHaveBeenCalled();
+  });
+
+  function ImagePicker({ disabled = false, onError = vi.fn() }) {
+    const field = useComposerPromptField({
+      placeholder: 'Prompt', testId: 'prompt', projectId: 'p1', projects: [],
+      disabled, slashCatalog: { kind: 'cli' }, onSubmit: vi.fn(), onError
+    });
+    return <>
+      <input {...field.imageInputProps} data-testid="image-picker" />
+      <button onClick={field.attachPickedFiles} disabled={!field.canAttach}>Attach files</button>
+      {field.images.map((image) => <button key={image.id} onClick={() => field.removeImage(image.id)}>
+        {image.name}
+      </button>)}
+    </>;
+  }
+
+  it('opens the browser picker synchronously, previews multiple images, and allows reselection', () => {
+    const urls = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:screenshot');
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const { unmount } = render(<ImagePicker />);
+    const input = screen.getByTestId('image-picker') as HTMLInputElement;
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+    expect(input.hidden).toBe(true);
+    expect(input.accept).toBe('image/*');
+    expect(input.multiple).toBe(true);
+    fireEvent.click(screen.getByText('Attach files'));
+    expect(click).toHaveBeenCalledOnce();
+    expect(attachments.pickFiles).not.toHaveBeenCalled();
+    const screenshot = new File(['png'], 'screenshot.png', { type: 'image/png' });
+    const photo = new File(['jpeg'], 'photo.jpg', { type: 'image/jpeg' });
+    fireEvent.change(input, { target: { files: [screenshot, photo] } });
+    expect(screen.getByText('screenshot.png')).toBeTruthy();
+    expect(screen.getByText('photo.jpg')).toBeTruthy();
+    expect(input.value).toBe('');
+    expect(urls).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByText('screenshot.png'));
+    expect(screen.queryByText('screenshot.png')).toBeNull();
+    expect(revoke).toHaveBeenCalledOnce();
+    fireEvent.change(input, { target: { files: [screenshot] } });
+    expect(screen.getByText('screenshot.png')).toBeTruthy();
+    unmount();
+    expect(revoke).toHaveBeenCalledTimes(3);
+  });
+
+  it('leaves the draft intact on cancellation and reports rejected selections', () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:valid');
+    const onError = vi.fn();
+    render(<ImagePicker onError={onError} />);
+    const input = screen.getByTestId('image-picker');
+    fireEvent.change(input, { target: { files: [] } });
+    expect(onError).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { files: [
+      new File(['text'], 'notes.txt', { type: 'text/plain' }),
+      new File(['png'], 'valid.png', { type: 'image/png' })
+    ] } });
+    expect(onError).toHaveBeenCalledWith('Only image files can be attached as previews.');
+    expect(screen.getByText('valid.png')).toBeTruthy();
+    expect(chain.insertContent).not.toHaveBeenCalled();
+  });
+
+  it('ignores picker results while sending', () => {
+    const urls = vi.spyOn(URL, 'createObjectURL');
+    render(<ImagePicker disabled />);
+    const input = screen.getByTestId('image-picker') as HTMLInputElement;
+    expect(input.disabled).toBe(true);
+    expect((screen.getByText('Attach files') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { files: [new File(['png'], 'busy.png', { type: 'image/png' })] } });
+    expect(urls).not.toHaveBeenCalled();
+    const { result } = renderField(true);
+    act(() => result.current.attachPickedFiles());
+    expect(attachments.pickFiles).not.toHaveBeenCalled();
+  });
+
+  it('keeps the desktop file dialog and mention insertion', async () => {
+    attachments.desktop = true;
+    attachments.pickFiles.mockResolvedValueOnce(['/tmp/example.txt']);
+    render(<ImagePicker />);
+    const click = vi.spyOn(screen.getByTestId('image-picker'), 'click');
+    fireEvent.click(screen.getByText('Attach files'));
+    await waitFor(() => expect(chain.insertContent).toHaveBeenCalledOnce());
+    expect(attachments.pickFiles).toHaveBeenCalledOnce();
+    expect(click).not.toHaveBeenCalled();
+    expect(chain.focus).toHaveBeenCalledOnce();
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
@@ -10,14 +10,18 @@ import { MobileAgentNavigation } from './MobileAgentNavigation';
 const h = vi.hoisted(() => ({
   data: { projects: [{ id: 'p', name: 'Zana project' }], terminals: {} as Record<string, TerminalSession[]> },
   roster: { threads: [] as ThreadListItem[], loading: false },
+  archive: vi.fn(), remove: vi.fn(), closeTerminal: vi.fn(), closePanes: vi.fn(), toast: vi.fn(),
   status: { byId: {}, since: {} }, unread: 0, ensure: vi.fn(), dismiss: vi.fn()
 }));
 vi.mock('../store', () => ({
-  useData: (select: (state: typeof h.data) => unknown) => select(h.data),
+  useData: Object.assign((select: (state: typeof h.data) => unknown) => select(h.data), { getState: () => ({ closeTerminal: h.closeTerminal }) }),
+  errorMessage: (error: Error) => error.message, pushErrorToast: h.toast,
   useAgentStatus: (select: (state: typeof h.status) => unknown) => select(h.status),
   useUnreadInboxCount: () => h.unread
 }));
-vi.mock('../thread-store', () => ({ useThreads: (select: (state: typeof h.roster) => unknown) => select(h.roster) }));
+vi.mock('../thread-store', () => ({ useThreads: Object.assign((select: (state: typeof h.roster) => unknown) => select(h.roster), { getState: () => ({ remove: h.remove }) }) }));
+vi.mock('../lib/product-client', () => ({ product: { threads: { archive: h.archive } } }));
+vi.mock('../lib/split-layout/store', () => ({ useSplitWorkspace: { getState: () => ({ closePanesForThreads: h.closePanes }) } }));
 vi.mock('../hooks/useEnsureThreads', () => ({ useEnsureThreads: h.ensure }));
 const makeThread = (): ThreadListItem => ({
   id: 't', projectId: 'p', hostId: 'h', environmentId: null, providerId: 'fake', status: 'idle',
@@ -32,6 +36,8 @@ function mount({ enabled = true, path = '/threads/t', projectId }: { enabled?: b
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  h.archive.mockReset().mockResolvedValue({ ok: true });
+  h.closeTerminal.mockReset().mockResolvedValue(undefined);
   h.unread = 0;
   h.roster = { threads: [makeThread()], loading: false };
   h.data.terminals = { p: [{ id: 'cli', projectId: 'p', title: 'Terminal agent', profile: 'codex', cwd: '/test', status: 'running', createdAt: 2 }] };
@@ -142,4 +148,53 @@ it('leaves desktop and the dedicated settings rail unchanged without loading ano
   expect(screen.getByText('Full navigation')).toBeTruthy();
   expect(screen.queryByRole('searchbox')).toBeNull();
   expect(h.ensure).not.toHaveBeenCalled();
+});
+
+
+it.each([undefined, 'p'])('closes the active thread and leaves the closed page (scope=%s)', async (projectId) => {
+  mount({ projectId });
+  fireEvent.click(screen.getByRole('button', { name: 'Close Improve the menu' }));
+  await waitFor(() => expect(h.remove).toHaveBeenCalledWith('t'));
+  expect(h.archive).toHaveBeenCalledWith('t');
+  expect(h.closePanes).toHaveBeenCalledWith(['t']);
+  expect(screen.getByTestId('location').textContent).toBe(projectId ? '/projects/p' : '/agents');
+  expect(h.dismiss).not.toHaveBeenCalled();
+});
+
+it('closes a CLI agent through the existing terminal cleanup path', async () => {
+  mount({ path: '/sessions/cli' });
+  fireEvent.click(screen.getByRole('button', { name: 'Close Terminal agent' }));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/agents'));
+  expect(h.closeTerminal).toHaveBeenCalledWith('cli', 'p');
+  expect(h.archive).not.toHaveBeenCalled();
+});
+
+it('does not navigate away when closing a different agent', async () => {
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Terminal agent' }));
+  await waitFor(() => expect(h.closeTerminal).toHaveBeenCalled());
+  expect(screen.getByTestId('location').textContent).toBe('/threads/t');
+});
+
+it.each([false, true])('keeps an agent visible and reports an unsuccessful close (throws=%s)', async (throws) => {
+  if (throws) h.archive.mockRejectedValue(new Error('Offline'));
+  else h.archive.mockResolvedValue({ ok: false });
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Improve the menu' }));
+  await waitFor(() => expect(h.toast).toHaveBeenCalled());
+  expect(h.remove).not.toHaveBeenCalled();
+  expect(h.closePanes).not.toHaveBeenCalled();
+  expect(screen.getByTestId('location').textContent).toBe('/threads/t');
+  expect(screen.getByRole('link', { name: /Improve the menu/ })).toBeTruthy();
+});
+
+it('does not redirect a user who navigated while a close was pending', async () => {
+  let resolve!: (value: { ok: boolean }) => void;
+  h.archive.mockImplementation(() => new Promise((r) => { resolve = r; }));
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Improve the menu' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Inbox', exact: true }));
+  resolve({ ok: true });
+  await waitFor(() => expect(h.remove).toHaveBeenCalled());
+  expect(screen.getByTestId('location').textContent).toBe('/inbox');
 });

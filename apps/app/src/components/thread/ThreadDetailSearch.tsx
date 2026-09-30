@@ -40,6 +40,11 @@ export function ThreadDetailSearch({
         type="button"
         className="icon-btn thread-detail-search-toggle"
         aria-label="Search in thread"
+        onPointerDown={(event) => {
+          // Focusing the toggle would move it as the mobile header expands,
+          // before the tap can click it and focus the input.
+          if (mobileHeader) event.preventDefault();
+        }}
         onClick={() => inputRef.current?.focus()}
       >
         <Search size={14} />

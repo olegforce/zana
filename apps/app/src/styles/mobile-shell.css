@@ -22,6 +22,7 @@
 }
 .app-shell[data-mobile='true'] {
   --titlebar-h: 48px;
+  --mobile-header-leading: 52px;
   --col-nav: 0px;
   /* Phone actions live in the header; plugin pages need the full content width. */
   --shell-trailing-reserve: 0px;
@@ -41,7 +42,7 @@
 .app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-title-slot > h1) .titlebar-title { display: none; }
 .mobile-thread-title-slot:not(:empty) {
   position: absolute;
-  left: 52px;
+  left: var(--mobile-header-leading, 52px);
   right: 56px;
   min-width: 0;
 }
@@ -135,6 +136,7 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
 .mobile-device-actions button:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .mobile-device-menu > p { margin: 6px 12px; color: var(--danger); font-size: 12px; }
 .app-shell[data-mobile='true'] .sidebar-trigger-overlay {
+  left: 0;
   height: 48px;
   padding-left: 4px;
 }
@@ -142,6 +144,8 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
   min-width: 44px;
   min-height: 44px;
 }
+.app-shell[data-mobile='true']:has(.mobile-agents-return) { --mobile-header-leading: 96px; }
+.app-shell[data-mobile='true'] .sidebar-trigger-overlay:has(.mobile-agents-return) { gap: 0; }
 .app-shell[data-mobile='true'].nav-settings .titlebar-title { display: none; }
 .app-shell[data-mobile='true'].nav-settings .sidebar-trigger-overlay {
   left: auto;
@@ -442,7 +446,7 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
 .app-shell[data-mobile='true'] .agent-session-main:has(> [data-title-in-shell='true']) { padding: 0; gap: 0; }
 .mobile-thread-controls-slot:empty { display: none; }
 .app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) {
-  padding: 0 4px 0 52px;
+  padding: 0 4px 0 var(--mobile-header-leading, 52px);
   justify-content: flex-start;
 }
 .app-shell[data-mobile='true'] .titlebar:has(.mobile-thread-controls-slot > *) .titlebar-bell { display: none; }
@@ -477,8 +481,10 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
   border: 0;
   animation: none;
 }
-/* Search temporarily uses the title's space, with a touch-sized close action. */
+/* Search uses the title and toggle's space, with a touch-sized close action. */
 .mobile-thread-controls-slot .thread-detail-search-close { display: none; }
+/* Keep the toggle visible until its click has transferred focus to the input. */
+.mobile-thread-controls-slot .thread-detail-search:is(:has(input:focus, .thread-detail-search-close:focus), .has-query) .thread-detail-search-toggle { display: none; }
 .mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query) .thread-detail-search-close { display: flex; }
 .titlebar:has(.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query)) .mobile-thread-title-slot { display: none; }
 .titlebar:has(.mobile-thread-controls-slot .thread-detail-search:is(:focus-within, .has-query)) .mobile-thread-controls-slot { flex: 1; }

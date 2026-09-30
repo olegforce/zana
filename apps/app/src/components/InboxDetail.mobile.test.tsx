@@ -48,8 +48,9 @@ beforeEach(() => {
   state.openIn.mockResolvedValue({ ok: true });
   state.save.mockResolvedValue(undefined);
   state.exportPdf.mockResolvedValue({ ok: true });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const view = () => <MemoryRouter><InboxDetail visible /></MemoryRouter>;
 const actions = () => fireEvent.click(screen.getByRole('button', { name: 'Message actions', exact: true }));
 
@@ -122,4 +123,57 @@ it('keeps desktop actions and file preview behavior, and resets reply drafts for
   expect(screen.getByRole('button', { name: 'Download this inbox entry as PDF' })).toBeTruthy();
   await screen.findByText('Full document content');
   expect(screen.getByRole('button', { name: /in Finder/ })).toBeTruthy();
+});
+
+it.each([true, false])('streams resolved video attachments without reading binary content (compact=%s)', async (compact) => {
+  state.compact = compact;
+  state.entries[0]!.docs = [{ path: 'demo #1.mp4' }];
+  state.resolveDoc.mockResolvedValue({ ok: true, rel: 'docs/demo #1.mp4', relocated: true });
+  render(view());
+  if (compact) fireEvent.click(screen.getByRole('button', { name: 'demo #1.mp4', exact: true }));
+  const video = await screen.findByLabelText('Video preview: demo #1.mp4') as HTMLVideoElement;
+  expect(state.readFile).not.toHaveBeenCalled();
+  expect(state.resolveDoc).toHaveBeenCalledWith('/project', 'demo #1.mp4', undefined);
+  expect(video.getAttribute('src')).toBe('/api/v1/file-preview/video?path=%2Fproject%2Fdocs%2Fdemo+%231.mp4&source=workspace');
+  expect(video.hasAttribute('controls') && video.hasAttribute('playsinline')).toBe(true);
+  expect(screen.getByText('relocated')).toBeTruthy();
+  fireEvent.error(video);
+  expect(screen.getByRole('status').textContent).toContain('Could not play this video');
+  fireEvent.loadedMetadata(video);
+  expect(screen.queryByText(/Could not play this video/)).toBeNull();
+});
+
+it.each(['missing', 'error', 'unknown'])('shows video resolution failures: %s', async (failure) => {
+  state.entries[0]!.docs = [{ path: 'missing.mp4' }];
+  if (failure === 'error') state.resolveDoc.mockRejectedValue(new Error('Host offline'));
+  if (failure === 'unknown') state.resolveDoc.mockRejectedValue(null);
+  render(view());
+  fireEvent.click(screen.getByRole('button', { name: 'missing.mp4', exact: true }));
+  await screen.findByText(failure === 'missing' ? 'Video file not found' : failure === 'error' ? 'Host offline' : 'Video preview unavailable');
+  expect(screen.queryByLabelText(/Video preview:/)).toBeNull();
+  expect(state.readFile).not.toHaveBeenCalled();
+});
+
+it('ignores video resolution after the attachment is collapsed', async () => {
+  state.entries[0]!.docs = [{ path: 'slow.mp4' }];
+  let resolve!: (value: unknown) => void;
+  state.resolveDoc.mockImplementation(() => new Promise(done => { resolve = done; }));
+  render(view());
+  const toggle = screen.getByRole('button', { name: 'slow.mp4', exact: true });
+  fireEvent.click(toggle);
+  await waitFor(() => expect(state.resolveDoc).toHaveBeenCalled());
+  fireEvent.click(toggle);
+  resolve({ ok: true, rel: 'slow.mp4' });
+  await waitFor(() => expect(screen.queryByLabelText(/Video preview:/)).toBeNull());
+});
+
+it('streams an exact video path over HTTP without needing a desktop resolver', async () => {
+  state.entries[0]!.docs = [{ path: 'exact.mp4' }];
+  vi.mocked(fetch).mockResolvedValue({ ok: true } as Response);
+  render(view());
+  fireEvent.click(screen.getByRole('button', { name: 'exact.mp4', exact: true }));
+  await screen.findByLabelText('Video preview: exact.mp4');
+  expect(fetch).toHaveBeenCalledWith('/api/v1/file-preview/video?path=%2Fproject%2Fexact.mp4&source=workspace', expect.objectContaining({ method: 'HEAD' }));
+  expect(state.resolveDoc).not.toHaveBeenCalled();
+  expect(state.readFile).not.toHaveBeenCalled();
 });

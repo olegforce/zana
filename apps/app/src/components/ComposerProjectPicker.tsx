@@ -14,6 +14,8 @@ import {
 } from './composer-project-picker.js';
 import { DEFAULT_COMPOSER_WORKSPACE_LABEL, isRemoteWorkspaceProject } from './composer-project-default.js';
 import { PopoverPicklist } from './ui/PopoverPicklist.js';
+import { MobileProjectPicker } from './MobileProjectPicker.js';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
 
 export function ComposerProjectPicker({
   projects,
@@ -28,6 +30,7 @@ export function ComposerProjectPicker({
   disabled?: boolean;
   title?: string;
 }) {
+  const Picker = useCompactLayout() ? MobileProjectPicker : PopoverPicklist;
   const addProject = useData((s) => s.addProject);
   const addProjectByPath = useData((s) => s.addProjectByPath);
   const rememberLastProjectId = useData((s) => s.rememberLastProjectId);
@@ -53,7 +56,7 @@ export function ComposerProjectPicker({
 
   return (
     <>
-      <PopoverPicklist
+      <Picker
         value={value}
         ariaLabel="Project"
         placeholder={DEFAULT_COMPOSER_WORKSPACE_LABEL}

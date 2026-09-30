@@ -1,5 +1,5 @@
 import { Maximize2, Minimize2 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ComponentPropsWithRef } from 'react';
 import { EditorContent, type Editor } from '@tiptap/react';
 import { ComposerIconButton } from '../ui/CommandComposer.js';
 import { ComposerImageThumbs } from './ComposerImageThumbs.js';
@@ -11,6 +11,7 @@ import { mergeLightboxItems } from '../thread/timeline/thread-image-lightbox.js'
 
 export function ComposerPromptField({
   editor,
+  imageInputProps,
   images,
   onRemoveImage,
   expanded,
@@ -23,6 +24,7 @@ export function ComposerPromptField({
   onApply
 }: {
   editor: Editor | null;
+  imageInputProps: ComponentPropsWithRef<'input'>;
   images: readonly ComposerImageAttachment[];
   onRemoveImage: (id: string) => void;
   expanded: boolean;
@@ -37,6 +39,7 @@ export function ComposerPromptField({
   const [lightbox, setLightbox] = useState<{ src: string; name: string } | null>(null);
   return (
     <>
+      <input {...imageInputProps} aria-label="Attach images" />
       <ComposerImageThumbs
         images={images.map((image) => ({
           id: image.id,

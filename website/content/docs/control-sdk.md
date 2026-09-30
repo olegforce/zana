@@ -117,12 +117,22 @@ main.
 | `refresh()` | `GET /api/v1/threads/:id` |
 | `wait({ until, timeoutMs, onInteraction })` | `idle` (default) / `quiet` / `error` / `needs_you`. `onInteraction`: `fail` (default) / `deny` / `approve-safe`. |
 | `waitForEvent(type)` | Long-poll thread events. |
+
 | `send(text, { mode, model, acpMode }?)` | Follow-up turn. |
 | `stop()` | Stop the thread. |
 | `fork()` | Fork history into a new thread. |
 | `timeline()` | Timeline snapshot. |
 | `interactions()` / `resolveInteraction(id, resolution)` | Pending permission prompts. |
 | `assertHealthy()` | Throws `UNHEALTHY` if `status === 'error'`. |
+
+Raw product HTTP history (`GET /api/v1/threads/:id/events`) is paginated: the
+default is the latest 500 events, with `limit` capped at 1,000 and a 16 MiB
+payload budget. Events are ordered oldest to newest within each page. When
+`hasOlder` is true, pass the returned `nextBeforeSeq` as `beforeSeq` to read the
+preceding page. A single event exceeding the budget returns HTTP 413
+(`history-read-too-large`); the stored conversation is preserved. Event waits
+filter by type and sequence inside SQLite, and timeout diagnostics request only
+the latest 20 events.
 
 ### `CliAgentHandle`
 

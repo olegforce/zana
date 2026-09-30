@@ -207,6 +207,8 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await expect(phone.getByTestId('thread-detail-status')).toBeVisible();
       const shellBox = (await phone.locator('.titlebar').boundingBox())!;
       await expect(threadHeader).toBeHidden();
+      // Wait for the mobile search/header styles to settle after resize and hydration.
+      await expect.poll(async () => (await shellTitle.boundingBox())?.width ?? 0).toBeGreaterThan(60);
       const titleBox = (await shellTitle.boundingBox())!;
       expect(titleBox.y).toBeGreaterThanOrEqual(shellBox.y);
       expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
@@ -233,7 +235,12 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       expect(overflowBox.y).toBeGreaterThanOrEqual(shellBox.y);
       expect(overflowBox.y + overflowBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
       const statusBox = (await phone.getByTestId('thread-detail-status').boundingBox())!;
-      expect(titleBox.width).toBeGreaterThan(80);
+      await phone.screenshot({ path: testInfo.outputPath(`mobile-header-controls-${width}.png`) });
+      // The direct Agents return uses one additional 44px target in this same row.
+      const agentsBackBox = (await phone.getByRole('link', { name: 'Back to agents', exact: true }).boundingBox())!;
+      expect(agentsBackBox.width).toBeGreaterThanOrEqual(44);
+      expect(agentsBackBox.x + agentsBackBox.width).toBeLessThanOrEqual(titleBox.x);
+      expect(titleBox.width).toBeGreaterThan(60);
       expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(statusBox.x);
       expect(statusBox.width).toBeLessThanOrEqual(20);
       const panelToggleBox = (await panelToggle.boundingBox())!;
@@ -242,8 +249,10 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await overflow.focus();
       await phone.keyboard.press('Tab');
       await expect(panelToggle).toBeFocused();
-      await searchToggle.click();
+      await searchToggle.tap();
       const search = phone.getByRole('searchbox', { name: 'Search in thread', exact: true });
+      await expect(search).toBeFocused();
+      await expect(searchToggle).toBeHidden();
       await search.fill('desktop');
       await expect(threadHeader).toBeHidden();
       expect((await phone.locator('.titlebar').boundingBox())!.height).toBe(48);

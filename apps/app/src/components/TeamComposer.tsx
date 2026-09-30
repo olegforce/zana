@@ -256,6 +256,7 @@ export function TeamComposer({
       >
         <ComposerPromptField
           editor={field.editor}
+          imageInputProps={field.imageInputProps}
           images={field.images}
           onRemoveImage={field.removeImage}
           expanded={expanded}
@@ -311,7 +312,7 @@ export function TeamComposer({
                 </div>
               </div>
               <div className="thread-command-footer-end">
-                <span className="composer-control-tooltip" data-tooltip={field.canAttach ? 'Attach files' : 'File attachments require the desktop app'}>
+                <span className="composer-control-tooltip" data-tooltip={field.canAttach ? 'Attach files' : 'Attachments are unavailable while sending'}>
                   <ComposerIconButton
                     onClick={() => { if (!field.canAttach) return; field.attachPickedFiles(); }}
                     disabled={!field.canAttach}

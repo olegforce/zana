@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { ArrowLeft, Ellipsis, Folder, Inbox, LayoutGrid, MessageSquare, Search, SquarePen, X } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Ellipsis, Inbox, LayoutGrid, MessageSquare, Search, SquarePen, X } from 'lucide-react';
 import { useAgentStatus, useData, useUnreadInboxCount } from '../store';
 import { useThreads } from '../thread-store';
 import { useEnsureThreads } from '../hooks/useEnsureThreads';
-import { getAgentsRoutePath, getInboxRoutePath, getNewThreadRoutePath, sessionIdFromPath, threadIdFromPath } from '../lib/route-paths';
+import { getAgentsRoutePath, getInboxRoutePath, getNewThreadRoutePath, getProjectRoutePath, sessionIdFromPath, threadIdFromPath } from '../lib/route-paths';
 import { useMobileNavDismiss } from './mobile-nav-context';
-import { filterMobileAgents, mobileAgentItems } from './mobile-agent-items';
+import { filterMobileAgents, mobileAgentItems, type MobileAgentItem } from './mobile-agent-items';
+import { MobileAgentRow } from './MobileAgentRow';
+import { product } from '../lib/product-client';
+import { useSplitWorkspace } from '../lib/split-layout/store';
 import '../styles/mobile-agent-navigation.css';
 
 /** Everyday phone navigation is agents first; More opens the live tool picker. */
@@ -27,6 +30,9 @@ function AgentNavigation({ projectId, children }: { projectId?: string; children
   const switched = useRef(false);
   const dismiss = useMobileNavDismiss();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const currentPath = useRef(pathname);
+  currentPath.current = pathname;
   const unreadInbox = useUnreadInboxCount();
   const agentsPath = getAgentsRoutePath();
   const agentsActive = pathname === agentsPath || pathname.startsWith(`${agentsPath}/`);
@@ -38,13 +44,26 @@ function AgentNavigation({ projectId, children }: { projectId?: string; children
   const projects = useData((state) => state.projects);
   const terminals = useData((state) => state.terminals);
   const states = useAgentStatus((state) => state.byId);
-  const since = useAgentStatus((state) => state.since);
   const threads = useThreads((state) => state.threads);
   const loading = useThreads((state) => state.loading);
   useEnsureThreads();
-  const items = useMemo(() => mobileAgentItems({ projects, threads, terminals, states, since, projectId }),
-    [projects, threads, terminals, states, since, projectId]);
+  const items = useMemo(() => mobileAgentItems({ projects, threads, terminals, states, projectId }),
+    [projects, threads, terminals, states, projectId]);
   const visible = useMemo(() => filterMobileAgents(items, search), [items, search]);
+
+  async function closeAgent(item: MobileAgentItem) {
+    if (item.kind === 'thread') {
+      const result = await product.threads.archive(item.id);
+      if (!result.ok) throw new Error('Could not close the agent');
+      useThreads.getState().remove(item.id);
+      useSplitWorkspace.getState().closePanesForThreads([item.id]);
+    } else {
+      await useData.getState().closeTerminal(item.id, item.projectId);
+    }
+    const activeId = item.kind === 'thread'
+      ? threadIdFromPath(currentPath.current) : sessionIdFromPath(currentPath.current);
+    if (activeId === item.id) navigate(projectId ? getProjectRoutePath(projectId) : agentsPath, { replace: true });
+  }
 
   useEffect(() => {
     // Switching rails removes the focused button. Keep keyboard focus in the drawer.
@@ -101,22 +120,8 @@ function AgentNavigation({ projectId, children }: { projectId?: string; children
       <div className="mobile-agent-history">
         {visible.length > 0 ? <ul aria-label="Your agents">
           {visible.map((item) => (
-            <li key={item.key}>
-              <Link to={item.to} onClick={() => dismiss?.()} className="mobile-agent-row"
-                aria-current={activeKey === item.key ? 'page' : undefined}>
-                <MessageSquare size={19} aria-hidden="true" />
-                <span className="mobile-agent-row-copy">
-                  <span className="mobile-agent-row-title">{item.title}</span>
-                  <span className="mobile-agent-row-detail">
-                    <span className="mobile-agent-project" title={item.projectName}>
-                      <Folder size={12} aria-hidden="true" />
-                      <span>{item.projectName}</span>
-                    </span>
-                    <span className="mobile-agent-status" data-status={item.status}>{item.status}</span>
-                  </span>
-                </span>
-              </Link>
-            </li>
+            <MobileAgentRow key={item.key} item={item} active={activeKey === item.key}
+              onOpen={() => dismiss?.()} onClose={() => closeAgent(item)} />
           ))}
         </ul> : <div className="mobile-agent-history-empty" role="status">
           <MessageSquare size={28} aria-hidden="true" />

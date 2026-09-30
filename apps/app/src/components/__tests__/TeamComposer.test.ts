@@ -39,7 +39,7 @@ describe('TeamComposer', () => {
     expect(source).not.toContain('ReasoningEffortPicker');
     expect(source).not.toContain('EnvironmentPicker');
     expect(source).not.toContain('LauncherModelPicker');
-    expect(source).toContain("className=\"composer-control-tooltip\" data-tooltip={field.canAttach ? 'Attach files' : 'File attachments require the desktop app'}");
+    expect(source).toContain("className=\"composer-control-tooltip\" data-tooltip={field.canAttach ? 'Attach files' : 'Attachments are unavailable while sending'}");
     expect(source).toContain('className="composer-control-tooltip" data-tooltip="Attach source files for the squad to work from"');
     expect(source).toContain("'Start voice input'");
   });

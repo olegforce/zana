@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentState, TerminalSession } from '@zana-ai/zcc-domain/product';
 import type { ThreadListItem } from '../thread-store';
-import { filterMobileAgents, mobileAgentItems } from './mobile-agent-items';
+import { filterMobileAgents, mobileAgentItems, mobileCliAgentStatus } from './mobile-agent-items';
 
 const projects = [{ id: 'p1', name: 'Design system' }, { id: 'p2', name: 'Website' }];
 const thread = (id: string, extra: Partial<ThreadListItem> = {}): ThreadListItem => ({
@@ -11,14 +11,13 @@ const thread = (id: string, extra: Partial<ThreadListItem> = {}): ThreadListItem
 const session = (id: string, extra: Partial<TerminalSession> = {}): TerminalSession => ({
   id, projectId: 'p2', title: `Agent ${id}`, profile: 'codex', cwd: '/test', status: 'running', createdAt: 2, ...extra
 });
-const empty = { projects, threads: [], terminals: {}, states: {}, since: {} };
+const empty = { projects, threads: [], terminals: {}, states: {} };
 
 describe('mobile agent history', () => {
   it('combines both agent types across projects, newest first, excluding archives and shells', () => {
     const items = mobileAgentItems({ ...empty,
-      threads: [thread('old'), thread('latest', { updatedAt: 30 }), thread('archive', { archivedAt: 20 })],
-      terminals: { p2: [session('cli'), session('shell', { profile: 'shell' }), session('scheduled', { scheduled: true })] },
-      since: { cli: 10 }
+      threads: [thread('old'), thread('latest', { createdAt: 30 }), thread('archive', { archivedAt: 20 })],
+      terminals: { p2: [session('cli'), session('shell', { profile: 'shell' }), session('scheduled', { scheduled: true })] }
     });
     expect(items.map((item) => item.key)).toEqual(['thread:latest', 'session:cli', 'session:scheduled', 'thread:old']);
     expect(items[0]).toMatchObject({ to: '/threads/latest', projectName: 'Design system', status: 'Idle' });
@@ -58,7 +57,33 @@ describe('mobile agent history', () => {
       session('success', { status: 'exited', exitCode: 0, finishedAt: 100 }),
       session('failure', { status: 'exited', exitCode: 1, finishedAt: 90 })
     ] }, states: { success: 'working', failure: 'working' } });
-    expect(items.map((item) => item.status)).toEqual(['Finished', 'Error', 'Working']);
+    expect(items.map((item) => item.key)).toEqual(['session:start']);
+    expect(items[0].status).toBe('Working');
+  });
+
+  it('keeps live agents in place across status, activity, title and roster-order changes', () => {
+    const threads = [thread('older', { createdAt: 1 }), thread('newer', { createdAt: 3 })];
+    const terminals = { p2: [session('cli')] };
+    const keys = (items: ReturnType<typeof mobileAgentItems>) => items.map((item) => item.key);
+    const initial = keys(mobileAgentItems({ ...empty, threads, terminals }));
+    expect(initial).toEqual(['thread:newer', 'session:cli', 'thread:older']);
+    expect(keys(mobileAgentItems({ ...empty,
+      threads: threads.toReversed().map((item) => ({ ...item, updatedAt: 500, status: 'active', title: 'Changed' })),
+      terminals, states: { cli: 'blocked' }
+    }))).toEqual(initial);
+    expect(keys(mobileAgentItems({ ...empty, threads: [...threads, thread('new', { createdAt: 4 })], terminals })))
+      .toEqual(['thread:new', ...initial]);
+  });
+
+  it('breaks creation-time ties consistently regardless of roster order', () => {
+    const a = thread('a');
+    const b = thread('b');
+    const items = (threads: ThreadListItem[]) => mobileAgentItems({ ...empty, threads }).map((item) => item.key);
+    expect(items([b, a])).toEqual(items([a, b]));
+  });
+
+  it.each([0, 1])('can label an exited session with code %s without including it in navigation', (exitCode) => {
+    expect(mobileCliAgentStatus({ status: 'exited', exitCode }, 'working')).toBe(exitCode ? 'Error' : 'Finished');
   });
 
   it('uses the shared thread status including errors and pending interactions', () => {

@@ -765,6 +765,7 @@ export function ThreadCommandComposer({
         ) : null}
         <ComposerPromptField
           editor={field.editor}
+          imageInputProps={field.imageInputProps}
           images={field.images}
           onRemoveImage={field.removeImage}
           expanded={expanded}
@@ -846,7 +847,7 @@ export function ThreadCommandComposer({
                 <span
                   className="composer-control-tooltip"
                   data-tooltip={
-                    field.canAttach ? 'Attach files' : 'File attachments require the desktop app'
+                    field.canAttach ? 'Attach files' : 'Attachments are unavailable while sending'
                   }
                 >
                   <ComposerIconButton

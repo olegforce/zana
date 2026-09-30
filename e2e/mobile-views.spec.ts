@@ -477,7 +477,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           expect.soft(await capture(page), `${width}px inbox documents`).toEqual([]);
           await page.getByRole('button', { name: 'results.md', exact: true }).click();
           await page.getByRole('button', { name: 'Leave a reply', exact: true }).click();
-          const reply = page.getByRole('textbox', { name: 'Reply to the originating terminal session' });
+          const reply = page.getByRole('textbox', { name: 'Reply to the originating agent' });
           await expect(reply).toBeFocused();
           await reply.fill('A draft to verify the mobile reply layout.');
           await expect(reply).toHaveCSS('font-size', '16px');
