@@ -20,7 +20,9 @@ export function QuickAccessPanel({ kind, summary, children, footer, onViewAll }:
   const trigger = kind === 'notifications' ? '.titlebar-bell' : '.titlebar-fav';
   const close = () => {
     setOpen(false);
-    document.querySelector<HTMLButtonElement>(trigger)?.focus();
+    const button = document.querySelector<HTMLButtonElement>(trigger);
+    const visibleTrigger = button && getComputedStyle(button).display !== 'none' ? button : document.querySelector<HTMLButtonElement>('.sidebar-trigger-overlay > button');
+    visibleTrigger?.focus();
   };
 
   useEffect(() => {

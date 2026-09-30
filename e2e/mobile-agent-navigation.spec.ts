@@ -68,7 +68,7 @@ setInterval(() => {}, 1000);
     const credential = await pair.json();
     expect((await context.request.post(`${serverUrl}/_mobile/session`, { headers: { authorization: `Bearer ${credential.credential}` } })).ok()).toBe(true);
     const page = await context.newPage();
-    await page.goto(`${serverUrl}/threads/${seed.threads[0]}`);
+    await page.goto(`${serverUrl}/agents`);
     await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
     const list = drawer.getByRole('list', { name: 'Your agents' });
@@ -80,10 +80,25 @@ setInterval(() => {}, 1000);
       await page.setViewportSize({ width, height: 844 });
       for (const close of await list.getByRole('button').all()) {
         const box = (await close.boundingBox())!;
-        expect(box.width).toBeGreaterThanOrEqual(44);
-        expect(box.height).toBeGreaterThanOrEqual(44);
-        expect(box.x + box.width).toBeLessThanOrEqual(width);
+        expect(box.width).toBe(1);
+        expect(box.height).toBe(1);
+        await expect(close).toHaveCSS('clip-path', 'inset(50%)');
       }
+      const row = rows.first();
+      const surface = row.locator('..');
+      expect((await row.boundingBox())!.width).toBe((await surface.boundingBox())!.width);
+      // An external keyboard can still reach and use a visible close control.
+      await row.focus();
+      await page.keyboard.press('Tab');
+      const close = surface.getByRole('button');
+      await expect(close).toBeFocused();
+      await expect(close).toHaveCSS('clip-path', 'none');
+      const box = (await close.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await page.keyboard.press('Shift+Tab');
+      await expect(close).toHaveCSS('clip-path', 'inset(50%)');
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     }
     await page.setViewportSize({ width: 390, height: 844 });
@@ -105,20 +120,23 @@ setInterval(() => {}, 1000);
     await expect(drawer).toBeVisible();
     await swipe(page, first, 0, -70);
     await expect(rows).toHaveCount(3);
-    await expect(page).toHaveURL(`${serverUrl}/threads/${seed.threads[0]}`);
+    await expect(page).toHaveURL(`${serverUrl}/agents`);
     await page.screenshot({ path: testInfo.outputPath('mobile-agent-drawer.png') });
-    // Closing another agent leaves the selected agent and drawer intact.
+    // Closing an agent leaves the overview and drawer intact.
     await swipe(page, second, 145);
     await expect(second).toHaveCount(0);
     await expect(drawer).toBeVisible();
-    await expect(page).toHaveURL(`${serverUrl}/threads/${seed.threads[0]}`);
+    await expect(page).toHaveURL(`${serverUrl}/agents`);
     const archived = await (await context.request.get(`${serverUrl}/api/v1/threads/${seed.threads[1]}`)).json();
     expect(archived.thread.archivedAt).toBeTruthy();
     await swipe(page, cli, 145);
     await expect(cli).toHaveCount(0);
     await expect(drawer).toBeVisible();
-    // Closing the active agent leaves its page, and remains closed after reload.
-    await swipe(page, first, 145);
+    // Keyboard close also leaves the active page and persists after reload.
+    await first.focus();
+    await page.keyboard.press('Tab');
+    await expect(list.getByRole('button', { name: 'Close First mobile agent' })).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(first).toHaveCount(0);
     await expect(page).toHaveURL(`${serverUrl}/agents`);
     await page.reload();

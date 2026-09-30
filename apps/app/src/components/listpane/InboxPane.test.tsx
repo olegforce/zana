@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MOBILE_THREAD_TITLE_ID, MOBILE_THREAD_CONTROLS_ID } from '../useMobileThreadTitleTarget.js';
+import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
+
+const layout = vi.hoisted(() => ({ compact: false }));
+vi.mock('../../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
+afterEach(() => { cleanup(); layout.compact = false; vi.clearAllMocks(); });
 
 const setInboxTab = vi.fn();
 const setInboxGrouping = vi.fn();
@@ -80,7 +88,7 @@ describe('InboxPane tabs', () => {
 
 describe('InboxPane compact chrome contract', () => {
   it('keeps grouping / clear in the ⋯ menu instead of a second icon row', () => {
-    const source = readFileSync(new URL('./InboxPane.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(resolve('apps/app/src/components/listpane/InboxPane.tsx'), 'utf8');
     const html = renderToStaticMarkup(<InboxPane />);
 
     expect(source).toContain('<span className="inbox-tab-label">Saved</span>');
@@ -102,10 +110,10 @@ describe('InboxPane compact chrome contract', () => {
 
   it('always shows the ⋯ menu and floors the list column at 345px', () => {
     const css = readFileSync(
-      new URL('../../styles/global.css', import.meta.url),
+      resolve('apps/app/src/styles/global.css'),
       'utf8'
     );
-    const store = readFileSync(new URL('../../store.ts', import.meta.url), 'utf8');
+    const store = readFileSync(resolve('apps/app/src/store.ts'), 'utf8');
 
     expect(store).toContain('export const INBOX_LIST_MIN = 345;');
     expect(css).toContain('--inbox-list-min: 345px;');
@@ -123,14 +131,64 @@ describe('InboxPane compact chrome contract', () => {
   });
 
   it('does not steal the titlebar reserve when the sidebar is collapsed', () => {
-    const source = readFileSync(new URL('./InboxPane.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(resolve('apps/app/src/components/listpane/InboxPane.tsx'), 'utf8');
     const css = readFileSync(
-      new URL('../../styles/global.css', import.meta.url),
+      resolve('apps/app/src/styles/global.css'),
       'utf8'
     );
     expect(source).not.toContain('ownsWindowTopLeft');
     expect(css).not.toContain('.app-shell.sidebar-is-collapsed .inbox-list-pane .list-header {\n  display: flex;\n}');
     expect(css).not.toContain('.app-shell.sidebar-is-collapsed .inbox-list-pane .inbox-actions-more {\n  display: none;\n}');
     expect(css).not.toContain('--inbox-tabs-leading');
+  });
+});
+
+
+describe('mobile Inbox header', () => {
+  function mount(onShowOverview = vi.fn()) {
+    layout.compact = true;
+    return render(<><div id={MOBILE_THREAD_TITLE_ID} /><div id={MOBILE_THREAD_CONTROLS_ID} /><InboxPane onShowOverview={onShowOverview} /></>);
+  }
+  it('shows the title, tabs and unread filter with search revealed on demand', () => {
+    mount();
+    expect(screen.getByRole('heading').textContent).toBe('Inbox');
+    expect(screen.getByRole('tab', { name: 'Feed, 1 unread' })).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Unread 1' }));
+    expect(screen.getByRole('button', { name: 'Show all messages' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Search inbox' }));
+    const input = screen.getByRole('textbox', { name: 'Search inbox' });
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: 'test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close inbox search' }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Search inbox' }));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
+  });
+  it('keeps grouping and reports in a single sheet, retaining their callbacks', () => {
+    mount();
+    const more = () => fireEvent.click(screen.getByRole('button', { name: 'Inbox actions' }));
+    more();
+    let sheet = screen.getByRole('dialog', { name: 'Inbox actions' });
+    fireEvent.click(within(sheet).getByRole('radio', { name: 'Group by time' }));
+    expect(setInboxGrouping).toHaveBeenCalledWith('time');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    more(); sheet = screen.getByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Reports 1' }));
+    more();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Show all messages' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 1 as read' }));
+    expect(markAllRead).toHaveBeenCalledWith(['e1', 'e2']);
+  });
+  it('opens the overview from More and releases its header while details are active', () => {
+    const overview = vi.fn();
+    const view = mount(overview);
+    fireEvent.click(screen.getByRole('button', { name: 'Inbox actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Inbox overview' }));
+    expect(overview).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    view.rerender(<><div id={MOBILE_THREAD_TITLE_ID} /><div id={MOBILE_THREAD_CONTROLS_ID} /><InboxPane mobileHeaderEnabled={false} /></>);
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Inbox actions' })).toBeNull();
   });
 });

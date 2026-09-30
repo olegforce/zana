@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ComposerRunSettings, composerRunSummary } from './ComposerRunSettings.js';
 import { PopoverPicklist } from '../ui/PopoverPicklist.js';
+import { useDialogFocusTrap } from '../../hooks/useDialogFocusTrap.js';
 
 const layout = vi.hoisted(() => ({ compact: true }));
 vi.mock('../../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
@@ -90,4 +91,36 @@ it('renders inline on desktop and clears the open state across viewport transiti
   layout.compact = true;
   rerender(<ComposerRunSettings summary="MacBook"><button>Machine</button></ComposerRunSettings>);
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('keeps the outer launcher open while closing a nested picker or run settings', () => {
+  const onClose = vi.fn();
+  function Launcher() {
+    const dialog = useRef<HTMLDivElement>(null);
+    useDialogFocusTrap(dialog, onClose);
+    return <div ref={dialog}>
+      <button onKeyDown={(event) => event.preventDefault()}>Handled key</button>
+      <ComposerRunSettings summary="MacBook">
+        <PopoverPicklist ariaLabel="Machine" value="local" options={[{ value: 'local', label: 'MacBook' }]}
+          onChange={vi.fn()} searchable={false} />
+      </ComposerRunSettings>
+    </div>;
+  }
+  render(<Launcher />);
+  const trigger = screen.getByRole('button', { name: 'Run settings: MacBook' });
+  fireEvent.click(trigger);
+  const machine = screen.getByRole('button', { name: 'Machine' });
+  fireEvent.click(machine);
+  fireEvent.keyDown(machine, { key: 'Escape' });
+  expect(screen.queryByRole('listbox')).toBeNull();
+  expect(screen.getByRole('dialog', { name: 'Run settings' })).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(machine, { key: 'Escape' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Handled key' }), { key: 'Escape' });
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(trigger, { key: 'Escape' });
+  expect(onClose).toHaveBeenCalledOnce();
 });

@@ -195,6 +195,7 @@ export function ThreadDetail({
   const [isStopping, setIsStopping] = useState(false);
   const [stoppingAnchorAt, setStoppingAnchorAt] = useState(0);
   const [searchDraft, setSearchDraft] = useState('');
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchHit, setSearchHit] = useState<TimelineSearchHit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -794,6 +795,8 @@ export function ThreadDetail({
       projectId={projectId}
       onRenamed={setTitle}
       onUnread={() => setLastReadSeq(0)}
+      onSearch={mobileControlsTarget ? () => setMobileSearchOpen(true) : undefined}
+      extraActions={mobileControlsTarget ? <div className="mobile-menu-labeled"><PluginThreadHeaderActions threadId={threadId} projectId={projectId} /></div> : undefined}
     />
   );
 
@@ -822,14 +825,16 @@ export function ThreadDetail({
             overflow={mobileControlsTarget ? null : overflow}
           />
           <ThreadDetailActions target={mobileControlsTarget}>
-            <ThreadDetailSearch
+            {(!mobileControlsTarget || mobileSearchOpen) && <ThreadDetailSearch
               mobileHeader={Boolean(mobileControlsTarget)}
+              autoFocus={Boolean(mobileControlsTarget)}
+              onClose={() => setMobileSearchOpen(false)}
               value={searchDraft}
               onChange={setSearchDraft}
               onSubmit={runThreadSearch}
-            />
+            />}
             <ThreadStatusBadge status={status} waitingOnUser={awaitingUser} thinking={thinking} />
-            <PluginThreadHeaderActions threadId={threadId} projectId={projectId} />
+            {!mobileControlsTarget && <PluginThreadHeaderActions threadId={threadId} projectId={projectId} />}
             {pane?.onToggleMaximize ? (
               <button
                 type="button"
@@ -854,7 +859,6 @@ export function ThreadDetail({
                 <X size={14} />
               </button>
             ) : null}
-            {mobileControlsTarget ? overflow : null}
             {!panel.state.isOpen && !embedded ? (
               <button
                 type="button"
@@ -867,6 +871,7 @@ export function ThreadDetail({
                 <PanelRight size={14} />
               </button>
             ) : null}
+            {mobileControlsTarget ? overflow : null}
           </ThreadDetailActions>
         </header>
         <div className="thread-detail-body">

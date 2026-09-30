@@ -70,6 +70,7 @@ import {
 import { dispatchOptimisticUserMessage, dispatchThreadMessageSent, dispatchThreadStopRequested } from './thread/timeline/thread-optimistic-events.js';
 import { ComposerPromptField } from './composer/ComposerPromptField.js';
 import { ThreadComposerToolbar } from './composer/ThreadComposerToolbar.js';
+import { focusComposerControl } from './composer/focus-composer-control.js';
 import { useComposerPromptField } from './composer/use-composer-prompt-field.js';
 import { ProviderCliBanner } from './composer/ProviderCliBanner.js';
 import { useComposerProviderCli } from './composer/use-composer-provider-cli.js';
@@ -353,7 +354,7 @@ export function ThreadCommandComposer({
     projectRoot: selectedProject?.path,
     projects,
     disabled: busy,
-    autoFocus,
+    autoFocus: autoFocus && !compact,
     initialText,
     slashCatalog: {
       kind: 'thread',
@@ -708,6 +709,38 @@ export function ThreadCommandComposer({
     />
   ) : null;
   const runMachine = hosts.find((host) => host.id === (selectedProject?.remote ? selectedProject.hostId : hostId));
+  const runSettings = !threadId ? (
+    <ComposerRunSettings summary={composerRunSummary({
+      machineName: runMachine?.name,
+      remote: Boolean(selectedProject?.remote),
+      foreignHost,
+      workspace: workspace.kind
+    })}>
+      {!selectedProject?.remote && !foreignHost && (
+        <div className="composer-run-setting">
+          <span className="composer-run-setting-label">Working folder</span>
+          <EnvironmentPicker hostId={hostId} projectId={projectId} value={workspace} onChange={setWorkspace} />
+        </div>
+      )}
+      {showHostPicker && pickerHosts.length > 0 && (
+        <div className="composer-run-setting">
+          <span className="composer-run-setting-label">Machine</span>
+          <div className="thread-command-chip">
+            <Laptop size={14} aria-hidden="true" />
+            <HostMachinePicker
+              hosts={pickerHosts}
+              project={selectedProject}
+              value={hostId}
+              onChange={setHostId}
+              includeDisconnected
+              alwaysShow
+            />
+          </div>
+        </div>
+      )}
+      {compact && selectedProject?.remote && <p className="mobile-run-settings-hint">This project uses its connected remote machine.</p>}
+    </ComposerRunSettings>
+  ) : undefined;
 
   return (
     <>
@@ -756,6 +789,7 @@ export function ThreadCommandComposer({
         className={`home-agent-command thread-command-card${field.dropOver ? ' is-drop-over' : ''}`}
         labelledBy="thread-command-label"
         aria-busy={busy}
+        onMouseDownCapture={compact ? focusComposerControl : undefined}
       >
         {uploadProgress != null ? (
           <div className="thread-command-upload" role="status" data-testid="thread-command-upload-progress">
@@ -789,10 +823,10 @@ export function ThreadCommandComposer({
         ) : (
           <ThreadComposerToolbar
             permission={compact ? permissionPicker : undefined}
-            location={compact && threadId ? <span className="thread-command-location">
+            location={compact ? (threadId ? <span className="thread-command-location">
               <Laptop size={14} aria-hidden="true" />
               {remoteHostBadge ? <ComposerRemoteHostBadge {...remoteHostBadge} /> : (environmentLabel ?? 'Local')}
-            </span> : undefined}
+            </span> : runSettings) : undefined}
             mode={
               <ComposerModePicker
                 value={composerMode}
@@ -949,36 +983,7 @@ export function ThreadCommandComposer({
                   />
                 </div>
               </div>
-              <ComposerRunSettings summary={composerRunSummary({
-                machineName: runMachine?.name,
-                remote: Boolean(selectedProject?.remote),
-                foreignHost,
-                workspace: workspace.kind
-              })}>
-                {!selectedProject?.remote && !foreignHost && (
-                  <div className="composer-run-setting">
-                    <span className="composer-run-setting-label">Working folder</span>
-                    <EnvironmentPicker hostId={hostId} projectId={projectId} value={workspace} onChange={setWorkspace} />
-                  </div>
-                )}
-                {showHostPicker && pickerHosts.length > 0 && (
-                  <div className="composer-run-setting">
-                    <span className="composer-run-setting-label">Machine</span>
-                    <div className="thread-command-chip">
-                      <Laptop size={14} aria-hidden="true" />
-                      <HostMachinePicker
-                        hosts={pickerHosts}
-                        project={selectedProject}
-                        value={hostId}
-                        onChange={setHostId}
-                        includeDisconnected
-                        alwaysShow
-                      />
-                    </div>
-                  </div>
-                )}
-                {compact && selectedProject?.remote && <p className="mobile-run-settings-hint">This project uses its connected remote machine.</p>}
-              </ComposerRunSettings>
+              {!compact && runSettings}
               <ComposerHostActionChip
                 action={hostAction}
                 busyLabel={hostBusy}

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ThreadComposerToolbar } from './ThreadComposerToolbar.js';
@@ -129,6 +130,20 @@ it('keeps the run location in options without mixing it into model or permission
   expect(screen.getByText('Location')).toBeTruthy();
   rerender(toolbar());
   expect(screen.queryByText('Location')).toBeNull();
+});
+
+it('leaves options open when Escape belongs to a portalled run-settings picker', () => {
+  render(toolbar({ location: <>
+    <button>Run settings</button>
+    {createPortal(<button>Machine picker</button>, document.body)}
+  </> }));
+  const toggle = screen.getByRole('button', { name: 'Composer options' });
+  fireEvent.click(toggle);
+  const picker = screen.getByRole('button', { name: 'Machine picker' });
+  picker.focus();
+  fireEvent.keyDown(picker, { key: 'Escape' });
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  expect(document.activeElement).toBe(picker);
 });
 
 it('collapses when writing resumes, without reacting to other fields or retaining listeners', () => {

@@ -61,6 +61,7 @@ test('phone composer picks, previews, removes and sends screenshots through mobi
     await editor.fill('Draft survives image selection');
     for (const width of [320, 390]) {
       await phone.setViewportSize({ width, height: 460 });
+      await editor.tap();
       await expect(options).toHaveAttribute('aria-expanded', 'false');
       await expect(attach).toBeVisible();
       await expect(attach).toBeEnabled();
@@ -99,6 +100,7 @@ test('phone composer picks, previews, removes and sends screenshots through mobi
       await expect(thumb).toHaveCount(0);
     }
     await phone.setViewportSize({ width: 390, height: 844 });
+    await editor.tap();
     await phone.getByTestId('thread-command-expand').click();
     const expanded = phone.getByRole('dialog', { name: 'Write a message', exact: true });
     await expect(expanded).toBeVisible();

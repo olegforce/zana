@@ -22,6 +22,7 @@ async function keyboardViewport(page: Page, height: number, offsetTop = 0) {
 }
 
 async function checkToolbar(composer: Locator, width: number, compactModel = true) {
+  await composer.getByTestId('thread-command-input').focus();
   const model = composer.getByRole('button', { name: 'Provider and model', exact: true });
   const attach = composer.getByRole('button', { name: 'Attach files', exact: true });
   const options = composer.getByRole('button', { name: 'Composer options', exact: true });
@@ -50,6 +51,71 @@ async function checkToolbar(composer: Locator, width: number, compactModel = tru
         a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1).toBe(true);
     }
   }
+}
+
+async function checkCompactComposer(page: Page, composer: Locator) {
+  const card = composer.locator('.thread-command-card');
+  const editor = composer.getByTestId('thread-command-input');
+  const send = composer.locator('.thread-command-send');
+  const options = composer.getByRole('button', { name: 'Composer options', exact: true });
+  const runSettings = composer.getByRole('button', { name: /^Run settings:/ });
+  await expect(editor).not.toBeFocused();
+  await expect(options).toBeHidden();
+  await expect(runSettings).toBeHidden();
+  await expect(editor).toHaveCSS('max-height', '24px');
+  const resting = (await card.boundingBox())!;
+  expect(resting.height).toBeLessThanOrEqual(56);
+  const inputBox = (await editor.boundingBox())!;
+  const sendBox = (await send.boundingBox())!;
+  expect(sendBox.width).toBeGreaterThanOrEqual(44);
+  expect(sendBox.height).toBeGreaterThanOrEqual(44);
+  expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(sendBox.x);
+  expect(Math.abs(inputBox.y + inputBox.height / 2 - sendBox.y - sendBox.height / 2)).toBeLessThan(2);
+
+  await editor.tap();
+  await expect(editor).toBeFocused();
+  await expect(options).toBeVisible();
+  await expect(runSettings).toBeHidden();
+  const writing = (await card.boundingBox())!;
+  expect(writing.height).toBeGreaterThan(resting.height);
+  expect(writing.height).toBeLessThanOrEqual(resting.height + 60);
+
+  // Focus can move into the toolbar or its picker without collapsing the card.
+  await options.tap();
+  await expect(composer.locator('.thread-command-options')).toBeVisible();
+  if (await runSettings.count()) {
+    await expect(composer.locator('.thread-command-composer-meta .mobile-run-settings-trigger')).toHaveCount(0);
+    await runSettings.tap();
+    const settings = page.getByRole('dialog', { name: 'Run settings', exact: true });
+    await expect(settings).toBeVisible();
+    const workspace = settings.getByRole('button', { name: 'Workspace', exact: true });
+    await workspace.tap();
+    await page.keyboard.press('Escape');
+    await expect(settings).toBeVisible();
+    await expect(options).toHaveAttribute('aria-expanded', 'true');
+    await settings.getByRole('button', { name: 'Close run settings', exact: true }).tap();
+    await expect(runSettings).toBeFocused();
+  }
+  await page.keyboard.press('Escape');
+  await expect(options).toBeFocused();
+  await expect(options).toBeVisible();
+  const model = composer.getByTestId('model-reasoning-picker-trigger');
+  await model.tap();
+  await page.getByRole('button', { name: 'Close model picker', exact: true }).tap();
+  await expect(model).toBeFocused();
+  await expect(options).toBeVisible();
+
+  await editor.fill('First line\nSecond line\nThird line');
+  await editor.evaluate((node) => node.blur());
+  await expect(options).toBeHidden();
+  expect((await card.boundingBox())!.height).toBe(resting.height);
+  await editor.tap();
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveText(/First line\s*Second line\s*Third line/);
+  await editor.press('ControlOrMeta+A');
+  await editor.press('Backspace');
+  await expect(editor).toHaveText('');
+  await editor.evaluate((node) => node.blur());
 }
 
 for (const engine of [chromium, webkit]) {
@@ -108,6 +174,11 @@ for (const engine of [chromium, webkit]) {
         const composer = page.locator('.thread-command-composer');
         const editor = composer.getByTestId('thread-command-input');
         await expect(composer.getByTestId('model-reasoning-picker-trigger')).toContainText('Auto');
+        for (const width of [320, 390]) {
+          await page.setViewportSize({ width, height: 844 });
+          await checkCompactComposer(page, composer);
+          await page.screenshot({ path: testInfo.outputPath(`compact-${route === '/' ? 'home' : route.includes('new') ? 'new' : 'reply'}-${width}.png`) });
+        }
         await editor.fill('Draft stays visible above the keyboard');
         await composer.locator('input[type="file"]').setInputFiles([1, 2].map((number) => ({
           name: `screenshot-${number}.png`, mimeType: 'image/png',
@@ -141,6 +212,26 @@ for (const engine of [chromium, webkit]) {
         }
       }
 
+      // Send and Stop remain usable directly from the compact row, even on
+      // small phones where the focused toolbar wraps its running controls.
+      await page.goto(`${serverUrl}/threads/${threadId}`);
+      const reply = page.locator('.thread-command-composer');
+      await page.setViewportSize({ width: 320, height: 844 });
+      const replyEditor = reply.getByTestId('thread-command-input');
+      await replyEditor.fill('delay:60000 Check compact send and stop');
+      await replyEditor.evaluate((node) => node.blur());
+      const sent = page.waitForResponse((response) => response.url().endsWith(`/threads/${threadId}/send`) && response.request().method() === 'POST', { timeout: 15_000 });
+      await reply.getByTestId('thread-command-send').tap();
+      expect((await sent).ok()).toBe(true);
+      const stop = reply.getByTestId('thread-command-stop');
+      await expect(stop).toBeVisible();
+      await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+      expect((await reply.locator('.thread-command-card').boundingBox())!.height).toBeLessThanOrEqual(56);
+      const stopped = page.waitForResponse((response) => response.url().endsWith(`/threads/${threadId}/stop`) && response.request().method() === 'POST', { timeout: 15_000 });
+      await stop.tap();
+      expect((await stopped).ok()).toBe(true);
+      await expect(stop).toBeHidden();
+
       await page.goto(serverUrl + '/agents');
       await page.getByTestId('agents-board-new-thread').first().click();
       const modal = page.getByTestId('launch-modal');
@@ -148,6 +239,7 @@ for (const engine of [chromium, webkit]) {
       expect(await modal.evaluate((node) => node.closest('.app-shell') === null)).toBe(true);
       const composer = modal.locator('.thread-command-composer');
       await expect(composer.getByTestId('model-reasoning-picker-trigger')).toContainText('Auto');
+      await checkCompactComposer(page, composer);
       for (const width of [320, 390]) {
         await page.setViewportSize({ width, height: 844 });
         await checkToolbar(composer, width);
@@ -179,6 +271,8 @@ for (const engine of [chromium, webkit]) {
       await page.setViewportSize({ width: 1280, height: 900 });
       await expect(page.locator('.app-shell')).toHaveAttribute('data-mobile', 'false');
       await expect(page.locator('.app-shell')).toHaveCSS('position', 'static');
+      await longComposer.getByTestId('thread-command-input').evaluate((node) => node.blur());
+      await expect(longComposer.getByTestId('model-reasoning-picker-trigger')).toBeVisible();
       await expect(longComposer.getByRole('button', { name: 'Composer options', exact: true })).toBeHidden();
     } finally {
       await browser.close();

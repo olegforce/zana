@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, Plus, Sparkles, Pause, PlayCircle, AlertTriangle, Activity, Settings } from 'lucide-react';
 import type { ScheduledTask, ScheduleTemplate } from '@zana-ai/zcc-domain/product';
+import { useCompactLayout } from '@/hooks/useCompactLayout';
+import { MobilePageHeader } from '@/components/MobilePageHeader';
 import { AuroraGrid } from '@/components/AuroraGrid';
 import { useData, useScheduler, useScheduleGroups, useUi } from '@/store';
 import { EmptyStateWithFeatured } from '@/components/scheduler/EmptyStateWithFeatured';
@@ -31,6 +33,7 @@ export { pickLiveRun } from '@/components/scheduler/schedulerUtils';
  *   appears here too. New schedules default to this project + project scope.
  */
 export function SchedulerView({ projectId }: { projectId?: string } = {}) {
+  const compact = useCompactLayout();
   const navigate = useNavigate();
   const location = useLocation();
   const tasks = useScheduler((s) => s.tasks);
@@ -149,6 +152,36 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
     useUi.getState().setProjectView(id, 'scheduler');
   };
 
+  const secondaryActions = <>
+    {!lockedProject && (
+      <button
+        className="settings-btn"
+        onClick={() => setManagingGroups(true)}
+        title="Manage schedule groups"
+      >
+        <Settings size={14} /> Groups
+      </button>
+    )}
+    <button
+      className="settings-btn"
+      onClick={() => setPickingTemplate(true)}
+      disabled={projects.length === 0}
+      title={projects.length === 0 ? 'Add a project first' : 'Browse templates'}
+    >
+      <Sparkles size={14} /> From template
+    </button>
+  </>;
+  const newSchedule = (
+    <button
+      className="settings-btn settings-btn--primary"
+      onClick={() => openNew()}
+      disabled={projects.length === 0}
+      title={projects.length === 0 ? 'Add a project first' : 'New schedule'}
+    >
+      <Plus size={14} /> New schedule
+    </button>
+  );
+
   return (
     <div
       data-testid="scheduler-view"
@@ -156,6 +189,7 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
         lockedProject ? ' scheduler-panel--embedded' : ' scheduler-page'
       }`}
     >
+      <MobilePageHeader title="Schedules" primary={<button type="button" className="icon-btn" aria-label="New schedule" disabled={projects.length === 0} onClick={() => openNew()}><Plus size={20} /></button>}>{secondaryActions}</MobilePageHeader>
       <AuroraGrid />
       <div className="settings-inner">
         <div className="scheduler-header">
@@ -196,31 +230,8 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
                 </button>
               </div>
             )}
-            {!lockedProject && (
-              <button
-                className="settings-btn"
-                onClick={() => setManagingGroups(true)}
-                title="Manage schedule groups"
-              >
-                <Settings size={14} /> Groups
-              </button>
-            )}
-            <button
-              className="settings-btn"
-              onClick={() => setPickingTemplate(true)}
-              disabled={projects.length === 0}
-              title={projects.length === 0 ? 'Add a project first' : 'Browse templates'}
-            >
-              <Sparkles size={14} /> From template
-            </button>
-            <button
-              className="settings-btn settings-btn--primary"
-              onClick={() => openNew()}
-              disabled={projects.length === 0}
-              title={projects.length === 0 ? 'Add a project first' : 'New schedule'}
-            >
-              <Plus size={14} /> New schedule
-            </button>
+            {!compact && secondaryActions}
+            {!compact && newSchedule}
           </div>
         </div>
 

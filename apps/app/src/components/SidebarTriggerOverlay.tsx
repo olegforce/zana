@@ -1,6 +1,7 @@
-import { PanelLeft, PanelLeftClose, Plus, Search } from 'lucide-react';
+import { Menu, PanelLeft, PanelLeftClose, Plus, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useUi } from '../store.js';
+import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { useEnsureThreads } from '../hooks/useEnsureThreads.js';
 import { getNewThreadRoutePath } from '../lib/route-paths.js';
 import { SidebarHistoryControls } from './SidebarHistoryControls.js';
@@ -18,6 +19,7 @@ export function SidebarTriggerOverlay({
   collapsed: collapsedOverride,
   onToggle
 }: { collapsed?: boolean; onToggle?: () => void } = {}) {
+  const compact = useCompactLayout();
   const storedCollapsed = useUi((s) => s.sidebarCollapsed);
   const collapsed = collapsedOverride ?? storedCollapsed;
   const toggleSidebar = useUi((s) => s.toggleSidebar);
@@ -36,7 +38,7 @@ export function SidebarTriggerOverlay({
         aria-expanded={!collapsed}
         title={label}
       >
-        {collapsed ? <PanelLeft size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+        {compact ? <Menu size={20} aria-hidden="true" /> : collapsed ? <PanelLeft size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
       </button>
       <MobileAgentsBack hidden={!collapsed} />
       <SidebarHistoryControls />

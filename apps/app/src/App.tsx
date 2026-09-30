@@ -710,7 +710,11 @@ export function App() {
     !!scopedProject || keepsProjectFocusRail(nav, focusedProjectId);
   const shellLayout = resolveShellLayout(nav, projectRailLocked);
   const titlebarProject = scopedProject ?? (projectRailLocked ? focusedProject : null);
-  const titlebarLabel = shellTitlebarLabel(titlebarProject?.name, projectRailLocked);
+  const desktopTitle = shellTitlebarLabel(titlebarProject?.name, projectRailLocked);
+  const mobileTitles: Record<string, string> = { agents: 'Agents', inbox: 'Inbox', scheduler: 'Schedules', settings: 'Settings', suggestions: 'Next steps', followups: 'Follow-ups', goals: 'Goals', projects: titlebarProject?.name ?? 'Projects' };
+  const titlebarLabel = mobileNavigation.isCompact
+    ? (nav === 'extensions' ? (({ skills: 'Skills', mcp: 'MCP servers', marketplace: 'Browse plugins' } as Record<string, string>)[route.extensionsTab ?? ''] ?? 'Plugins') : mobileTitles[nav] ?? modules.find((module) => module.id === nav)?.title ?? desktopTitle)
+    : desktopTitle;
 
   return (
     <div
@@ -724,7 +728,8 @@ export function App() {
     >
       <div className="titlebar">
         {mobileNavigation.isCompact && <MobileSettingsBack hidden={mobileNavigation.drawerOpen} />}
-        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_TITLE_ID} className="mobile-thread-title-slot" />}
+        {/* Keep portal targets mounted while independent viewport subscribers update. */}
+        <div id={MOBILE_THREAD_TITLE_ID} className="mobile-thread-title-slot" />
         <span className="titlebar-title" title={titlebarProject?.path ?? undefined}>
           {titlebarLabel}
         </span>
@@ -762,8 +767,8 @@ export function App() {
             </span>
           )}
         </button>
-        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_CONTROLS_ID} className="mobile-thread-controls-slot" />}
-        {mobileNavigation.isCompact && <div id={MOBILE_THREAD_ACTIONS_ID} className="mobile-thread-actions-slot" />}
+        <div id={MOBILE_THREAD_CONTROLS_ID} className="mobile-thread-controls-slot" />
+        <div id={MOBILE_THREAD_ACTIONS_ID} className="mobile-thread-actions-slot" />
       </div>
       {/* Full-width update banner, in its own grid row below the titlebar (the
           `has-update-banner` class above adds that row). Renders null when no
@@ -777,6 +782,13 @@ export function App() {
         enabled={mobileNavigation.isCompact}
         open={!sidebarCollapsed}
         onClose={() => mobileNavigation.setDrawerOpen(false)}
+        shortcuts={<button type="button" className="mobile-nav-notifications" onClick={() => {
+          mobileNavigation.setDrawerOpen(false);
+          useUi.getState().toggleNotificationsDrawer();
+        }} aria-label={unreadInbox > 0 ? `Notifications — ${unreadInbox} unread` : 'Notifications'}>
+          <Bell size={18} aria-hidden="true" /> Notifications
+          {unreadInbox > 0 && <span className="nav-badge" aria-hidden="true">{unreadInbox > 99 ? '99+' : unreadInbox}</span>}
+        </button>}
         headerStart={nav === 'settings' ? <MobileSettingsBack onNavigate={() => mobileNavigation.setDrawerOpen(false)} /> : undefined}
       >
       <MobileAgentNavigation

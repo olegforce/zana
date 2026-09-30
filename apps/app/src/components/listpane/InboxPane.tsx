@@ -6,6 +6,8 @@ import { groupByBucketThenProject, subGroupKey } from '@zana-ai/zcc-domain/inbox
 import { isReport } from '@zana-ai/zcc-domain/feed-categories';
 import { ListPaneResizer } from '../ListPaneResizer.js';
 import { InboxSidebar } from '../InboxSidebar.js';
+import { useCompactLayout } from '../../hooks/useCompactLayout.js';
+import { MobilePageHeader } from '../MobilePageHeader.js';
 import { SavedSidebar } from '../SavedSidebar.js';
 
 function tabAriaLabel(name: string, count: number, countKind?: string): string {
@@ -13,7 +15,11 @@ function tabAriaLabel(name: string, count: number, countKind?: string): string {
   return countKind ? `${name}, ${count} ${countKind}` : `${name}, ${count}`;
 }
 
-export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = {}) {
+export function InboxPane({ onShowOverview, mobileHeaderEnabled = true }: { onShowOverview?: () => void; mobileHeaderEnabled?: boolean } = {}) {
+  const compact = useCompactLayout();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (compact && searchOpen) searchRef.current?.focus(); }, [compact, searchOpen]);
   const allEntries = useInbox((s) => s.entries);
   const readIds = useInboxRead((s) => s.readIds);
   const markAllRead = useInboxRead((s) => s.markAllRead);
@@ -116,8 +122,118 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
     if (showingSaved) setActionsMenuOpen(false);
   }, [showingSaved]);
 
+  const feedActions = <>
+    {showingFeed && (
+      <div role={compact ? "radiogroup" : "group"} aria-label="Inbox grouping">
+        <button
+          type="button"
+          role={compact ? "radio" : "menuitemradio"}
+          aria-checked={inboxGrouping === 'project'}
+          onClick={() => {
+            setInboxGrouping('project');
+            setActionsMenuOpen(false);
+          }}
+        >
+          <FolderTree size={13} aria-hidden />
+          Group by project
+          {inboxGrouping === 'project' && <Check size={13} className="inbox-menu-check" aria-hidden />}
+        </button>
+        <button
+          type="button"
+          role={compact ? "radio" : "menuitemradio"}
+          aria-checked={inboxGrouping === 'time'}
+          onClick={() => {
+            setInboxGrouping('time');
+            setActionsMenuOpen(false);
+          }}
+        >
+          <Clock size={13} aria-hidden />
+          Group by time
+          {inboxGrouping === 'time' && <Check size={13} className="inbox-menu-check" aria-hidden />}
+        </button>
+      </div>
+    )}
+    {(showCollapseAll || unreadCount > 0) && <div className="tab-context-sep" />}
+    {showCollapseAll && (
+      <button
+        type="button"
+        role={compact ? undefined : "menuitem"}
+        onClick={() => {
+          setManyCollapsed(subgroupKeys, !anyCollapsed);
+          setActionsMenuOpen(false);
+        }}
+      >
+        {anyCollapsed ? <ChevronsUpDown size={13} aria-hidden /> : <ChevronsDownUp size={13} aria-hidden />}
+        {collapseTitle}
+      </button>
+    )}
+    {unreadCount > 0 && (
+      <button
+        type="button"
+        role={compact ? undefined : "menuitem"}
+        onClick={() => {
+          markAllRead(entries.map((e) => e.id));
+          setActionsMenuOpen(false);
+        }}
+      >
+        <MailCheck size={13} aria-hidden />
+        {markReadTitle}
+      </button>
+    )}
+    <div className="tab-context-sep" />
+    <button
+      type="button"
+      role={compact ? undefined : "menuitem"}
+      className="tab-context-danger"
+      disabled={clearableCount === 0}
+      title={clearTitle}
+      onClick={() => {
+        setActionsMenuOpen(false);
+        onClear();
+      }}
+    >
+      <Trash2 size={13} aria-hidden />
+      Clear inbox
+    </button>
+  </>;
+  const unreadFilter = (
+    <button
+      type="button"
+      className={`inbox-filter-chip ${unreadOnly ? 'on' : ''}`}
+      aria-pressed={unreadOnly}
+      aria-label={unreadChipLabel}
+      title={unreadChipLabel}
+      disabled={unreadCount === 0 && !unreadOnly}
+      onClick={() => setUnreadOnly((v) => !v)}
+    >
+      Unread{unreadCount > 0 ? ` ${unreadCount}` : ''}
+    </button>
+  );
+  const reportsFilter = (
+    <button
+      type="button"
+      className={`inbox-filter-chip ${reportsOnly ? 'on' : ''}`}
+      aria-pressed={reportsOnly}
+      aria-label={reportsChipLabel}
+      title={reportsChipLabel}
+      disabled={reportCount === 0 && !reportsOnly}
+      onClick={() => setReportsOnly((v) => !v)}
+    >
+      Reports{reportCount > 0 ? ` ${reportCount}` : ''}
+    </button>
+  );
+
   return (
     <section className="list-pane inbox-list-pane">
+      <MobilePageHeader title="Inbox" enabled={mobileHeaderEnabled}
+        primary={<button type="button" className="icon-btn" aria-label={searchOpen ? 'Close inbox search' : 'Search inbox'} aria-expanded={searchOpen} onClick={() => { setSearchOpen((open) => !open); if (searchOpen) setQuery(''); }}>{searchOpen ? <X size={20} /> : <Search size={20} />}</button>}>
+        {showingFeed && <>
+          {onShowOverview && <button type="button" onClick={onShowOverview}><LayoutDashboard size={18} /> Inbox overview</button>}
+          {reportsFilter}
+          {feedActions}
+        </>}
+        {showingSaved && <button type="button" onClick={() => setInboxTab('feed')}><InboxIcon size={18} /> Open feed</button>}
+      </MobilePageHeader>
       {/* Tab strip: live feed vs durable saved reports. Feed actions live in
           the ⋯ menu; Unread / Reports are filter chips under the search. */}
       <div className="inbox-tabs-row">
@@ -149,12 +265,13 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
             {savedCount > 0 && <span className="inbox-tab-count">{savedCount}</span>}
           </button>
         </div>
-        {!showingSaved && onShowOverview && (
+        {compact && !showingSaved && unreadFilter}
+        {!compact && !showingSaved && onShowOverview && (
           <button type="button" className="inbox-mobile-overview" aria-label="Inbox overview" title="Inbox overview" onClick={onShowOverview}>
             <LayoutDashboard size={16} aria-hidden />
           </button>
         )}
-        {!showingSaved && (
+        {!compact && !showingSaved && (
           <div className="inbox-actions-more" ref={actionsMenuRef}>
             <button
               type="button"
@@ -189,78 +306,7 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
                       style={actionsMenuPos}
                       onMouseDown={(e) => e.stopPropagation()}
                     >
-                      {showingFeed && (
-                        <div role="group" aria-label="Inbox grouping">
-                          <button
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={inboxGrouping === 'project'}
-                            onClick={() => {
-                              setInboxGrouping('project');
-                              setActionsMenuOpen(false);
-                            }}
-                          >
-                            <FolderTree size={13} aria-hidden />
-                            Group by project
-                            {inboxGrouping === 'project' && <Check size={13} className="inbox-menu-check" aria-hidden />}
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={inboxGrouping === 'time'}
-                            onClick={() => {
-                              setInboxGrouping('time');
-                              setActionsMenuOpen(false);
-                            }}
-                          >
-                            <Clock size={13} aria-hidden />
-                            Group by time
-                            {inboxGrouping === 'time' && <Check size={13} className="inbox-menu-check" aria-hidden />}
-                          </button>
-                        </div>
-                      )}
-                      {(showCollapseAll || unreadCount > 0) && <div className="tab-context-sep" />}
-                      {showCollapseAll && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setManyCollapsed(subgroupKeys, !anyCollapsed);
-                            setActionsMenuOpen(false);
-                          }}
-                        >
-                          {anyCollapsed ? <ChevronsUpDown size={13} aria-hidden /> : <ChevronsDownUp size={13} aria-hidden />}
-                          {collapseTitle}
-                        </button>
-                      )}
-                      {unreadCount > 0 && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            markAllRead(entries.map((e) => e.id));
-                            setActionsMenuOpen(false);
-                          }}
-                        >
-                          <MailCheck size={13} aria-hidden />
-                          {markReadTitle}
-                        </button>
-                      )}
-                      <div className="tab-context-sep" />
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="tab-context-danger"
-                        disabled={clearableCount === 0}
-                        title={clearTitle}
-                        onClick={() => {
-                          setActionsMenuOpen(false);
-                          onClear();
-                        }}
-                      >
-                        <Trash2 size={13} aria-hidden />
-                        Clear inbox
-                      </button>
+                      {feedActions}
                     </div>,
                     document.body
                   ))}
@@ -268,10 +314,11 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
         )}
       </div>
       <div className="inbox-filter-row">
-        <div className="inbox-filter-search">
+        {(!compact || searchOpen) && <div className="inbox-filter-search">
           <Search size={12} className="inbox-filter-icon" aria-hidden />
           <input
             type="text"
+            ref={searchRef}
             className="inbox-filter-input"
             aria-label={showingSaved ? 'Search saved reports' : 'Search inbox'}
             placeholder={showingSaved ? 'Filter saved reports…' : reportsOnly ? 'Filter reports…' : 'Filter inbox…'}
@@ -288,31 +335,11 @@ export function InboxPane({ onShowOverview }: { onShowOverview?: () => void } = 
               <X size={12} />
             </button>
           )}
-        </div>
+        </div>}
         {!showingSaved && (
           <>
-            <button
-              type="button"
-              className={`inbox-filter-chip ${unreadOnly ? 'on' : ''}`}
-              aria-pressed={unreadOnly}
-              aria-label={unreadChipLabel}
-              title={unreadChipLabel}
-              disabled={unreadCount === 0 && !unreadOnly}
-              onClick={() => setUnreadOnly((v) => !v)}
-            >
-              Unread{unreadCount > 0 ? ` ${unreadCount}` : ''}
-            </button>
-            <button
-              type="button"
-              className={`inbox-filter-chip ${reportsOnly ? 'on' : ''}`}
-              aria-pressed={reportsOnly}
-              aria-label={reportsChipLabel}
-              title={reportsChipLabel}
-              disabled={reportCount === 0 && !reportsOnly}
-              onClick={() => setReportsOnly((v) => !v)}
-            >
-              Reports{reportCount > 0 ? ` ${reportCount}` : ''}
-            </button>
+            {!compact && unreadFilter}
+            {!compact && reportsFilter}
           </>
         )}
       </div>

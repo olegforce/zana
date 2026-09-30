@@ -80,6 +80,53 @@ it('keeps desktop narrow windows in the desktop layout', () => {
   });
   expect(result.current.isCompact).toBe(false);
 });
+it('tracks keyboard resize and pan, then releases viewport listeners on desktop', () => {
+  const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+  const remove = vi.spyOn(viewport, 'removeEventListener');
+  vi.stubGlobal('visualViewport', viewport);
+  const { unmount } = renderHook(useMobileNavigation, {
+    wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter>
+  });
+  const style = document.documentElement.style;
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('844px');
+  act(() => {
+    viewport.height = 390;
+    viewport.offsetTop = 150;
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('390px');
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('150px');
+  act(() => {
+    viewport.offsetTop = 210;
+    viewport.dispatchEvent(new Event('scroll'));
+  });
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('210px');
+  act(() => { narrow = false; listener(); });
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('');
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('');
+  expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
+  expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function));
+  viewport.dispatchEvent(new Event('scroll'));
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('');
+  unmount();
+});
+it('falls back to window size and cleans up on unmount without a visual viewport', () => {
+  vi.stubGlobal('visualViewport', undefined);
+  vi.stubGlobal('innerHeight', 800);
+  const { unmount } = renderHook(useMobileNavigation, {
+    wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter>
+  });
+  const style = document.documentElement.style;
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('800px');
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('0px');
+  vi.stubGlobal('innerHeight', 400);
+  fireEvent(window, new Event('resize'));
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('400px');
+  unmount();
+  fireEvent(window, new Event('resize'));
+  expect(style.getPropertyValue('--mobile-viewport-height')).toBe('');
+  expect(style.getPropertyValue('--mobile-viewport-top')).toBe('');
+});
 it('traps drawer focus, closes on Escape and restores focus', () => {
   const close = vi.fn();
   const trigger = document.createElement('button');

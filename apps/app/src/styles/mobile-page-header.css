@@ -1,0 +1,55 @@
+.mobile-page-actions { display: flex; align-items: center; gap: 0; }
+.mobile-page-actions > button { width: 44px; height: 44px; padding: 0; }
+.mobile-action-sheet-backdrop {
+  position: fixed; top: var(--mobile-viewport-top, 0px); left: 0; right: 0;
+  height: var(--mobile-viewport-height, 100dvh); z-index: 1200;
+  display: flex; align-items: flex-end; background: rgb(0 0 0 / 45%);
+}
+.mobile-action-sheet {
+  width: 100%; max-height: min(80%, 660px); min-height: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-bottom: 0; border-radius: 20px 20px 0 0;
+  background: var(--bg-panel); color: var(--text-primary); box-shadow: 0 -8px 40px rgb(0 0 0 / 20%);
+  padding: 8px 16px max(16px, env(safe-area-inset-bottom)); outline: none;
+}
+.mobile-action-sheet > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-action-sheet h2 { margin: 8px 0; font-size: 16px; font-weight: 600; }
+.mobile-action-sheet header > button { width: 44px; height: 44px; }
+.mobile-action-sheet-body { overflow: auto; overscroll-behavior: contain; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
+.mobile-action-sheet-body button {
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+  width: 100%; min-height: 48px; height: auto; padding: 10px 12px; flex-shrink: 0;
+  border: 0; border-radius: 10px; background: transparent; color: var(--text-primary);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.mobile-action-sheet-body button:is(:hover, :focus-visible) { background: var(--bg-hover); }
+.mobile-action-sheet-body button:disabled { opacity: .45; cursor: default; }
+.mobile-action-sheet-body button:is([aria-pressed='true'], [aria-checked='true']) { background: var(--bg-hover); color: var(--accent); }
+.mobile-action-sheet-body :is(.agents-view-toggle, .ext-installed-tags) { display: flex; flex-direction: column; border: 0; background: transparent; gap: 4px; }
+.mobile-action-sheet-body .tab-context-menu { position: static; box-shadow: none; width: 100%; min-width: 0; max-width: none !important; border: 0; padding: 0; background: transparent; }
+.mobile-action-sheet-body .tab-context-danger { color: var(--danger); }
+.mobile-action-sheet-body .mobile-menu-label { margin: 10px 12px 4px; font-size: 12px; color: var(--text-muted); }
+.mobile-action-sheet-body .mobile-menu-labeled button::after { content: attr(aria-label); }
+.mobile-action-sheet-body .agents-board-btn-label { display: inline; }
+.mobile-action-sheet-body .agents-board-btn-count { margin-left: auto; }
+.mobile-action-sheet-body .mobile-menu-extra { display: contents; }
+
+.app-shell[data-mobile='true'] .titlebar { padding-left: var(--mobile-header-leading, 52px); }
+.app-shell[data-mobile='true'] .titlebar > .titlebar-bell { display: none; }
+.app-shell[data-mobile='true'] .titlebar-title { max-width: calc(100vw - 64px); }
+.app-shell[data-mobile='true']:has(.mobile-agents-return) { --mobile-header-leading: 52px; }
+.app-shell[data-mobile='true'] .sidebar-trigger-overlay:has(.mobile-agents-return) > button:first-child { display: none; }
+/* An embedded List conversation temporarily owns the same slots as its page. */
+.titlebar:has(.mobile-thread-title-slot > h1:not(.mobile-page-title)) :is(.mobile-page-title, .mobile-page-actions) { display: none; }
+.app-shell[data-mobile='true'] .agents-board-toolbar { padding: 8px 12px; }
+.app-shell[data-mobile='true'] .agents-board-toolbar:empty { display: none; }
+.app-shell[data-mobile='true'] .agents-board-filter { margin: 0; }
+.app-shell[data-mobile='true'] .inbox-tabs-row { padding-top: 4px; padding-bottom: 4px; }
+.app-shell[data-mobile='true'] .inbox-tabs-row > .inbox-filter-chip { margin-left: auto; }
+.app-shell[data-mobile='true'] .inbox-filter-row:empty { display: none; }
+.app-shell[data-mobile='true'] .scheduler-header-text,
+.app-shell[data-mobile='true'] .ext-installed-header { display: none; }
+.app-shell[data-mobile='true'] .scheduler-header:has(.scheduler-header-actions:empty) { display: none; }
+.app-shell[data-mobile='true'] .scheduler-panel .settings-inner { padding-top: 8px; }
+.app-shell[data-mobile='true'] .ext-installed-toolbar { padding-top: 8px; }
+.mobile-nav-notifications { display: flex; align-items: center; gap: 10px; min-height: 44px; width: calc(100% - 24px); margin: 4px 12px; padding: 10px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); font: inherit; text-align: left; }
+.mobile-nav-notifications .nav-badge { margin-left: auto; }
