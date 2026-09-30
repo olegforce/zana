@@ -1,10 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import NodeWebSocket from 'ws';
 import {
   HOST_RPC_PROTOCOL_VERSION,
   HostEventBatchMessageSchema,
-  HostHelloMessageSchema,
-  HostHelloOkMessageSchema,
   type HostEventEnvelope
 } from '@zana-ai/zcc-contracts/host-rpc';
 import { createEventSink, type EventSink } from './event-sink.js';
@@ -23,21 +20,19 @@ import {
   InteractiveRequestRegistry,
   InteractiveRequestRegistryError
 } from './interactive-request-registry.js';
-import { joinServerWsUrl } from './server-url.js';
+import { createHostServerSocket } from './server-socket.js';
 import { connectHostFetch } from './connect-access.js';
 import {
   startDesktopBrowserBroker,
   type DesktopBrowserBroker
 } from './desktop-browser-broker.js';
 
-const BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000];
-const HEARTBEAT_MS = 15_000;
 // Pairing URLs keep `/t/<session>` via joinServerWsUrl (not a leading-slash new URL).
 
 export interface EnrolledHostConnection {
   runtime: CommandRuntime;
   sink: EventSink;
-  /** Resolves after the laptop accepts `host.hello` (`host.hello-ok`). */
+  /** Resolves after plugin reconciliation and the server readiness acknowledgement. */
   ready: Promise<void>;
   close(): Promise<void>;
 }
@@ -50,62 +45,43 @@ export function startEnrolledHostConnection(options: {
   instanceId?: string;
   runtime?: CommandRuntime;
   dataDir?: string;
+  keepRetryingStartup?: boolean;
   onSocketClose?: (code: number) => void;
   onConnectionChange?: (connected: boolean) => void;
 }): EnrolledHostConnection {
   const instanceId = options.instanceId ?? randomUUID();
-  const wsUrl = joinServerWsUrl(options.serverUrl, '/internal/hosts/ws');
-  if (!options.connectCredential) {
-    wsUrl.searchParams.set('hostId', options.hostId);
-    wsUrl.searchParams.set('hostKey', options.hostKey);
-  }
   const fetchFn = connectHostFetch(options.serverUrl, options.connectCredential);
 
-  let socket: WebSocket | null = null;
+  let socket: ReturnType<typeof createHostServerSocket> | undefined;
   let closed = false;
-  let attempt = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let settleReady: ((error?: Error) => void) | null = null;
-  let readySettled = false;
-  let helloAccepted = false;
+  let stopTask: Promise<void> | undefined;
   const delivery = createEventDelivery({
-    onTimeout: () => socket?.close(1013, 'Host event acknowledgement timed out'),
+    onTimeout: () => socket?.reconnect('event-ack-timeout'),
     onRejected: reasons => console.error('[host-events] Server rejected events:', reasons.join(', '))
   });
-  const ready = new Promise<void>((resolve, reject) => {
-    settleReady = (error) => {
-      if (error) reject(error);
-      else resolve();
-    };
-  });
-
-  function markReady(error?: Error): void {
-    if (readySettled) return;
-    readySettled = true;
-    settleReady?.(error);
-  }
 
   let adapter: ThreadRuntimeAdapter | null = null;
   let enrolledPty: EnrolledPty | null = null;
   let desktopBrowserBroker: DesktopBrowserBroker | null = null;
   const sink: EventSink = createEventSink({
-    isSessionOpen: () => helloAccepted && socket?.readyState === WebSocket.OPEN,
+    isSessionOpen: () => socket?.connected === true,
     onOverflow: (error) => {
       console.error('[host-events]', error.message);
-      void stopConnection(1013, 'Host event backlog exceeded capacity').catch(() => undefined);
+      void stopConnection().catch(() => undefined);
     },
     postEvents: async (events, batchId) => {
       const current = socket;
-      if (!helloAccepted || !current || current.readyState !== WebSocket.OPEN) throw new Error('host session is not open');
-      return delivery.send(batchId, events.length, () => current.send(JSON.stringify(HostEventBatchMessageSchema.parse({
-        type: 'host.event',
-        protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-        hostId: options.hostId,
-        instanceId,
-        batchId,
-        events
-      }))));
+      if (!current?.connected) throw new Error('host session is not open');
+      return delivery.send(batchId, events.length, () => {
+        if (!current.send(JSON.stringify(HostEventBatchMessageSchema.parse({
+          type: 'host.event',
+          protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+          hostId: options.hostId,
+          instanceId,
+          batchId,
+          events
+        })))) throw new Error('host session is not open');
+      });
     }
   });
 
@@ -240,110 +216,48 @@ export function startEnrolledHostConnection(options: {
       }
       desktopBrowserBroker = broker;
       runtime.desktopBrowserBroker = broker;
-      if (socket?.readyState === WebSocket.OPEN) broker.setConnected(true);
+      if (socket?.connected) broker.setConnected(true);
       return broker;
     }).catch(() => null)
     : Promise.resolve(null);
 
-  function connect(): void {
-    if (closed) return;
-    const next = options.connectCredential ? new NodeWebSocket(wsUrl, { headers: {
-      'x-zcc-machine-credential': options.connectCredential,
-      'x-zcc-host-id': options.hostId,
-      authorization: `Bearer ${options.hostKey}`
-    }, followRedirects: false, handshakeTimeout: 10_000 }) as unknown as WebSocket : new WebSocket(wsUrl);
-    socket = next;
-    helloAccepted = false;
-    next.addEventListener('error', () => { /* close owns reconnect; never close recursively from error. */ });
-    next.addEventListener('open', () => {
-      attempt = 0;
-      next.send(JSON.stringify(HostHelloMessageSchema.parse({
-        type: 'host.hello',
-        protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-        hostId: options.hostId,
-        instanceId
-      })));
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      heartbeatTimer = setInterval(() => {
-        if (next.readyState === WebSocket.OPEN) {
-          next.send(JSON.stringify({ type: 'heartbeat' }));
-        }
-      }, HEARTBEAT_MS);
-    });
-    next.addEventListener('message', (event) => {
-      if (socket !== next || closed) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'host.hello-ok') {
-        const ack = HostHelloOkMessageSchema.safeParse(parsed);
-        if (ack.success && ack.data.hostId === options.hostId) {
-          // Offline removal/reload cannot reach this daemon. Reconcile the
-          // server's current generations before announcing this connection.
-          void (runtime.pluginHosts ?? pluginHosts).reconcileGenerations(ack.data.pluginHostGenerations).then(() => {
-            if (socket !== next || closed || next.readyState !== WebSocket.OPEN) return;
-            helloAccepted = true;
-            desktopBrowserBroker?.setConnected(true);
-            options.onConnectionChange?.(true);
-            markReady();
-            void sink.flush();
-          }).catch(() => {
-            if (socket === next && !closed) next.close(1011, 'Plugin worker reconciliation failed');
-          });
-        }
-        return;
-      }
+  socket = createHostServerSocket({
+    serverUrl: options.serverUrl,
+    hostId: options.hostId,
+    hostKey: options.hostKey,
+    connectCredential: options.connectCredential,
+    instanceId,
+    keepRetryingStartup: options.keepRetryingStartup,
+    getRuntimeSnapshot: () => adapter?.getRuntimeSnapshot?.() ?? { threads: [], loadedEnvironments: [] },
+    onTerminated: () => { void stopConnection().catch(() => undefined); },
+    onHello: hello => (runtime.pluginHosts ?? pluginHosts).reconcileGenerations(hello.pluginHostGenerations),
+    onConnectionChange: connected => {
+      if (!connected) delivery.cancel();
+      desktopBrowserBroker?.setConnected(connected);
+      options.onConnectionChange?.(connected);
+      if (connected) void sink.flush();
+    },
+    onSocketClose: options.onSocketClose,
+    onMessage: (parsed, reply) => {
       if (delivery.accept(parsed)) return;
-      if (!parsed || typeof parsed !== 'object' || (parsed as { type?: string }).type !== 'host-rpc.request') {
-        return;
-      }
-      void handleHostRpcRequest(runtime, parsed).then((response) => {
-        if (next.readyState === WebSocket.OPEN) next.send(JSON.stringify(response));
-      });
-    });
-    next.addEventListener('close', (event) => {
-      if (socket !== next) return;
-      helloAccepted = false;
-      delivery.cancel();
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
-      desktopBrowserBroker?.setConnected(false);
-      options.onConnectionChange?.(false);
-      options.onSocketClose?.(event.code);
-      if (!readySettled) {
-        markReady(new Error('host websocket closed before hello'));
-        return;
-      }
-      if (closed) return;
-      const delay = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]!;
-      attempt += 1;
-      reconnectTimer = setTimeout(connect, delay);
-    });
-    // Do not close() from `error`: Node's undici WebSocket re-dispatches
-    // error from close(), which overflowed the stack on remotes. `close` reconnects.
+      if (!parsed || typeof parsed !== 'object' || (parsed as { type?: string }).type !== 'host-rpc.request') return;
+      void handleHostRpcRequest(runtime, parsed).then(response => reply(JSON.stringify(response)));
+    }
+  });
+
+  function stopConnection(): Promise<void> {
+    return stopTask ??= disposeConnection();
   }
 
-  connect();
-
-  async function stopConnection(code?: number, reason?: string): Promise<void> {
+  async function disposeConnection(): Promise<void> {
     closed = true;
-    helloAccepted = false;
     delivery.cancel();
     options.onConnectionChange?.(false);
-    markReady(new Error('host connection closed before hello'));
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    socket?.close();
     await pluginHosts.shutdown();
     adapter?.dispose();
     enrolledPty?.dispose();
     await sink.dispose();
-    socket?.close(code, reason);
-    socket = null;
     const broker = desktopBrowserBroker ?? await brokerTask;
     desktopBrowserBroker = null;
     runtime.desktopBrowserBroker = undefined;
@@ -353,7 +267,7 @@ export function startEnrolledHostConnection(options: {
   return {
     runtime,
     sink,
-    ready,
+    ready: socket.ready,
     close: () => stopConnection()
   };
 }

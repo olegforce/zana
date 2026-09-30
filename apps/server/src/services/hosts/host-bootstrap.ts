@@ -297,14 +297,13 @@ export function resolveHostBootstrapPlan(input: {
 }
 
 /**
- * A websocket-connected daemon can still be running a stale join.mjs.
- * Restart-only cannot replace that file, so Fix always reinstalls unless a
- * disconnected daemon comes back after a plain restart.
+ * Preserve an existing enrollment first. Restart also runs the daemon's
+ * protocol updater; reinstall is a fallback when recovery actually fails.
  */
 export function resolveRepairPlan(
   state: 'connected' | 'disconnected' | 'not_installed'
 ): 'install' | 'restart' {
-  return state === 'disconnected' ? 'restart' : 'install';
+  return state === 'not_installed' ? 'install' : 'restart';
 }
 
 function executionPath(remote: ProjectRemote, homeDir: string | null): string {

@@ -44,6 +44,7 @@ describe('real bundled host replacement', () => {
     const sockets = new WebSocketServer({ server });
     sockets.on('connection', socket => socket.on('message', bytes => {
       const message = JSON.parse(String(bytes));
+      if (message.type === 'host.ready') socket.send(JSON.stringify({ type: 'host.ready-ok', protocolVersion: protocol, hostId, instanceId: message.instanceId }));
       if (message.type === 'host.hello') socket.send(JSON.stringify({ type: 'host.hello-ok', protocolVersion: protocol, hostId }));
     }));
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

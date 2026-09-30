@@ -282,8 +282,9 @@ export function createAgentRuntimeAdapter(options: {
   const runtimes = new Map<string, AgentRuntime>();
   const modelDiscovery = new ModelDiscoveryLane();
   const discoveryRuntimes = new Set<AgentRuntime>();
+  const environmentRuntimes = new Set<string>();
   const runtimeMeta = new Map<string, { catalogHash: string; cwd: string }>();
-  const threadLocation = new Map<string, { environmentId: string; cwd: string }>();
+  const threadLocation = new Map<string, { environmentId: string; cwd: string; status: 'active' | 'idle' | 'error' }>();
   const remoteProxyByThread = new Map<string, ThreadRemoteProxy>();
   const submitByThread = new Map<string, Promise<void>>();
   const createRuntime = options.createRuntime
@@ -327,6 +328,10 @@ export function createAgentRuntimeAdapter(options: {
       skillRoots: loadRuntimeSkillRoots(skillDataDir),
       ...(bridgeBundleDir ? { bridgeBundleDir } : {}),
       onEvent: (event) => {
+        const location = threadLocation.get(event.threadId);
+        if (location && event.type === 'turn/completed' && !('parentToolCallId' in event && event.parentToolCallId)) {
+          location.status = event.status === 'failed' ? 'error' : 'idle';
+        }
         options.emit(mapRuntimeThreadEvent(event));
       },
       onToolCall: async (request) => {
@@ -358,11 +363,18 @@ export function createAgentRuntimeAdapter(options: {
         };
       },
       ...(options.onInteractiveRequest ? { onInteractiveRequest: options.onInteractiveRequest } : {}),
-      ...(options.onProcessExit ? { onProcessExit: options.onProcessExit } : {})
+      onProcessExit: info => {
+        for (const thread of info.threads) {
+          const location = threadLocation.get(thread.threadId);
+          if (location && !info.expected) location.status = 'error';
+        }
+        options.onProcessExit?.(info);
+      }
     });
   }
 
-  function runtimeFor(environmentId: string, cwd: string): AgentRuntime {
+  function runtimeFor(environmentId: string, cwd: string, isEnvironment = true): AgentRuntime {
+    if (isEnvironment) environmentRuntimes.add(environmentId);
     const catalogHash = hashInjectedSkillCatalog(skillDataDir);
     const existing = runtimes.get(environmentId);
     const meta = runtimeMeta.get(environmentId);
@@ -425,7 +437,7 @@ export function createAgentRuntimeAdapter(options: {
       syncProviderBridgeRecording();
       const workspaceCwd = input.cwd ?? join(storageRoot, 'provider-health', input.providerId);
       if (!input.cwd) mkdirSync(workspaceCwd, { recursive: true });
-      const runtime = runtimeFor(`provider-health:${input.providerId}`, workspaceCwd);
+      const runtime = runtimeFor(`provider-health:${input.providerId}`, workspaceCwd, false);
       return runtime.providerHealth({
         providerId: input.providerId,
         bridgeLaunch: await resolveLaunch(input.bridgeLaunch),
@@ -435,7 +447,7 @@ export function createAgentRuntimeAdapter(options: {
     async startWork(input: ThreadWorkInput) {
       syncProviderBridgeRecording();
       const runtime = runtimeFor(input.environmentId, input.cwd);
-      threadLocation.set(input.threadId, { environmentId: input.environmentId, cwd: input.cwd });
+      threadLocation.set(input.threadId, { environmentId: input.environmentId, cwd: input.cwd, status: 'active' });
       const remoteProxy = usesRemoteToolProxy(input);
       if (remoteProxy && input.remote) {
         remoteProxyByThread.set(
@@ -445,42 +457,50 @@ export function createAgentRuntimeAdapter(options: {
       } else {
         remoteProxyByThread.delete(input.threadId);
       }
-      const result = await runtime.startThread({
-        skillRoots: await skillSnapshots.capture(runtime),
-        environmentId: input.environmentId,
-        threadId: input.threadId,
-        projectId: input.projectId,
-        providerId: input.providerId,
-        input: input.input,
-        clientRequestId: input.clientRequestId ?? encodeClientTurnRequestIdNumber({ value: Date.now() }),
-        options: executionOptions({
-          permissionMode: input.permissionMode,
-          model: input.model,
-          reasoningLevel: input.reasoningLevel,
-          serviceTier: input.serviceTier,
-          acpMode: input.acpMode,
-          claudeCodePermissionMode: input.claudeCodePermissionMode,
-          providerOptions: input.providerOptions
-        }),
-        ...(acpLaunchSpecFromProviderOptions(input.providerOptions)
-          ? { acpLaunchSpec: acpLaunchSpecFromProviderOptions(input.providerOptions) }
-          : {}),
-        ...(input.providerThreadId ? {
-          fork: {
-            sourceProviderThreadId: input.providerThreadId,
-            ...(input.providerCheckpointId
-              ? { sourceProviderCheckpointId: input.providerCheckpointId }
-              : {})
-          }
-        } : {}),
-        ...(input.bridgeLaunch ? { bridgeLaunch: await resolveLaunch(input.bridgeLaunch) } : {}),
-        ...mergeSessionTooling({
-          remoteProxy,
-          dynamicTools: input.dynamicTools,
-          instructions: input.instructions
-        })
-      });
-      return { providerThreadId: result.providerThreadId };
+      try {
+        const result = await runtime.startThread({
+          skillRoots: await skillSnapshots.capture(runtime),
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          projectId: input.projectId,
+          providerId: input.providerId,
+          input: input.input,
+          clientRequestId: input.clientRequestId ?? encodeClientTurnRequestIdNumber({ value: Date.now() }),
+          options: executionOptions({
+            permissionMode: input.permissionMode,
+            model: input.model,
+            reasoningLevel: input.reasoningLevel,
+            serviceTier: input.serviceTier,
+            acpMode: input.acpMode,
+            claudeCodePermissionMode: input.claudeCodePermissionMode,
+            providerOptions: input.providerOptions
+          }),
+          ...(acpLaunchSpecFromProviderOptions(input.providerOptions)
+            ? { acpLaunchSpec: acpLaunchSpecFromProviderOptions(input.providerOptions) }
+            : {}),
+          ...(input.providerThreadId ? {
+            fork: {
+              sourceProviderThreadId: input.providerThreadId,
+              ...(input.providerCheckpointId
+                ? { sourceProviderCheckpointId: input.providerCheckpointId }
+                : {})
+            }
+          } : {}),
+          ...(input.bridgeLaunch ? { bridgeLaunch: await resolveLaunch(input.bridgeLaunch) } : {}),
+          ...mergeSessionTooling({
+            remoteProxy,
+            dynamicTools: input.dynamicTools,
+            instructions: input.instructions
+          })
+        });
+        const location = threadLocation.get(input.threadId);
+        if (location?.status === 'active') location.status = 'idle';
+        return { providerThreadId: result.providerThreadId };
+      } catch (error) {
+        const location = threadLocation.get(input.threadId);
+        if (location) location.status = 'error';
+        throw error;
+      }
     },
     async submitTurn(input) {
       const previous = submitByThread.get(input.threadId) ?? Promise.resolve();
@@ -520,6 +540,10 @@ export function createAgentRuntimeAdapter(options: {
       submitByThread.set(input.threadId, run);
       try {
         await run;
+      } catch (error) {
+        const location = threadLocation.get(input.threadId);
+        if (location) location.status = 'error';
+        throw error;
       } finally {
         if (submitByThread.get(input.threadId) === run) submitByThread.delete(input.threadId);
       }
@@ -527,34 +551,42 @@ export function createAgentRuntimeAdapter(options: {
     async resumeWork(input: ThreadResumeInput) {
       syncProviderBridgeRecording();
       const runtime = runtimeFor(input.environmentId, input.cwd);
-      threadLocation.set(input.threadId, { environmentId: input.environmentId, cwd: input.cwd });
-      const result = await runtime.resumeThread({
-        skillRoots: await skillSnapshots.capture(runtime),
-        environmentId: input.environmentId,
-        threadId: input.threadId,
-        projectId: input.projectId,
-        providerId: input.providerId,
-        providerThreadId: input.providerThreadId,
-        options: executionOptions({
-          permissionMode: input.permissionMode,
-          model: input.model,
-          reasoningLevel: input.reasoningLevel,
-          serviceTier: input.serviceTier,
-          acpMode: input.acpMode,
-          claudeCodePermissionMode: input.claudeCodePermissionMode,
-          providerOptions: input.providerOptions
-        }),
-        ...(acpLaunchSpecFromProviderOptions(input.providerOptions)
-          ? { acpLaunchSpec: acpLaunchSpecFromProviderOptions(input.providerOptions) }
-          : {}),
-        ...(input.bridgeLaunch ? { bridgeLaunch: await resolveLaunch(input.bridgeLaunch) } : {}),
-        ...mergeSessionTooling({
-          remoteProxy: false,
-          dynamicTools: input.dynamicTools,
-          instructions: input.instructions
-        })
-      });
-      return { providerThreadId: result.providerThreadId };
+      threadLocation.set(input.threadId, { environmentId: input.environmentId, cwd: input.cwd, status: 'active' });
+      try {
+        const result = await runtime.resumeThread({
+          skillRoots: await skillSnapshots.capture(runtime),
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          projectId: input.projectId,
+          providerId: input.providerId,
+          providerThreadId: input.providerThreadId,
+          options: executionOptions({
+            permissionMode: input.permissionMode,
+            model: input.model,
+            reasoningLevel: input.reasoningLevel,
+            serviceTier: input.serviceTier,
+            acpMode: input.acpMode,
+            claudeCodePermissionMode: input.claudeCodePermissionMode,
+            providerOptions: input.providerOptions
+          }),
+          ...(acpLaunchSpecFromProviderOptions(input.providerOptions)
+            ? { acpLaunchSpec: acpLaunchSpecFromProviderOptions(input.providerOptions) }
+            : {}),
+          ...(input.bridgeLaunch ? { bridgeLaunch: await resolveLaunch(input.bridgeLaunch) } : {}),
+          ...mergeSessionTooling({
+            remoteProxy: false,
+            dynamicTools: input.dynamicTools,
+            instructions: input.instructions
+          })
+        });
+        const location = threadLocation.get(input.threadId);
+        if (location?.status === 'active') location.status = 'idle';
+        return { providerThreadId: result.providerThreadId };
+      } catch (error) {
+        const location = threadLocation.get(input.threadId);
+        if (location) location.status = 'error';
+        throw error;
+      }
     },
     async resizeWork() {
       /* AgentRuntime has no PTY geometry. */
@@ -653,10 +685,20 @@ export function createAgentRuntimeAdapter(options: {
         await skillSnapshots.release(runtime);
         runtimes.delete(environmentId);
         runtimeMeta.delete(environmentId);
+        environmentRuntimes.delete(environmentId);
       }
     },
+    getRuntimeSnapshot() {
+      const live = new Set([...runtimes.values()].flatMap(runtime => runtime.getLiveThreadIds()));
+      return {
+        threads: [...threadLocation].map(([threadId, location]) => ({
+          threadId, status: live.has(threadId) || submitByThread.has(threadId) ? 'active' as const : location.status
+        })),
+        loadedEnvironments: [...runtimes.keys()].filter(id => environmentRuntimes.has(id))
+      };
+    },
     listLoadedEnvironments() {
-      return [...runtimes.keys()];
+      return [...runtimes.keys()].filter(id => environmentRuntimes.has(id));
     },
     dispose() {
       modelDiscovery.dispose();
@@ -664,6 +706,7 @@ export function createAgentRuntimeAdapter(options: {
         .then(() => skillSnapshots.dispose()).catch(() => undefined);
       runtimes.clear();
       runtimeMeta.clear();
+      environmentRuntimes.clear();
       threadLocation.clear();
       remoteProxyByThread.clear();
     }

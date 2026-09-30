@@ -79,7 +79,10 @@ import {
 // portable prebuilds remain inside the updater-compatible join.mjs bundle.
 // 37: host-local CLI launch discovery (version, roles, models).
 // 38: enrolled CLI engine with per-session callback grants and host-owned binaries.
-export const HOST_RPC_PROTOCOL_VERSION = 38;
+// 39: acknowledged heartbeats, two-phase readiness and runtime inventory on reconnect.
+export const HOST_RPC_PROTOCOL_VERSION = 39;
+export const HOST_HEARTBEAT_INTERVAL_MS = 5_000;
+export const HOST_LEASE_TIMEOUT_MS = 30_000;
 const ProtocolVersionSchema = z.literal(HOST_RPC_PROTOCOL_VERSION);
 
 const UuidSchema = z.string().uuid();
@@ -1486,9 +1489,37 @@ export const HostHelloOkMessageSchema = z.object({
   type: z.literal('host.hello-ok'),
   protocolVersion: ProtocolVersionSchema,
   hostId: UuidSchema,
+  heartbeatIntervalMs: z.number().int().min(1_000).max(30_000).default(HOST_HEARTBEAT_INTERVAL_MS),
+  leaseTimeoutMs: z.number().int().min(30_000).max(120_000).default(HOST_LEASE_TIMEOUT_MS),
   pluginHostGenerations: z.array(z.object({ pluginId: z.string().min(1).max(200), generation: z.string().min(1).max(200) }).strict()).max(4096).default([])
 }).strict();
 export type HostHelloOkMessage = z.infer<typeof HostHelloOkMessageSchema>;
+
+/** Authoritative, bounded inventory of work still owned by this daemon lifetime. */
+export const HostRuntimeSnapshotSchema = z.object({
+  threads: z.array(z.object({
+    threadId: UuidSchema,
+    status: z.enum(['active', 'idle', 'error'])
+  }).strict()).max(4096),
+  loadedEnvironments: z.array(UuidSchema).max(4096)
+}).strict();
+export type HostRuntimeSnapshot = z.infer<typeof HostRuntimeSnapshotSchema>;
+export const HostReadyMessageSchema = z.object({
+  type: z.literal('host.ready'),
+  protocolVersion: ProtocolVersionSchema,
+  hostId: UuidSchema,
+  instanceId: UuidSchema,
+  runtime: HostRuntimeSnapshotSchema
+}).strict();
+export const HostReadyOkMessageSchema = z.object({
+  type: z.literal('host.ready-ok'),
+  protocolVersion: ProtocolVersionSchema,
+  hostId: UuidSchema,
+  instanceId: UuidSchema
+}).strict();
+
+export const HostHeartbeatMessageSchema = z.object({ type: z.literal('heartbeat') }).strict();
+export const HostHeartbeatAckMessageSchema = z.object({ type: z.literal('heartbeat-ack') }).strict();
 
 export const HostRpcRequestMessageSchema = z.object({
   type: z.literal('host-rpc.request'),
@@ -1570,6 +1601,7 @@ export type HostEventAckMessage = z.infer<typeof HostEventAckMessageSchema>;
 
 export const HostDaemonWsInboundSchema = z.union([
   HostHelloMessageSchema,
+  HostReadyMessageSchema,
   HostRpcResponseSuccessSchema,
   HostRpcResponseFailureSchema,
   HostEventBatchMessageSchema
@@ -1579,7 +1611,8 @@ export type HostDaemonWsInbound = z.infer<typeof HostDaemonWsInboundSchema>;
 export const HostDaemonWsOutboundSchema = z.discriminatedUnion('type', [
   HostRpcRequestMessageSchema,
   HostEventAckMessageSchema,
-  HostHelloOkMessageSchema
+  HostHelloOkMessageSchema,
+  HostReadyOkMessageSchema
 ]);
 export type HostDaemonWsOutbound = z.infer<typeof HostDaemonWsOutboundSchema>;
 

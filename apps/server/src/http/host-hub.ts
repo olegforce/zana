@@ -3,10 +3,17 @@ import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import {
   HOST_RPC_PROTOCOL_VERSION,
+  HOST_HEARTBEAT_INTERVAL_MS,
+  HOST_LEASE_TIMEOUT_MS,
+  HostHeartbeatMessageSchema,
+  HostHeartbeatAckMessageSchema,
   HostEventAckMessageSchema,
   HostEventBatchMessageSchema,
   HostHelloMessageSchema,
   HostHelloOkMessageSchema,
+  HostReadyMessageSchema,
+  HostReadyOkMessageSchema,
+  type HostRuntimeSnapshot,
   HostRpcCommandSchema,
   HostRpcRequestMessageSchema,
   HostRpcResponseMessageSchema,
@@ -40,6 +47,7 @@ import {
 } from '../services/threads/conversation-provider-identity.js';
 import {
   interruptLiveConversationThreadsForHost,
+  reconcileHostRuntimeSnapshot,
   shouldInterruptLiveThreadsOnNewHostInstance
 } from '../services/threads/conversation-host-recovery.js';
 import {
@@ -139,6 +147,19 @@ export function createHostHub(
   }
 ) {
   const sessions = new Map<string, ConnectedHostSession>();
+  const handshakes = new Map<WebSocket, () => void>();
+  // One lease sweep per hub, disposed with the server. A half-open socket
+  // cannot keep an unreachable machine marked online indefinitely.
+  const leaseTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [hostId, session] of sessions) {
+      if (now - (session.lastHeartbeatAt ?? session.connectedAt) > HOST_LEASE_TIMEOUT_MS) {
+        detach(hostId, 'heartbeat-timeout');
+        session.socket.terminate();
+      }
+    }
+  }, HOST_HEARTBEAT_INTERVAL_MS);
+  leaseTimer.unref();
   const pending = new Map<string, PendingRpc>();
   const connectWaiters = new Map<string, Array<{
     resolve: () => void;
@@ -189,14 +210,14 @@ export function createHostHub(
     }
   }
 
-  function attach(socket: WebSocket, hostId: string, instanceId: string): void {
+  function attach(socket: WebSocket, hostId: string, instanceId: string, runtime: HostRuntimeSnapshot): void {
     const previousLive = sessions.get(hostId);
     const previousPersisted = getLatestSessionForHost(db, hostId);
     if (previousLive && previousLive.socket !== socket) {
       // Pending RPCs belong to the old socket even when a daemon reconnects
       // with the same lifetime id. They cannot be settled by its replacement.
       detach(hostId, 'connection-replaced');
-      previousLive.socket.close(4003, 'Host connection replaced');
+      previousLive.socket.close(previousLive.instanceId === instanceId ? 4004 : 4003, 'Host connection replaced');
     }
     if (shouldInterruptLiveThreadsOnNewHostInstance(
       previousPersisted?.instanceId ?? previousLive?.instanceId ?? null,
@@ -218,9 +239,13 @@ export function createHostHub(
       hub.emit('terminals:exit', { sessionId: id, code: -1 });
       hub.emit('terminals:updated', { sessionId: id });
     }
+    if (previousPersisted?.instanceId === instanceId) reconcileHostRuntimeSnapshot(db, hub, hostId, runtime);
     openHostSession(db, { hostId, instanceId, hostName: getHost(db, hostId)?.name ?? 'host' });
     markHostSeen(db, hostId);
     sessions.set(hostId, { hostId, instanceId, socket, connectedAt: Date.now(), lastHeartbeatAt: null });
+    socket.send(JSON.stringify(HostReadyOkMessageSchema.parse({
+      type: 'host.ready-ok', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId
+    })));
     hub.emit('hosts:changed', undefined);
     options?.onHostConnected?.(hostId);
     const waiters = connectWaiters.get(hostId);
@@ -251,8 +276,11 @@ export function createHostHub(
     const session = sessions.get(hostId);
     if (!session) return;
 
-    if (parsed && typeof parsed === 'object' && 'type' in parsed && parsed.type === 'heartbeat') {
+    if (HostHeartbeatMessageSchema.safeParse(parsed).success) {
       session.lastHeartbeatAt = Date.now();
+      if (session.socket.readyState === session.socket.OPEN) {
+        session.socket.send(JSON.stringify(HostHeartbeatAckMessageSchema.parse({ type: 'heartbeat-ack' })));
+      }
       return;
     }
 
@@ -586,7 +614,29 @@ export function createHostHub(
     const hello = HostHelloMessageSchema.safeParse(raw);
     if (!hello.success) return false;
     if (hello.data.hostId !== hostId) return false;
-    attach(socket, hostId, hello.data.instanceId);
+    if (handshakes.size >= 128 || handshakes.has(socket)) return false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      handshakes.delete(socket);
+      socket.off('message', onReady);
+      socket.off('close', cleanup);
+    };
+    const onReady = (data: import('ws').RawData) => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(data.toString()); } catch { /* rejected below */ }
+      const ready = HostReadyMessageSchema.safeParse(parsed);
+      cleanup();
+      if (!ready.success || ready.data.hostId !== hostId || ready.data.instanceId !== hello.data.instanceId) {
+        socket.close(4002, 'Invalid host readiness');
+        return;
+      }
+      attach(socket, hostId, hello.data.instanceId, ready.data.runtime);
+    };
+    const timer = setTimeout(() => { cleanup(); socket.close(1013, 'Host readiness timed out'); }, 10_000);
+    timer.unref();
+    handshakes.set(socket, cleanup);
+    socket.on('message', onReady);
+    socket.on('close', cleanup);
     if (socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify(HostHelloOkMessageSchema.parse({
         type: 'host.hello-ok',
@@ -599,6 +649,8 @@ export function createHostHub(
   }
 
   function close(): void {
+    clearInterval(leaseTimer);
+    for (const [socket, cleanup] of handshakes) { cleanup(); socket.close(); }
     for (const session of sessions.values()) {
       session.socket.close();
     }

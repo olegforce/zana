@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Keep in lockstep with `HOST_RPC_PROTOCOL_VERSION` in `@zana-ai/zcc-contracts/host-rpc`. */
-const PROTOCOL_VERSION = 38;
+const PROTOCOL_VERSION = 39;
 
 function joinServerUrl(serverUrl, path) {
   const base = serverUrl.endsWith('/') ? serverUrl : `${serverUrl}/`;
@@ -152,7 +152,17 @@ function connectWs(options, auth, onOpen) {
     next.addEventListener('message', (event) => {
       try {
         const payload = JSON.parse(String(event.data));
-        if (payload?.type === 'host.hello-ok' && payload.hostId === auth.hostId) onOpen();
+        if (payload?.type === 'host.hello-ok' && payload.hostId === auth.hostId) {
+          next.send(JSON.stringify({
+            type: 'host.ready',
+            protocolVersion: PROTOCOL_VERSION,
+            hostId: auth.hostId,
+            instanceId: auth.instanceId,
+            runtime: { threads: [], loadedEnvironments: [] }
+          }));
+        }
+        if (payload?.type === 'host.ready-ok' && payload.hostId === auth.hostId
+          && payload.instanceId === auth.instanceId) onOpen();
       } catch {
         /* ignore non-JSON frames */
       }

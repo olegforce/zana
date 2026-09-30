@@ -6,6 +6,41 @@ Remote daemon upgrades download at most 16 MiB, expand at most 64 MiB, and enfor
 
 Service installations set `ZCC_HOST_SERVICE_MANAGED=1`; their manager restarts the stable entry. Background-only installations spawn a replacement and refresh `host-daemon.pid`. Repair stops launchd/systemd first. An unmanaged PID is signalled only if its command and start time still match the expected daemon. Desktop lock takeover also requires a recorded matching process identity. A live legacy PID-only lock requires stopping its owning app or service; it cannot safely be killed automatically.
 
+Enrolled connections use BB's PartySocket/`ws` stack on both legacy relay and
+Connect paths. A failed upgrade retries with 1–30 second exponential backoff;
+each connection and readiness handshake has a 10-second deadline. An installed
+standalone daemon keeps retrying during an initial outage, including when the
+protocol updater is temporarily unavailable. Desktop enrollment waits remain
+bounded at 60 seconds. Shutdown cancels a pending startup and releases its lock. Accepted sessions exchange heartbeats every five seconds
+with a 30-second lease. Missing replies force reconnection, and the server
+removes peers whose heartbeats stop. Reconnection preserves the daemon lifetime
+and machine credentials; temporary network errors never consume a join code.
+
+Readiness is a two-phase exchange. `host.hello-ok` supplies plugin generations;
+the daemon reconciles them, then sends `host.ready` with its bounded runtime
+inventory. The server acknowledges readiness before releasing Stop or queued
+requests. A reconnect of the same daemon lifetime restores surviving work,
+settles completed work, and retains failures. A new process cannot restore the
+old process's work. Stop intent survives disconnect grace until it can be
+delivered. Inventory entries are confined to the authenticated host's threads
+and their existing environments. Internal provider-health runtimes are excluded;
+repeated readiness failures use a bounded retry delay rather than a tight loop.
+
+Close code 4003 retires a superseded daemon; 4004 replaces only a stale socket
+of the same lifetime. A superseded service-managed process stops its runtime
+and keeps only its local status listener until an explicit restart, because
+existing launchd/systemd installations restart clean exits too. This prevents
+two service managers from repeatedly replacing one another.
+
+Repair tries restarting any existing installation before reinstalling. On
+machines without launchd/systemd, `join.mjs restart` uses the saved enrollment
+and verifies the recorded lock owner before replacing the process. Restart also
+prepends the selected Node executable directory to PATH for child tools. This is a
+background process, not a boot service: a machine reboot still requires its
+environment to start the daemon. A version-38 daemon already stranded by the
+native Node 22 WebSocket bug needs a one-time restart/update after the desktop
+with protocol 39 is installed.
+
 Core warnings and errors are recorded under the data directory's `logs/` in `desktop.log`, `server.log`, and `host-daemon.log`. Each role keeps three files, approximately 2 MiB each, with private file permissions, credential redaction and a bounded write queue. The startup record includes the runtime executable and Node/Electron versions; a streamed SHA-256 fingerprint identifies the actual bundle even when release versions are equal. Logging errors never block startup. These diagnostics do not capture terminal transcripts or arbitrary object graphs. Sudden OS kills may lose the last queued log messages; the surviving desktop records utility failure.
 
 ## Dependency maintenance
@@ -20,6 +55,9 @@ Two version-based audit alerts can still be returned:
 The audit alerts are not globally suppressed. Recheck these exceptions when the upstream packages or patches change.
 
 ## Verification
+
+- `apps/server/src/http/host-reconnection.integration.test.ts` covers delayed readiness, pending Stop, same-lifetime runtime reconciliation, malformed readiness and superseded ownership.
+- `e2e/machine-reconnection.spec.ts` runs the served bundle through failed upgrades, missing hello/heartbeat acknowledgements and an unmanaged restart with a startup outage longer than 60 seconds. It verifies the Machines UI and unchanged saved credentials.
 
 - `apps/server/src/services/hosts/host-self-update.integration.test.ts` starts a real bundled daemon speaking the previous protocol, serves the current artifact, and proves replacement/handshake for both restart ownership modes.
 - `e2e/runtime-recovery.spec.ts` kills only an isolated app's server/daemon, verifies the recovery dialog and persisted projects, and probes the served daemon artifact from Electron.

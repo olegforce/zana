@@ -1,234 +1,112 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { HOST_RPC_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/host-rpc';
 import { startEnrolledHostConnection } from './server-connection.js';
 import type { CommandRuntime } from './command-dispatch.js';
 
-function stubRuntime(dataDir: string): CommandRuntime {
-  return {
-    dataDir,
-    environments: new Map(),
-    threads: new Map(),
-    terminals: new Map(),
-    provisionSignals: new Map(),
-    lanes: new Map(),
-    loadConfig: () => ({}) as ReturnType<CommandRuntime['loadConfig']>,
-    verifyProviders: async () => ({ providers: [] }),
-    emit: () => undefined
+const hostId = '11111111-1111-4111-8111-111111111111';
+const instanceId = '22222222-2222-4222-8222-222222222222';
+const cleanup: Array<() => Promise<void>> = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.unstubAllGlobals(); });
+async function fixture(connectCredential?: string) {
+  const dataDir = mkdtempSync(join(tmpdir(), 'zcc-host-reconnect-'));
+  const server = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  let failures = 0; let upgrades = 0; let status = 503;
+  let accepted: WebSocket;
+  const requests: Array<{ url: string; headers: import('node:http').IncomingHttpHeaders }> = [];
+  const hellos: any[] = [];
+  const messages: any[] = [];
+  const sockets = new Set<import('node:stream').Duplex>();
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  server.on('upgrade', (request, socket, head) => {
+    upgrades++;
+    requests.push({ url: request.url!, headers: request.headers });
+    if (failures-- > 0) { socket.end(`HTTP/1.1 ${status} Failure\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`); return; }
+    wss.handleUpgrade(request, socket, head, ws => {
+      accepted = ws;
+      ws.on('message', raw => {
+        const message = JSON.parse(String(raw));
+        messages.push(message);
+        if (message.type === 'host.hello') {
+          hellos.push(message);
+          ws.send(JSON.stringify({ type: 'host.hello-ok', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, pluginHostGenerations: [{ pluginId: 'test', generation: 'current' }] }));
+        }
+        if (message.type === 'host.ready') ws.send(JSON.stringify({ type: 'host.ready-ok', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId: message.instanceId }));
+        if (message.type === 'host.event') ws.send(JSON.stringify({ type: 'host.event-ack', protocolVersion: HOST_RPC_PROTOCOL_VERSION, batchId: message.batchId, accepted: message.events.length, rejected: [] }));
+        if (message.type === 'heartbeat') ws.send(JSON.stringify({ type: 'heartbeat-ack' }));
+      });
+    });
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  cleanup.push(async () => {
+    for (const socket of wss.clients) socket.terminate();
+    for (const socket of sockets) socket.destroy();
+    wss.close(); await new Promise<void>(r => server.close(() => r())); rmSync(dataDir, { recursive: true, force: true });
+  });
+  const reconcile = vi.fn(async () => {});
+  const runtime = { dataDir, environments: new Map(), threads: new Map(), terminals: new Map(), provisionSignals: new Map(), lanes: new Map(),
+    loadConfig: () => ({}), verifyProviders: async () => ({ providers: [] }), emit: () => {}, pluginHosts: { reconcileGenerations: reconcile } } as unknown as CommandRuntime;
+  const changes: boolean[] = [];
+  const connect = () => {
+    const connection = startEnrolledHostConnection({ serverUrl: `http://127.0.0.1:${(server.address() as any).port}/t/zcrs_abcdefghijklmnop`, hostId, instanceId,
+      hostKey: 'secret-machine-key', connectCredential, runtime, dataDir, onConnectionChange: value => changes.push(value) });
+    void connection.ready.catch(() => {}); cleanup.push(() => connection.close()); return connection;
   };
+  return { connect, changes, hellos, reconcile, requests, messages, send: (message: unknown) => accepted.send(JSON.stringify(message)), get upgrades() { return upgrades; },
+    rejectNext: (count = 1, code = 503) => { failures = count; status = code; }, drop: () => accepted.terminate() };
 }
 
-describe('enrolled host websocket', () => {
-  const OriginalWebSocket = globalThis.WebSocket;
-  afterEach(() => {
-    globalThis.WebSocket = OriginalWebSocket;
-    vi.useRealTimers();
-  });
-
-  it('does not close() from error — Node undici re-enters error and overflows', async () => {
-    let closeCalls = 0;
-    class RecursiveErrorSocket {
-      static readonly CONNECTING = 0;
-      static readonly OPEN = 1;
-      static readonly CLOSING = 2;
-      static readonly CLOSED = 3;
-      readyState = 0;
-      private readonly handlers = new Map<string, Array<(event?: unknown) => void>>();
-      constructor() {
-        queueMicrotask(() => this.dispatch('error'));
-      }
-      addEventListener(type: string, fn: (event?: unknown) => void) {
-        const list = this.handlers.get(type) ?? [];
-        list.push(fn);
-        this.handlers.set(type, list);
-      }
-      close() {
-        closeCalls += 1;
-        if (closeCalls > 20) throw new RangeError('Maximum call stack size exceeded');
-        this.dispatch('error');
-      }
-      send() {}
-      dispatch(type: string) {
-        for (const fn of this.handlers.get(type) ?? []) fn({ code: 1006 });
-      }
+describe('enrolled host with BB ws transport', () => {
+  it.each([undefined, 'c'.repeat(43)])('reconnects after a failed upgrade with the same identity (Connect credential=%s)', async credential => {
+    // The affected Node 22 native WebSocket never emits close for a failed
+    // upgrade. Prove the production path never calls that implementation.
+    vi.stubGlobal('WebSocket', class { constructor() { throw new Error('native WebSocket must not be used'); } });
+    const f = await fixture(credential); const connection = f.connect(); await connection.ready;
+    expect(f.changes).toEqual([true]);
+    f.rejectNext(); f.drop();
+    await vi.waitFor(() => expect(f.hellos).toHaveLength(2), { timeout: 8000 });
+    await vi.waitFor(() => expect(f.changes).toEqual([true, false, true]));
+    expect(f.upgrades).toBe(3);
+    expect(f.hellos[1]).toEqual(f.hellos[0]);
+    expect(f.reconcile).toHaveBeenCalledTimes(2);
+    for (const request of f.requests) {
+      expect(request.url).toBe('/t/zcrs_abcdefghijklmnop/internal/hosts/ws');
+      expect(request.headers.authorization).toBe('Bearer secret-machine-key');
+      expect(request.headers['x-zcc-host-id']).toBe(hostId);
+      expect(request.headers['x-zcc-machine-credential']).toBe(credential);
     }
-    globalThis.WebSocket = RecursiveErrorSocket as unknown as typeof WebSocket;
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-error-'));
-    const connection = startEnrolledHostConnection({
-      serverUrl: 'http://127.0.0.1:1/',
-      hostId: 'host-1',
-      hostKey: 'key-1',
-      dataDir,
-      runtime: stubRuntime(dataDir)
-    });
-    void connection.ready.catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(closeCalls).toBe(0);
-    await connection.close();
+  }, 12000);
+  it('retries a transient initial upgrade failure without settling ready early', async () => {
+    const f = await fixture(); f.rejectNext(); const connection = f.connect();
+    await connection.ready;
+    expect(f.upgrades).toBe(2); expect(f.changes).toEqual([true]);
   });
-
-  it('rejects ready when the socket closes before hello', async () => {
-    class ClosedSocket {
-      static readonly CONNECTING = 0;
-      static readonly OPEN = 1;
-      static readonly CLOSING = 2;
-      static readonly CLOSED = 3;
-      readyState = 3;
-      addEventListener(type: string, fn: (event?: unknown) => void) {
-        if (type === 'close') queueMicrotask(() => fn({ code: 1006 }));
-      }
-      close() {}
-      send() {}
-    }
-    globalThis.WebSocket = ClosedSocket as unknown as typeof WebSocket;
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-closed-'));
-    const connection = startEnrolledHostConnection({
-      serverUrl: 'http://127.0.0.1:1/',
-      hostId: '11111111-1111-4111-8111-111111111111',
-      hostKey: 'key-1',
-      dataDir,
-      runtime: stubRuntime(dataDir)
-    });
-    await expect(connection.ready).rejects.toThrow(/closed before hello/);
-    await connection.close();
-  });
-
-  it('fetches plugin host artifacts through the enrolled HTTP client', () => {
-    const source = readFileSync(new URL('./server-connection.ts', import.meta.url), 'utf8');
-    expect(source).toContain('createPluginHostArtifactHttpClient');
-    expect(source).toContain('fetchPluginHostArtifact');
-  });
-
-  it('keeps the pairing session prefix on the host websocket', async () => {
-    const opened: string[] = [];
-    class CaptureSocket {
-      static readonly CONNECTING = 0;
-      static readonly OPEN = 1;
-      static readonly CLOSING = 2;
-      static readonly CLOSED = 3;
-      readyState = 3;
-      constructor(url: string) {
-        opened.push(String(url));
-      }
-      addEventListener(type: string, fn: (event?: unknown) => void) {
-        if (type === 'close') queueMicrotask(() => fn({ code: 1006 }));
-      }
-      close() {}
-      send() {}
-    }
-    globalThis.WebSocket = CaptureSocket as unknown as typeof WebSocket;
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-prefix-'));
-    const connection = startEnrolledHostConnection({
-      serverUrl: 'https://zcc.example/t/zcrs_abcdefghijklmnopqr',
-      hostId: '11111111-1111-4111-8111-111111111111',
-      hostKey: 'key-1',
-      dataDir,
-      runtime: stubRuntime(dataDir)
-    });
-    await expect(connection.ready).rejects.toThrow(/closed before hello/);
-    expect(opened[0]).toContain('/t/zcrs_abcdefghijklmnopqr/internal/hosts/ws');
-    await connection.close();
-  });
-
-  it('resolves ready only after host.hello-ok, not on websocket open', async () => {
-    vi.useFakeTimers();
-    const changes: boolean[] = [];
-    const sockets: HelloOkSocket[] = [];
-    const hostId = '11111111-1111-4111-8111-111111111111';
-    class HelloOkSocket {
-      static readonly CONNECTING = 0;
-      static readonly OPEN = 1;
-      static readonly CLOSING = 2;
-      static readonly CLOSED = 3;
-      readyState = 1;
-      private readonly handlers = new Map<string, Array<(event?: unknown) => void>>();
-      constructor() {
-        sockets.push(this);
-        queueMicrotask(() => this.dispatch('open'));
-      }
-      addEventListener(type: string, fn: (event?: unknown) => void) {
-        const list = this.handlers.get(type) ?? [];
-        list.push(fn);
-        this.handlers.set(type, list);
-      }
-      send(data: string) {
-        const parsed = JSON.parse(data) as { type?: string; hostId?: string };
-        if (parsed.type !== 'host.hello') return;
-        queueMicrotask(() => this.dispatch('message', {
-          data: JSON.stringify({
-            type: 'host.hello-ok',
-            protocolVersion: HOST_RPC_PROTOCOL_VERSION,
-            hostId: parsed.hostId,
-            pluginHostGenerations: [{ pluginId: 'test', generation: 'current' }]
-          })
-        }));
-      }
-      close() {}
-      dispatch(type: string, event?: unknown) {
-        for (const fn of this.handlers.get(type) ?? []) fn(event ?? { code: 1000 });
-      }
-    }
-    globalThis.WebSocket = HelloOkSocket as unknown as typeof WebSocket;
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-hello-ok-'));
-    const runtime = stubRuntime(dataDir);
-    const reconcile = vi.fn().mockResolvedValue(undefined);
-    runtime.pluginHosts = { reconcileGenerations: reconcile } as unknown as NonNullable<CommandRuntime['pluginHosts']>;
-    const connection = startEnrolledHostConnection({
-      serverUrl: 'http://127.0.0.1:1/',
-      hostId,
-      hostKey: 'key-1',
-      dataDir,
-      runtime,
-      onConnectionChange: connected => changes.push(connected)
-    });
-    await expect(connection.ready).resolves.toBeUndefined();
-    expect(changes).toEqual([true]);
-    expect(reconcile).toHaveBeenCalledWith([{ pluginId: 'test', generation: 'current' }]);
-    sockets[0]!.dispatch('close', { code: 1006 });
-    expect(changes).toEqual([true, false]);
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(changes).toEqual([true, false, true]);
-    expect(reconcile).toHaveBeenCalledTimes(2);
-    await connection.close();
-    expect(changes.at(-1)).toBe(false);
-  });
-
-  it('does not mark ready on websocket open before hello-ok', async () => {
-    class OpenOnlySocket {
-      static readonly CONNECTING = 0;
-      static readonly OPEN = 1;
-      static readonly CLOSING = 2;
-      static readonly CLOSED = 3;
-      readyState = 1;
-      private readonly handlers = new Map<string, Array<(event?: unknown) => void>>();
-      constructor() {
-        queueMicrotask(() => this.dispatch('open'));
-      }
-      addEventListener(type: string, fn: (event?: unknown) => void) {
-        const list = this.handlers.get(type) ?? [];
-        list.push(fn);
-        this.handlers.set(type, list);
-      }
-      send() {}
-      close() {}
-      dispatch(type: string, event?: unknown) {
-        for (const fn of this.handlers.get(type) ?? []) fn(event ?? { code: 1000 });
-      }
-    }
-    globalThis.WebSocket = OpenOnlySocket as unknown as typeof WebSocket;
-    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-ws-open-only-'));
-    const connection = startEnrolledHostConnection({
-      serverUrl: 'http://127.0.0.1:1/',
-      hostId: '11111111-1111-4111-8111-111111111111',
-      hostKey: 'key-1',
-      dataDir,
-      runtime: stubRuntime(dataDir)
-    });
-    const settled = connection.ready.then(() => 'ready', () => 'rejected');
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(await Promise.race([settled, Promise.resolve('waiting')])).toBe('waiting');
-    await connection.close();
+  it('dispatches RPC and flushes acknowledged events only after readiness, including reconnect', async () => {
+    const f = await fixture(); const connection = f.connect();
+    connection.runtime.emit({ kind: 'terminal.output', terminalId: instanceId, payload: { data: 'before ready' } });
+    await connection.ready;
+    await connection.sink.flush();
+    expect(f.messages.findIndex(m => m.type === 'host.ready')).toBeLessThan(f.messages.findIndex(m => m.type === 'host.event'));
+    f.send(null); f.send({ type: 'unrecognized' });
+    f.send({ type: 'host-rpc.request', protocolVersion: HOST_RPC_PROTOCOL_VERSION, requestId: 'provider-check', command: { type: 'provider.status' } });
+    await vi.waitFor(() => expect(f.messages.find(m => m.requestId === 'provider-check')).toMatchObject({ type: 'host-rpc.response', ok: true }));
+    f.rejectNext(); f.drop();
+    await vi.waitFor(() => expect(f.changes.at(-1)).toBe(false));
+    connection.runtime.emit({ kind: 'terminal.output', terminalId: instanceId, payload: { data: 'while offline' } });
+    await vi.waitFor(() => expect(f.changes.at(-1)).toBe(true), { timeout: 8000 });
+    await connection.sink.flush();
+    const events = f.messages.filter(m => m.type === 'host.event').flatMap(m => m.events);
+    expect(events.map(event => event.payload.data)).toEqual(['before ready', 'while offline']);
+  }, 12000);
+  it('rejects authentication failures and cancels retries on shutdown', async () => {
+    const f = await fixture(); f.rejectNext(1, 401); const connection = f.connect();
+    await expect(connection.ready).rejects.toThrow('rejected credentials (401)');
+    await connection.close(); await new Promise(r => setTimeout(r, 1200));
+    expect(f.upgrades).toBe(1);
   });
 });
