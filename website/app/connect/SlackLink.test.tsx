@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { SlackLink } from './SlackLink';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
@@ -17,8 +17,41 @@ it('requires choosing an owned computer and explicit approval before revealing a
 it('lists links and revokes access, keeping failures visible', async () => {
   const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ links: [{ id: 'one', slack_user: 'U123456', team_id: 'T123456', state: 'active', computer: 'MacBook' }] })).mockResolvedValueOnce(new Response('', { status: 503 })).mockResolvedValueOnce(Response.json({ revoked: true }));
   vi.stubGlobal('fetch', fetcher); render(<SlackLink computers={computers} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Revoke Slack access' })); expect((await screen.findByRole('alert')).textContent).toContain('not enabled');
-  fireEvent.click(screen.getByRole('button', { name: 'Revoke Slack access' })); await waitFor(() => expect(screen.queryByRole('button', { name: 'Revoke Slack access' })).toBeNull());
+  fireEvent.click(await screen.findByRole('button', { name: 'Revoke Slack access for U123456 in T123456' })); expect((await screen.findByRole('alert')).textContent).toContain('not enabled');
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke Slack access for U123456 in T123456' })); await waitFor(() => expect(screen.queryByRole('button', { name: 'Revoke Slack access for U123456 in T123456' })).toBeNull());
+});
+it('distinguishes active and pending connections and revokes only the selected Slack identity', async () => {
+  const links = [
+    { id: 'active', slack_user: 'U123456', team_id: 'T123456', state: 'active', computer: 'MacBook' },
+    { id: 'pending', slack_user: 'U654321', team_id: 'T654321', state: 'pending', computer: 'MacBook' },
+  ];
+  const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ links })).mockResolvedValueOnce(Response.json({ revoked: true }));
+  vi.stubGlobal('fetch', fetcher); render(<SlackLink computers={computers} />);
+  const list = await screen.findByRole('list', { name: 'Slack connections' });
+  const rows = within(list).getAllByRole('listitem');
+  expect(within(rows[0]).getByText('Connected')).toBeTruthy();
+  expect(within(rows[0]).getByText('U123456')).toBeTruthy();
+  expect(within(rows[0]).queryByText(/Finish connecting/)).toBeNull();
+  expect(within(rows[1]).getByText('Awaiting activation')).toBeTruthy();
+  expect(within(rows[1]).getByText('T654321')).toBeTruthy();
+  expect(within(rows[1]).getByText('Finish connecting in Slack Bridge on this computer.')).toBeTruthy();
+  expect(screen.getByLabelText('2 Slack connections')).toBeTruthy();
+  fireEvent.click(within(rows[1]).getByRole('button', { name: 'Revoke Slack access for U654321 in T654321' }));
+  await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1));
+  expect(screen.getByText('U123456')).toBeTruthy();
+  expect(fetcher).toHaveBeenLastCalledWith('/api/connect/slack/revoke/', expect.objectContaining({ body: JSON.stringify({ id: 'pending' }) }));
+});
+it('shows a known workspace name while preserving its ID and falling back for unknown workspaces', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ links: [
+    { id: 'known', slack_user: 'U123456', team_id: 'T123456', team_name: 'Acme Engineering', state: 'active', computer: 'MacBook' },
+    { id: 'unknown', slack_user: 'U654321', team_id: 'T654321', team_name: null, state: 'pending', computer: 'MacBook' },
+  ] })));
+  render(<SlackLink computers={computers} />);
+  expect((await screen.findByText('Acme Engineering')).getAttribute('title')).toBe('T123456');
+  expect(screen.queryByText('T123456')).toBeNull();
+  expect(screen.getByText('T654321')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Revoke Slack access for U123456 in Acme Engineering' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Revoke Slack access for U654321 in T654321' })).toBeTruthy();
 });
 it('shows expired and failed approvals without auto-selecting a computer', async () => {
   window.history.replaceState({}, '', `/connect/?slack=${'x'.repeat(22)}`);
