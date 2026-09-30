@@ -39,7 +39,7 @@ it('traps focus and closes with Escape, Close or the backdrop without running an
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete' }));
   fireEvent.keyDown(window, { key: 'Tab' });
   expect(document.activeElement).toBe(close);
-  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
   expect(screen.queryByRole('dialog')).toBeNull();
   fireEvent.click(trigger);
   fireEvent.click(screen.getByRole('button', { name: 'Close message actions' }));

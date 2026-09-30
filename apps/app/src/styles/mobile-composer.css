@@ -99,7 +99,7 @@ body:has(.app-shell[data-mobile='true']) .new-thread-view .thread-command-card {
   box-shadow: 0 4px 20px rgb(0 0 0 / 5%);
 }
 body:has(.app-shell[data-mobile='true']) .new-thread-view .thread-command-editor {
-  min-height: clamp(40px, calc(var(--mobile-viewport-height, 100dvh) - 440px), 92px);
+  min-height: 40px;
 }
 body:has(.app-shell[data-mobile='true']) .new-thread-view .thread-command-editor p.is-editor-empty:first-child::before {
   content: 'What would you like the agent to do?';
@@ -110,10 +110,10 @@ body:has(.app-shell[data-mobile='true']) :is(.new-thread-view, .home-panel, .lau
 
 /* Permission changes remain next to the model, outside the options disclosure. */
 body:has(.app-shell[data-mobile='true']) .thread-command-composer .thread-command-toolbar:has(.thread-command-permission) {
-  grid-template-columns: minmax(0, max-content) auto minmax(44px, 1fr) auto auto;
+  grid-template-columns: minmax(44px, max-content) auto minmax(44px, 1fr) auto auto;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-composer .thread-command-toolbar:has(.thread-command-permission):has(.thread-command-primary-actions) {
-  grid-template-columns: minmax(0, max-content) auto auto minmax(44px, 1fr) auto auto;
+  grid-template-columns: minmax(44px, max-content) auto auto minmax(44px, 1fr) auto auto;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-toolbar .thread-command-permission {
   grid-row: 1;
@@ -162,11 +162,20 @@ body:has(.app-shell[data-mobile='true']) .thread-command-toolbar:has(.thread-com
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-model .model-reasoning-picker-trigger {
   gap: 4px;
+  min-width: 44px;
   padding: 0 4px;
+  overflow: hidden;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-permission .launch-model-picker-trigger {
   padding: 0 6px;
   font-size: 12px;
+  max-width: 84px;
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-permission .launch-model-picker-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-option.thread-command-option--location {
   display: flex;
@@ -234,6 +243,46 @@ body:has(.app-shell[data-mobile='true']) .thread-command-composer-meta:has(> .th
 .mobile-run-settings .launch-model-picker-trigger { min-height: 44px; padding: 8px; font-size: 16px; max-width: 100%; }
 .mobile-run-settings :is(button, input):focus-visible,
 .mobile-run-settings-trigger:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+
+/* Rest in one row; focus reveals the existing toolbar and a little more writing
+   room. Keep open pickers and the explicit full-screen editor stable on blur. */
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) > :is(.composer-image-thumbs, .thread-command-upload) {
+  grid-column: 1 / -1;
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) .thread-command-editor-slot {
+  min-width: 0;
+  padding: 10px 0 10px 12px;
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) .thread-command-editor {
+  min-height: 24px;
+  max-height: 24px;
+  overflow: hidden;
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-toolbar {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+}
+/* Keep return targets focusable while clipped so closing a picker or the
+   full-screen editor can restore focus and reveal the controls. */
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) :is(.thread-command-footer-start, .thread-command-expand) {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+body:has(.app-shell[data-mobile='true']) .thread-command-composer:not(.is-expanded):not(:focus-within):not(:has([aria-expanded='true'])) .thread-command-card:has(> .thread-command-toolbar) :is(.thread-command-primary-actions, .thread-command-secondary-actions, .thread-command-options-toggle) {
+  display: none;
+}
 
 /* Expand in place: no second editor, no draft remount, and no desktop height cap. */
 body:has(.app-shell[data-mobile='true']) .split-workspace:has([data-mobile-expanded='true']) { z-index: 120; }

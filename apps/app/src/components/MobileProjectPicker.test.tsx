@@ -42,7 +42,7 @@ it('keeps actions available for an empty search and closes through the button, E
   expect(onChange).toHaveBeenCalledWith('new');
   for (const close of [
     () => fireEvent.click(screen.getByRole('button', { name: 'Close project picker' })),
-    () => fireEvent.keyDown(window, { key: 'Escape' }),
+    () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }),
     () => fireEvent.mouseDown(screen.getByRole('dialog').parentElement!)
   ]) {
     fireEvent.click(trigger);

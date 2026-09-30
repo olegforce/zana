@@ -46,6 +46,9 @@ export function ThreadComposerToolbar({
       className="ui-command-composer-toolbar thread-command-toolbar"
       data-options-expanded={expanded}
       onKeyDown={(event) => {
+        // Portalled settings and pickers own Escape even though React bubbles
+        // their events through the toolbar that contains their trigger.
+        if (!event.currentTarget.contains(event.target as Node)) return;
         if (event.key !== 'Escape' || event.defaultPrevented || !expanded) return;
         event.stopPropagation();
         setExpanded(false);

@@ -38,6 +38,7 @@ import { invokeAgentsBoardAction } from '@/plugins/plugin-agent-actions';
 import { listAgentsBoardActions, subscribePluginSlots } from '@/plugins/plugin-slots';
 import { openScheduleFromAgents } from '@/components/scheduler/openScheduledLive';
 import { PaneEmptyState } from '@/components/PaneEmptyState';
+import { MobilePageHeader } from '@/components/MobilePageHeader';
 import { hasDesktopBridge } from '@/lib/app-surface';
 
 /**
@@ -122,7 +123,7 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
   const includeScheduled = useData((s) => s.includeScheduledAgentsInAgentView);
   const scheduledTasks = useScheduler((s) => s.tasks);
   const favoriteIds = useFavoriteAgents((s) => s.favoriteIds);
-  const { view: boardView } = useAgentsBoardView();
+  const { view: boardView, compact } = useAgentsBoardView();
   const threads = useThreads((s) => s.threads);
   useEnsureThreads();
   const location = useLocation();
@@ -307,41 +308,75 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
     })().finally(() => setBusyAction(null));
   };
 
+  const secondaryActions = <>
+    <AgentViewToggle />
+    <ScheduledColumnToggle />
+    {reclaimableAgents.length > 0 && (
+      <button
+        type="button"
+        className="btn agents-board-close-idle"
+        onClick={() => {
+          setCloseIdleForce(false);
+          setCloseIdleTarget(reclaimableAgents);
+        }}
+        disabled={busyAction !== null}
+        aria-label={
+          busyAction === 'close'
+            ? `Closing ${reclaimableAgents.length} idle agents`
+            : `Close ${reclaimableAgents.length} idle agents`
+        }
+        title={
+          isGlobal
+            ? "Close every idle agent that isn't waiting on a question or starred, across all projects (working and blocked agents are left running)"
+            : "Close every idle agent that isn't waiting on a question or starred (working and blocked agents are left running)"
+        }
+      >
+        {busyAction === 'close' ? <Loader2 size={14} className="gus-spin" /> : <Moon size={14} />}
+        <span className="agents-board-btn-label">
+          {busyAction === 'close' ? 'Closing' : 'Close'}
+        </span>
+        <span className="agents-board-btn-count">
+          ({reclaimableAgents.length}){busyAction === 'close' ? '…' : ''}
+        </span>
+      </button>
+    )}
+    {boardPluginActions.map((slot) => {
+      const Icon = slot.icon ? resolveIcon(slot.icon) : Puzzle;
+      return (
+        <button
+          key={`${slot.pluginId}/${slot.id}`}
+          type="button"
+          className="btn agents-board-plugin-action"
+          data-testid={`agents-board-plugin-${slot.pluginId}-${slot.id}`}
+          onClick={() => invokeAgentsBoardAction(slot, boardPluginCtx)}
+          title={slot.title}
+        >
+          <Icon size={14} aria-hidden="true" />
+          <span className="agents-board-btn-label">{slot.title}</span>
+        </button>
+      );
+    })}
+  </>;
+  const newAgent = (
+    <button
+      type="button"
+      className="btn primary agents-board-new"
+      data-testid="agents-board-new-thread"
+      onClick={() => useUi.getState().setLauncherOpen(true)}
+      aria-label="New agent"
+      title="Start a new agent"
+    >
+      <Plus size={14} />
+      <span className="agents-board-btn-label">New agent</span>
+    </button>
+  );
+
   return (
     <div className={isGlobal ? 'agents-board agents-board--global panel-body--full' : 'agents-board'}>
+      <MobilePageHeader title="Agents" primary={<button type="button" className="icon-btn" aria-label="New agent" data-testid="agents-board-new-thread" onClick={() => useUi.getState().setLauncherOpen(true)}><Plus size={20} /></button>}>{secondaryActions}</MobilePageHeader>
       {showToolbar && (
         <div className="agents-board-toolbar">
-          <AgentViewToggle />
-          <ScheduledColumnToggle />
-          {reclaimableAgents.length > 0 && (
-            <button
-              type="button"
-              className="btn agents-board-close-idle"
-              onClick={() => {
-                setCloseIdleForce(false);
-                setCloseIdleTarget(reclaimableAgents);
-              }}
-              disabled={busyAction !== null}
-              aria-label={
-                busyAction === 'close'
-                  ? `Closing ${reclaimableAgents.length} idle agents`
-                  : `Close ${reclaimableAgents.length} idle agents`
-              }
-              title={
-                isGlobal
-                  ? "Close every idle agent that isn't waiting on a question or starred, across all projects (working and blocked agents are left running)"
-                  : "Close every idle agent that isn't waiting on a question or starred (working and blocked agents are left running)"
-              }
-            >
-              {busyAction === 'close' ? <Loader2 size={14} className="gus-spin" /> : <Moon size={14} />}
-              <span className="agents-board-btn-label">
-                {busyAction === 'close' ? 'Closing' : 'Close'}
-              </span>
-              <span className="agents-board-btn-count">
-                ({reclaimableAgents.length}){busyAction === 'close' ? '…' : ''}
-              </span>
-            </button>
-          )}
+          {!compact && secondaryActions}
           {isGlobal && (
             <div className="agents-board-filter">
               <Search size={12} className="agents-board-filter-icon" aria-hidden="true" />
@@ -364,33 +399,8 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
               )}
             </div>
           )}
-          {boardPluginActions.map((slot) => {
-            const Icon = slot.icon ? resolveIcon(slot.icon) : Puzzle;
-            return (
-              <button
-                key={`${slot.pluginId}/${slot.id}`}
-                type="button"
-                className="btn agents-board-plugin-action"
-                data-testid={`agents-board-plugin-${slot.pluginId}-${slot.id}`}
-                onClick={() => invokeAgentsBoardAction(slot, boardPluginCtx)}
-                title={slot.title}
-              >
-                <Icon size={14} aria-hidden="true" />
-                <span className="agents-board-btn-label">{slot.title}</span>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            className="btn primary agents-board-new"
-            data-testid="agents-board-new-thread"
-            onClick={() => useUi.getState().setLauncherOpen(true)}
-            aria-label="New agent"
-            title="Start a new agent"
-          >
-            <Plus size={14} />
-            <span className="agents-board-btn-label">New agent</span>
-          </button>
+          {!compact && newAgent}
+
         </div>
       )}
 

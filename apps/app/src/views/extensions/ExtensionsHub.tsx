@@ -1,5 +1,7 @@
 import { product } from '../../lib/product-client.js';
 import { hasDesktopBridge } from '../../lib/app-surface.js';
+import { useCompactLayout } from '@/hooks/useCompactLayout';
+import { MobilePageHeader } from '@/components/MobilePageHeader';
 import { DesktopOnlyPlugin } from './DesktopOnlyPlugin.js';
 /**
  * Extensions hub. Installed is a host-wide PluginService collection (icon,
@@ -113,6 +115,7 @@ export function ExtensionsHub({
   onTabChange?: (tab: HubTab) => void;
   showTabs?: boolean;
 } = {}) {
+  const compact = useCompactLayout();
   const [uncontrolledTab, setUncontrolledTab] = useState<HubTab>(initialTab);
   const tab = controlledTab ?? uncontrolledTab;
   const catalogPluginId = useUi((s) => (tab === 'marketplace' ? s.settingsExtensionId : null));
@@ -194,6 +197,21 @@ export function ExtensionsHub({
     onTabChange?.(next);
   };
 
+  const maintenanceButtons = <>
+    <button type="button" role={compact ? undefined : "menuitem"} onClick={checkUpdates} disabled={checkingUpdates}>
+      <ArrowUpCircle size={14} className={checkingUpdates ? 'ext-spin' : undefined} />
+      {checkingUpdates ? 'Checking for updates…' : 'Check for updates'}
+    </button>
+    <button type="button" role={compact ? undefined : "menuitem"} onClick={redeploy} disabled={redeploying}>
+      <RefreshCw size={14} className={redeploying ? 'ext-spin' : undefined} />
+      {redeploying ? 'Reloading skills and MCP…' : 'Reload skills and MCP'}
+    </button>
+    <button type="button" role={compact ? undefined : "menuitem"} onClick={reload} disabled={reloading}>
+      <RotateCw size={14} className={reloading ? 'ext-spin' : undefined} />
+      {reloading ? 'Rescanning plugins…' : 'Rescan installed plugins'}
+    </button>
+  </>;
+
   const maintenanceActions = (
     <div className="ext-hub-more-wrap" ref={moreRef}>
       <button
@@ -209,18 +227,7 @@ export function ExtensionsHub({
       </button>
       {moreOpen && (
         <div className="ext-hub-more-menu" role="menu" aria-label="Extension maintenance">
-          <button type="button" role="menuitem" onClick={checkUpdates} disabled={checkingUpdates}>
-            <ArrowUpCircle size={14} className={checkingUpdates ? 'ext-spin' : undefined} />
-            {checkingUpdates ? 'Checking for updates…' : 'Check for updates'}
-          </button>
-          <button type="button" role="menuitem" onClick={redeploy} disabled={redeploying}>
-            <RefreshCw size={14} className={redeploying ? 'ext-spin' : undefined} />
-            {redeploying ? 'Reloading skills and MCP…' : 'Reload skills and MCP'}
-          </button>
-          <button type="button" role="menuitem" onClick={reload} disabled={reloading}>
-            <RotateCw size={14} className={reloading ? 'ext-spin' : undefined} />
-            {reloading ? 'Rescanning plugins…' : 'Rescan installed plugins'}
-          </button>
+          {maintenanceButtons}
         </div>
       )}
     </div>
@@ -249,7 +256,7 @@ export function ExtensionsHub({
             Browse
           </button>
           <span className="ext-hub-tabs-spacer" />
-          {maintenanceActions}
+          {!compact && maintenanceActions}
         </div>
       ) : null}
       {redeployNote && (
@@ -258,7 +265,7 @@ export function ExtensionsHub({
         </div>
       )}
       {tab === 'installed' ? (
-        <InstalledView toolbarExtra={showTabs ? undefined : maintenanceActions} />
+        <InstalledView toolbarExtra={showTabs ? undefined : maintenanceActions} mobileActions={maintenanceButtons} />
       ) : (
         <PluginBrowseSplit
           pluginId={catalogPluginId}
@@ -277,7 +284,8 @@ const PUBLISHER_FILTERS: { id: InstalledPublisherFilter; label: string }[] = [
   { id: 'user', label: 'User' }
 ];
 
-export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {}) {
+export function InstalledView({ toolbarExtra, mobileActions }: { toolbarExtra?: ReactNode; mobileActions?: ReactNode } = {}) {
+  const compact = useCompactLayout();
   const navigate = useNavigate();
   const modules = useMergedModules() as (AppModule & { loadError?: string })[];
   const [entries, setEntries] = useState<ExtensionEntry[]>([]);
@@ -369,6 +377,81 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
     }
   }, [offeredFilters, publisher]);
 
+  const sortAction = (
+    <button
+      type="button"
+      className="settings-btn"
+      onClick={() => setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))}
+      aria-label={`Sort by name ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
+      title={sortDir === 'asc' ? 'Name A–Z' : 'Name Z–A'}
+    >
+      {sortDir === 'asc' ? <ArrowUpAZ size={14} /> : <ArrowDownAZ size={14} />}
+      Name
+    </button>
+  );
+  const installActions = <>
+    <button
+      type="button"
+      role={compact ? undefined : "menuitem"}
+      disabled={!hasDesktopBridge()}
+      className="ext-install-menu-item"
+      onClick={() => {
+        setNewMenuOpen(false);
+        setOpenExisting(true);
+      }}
+    >
+      <FolderOpen size={14} />
+      Open existing plugin
+    </button>
+    <button
+      type="button"
+      role={compact ? undefined : "menuitem"}
+      disabled={!hasDesktopBridge()}
+      className="ext-install-menu-item"
+      onClick={() => {
+        setNewMenuOpen(false);
+        product.extensions
+          .install({ kind: 'localDir' })
+          .then((res) => reportHubInstallFailure(res, useUi.getState().pushToast))
+          .catch((err) =>
+            useUi.getState().pushToast(err instanceof Error ? err.message : String(err), 'error')
+          );
+      }}
+    >
+      <FolderOpen size={14} />
+      Install from folder
+    </button>
+    <button
+      type="button"
+      role={compact ? undefined : "menuitem"}
+      disabled={!hasDesktopBridge()}
+      className="ext-install-menu-item"
+      onClick={() => {
+        setNewMenuOpen(false);
+        setInstallGit(true);
+      }}
+    >
+      <GitBranch size={14} />
+      Install from repository
+    </button>
+  </>;
+  const publisherFilters = <>
+    {offeredFilters.length > 1 && (
+      <div className="ext-installed-tags" role="group" aria-label="Filter by publisher">
+        {offeredFilters.map((filter) => (
+          <button
+            key={filter.id}
+            type="button"
+            className={`ext-market-tag ${publisher === filter.id ? 'is-active' : ''}`}
+            onClick={() => setPublisher(filter.id)}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+    )}
+  </>;
+
   if (active) {
     return (
       <section className="ext-installed ext-installed--detail">
@@ -387,6 +470,15 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
 
   return (
     <section className="ext-installed">
+      <MobilePageHeader title="Plugins" primary={<button type="button" className="icon-btn" aria-label="New plugin" onClick={() => startCreatePlugin()}><Plus size={20} /></button>}>
+        {sortAction}
+        <p className="mobile-menu-label">Publisher</p>
+        {publisherFilters}
+        <p className="mobile-menu-label">Install plugins</p>
+        {installActions}
+        {!hasDesktopBridge() && <p className="settings-help">Install from a folder or repository on the instance owner’s desktop.</p>}
+        {mobileActions}
+      </MobilePageHeader>
       <header className="ext-installed-header">
         <h3>Plugins</h3>
         <p className="settings-help">
@@ -409,17 +501,8 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
             {visible.length} of {rows.length}
           </span>
         </div>
-        <div className="settings-btn-row">
-          <button
-            type="button"
-            className="settings-btn"
-            onClick={() => setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))}
-            aria-label={`Sort by name ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
-            title={sortDir === 'asc' ? 'Name A–Z' : 'Name Z–A'}
-          >
-            {sortDir === 'asc' ? <ArrowUpAZ size={14} /> : <ArrowDownAZ size={14} />}
-            Name
-          </button>
+        {!compact && <div className="settings-btn-row">
+          {sortAction}
           <div className="ext-install-menu-wrap ext-install-split" ref={newMenuRef}>
             <button
               type="button"
@@ -444,67 +527,14 @@ export function InstalledView({ toolbarExtra }: { toolbarExtra?: ReactNode } = {
             </button>
             {newMenuOpen && (
               <div className="ext-install-menu" role="menu" aria-label="Install or open a plugin">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="ext-install-menu-item"
-                  onClick={() => {
-                    setNewMenuOpen(false);
-                    setOpenExisting(true);
-                  }}
-                >
-                  <FolderOpen size={14} />
-                  Open existing plugin
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="ext-install-menu-item"
-                  onClick={() => {
-                    setNewMenuOpen(false);
-                    product.extensions
-                      .install({ kind: 'localDir' })
-                      .then((res) => reportHubInstallFailure(res, useUi.getState().pushToast))
-                      .catch((err) =>
-                        useUi.getState().pushToast(err instanceof Error ? err.message : String(err), 'error')
-                      );
-                  }}
-                >
-                  <FolderOpen size={14} />
-                  Install from folder
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="ext-install-menu-item"
-                  onClick={() => {
-                    setNewMenuOpen(false);
-                    setInstallGit(true);
-                  }}
-                >
-                  <GitBranch size={14} />
-                  Install from repository
-                </button>
+                {installActions}
               </div>
             )}
           </div>
           {toolbarExtra}
-        </div>
+        </div>}
       </div>
-      {offeredFilters.length > 1 && (
-        <div className="ext-installed-tags" role="group" aria-label="Filter by publisher">
-          {offeredFilters.map((filter) => (
-            <button
-              key={filter.id}
-              type="button"
-              className={`ext-market-tag ${publisher === filter.id ? 'is-active' : ''}`}
-              onClick={() => setPublisher(filter.id)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {!compact && publisherFilters}
       <div className="ext-installed-scroller">
         {rows.length === 0 ? (
           <p className="settings-help settings-help--muted">

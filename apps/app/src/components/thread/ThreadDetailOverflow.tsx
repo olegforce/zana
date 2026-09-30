@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type Ref } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type Ref, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Archive, GitFork, Mail, MailCheck, MoreHorizontal, Pencil, Square } from 'lucide-react';
+import { Archive, GitFork, Mail, MailCheck, MoreHorizontal, Pencil, Search, Square } from 'lucide-react';
 import { product } from '../../lib/product-client.js';
 import { getAgentsRoutePath, getProjectRoutePath, getThreadRoutePath } from '../../lib/route-paths.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
 import { useThreads } from '../../thread-store.js';
+import { MobileActionSheet } from '../MobilePageHeader.js';
+import { useCompactLayout } from '../../hooks/useCompactLayout.js';
 import { PromptModal } from '../PromptModal.js';
 import { shouldShowThreadStop } from './thread-timeline-model.js';
 import { dispatchThreadStopRequested } from './timeline/thread-optimistic-events.js';
@@ -43,6 +45,8 @@ export function ThreadDetailOverflowMenu({
   onArchive,
   onCloseFollowup,
   menuRef,
+  onSearch,
+  extraActions,
   style
 }: {
   canStop: boolean;
@@ -53,6 +57,8 @@ export function ThreadDetailOverflowMenu({
   onArchive: () => void;
   onCloseFollowup: () => void;
   menuRef?: Ref<HTMLDivElement>;
+  onSearch?: () => void;
+  extraActions?: ReactNode;
   style?: CSSProperties;
 }) {
   return (
@@ -65,6 +71,8 @@ export function ThreadDetailOverflowMenu({
       style={style}
       onMouseDown={(e) => e.stopPropagation()}
     >
+      {onSearch && <button type="button" role="menuitem" onClick={onSearch}><Search size={16} /> Search in thread</button>}
+      {extraActions}
       {SHOW_THREAD_UNREAD ? (
         <button type="button" role="menuitem" onClick={onUnread}>
           <Mail size={13} /> Mark unread
@@ -122,7 +130,9 @@ export function ThreadDetailOverflow({
   inFlightRetry = false,
   projectId,
   onRenamed,
-  onUnread
+  onUnread,
+  onSearch,
+  extraActions
 }: {
   threadId: string;
   title: string;
@@ -131,7 +141,10 @@ export function ThreadDetailOverflow({
   projectId: string | null;
   onRenamed?: (title: string) => void;
   onUnread?: () => void;
+  onSearch?: () => void;
+  extraActions?: ReactNode;
 }) {
+  const compact = useCompactLayout();
   const navigate = useNavigate();
   const route = useRouteState();
   const remove = useThreads((s) => s.remove);
@@ -145,7 +158,7 @@ export function ThreadDetailOverflow({
   const scopedProjectId = projectId && route.isProjectFocused ? projectId : null;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || compact) return;
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Node;
       if (wrapRef.current?.contains(target) || menuRef.current?.contains(target)) return;
@@ -160,13 +173,15 @@ export function ThreadDetailOverflow({
       document.removeEventListener('mousedown', onDoc);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, compact]);
 
   const close = () => setOpen(false);
   const menu = (
     <ThreadDetailOverflowMenu
       menuRef={menuRef}
-      style={menuPos}
+      style={compact ? undefined : menuPos}
+      onSearch={onSearch ? () => { close(); onSearch(); } : undefined}
+      extraActions={extraActions}
       canStop={canStop}
       onUnread={() => {
         close();
@@ -217,7 +232,7 @@ export function ThreadDetailOverflow({
         type="button"
         className="icon-btn thread-detail-overflow-btn"
         aria-label="Agent actions"
-        aria-haspopup="menu"
+        aria-haspopup={compact ? 'dialog' : 'menu'}
         aria-expanded={open}
         data-testid="thread-overflow-trigger"
         onClick={() => {
@@ -228,7 +243,7 @@ export function ThreadDetailOverflow({
       >
         <MoreHorizontal size={16} />
       </button>
-      {open ? (typeof document === 'undefined' ? menu : createPortal(menu, document.body)) : null}
+      {open ? compact ? <MobileActionSheet title="Agent actions" onClose={close}>{menu}</MobileActionSheet> : (typeof document === 'undefined' ? menu : createPortal(menu, document.body)) : null}
       {renaming ? (
         <PromptModal
           title="Rename agent"

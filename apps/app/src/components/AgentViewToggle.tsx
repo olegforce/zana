@@ -42,7 +42,7 @@ export function AgentViewToggle() {
           aria-label={`${compact && v === 'flow' ? 'Canvas' : label} view`}
         >
           <Icon size={14} />
-          {compact && v === 'flow' && <span className="agents-view-toggle-label">Canvas</span>}
+          {compact && <span className="agents-view-toggle-label">{v === 'flow' ? 'Canvas' : label}</span>}
         </button>
       ))}
     </div>
@@ -63,6 +63,7 @@ export function scheduledColumnToggleLabel(includeScheduled: boolean, running: n
  * task has a live session, even when the toggle is off.
  */
 export function ScheduledColumnToggle() {
+  const compact = useCompactLayout();
   const includeScheduled = useData((s) => s.includeScheduledAgentsInAgentView);
   const setIncludeScheduled = useData((s) => s.setIncludeScheduledAgentsInAgentView);
   const runningSchedules = useRunningSchedulerCount();
@@ -80,6 +81,7 @@ export function ScheduledColumnToggle() {
         aria-label={label}
       >
         <Calendar size={14} />
+        {compact && <span>Scheduled agents</span>}
         {runningSchedules > 0 && (
           <span className="agents-scheduled-toggle-badge nav-badge nav-badge--running" aria-hidden="true">
             {runningSchedules > 99 ? '99+' : runningSchedules}

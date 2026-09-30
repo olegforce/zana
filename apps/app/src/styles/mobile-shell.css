@@ -149,7 +149,7 @@ body:has(.app-shell[data-mobile='true']) .thread-detail-overflow-menu > button {
   min-width: 44px;
   min-height: 44px;
 }
-.app-shell[data-mobile='true']:has(.mobile-agents-return) { --mobile-header-leading: 96px; }
+.app-shell[data-mobile='true']:has(.mobile-agents-return) { --mobile-header-leading: 52px; }
 .app-shell[data-mobile='true'] .sidebar-trigger-overlay:has(.mobile-agents-return) { gap: 0; }
 .app-shell[data-mobile='true'].nav-settings .titlebar-title { display: none; }
 .app-shell[data-mobile='true'].nav-settings .sidebar-trigger-overlay {

@@ -148,6 +148,11 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       wsConnected
     ]);
     await expect(phone.locator('.app-shell')).toHaveAttribute('data-mobile', 'true');
+    const openNavigation = async () => {
+      const back = phone.getByRole('link', { name: 'Back to agents', exact: true });
+      if (await back.isVisible()) await back.click();
+      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+    };
     const agentMenu = phone.getByTestId('thread-overflow-trigger');
     await expect(phone.getByRole('button', { name: 'Connection options', exact: true })).toHaveCount(0);
     await expect.poll(() => phone.evaluate(() => (window as unknown as {
@@ -155,7 +160,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     }).__mobileMessages)).toEqual(expect.arrayContaining([
       { type: 'shell-chrome', visible: true }
     ]));
-    await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+    await openNavigation();
     const deviceOptions = phone.getByRole('button', { name: 'Device options', exact: true });
     const deviceActions = phone.getByRole('menu', { name: 'Device actions', exact: true });
     await expect(deviceActions).toHaveCount(0);
@@ -180,7 +185,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     await deviceOptions.click();
     await deviceActions.getByRole('menuitem', { name: 'Share', exact: true }).click();
     await expect.poll(() => phone.evaluate(() => (window as unknown as { __mobileMessages: unknown[] }).__mobileMessages))
-      .toEqual(expect.arrayContaining([expect.objectContaining({ type: 'request', request: { kind: 'share', payload: { url: `${serverUrl}/threads/${threadId}` } } })]));
+      .toEqual(expect.arrayContaining([expect.objectContaining({ type: 'request', request: { kind: 'share', payload: { url: `${serverUrl}/agents` } } })]));
     await expect(deviceActions).toHaveCount(0);
     await deviceOptions.click();
     await expect(deviceActions.getByRole('menuitem', { name: 'Share', exact: true })).toBeEnabled();
@@ -192,7 +197,8 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     const oldDocument = await phone.evaluate(() => performance.timeOrigin);
     await Promise.all([phone.waitForEvent('load'), deviceActions.getByRole('menuitem', { name: 'Reload', exact: true }).click()]);
     expect(await phone.evaluate(() => performance.timeOrigin)).toBeGreaterThan(oldDocument);
-    await expect(phone).toHaveURL(`${serverUrl}/threads/${threadId}`);
+    await expect(phone).toHaveURL(`${serverUrl}/agents`);
+    await phone.goto(`${serverUrl}/threads/${threadId}`);
     await expect(phone.getByTestId('thread-detail')).toBeVisible();
     const shellTitle = phone.locator('.mobile-thread-title-slot h1');
     const threadHeader = phone.locator('.thread-detail-header');
@@ -214,10 +220,10 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height);
       expect(shellBox.height).toBe(48);
       expect((await phone.getByTestId('thread-timeline').boundingBox())!.y).toBeLessThanOrEqual(56);
-      const searchToggle = phone.getByRole('button', { name: 'Search in thread', exact: true });
+      const searchToggle = phone.getByRole('menuitem', { name: 'Search in thread', exact: true });
       const panelToggle = phone.getByRole('button', { name: 'Show right panel', exact: true });
       const overflow = phone.getByTestId('thread-overflow-trigger');
-      const controls = [searchToggle, panelToggle];
+      const controls = [panelToggle];
       for (const button of controls) {
         const box = (await button.boundingBox())!;
         expect(box.height).toBeGreaterThanOrEqual(44);
@@ -244,11 +250,12 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(statusBox.x);
       expect(statusBox.width).toBeLessThanOrEqual(20);
       const panelToggleBox = (await panelToggle.boundingBox())!;
-      expect(overflowBox.x + overflowBox.width).toBeLessThanOrEqual(panelToggleBox.x);
-      expect(panelToggleBox.x + panelToggleBox.width).toBe(width - 4);
-      await overflow.focus();
+      expect(panelToggleBox.x + panelToggleBox.width).toBeLessThanOrEqual(overflowBox.x);
+      expect(overflowBox.x + overflowBox.width).toBe(width - 4);
+      await panelToggle.focus();
       await phone.keyboard.press('Tab');
-      await expect(panelToggle).toBeFocused();
+      await expect(overflow).toBeFocused();
+      await overflow.click();
       await searchToggle.tap();
       const search = phone.getByRole('searchbox', { name: 'Search in thread', exact: true });
       await expect(search).toBeFocused();
@@ -263,11 +270,11 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       expect(searchBox.x).toBeGreaterThanOrEqual(searchStatus.x + searchStatus.width);
       const searchOverflowBox = (await overflow.boundingBox())!;
       expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(searchOverflowBox.x);
-      expect(searchOverflowBox.x + searchOverflowBox.width).toBeLessThanOrEqual(panelBox.x);
-      expect(panelBox.x + panelBox.width).toBe(width - 4);
+      expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(searchOverflowBox.x);
+      expect(searchOverflowBox.x + searchOverflowBox.width).toBe(width - 4);
       await phone.getByRole('button', { name: 'Close search', exact: true }).click();
       await expect(shellTitle).toBeVisible();
-      await expect(search).toHaveValue('');
+      await expect(search).toHaveCount(0);
       await expect(phone.getByRole('button', { name: 'Close search', exact: true })).toBeHidden();
       await overflow.click();
       await expect(phone.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible();
@@ -347,7 +354,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     for (const width of [320, 390, 820]) {
       await phone.setViewportSize({ width, height: 844 });
       await expect(phone.locator('.app-shell')).toHaveAttribute('data-mobile', 'true');
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await expect(drawer).toBeVisible();
       await expectFullscreenDrawer(width);
       await expect(drawer.locator('.mobile-nav-brand')).toHaveText('Zana');
@@ -392,36 +399,36 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
         await overviewShortcut.click();
         await expect(phone).toHaveURL(`${serverUrl}/agents`);
         await expect(drawer).toBeHidden();
+        await phone.getByRole('button', { name: 'Agents actions', exact: true }).click();
         const boardView = phone.getByRole('button', { name: 'Board view', exact: true });
         const listView = phone.getByRole('button', { name: 'List view', exact: true });
         await expect(phone.getByRole('button', { name: 'Canvas view', exact: true })).toBeVisible();
-        const newAgent = phone.getByTestId('agents-board-new-thread');
-        await expect(newAgent.locator('.agents-board-btn-label')).toBeVisible();
-        await expect(newAgent).toHaveText('New agent');
-        const newAgentBox = (await newAgent.boundingBox())!;
-        const viewsBox = (await phone.getByRole('group', { name: 'Agents view', exact: true }).boundingBox())!;
-        expect(newAgentBox.height).toBeGreaterThanOrEqual(44);
-        expect(newAgentBox.width).toBeGreaterThan(newAgentBox.height);
-        expect(newAgentBox.x).toBeGreaterThanOrEqual(viewsBox.x + viewsBox.width);
-        expect(newAgentBox.x + newAgentBox.width).toBeLessThanOrEqual(width);
-        expect(Math.abs(newAgentBox.y - viewsBox.y)).toBeLessThanOrEqual(2);
-        const agentsFilterBox = (await phone.getByRole('textbox', { name: 'Filter agents', exact: true }).boundingBox())!;
-        expect(agentsFilterBox.y).toBeGreaterThanOrEqual(newAgentBox.y + newAgentBox.height);
-        expect(agentsFilterBox.y - newAgentBox.y).toBeLessThan(66);
-        await phone.screenshot({ path: testInfo.outputPath(`mobile-new-agent-button-${width}.png`) });
         await boardView.click();
+        const newAgent = phone.getByTestId('agents-board-new-thread');
+        await expect(newAgent).toHaveAttribute('aria-label', 'New agent');
+        const newAgentBox = (await newAgent.boundingBox())!;
+        const pageHeaderBox = (await phone.locator('.titlebar').boundingBox())!;
+        expect(newAgentBox.height).toBeGreaterThanOrEqual(44);
+        expect(newAgentBox.width).toBe(44);
+        expect(newAgentBox.y + newAgentBox.height).toBeLessThanOrEqual(pageHeaderBox.y + pageHeaderBox.height);
+        const agentsFilterBox = (await phone.getByRole('textbox', { name: 'Filter agents', exact: true }).boundingBox())!;
+        expect(agentsFilterBox.y).toBeGreaterThanOrEqual(pageHeaderBox.y + pageHeaderBox.height);
+        await phone.screenshot({ path: testInfo.outputPath(`mobile-new-agent-button-${width}.png`) });
         await expect(phone.getByTestId('mobile-agent-board')).toBeVisible();
+        await phone.getByRole('button', { name: 'Agents actions', exact: true }).click();
         await listView.click();
-        await expect(listView).toHaveAttribute('aria-pressed', 'true');
-        await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+        await expect(phone.locator('.agent-monitor-list')).toBeVisible();
+        await openNavigation();
         await expect(overviewShortcut).toHaveAttribute('aria-current', 'page');
         await overviewShortcut.click();
         await expect(drawer).toBeHidden();
+        await phone.getByRole('button', { name: 'Agents actions', exact: true }).click();
         await expect(listView).toHaveAttribute('aria-pressed', 'true');
-        await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+        await phone.getByRole('button', { name: 'Close actions', exact: true }).click();
+        await openNavigation();
         await drawer.locator(`.mobile-agent-row[href="/threads/${threadId}"]`).click();
         await expect(phone.getByTestId('thread-detail')).toBeVisible();
-        await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+        await openNavigation();
       }
       await drawer.getByRole('button', { name: 'More', exact: true }).click();
       await expect(drawer.getByRole('button', { name: 'All agents', exact: true })).toBeFocused();
@@ -497,14 +504,14 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await expect(drawer).toBeHidden();
       // Settings must have an exit on the page itself, including after section
       // changes and scrolling; its drawer must also dismiss on the current tab.
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await drawer.getByRole('button', { name: 'More', exact: true }).click();
       await drawer.getByRole('link', { name: 'Settings', exact: true }).click();
       await expect(drawer).toBeHidden();
       await expect(phone.locator('.settings-panel--preferences')).toBeVisible();
       await expect(phone.locator('.mobile-thread-title-slot')).toBeEmpty();
       const settingsBack = phone.locator('.titlebar > .mobile-settings-back');
-      await expect(settingsBack).toHaveAttribute('href', `/threads/${threadId}`);
+      await expect(settingsBack).toHaveAttribute('href', '/agents');
       const backBox = (await settingsBack.boundingBox())!;
       expect(backBox.height).toBeGreaterThanOrEqual(44);
       const menuBox = (await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).boundingBox())!;
@@ -520,11 +527,11 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
         const style = getComputedStyle(link);
         return [style.color, style.fontSize, style.fontWeight, style.padding, style.gap];
       });
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await expect(phone.getByRole('link', { name: 'Back to app', exact: true })).toHaveCount(1);
       await expectFullscreenDrawer(width);
       const drawerBack = drawer.locator('.mobile-nav-header .mobile-settings-back');
-      await expect(drawerBack).toHaveAttribute('href', `/threads/${threadId}`);
+      await expect(drawerBack).toHaveAttribute('href', '/agents');
       expect(await drawerBack.evaluate((link) => {
         const style = getComputedStyle(link);
         return [style.color, style.fontSize, style.fontWeight, style.padding, style.gap];
@@ -533,28 +540,28 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
       await phone.screenshot({ path: testInfo.outputPath(`mobile-settings-menu-${width}.png`) });
       await drawerBack.click();
       await expect(drawer).toBeHidden();
-      await expect(phone).toHaveURL(`${serverUrl}/threads/${threadId}`);
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await expect(phone).toHaveURL(`${serverUrl}/agents`);
+      await openNavigation();
       await drawer.getByRole('button', { name: 'More', exact: true }).click();
       await drawer.getByRole('link', { name: 'Settings', exact: true }).click();
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await drawer.getByRole('link', { name: 'Preferences', exact: true }).click();
       await expect(drawer).toBeHidden();
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await drawer.getByRole('link', { name: 'Preferences', exact: true }).click();
       await expect(drawer).toBeHidden();
-      await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await openNavigation();
       await drawer.getByRole('link', { name: 'Terminal', exact: true }).click();
       await expect(drawer).toBeHidden();
-      await expect(settingsBack).toHaveAttribute('href', `/threads/${threadId}`);
+      await expect(settingsBack).toHaveAttribute('href', '/agents');
       await expect(phone.getByRole('heading', { name: 'Terminal', exact: true })).toBeVisible();
       await phone.locator('.settings-panel--preferences').evaluate((panel) => { panel.scrollTop = panel.scrollHeight; });
       expect(await settingsBack.boundingBox()).toEqual(backBox);
       expect(await settingsHeader.boundingBox()).toEqual(headerBox);
       await phone.screenshot({ path: testInfo.outputPath(`mobile-settings-back-${width}.png`) });
       await settingsBack.click();
-      await expect(phone).toHaveURL(`${serverUrl}/threads/${threadId}`);
-      await expect(phone.getByTestId('thread-detail')).toBeVisible();
+      await expect(phone).toHaveURL(`${serverUrl}/agents`);
+      await expect(phone.locator('.agents-board')).toBeVisible();
       await expect(settingsBack).toHaveCount(0);
     }
     expect(await phone.evaluate(() => localStorage.getItem('zcc.sidebarCollapsed'))).toBe('1');
@@ -562,7 +569,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     await expect(phone.locator('.app-shell')).toHaveAttribute('data-mobile', 'true');
     // The compact row moves New agent into its overflow menu, preserving the
     // project selection and handing focus back to the ordinary launcher.
-    await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+    await openNavigation();
     await drawer.getByRole('button', { name: 'More', exact: true }).click();
     await drawer.getByRole('button', { name: 'Projects', exact: true }).click();
     await drawer.getByRole('button', { name: 'Project actions for mobile-project', exact: true }).click();
@@ -574,11 +581,12 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     await expect(launcher).toBeHidden();
     // The History action opens an overlay without changing the URL. It must
     // dismiss the drawer too, otherwise its focus trap covers the history.
-    await phone.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+    await openNavigation();
     await drawer.getByRole('button', { name: 'More', exact: true }).click();
     await drawer.getByTestId('nav-conversation-history').click();
     await expect(drawer).toBeHidden();
     await phone.keyboard.press('Escape');
+    await phone.goto(`${serverUrl}/threads/${threadId}`);
     const composer = phone.getByTestId('thread-detail').getByLabel('Message', { exact: true });
     const send = phone.getByRole('button', { name: /^(Send|Send message)$/ }).first();
     const composerOptions = phone.getByRole('button', { name: 'Composer options', exact: true });
@@ -590,6 +598,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     await composer.fill('Draft survives mobile options');
     for (const width of [320, 390]) {
       await phone.setViewportSize({ width, height: 844 });
+      await composer.tap();
       await expect(composerOptions).toHaveAttribute('aria-expanded', 'false');
       await expect(phone.getByTestId('composer-mode-picker-trigger')).toBeHidden();
       for (const button of [
@@ -692,6 +701,7 @@ test('Mobile pairs to built Electron, uses phone navigation, reads and sends a l
     // stay in separate rows on both sides of that breakpoint.
     for (const width of [320, 390, 480, 481, 820]) {
       await phone.setViewportSize({ width, height: 844 });
+      await composer.tap();
       await composerOptions.click();
       const options = phone.getByRole('group', { name: 'Additional composer controls', exact: true });
       const actions = phone.locator('.thread-command-secondary-actions');

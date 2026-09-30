@@ -158,6 +158,18 @@
   cursor: pointer;
 }
 .mobile-agent-close:disabled { opacity: 0.5; cursor: default; }
+/* Touch users swipe to close. Keep a keyboard/screen-reader alternative without
+   taking space or showing a destructive action on every row. */
+.mobile-agent-close:not(:focus-visible) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
 .mobile-agent-row {
   display: flex;
   flex: 1;

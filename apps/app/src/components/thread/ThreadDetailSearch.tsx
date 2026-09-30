@@ -1,4 +1,4 @@
-import { useRef, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type FormEvent, type KeyboardEvent } from 'react';
 import { Search, X } from 'lucide-react';
 
 export function threadDetailSearchClassName(draft: string): string {
@@ -9,14 +9,19 @@ export function ThreadDetailSearch({
   value,
   onChange,
   onSubmit,
-  mobileHeader = false
+  mobileHeader = false,
+  autoFocus = false,
+  onClose
 }: {
   value: string;
   mobileHeader?: boolean;
+  autoFocus?: boolean;
+  onClose?: () => void;
   onChange: (value: string) => void;
   onSubmit: (needle: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (autoFocus) inputRef.current?.focus(); }, [autoFocus]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -28,6 +33,7 @@ export function ThreadDetailSearch({
     onChange('');
     onSubmit('');
     event.currentTarget.blur();
+    onClose?.();
   };
 
   return (
@@ -67,6 +73,7 @@ export function ThreadDetailSearch({
           onSubmit('');
           inputRef.current?.blur();
           event.currentTarget.blur();
+          onClose?.();
         }}
       ><X size={18} aria-hidden="true" /></button>}
     </form>

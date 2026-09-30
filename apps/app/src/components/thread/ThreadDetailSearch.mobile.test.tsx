@@ -46,3 +46,15 @@ it('retains Escape behavior and leaves desktop without the extra close control',
   expect(submit).toHaveBeenCalledWith('');
   expect(document.activeElement).not.toBe(input);
 });
+
+
+it('focuses the search opened from More and returns control to its owner on dismissal', () => {
+  const close = vi.fn();
+  const { rerender } = render(<ThreadDetailSearch mobileHeader autoFocus value="" onChange={() => {}} onSubmit={() => {}} onClose={close} />);
+  expect(document.activeElement).toBe(screen.getByRole('searchbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
+  expect(close).toHaveBeenCalledOnce();
+  rerender(<ThreadDetailSearch mobileHeader autoFocus value="find" onChange={() => {}} onSubmit={() => {}} onClose={close} />);
+  fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
+  expect(close).toHaveBeenCalledTimes(2);
+});

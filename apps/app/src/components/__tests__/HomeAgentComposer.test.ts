@@ -282,7 +282,7 @@ describe('ThreadCommandComposer submit path', () => {
     expect(source).toContain('composerHostsForProject');
     expect(source).toContain('ComposerRemoteHostBadge');
     expect(source).toContain('HostSshIdentityDialog');
-    expect(source.indexOf('<EnvironmentPicker')).toBeGreaterThan(metaIdx);
+    expect(source.indexOf('{!compact && runSettings}')).toBeGreaterThan(metaIdx);
     expect(source.indexOf('{!compact && permissionPicker}')).toBeGreaterThan(metaIdx);
     expect(source.indexOf('permission={compact ? permissionPicker : undefined}')).toBeLessThan(metaIdx);
 

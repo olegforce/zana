@@ -8,6 +8,7 @@ import zanaIcon from '../assets/zana-favicon.svg';
 import { MobileNavDismiss } from './mobile-nav-context.js';
 import { MobileDeviceActions } from './MobileDeviceActions.js';
 import '../styles/mobile-shell.css';
+import '../styles/mobile-page-header.css';
 
 function useMobileShellChromeOwnership() {
   const compact = useCompactLayout();
@@ -30,19 +31,29 @@ export function useMobileNavigation() {
   useEffect(() => setDrawerOpen(false), [location.pathname, location.search]);
   useEffect(() => {
     if (!isCompact) return;
-    // visualViewport shrinks for the software keyboard even when layoutViewport
-    // and 100vh do not. Restore the property on desktop/tablet transitions.
+    // The keyboard can shrink AND pan the visual viewport without changing the
+    // layout viewport. Follow both so the composer stays above the keyboard.
     const viewport = window.visualViewport;
-    const resize = () =>
+    const resize = () => {
       document.documentElement.style.setProperty(
         '--mobile-viewport-height',
         `${viewport?.height ?? window.innerHeight}px`
       );
+      document.documentElement.style.setProperty(
+        '--mobile-viewport-top',
+        `${viewport?.offsetTop ?? 0}px`
+      );
+    };
     resize();
     viewport?.addEventListener('resize', resize);
+    viewport?.addEventListener('scroll', resize);
+    window.addEventListener('resize', resize);
     return () => {
       viewport?.removeEventListener('resize', resize);
+      viewport?.removeEventListener('scroll', resize);
+      window.removeEventListener('resize', resize);
       document.documentElement.style.removeProperty('--mobile-viewport-height');
+      document.documentElement.style.removeProperty('--mobile-viewport-top');
     };
   }, [isCompact]);
   return { isCompact, drawerOpen, setDrawerOpen };
@@ -53,12 +64,14 @@ export function MobileNavDrawer({
   open,
   onClose,
   headerStart,
+  shortcuts,
   children
 }: {
   enabled: boolean;
   open: boolean;
   onClose(): void;
   headerStart?: ReactNode;
+  shortcuts?: ReactNode;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -138,6 +151,7 @@ export function MobileNavDrawer({
             </button>
           </div>
         </header>
+        {shortcuts}
         <MobileNavDismiss.Provider value={onClose}>{children}</MobileNavDismiss.Provider>
       </div>
     </>

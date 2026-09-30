@@ -72,7 +72,7 @@ export function InboxView() {
 
   return (
     <section ref={root} className="inbox-view panel-body--full" data-compact={compact} data-detail-open={detailOpen}>
-      <InboxPane onShowOverview={compact ? () => { select(null); setOverviewOpen(true); } : undefined} />
+      <InboxPane mobileHeaderEnabled={active && !detailOpen} onShowOverview={compact ? () => { select(null); setOverviewOpen(true); } : undefined} />
       <div className="inbox-view-detail">
         {compact && (showingSaved || !selectedId) && (
           <button type="button" className="inbox-mobile-back" onClick={backToList}>

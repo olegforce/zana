@@ -99,6 +99,15 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
     expect((await context.request.post(`${serverUrl}/_mobile/session`, { headers: { authorization: `Bearer ${credential.credential}` } })).ok()).toBe(true);
     const page = await context.newPage();
     await page.route('**/api/v1/system/voice-status', (route) => route.fulfill({ json: { enabled: true } }));
+    // Keep the audited controls stable while native harness catalogs load. Some
+    // host providers expose only one permission mode and remove that picker.
+    await page.route('**/api/v1/system/execution-options*', (route) => route.fulfill({ json: {
+      providers: [{ id: 'fake', displayName: 'Fake', available: true,
+        composerActions: [], capabilities: { permissionModes: ['full', 'accept-edits'] } }],
+      models: [{ id: 'fake-model', model: 'fake-model', displayName: 'Fake Model', isDefault: true,
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: 'Medium' }], defaultReasoningEffort: 'medium' }],
+      selectedOnlyModels: [], permissionCeiling: 'full', modelLoadError: null
+    } }));
     const audit: Record<string, unknown> = {};
     for (const width of [320, 390, 820]) {
       await page.setViewportSize({ width, height: 900 });
@@ -118,6 +127,13 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
       await page.route(rosterUrl, badgeRoster);
       await page.goto(serverUrl + '/');
       const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
+      await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+      await drawer.getByRole('button', { name: /^Notifications/ }).click();
+      await expect(drawer).toBeHidden();
+      const notifications = page.getByRole('complementary', { name: 'Notifications', exact: true });
+      await expect(notifications).toBeVisible();
+      await notifications.getByRole('button', { name: 'Close notifications', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeFocused();
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
       const history = drawer.getByRole('list', { name: 'Your agents' });
       await expect(history.getByRole('link')).toHaveCount(9);
@@ -206,6 +222,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
       expect((await terminal.boundingBox())!.height).toBeGreaterThan(700);
       expect((await terminal.boundingBox())!.y).toBeLessThanOrEqual(56);
       await page.screenshot({ path: testInfo.outputPath(`${width}-cli-agent-header.png`) });
+      await page.getByRole('link', { name: 'Back to agents', exact: true }).click();
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
       await search.fill('Responsive agent 1 delay');
       await expect(history.getByRole('link')).toHaveCount(1);
@@ -214,8 +231,9 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
       await expect(page.getByTestId('thread-detail')).toBeVisible();
       await expect(drawer).toBeHidden();
       await expect(page.locator('.agent-terminal-modal, .modal-backdrop')).toHaveCount(0);
+      await page.getByRole('link', { name: 'Back to agents', exact: true }).click();
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
-      await expect(history.locator('[aria-current="page"]')).toHaveAttribute('href', `/threads/${seed.id}`);
+      await expect(drawer.getByTestId('mobile-nav-agents')).toHaveAttribute('aria-current', 'page');
       await drawer.getByRole('button', { name: 'More', exact: true }).click();
       await expect(drawer.getByTestId('nav-agents')).toBeVisible();
       await drawer.getByRole('button', { name: 'All agents', exact: true }).click();
@@ -252,6 +270,21 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
         await page.goto(serverUrl + path, { waitUntil: 'domcontentloaded' });
         await expect(page.locator(selector).first()).toBeVisible();
         await expect(page.locator('.app-shell')).toHaveAttribute('data-mobile', 'true');
+        const mobileTitle = ({ agents: 'Agents', inbox: 'Inbox', scheduler: 'Schedules', plugins: 'Plugins' } as Record<string, string>)[name];
+        if (mobileTitle) {
+          await expect(page.locator('.mobile-thread-title-slot h1')).toHaveText(mobileTitle);
+          expect((await page.locator('.titlebar').boundingBox())!.height).toBe(48);
+          await expect(page.locator('.titlebar-bell')).toBeHidden();
+        }
+        if (name === 'scheduler' || name === 'plugins') {
+          const title = name === 'scheduler' ? 'Schedules' : 'Plugins';
+          await page.getByRole('button', { name: `${title} actions`, exact: true }).click();
+          const sheet = page.getByRole('dialog', { name: `${title} actions`, exact: true });
+          await expect(sheet).toBeVisible();
+          await expect(sheet.getByRole('button', { name: name === 'scheduler' ? 'From template' : 'Check for updates', exact: true })).toBeVisible();
+          await page.screenshot({ path: testInfo.outputPath(`${width}-${name}-actions.png`) });
+          await sheet.getByRole('button', { name: 'Close actions', exact: true }).click();
+        }
         if (name === 'inbox') {
           const firstRow = page.locator('.inbox-row.unread').first();
           await expect(firstRow).toBeVisible();
@@ -275,6 +308,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
             await page.screenshot({ path: testInfo.outputPath(`${width}-inbox-list-${theme}.png`) });
           }
           await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+          await page.getByRole('button', { name: 'Search inbox', exact: true }).click();
           const search = page.getByRole('textbox', { name: 'Search inbox', exact: true });
           const searchTop = (await search.boundingBox())!.y;
           await page.locator('.inbox-list-pane .list-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
@@ -287,6 +321,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
         writeFileSync(testInfo.outputPath('responsive-audit.json'), JSON.stringify(audit, null, 2));
         if (name === 'new-thread') {
           const composer = page.getByLabel('Message', { exact: true });
+          await composer.tap();
           const permission = page.getByRole('button', { name: 'Permission mode', exact: true });
           const project = page.getByRole('button', { name: 'Project', exact: true });
           const runSettings = page.getByRole('button', { name: /^Run settings:/ });
@@ -294,9 +329,10 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await expect(page.locator('.new-thread-view > .aurora-grid')).toBeHidden();
           await expect(project).toBeVisible();
           await expect(permission).toBeVisible();
+          await expect(runSettings).toBeHidden();
           await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeHidden();
           expect((await project.boundingBox())!.y).toBeLessThan((await composer.boundingBox())!.y);
-          for (const control of [project, permission, runSettings]) {
+          for (const control of [project, permission]) {
             const box = (await control.boundingBox())!;
             expect(box.height).toBeGreaterThanOrEqual(44);
             expect(box.x).toBeGreaterThanOrEqual(0);
@@ -316,17 +352,18 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
             expect(box!.height).toBeGreaterThanOrEqual(44);
             expect(box!.width).toBeGreaterThanOrEqual(44);
           }
-          if (width >= 380) expect(new Set(boxes.map((box) => box!.y)).size).toBe(1);
-          else expect(new Set(boxes.map((box) => box!.y)).size).toBe(2);
+          expect(new Set(boxes.map((box) => box!.y)).size).toBe(1);
           for (let i = 1; i < boxes.length; i++) {
             if (boxes[i]!.y === boxes[i - 1]!.y) expect(boxes[i]!.x).toBeGreaterThanOrEqual(boxes[i - 1]!.x + boxes[i - 1]!.width);
           }
-          // Unlike the fake existing thread, this launcher exposes permissions.
-          // Cover the wrapped toolbar that originally put actions over Thinking.
+          // The launcher keeps permissions on its primary toolbar row, while
+          // disclosed settings and auxiliary actions stay below it.
           for (const optionsWidth of width === 390 ? [390, 480, 481] : [width]) {
             await page.setViewportSize({ width: optionsWidth, height: 900 });
             const toggle = page.getByRole('button', { name: 'Composer options', exact: true });
             await toggle.click();
+            await expect(runSettings).toBeVisible();
+            expect((await runSettings.boundingBox())!.height).toBeGreaterThanOrEqual(44);
             const optionsBox = (await page.locator('.thread-command-options').boundingBox())!;
             const actions = page.locator('.thread-command-secondary-actions');
             await expect(actions.getByRole('button', { name: 'Start voice input', exact: true })).toBeVisible();
@@ -378,6 +415,8 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await expect(composer).toHaveText('Keep my mobile draft');
           await page.setViewportSize({ width, height: 900 });
           await expect(page.getByRole('button', { name: 'Composer options', exact: true })).toHaveAttribute('aria-expanded', 'false');
+          await expect(runSettings).toBeHidden();
+          await page.getByRole('button', { name: 'Composer options', exact: true }).click();
           await runSettings.click();
           const settings = page.getByRole('dialog', { name: 'Run settings', exact: true });
           await expect.poll(() => settings.boundingBox()).toEqual({ x: 0, y: 0, width, height: 900 });
@@ -388,9 +427,12 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await page.screenshot({ path: testInfo.outputPath(`${width}-run-settings.png`) });
           await settings.getByRole('button', { name: 'Close run settings' }).click();
           await expect(runSettings).toBeFocused();
+          await expect(page.getByRole('button', { name: 'Composer options', exact: true })).toHaveAttribute('aria-expanded', 'true');
           await expect(composer).toHaveText('Keep my mobile draft');
           await page.setViewportSize({ width, height: 400 });
           await composer.focus();
+          await expect(page.getByRole('button', { name: 'Composer options', exact: true })).toHaveAttribute('aria-expanded', 'false');
+          await expect(page.locator('.app-shell')).toHaveCSS('height', '400px');
           const permissionBox = (await permission.boundingBox())!;
           expect(permissionBox.y).toBeGreaterThanOrEqual(48);
           expect(permissionBox.y + permissionBox.height).toBeLessThanOrEqual(400);
@@ -502,6 +544,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await page.getByRole('button', { name: 'Saved reports', exact: true }).click();
           await expect(page.locator('.saved-row')).toBeVisible();
           await page.getByRole('tab', { name: /^Feed/ }).click();
+          await page.getByRole('button', { name: 'Inbox actions', exact: true }).click();
           await page.getByRole('button', { name: 'Inbox overview', exact: true }).click();
           await expect(page.locator('.inbox-overview')).toBeVisible();
           await page.getByRole('button', { name: 'Inbox', exact: true }).click();
@@ -520,6 +563,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           expect(await page.locator('.inbox-list-pane .list-body').evaluate(el => el.scrollTop)).toBeCloseTo(listScroll, 0);
         }
         if (name === 'agents') {
+          await page.getByRole('button', { name: 'Agents actions', exact: true }).click();
           await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toBeVisible();
           if (width === 320) {
             await expect(page.getByRole('button', { name: 'Board view', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -558,6 +602,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await expect(page).toHaveURL(/\/sessions\//);
           await expect(page.locator('.agent-terminal-modal')).toHaveCount(0);
           await page.goBack();
+          await page.getByRole('button', { name: 'Agents actions', exact: true }).click();
           await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toHaveAttribute('aria-pressed', 'true');
           await page.getByRole('button', { name: 'List view', exact: true }).click();
           await expect(page.locator('.agent-monitor-row').first()).toBeVisible();
@@ -599,6 +644,7 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
           await page.getByRole('button', { name: 'Back to agents', exact: true }).click();
           await expect(page.locator('.agent-monitor-main')).toHaveCount(0);
           await expect(list).toBeVisible();
+          await page.getByRole('button', { name: 'Agents actions', exact: true }).click();
           await page.getByRole('button', { name: 'Board view', exact: true }).click();
           const board = page.getByTestId('mobile-agent-board');
           await expect(board).toBeVisible();
@@ -696,7 +742,9 @@ test('Main views and populated Inbox fit phone and tablet screens', async ({ app
     await expect(page.getByRole('button', { name: 'Back to agents', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Flow view', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 900 });
+    await page.getByRole('button', { name: 'Agents actions', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Canvas view', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close actions', exact: true }).click();
     await expect(page.getByTestId('mobile-agent-board')).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.getByRole('button', { name: 'Flow view', exact: true })).toHaveAttribute('aria-pressed', 'true');

@@ -25,8 +25,18 @@ export function useDialogFocusTrap(
   useEffect(() => {
     if (!enabled) return;
     const opener = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const originalTabIndex = dialog?.getAttribute('tabindex');
+    // Mobile composers deliberately avoid focusing an editor on mount. Give
+    // the dialog keyboard focus without opening the software keyboard.
+    if (dialog && !dialog.contains(opener)) {
+      if (originalTabIndex == null) dialog.tabIndex = -1;
+      dialog.focus({ preventScroll: true });
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // A nested portalled dialog or picker handles its own Escape.
+        if (e.defaultPrevented || !dialogRef.current?.contains(e.target as Node)) return;
         onCloseRef.current?.();
         return;
       }
@@ -34,13 +44,13 @@ export function useDialogFocusTrap(
       const root = dialogRef.current;
       if (!root) return;
       const focusable = root.querySelectorAll<HTMLElement>(
-        'button, textarea, input, select, [href], [tabindex]:not([tabindex="-1"])'
+        'button:not(:disabled), textarea:not(:disabled), input:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
       );
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
-      if (e.shiftKey && active === first) {
+      if (e.shiftKey && (active === first || active === root)) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {
@@ -51,6 +61,7 @@ export function useDialogFocusTrap(
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
+      if (dialog && originalTabIndex == null) dialog.removeAttribute('tabindex');
       // Restore focus to the opener if it's still in the document.
       if (opener && document.contains(opener)) opener.focus();
     };
