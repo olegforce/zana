@@ -154,10 +154,10 @@ it('leaves desktop and the dedicated settings rail unchanged without loading ano
 it.each([undefined, 'p'])('closes the active thread and leaves the closed page (scope=%s)', async (projectId) => {
   mount({ projectId });
   fireEvent.click(screen.getByRole('button', { name: 'Close Improve the menu' }));
-  await waitFor(() => expect(h.remove).toHaveBeenCalledWith('t'));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(projectId ? '/projects/p' : '/agents'));
   expect(h.archive).toHaveBeenCalledWith('t');
+  expect(h.remove).toHaveBeenCalledWith('t');
   expect(h.closePanes).toHaveBeenCalledWith(['t']);
-  expect(screen.getByTestId('location').textContent).toBe(projectId ? '/projects/p' : '/agents');
   expect(h.dismiss).not.toHaveBeenCalled();
 });
 
