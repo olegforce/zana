@@ -7,6 +7,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactNode } from 'react';
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 
+const layout = vi.hoisted(() => ({ compact: false }));
+vi.mock('../../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
+
 const setHeartbeat = vi.fn();
 const session = {
   id: 's1',
@@ -84,6 +87,7 @@ import { AgentSessionPage } from './AgentSessionPage.js';
 describe('AgentSessionPage', () => {
   afterEach(() => {
     cleanup();
+    layout.compact = false;
     store.heartbeatEnabled = false;
     supportsHooks = false;
     session.status = 'running';
@@ -93,6 +97,15 @@ describe('AgentSessionPage', () => {
     store.projects = [{ id: 'p1', name: 'Demo', color: '#111' }];
     agentStatus.byId = { s1: 'working' };
     setHeartbeat.mockReset();
+  });
+
+  it.each(['s1', 'missing'])('shows the mobile fallback for a direct link to %s', (sessionId) => {
+    layout.compact = true;
+    render(<AgentSessionPage projectId="p1" sessionId={sessionId} />);
+    expect(screen.getByTestId('cli-agent-mobile-unsupported')).toBeTruthy();
+    expect(screen.queryByTestId('agent-session-view')).toBeNull();
+    expect(screen.queryByTestId('agent-session-missing')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 
   it('renders AgentSessionView when the session exists', () => {

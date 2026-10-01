@@ -34319,8 +34319,13 @@ textarea.thread-command-editor {
   pointer-events: none;
 }
 
-.pane-empty-well--ended {
+.pane-empty-well--ended,
+.pane-empty-well--desktop {
   margin-top: -14px;
+}
+
+.pane-empty-well--desktop {
+  color: var(--accent-blue);
 }
 
 .pane-empty-term--loading {

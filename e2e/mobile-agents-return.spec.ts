@@ -91,6 +91,23 @@ setInterval(() => {}, 1000);
       }, path);
       await expect(phone).toHaveURL(serverUrl + path);
       await expect(back).toHaveAttribute('href', destination);
+      if (path.includes('/sessions/')) {
+        const notice = phone.getByTestId('cli-agent-mobile-unsupported');
+        for (const width of [320, 390, 820]) {
+          await phone.setViewportSize({ width, height: 844 });
+          await expect(notice).toBeVisible();
+          await expect(notice.getByRole('heading')).toHaveText('CLI Agents aren’t supported on mobile yet');
+          await expect(notice.locator('.lucide-monitor')).toBeVisible();
+          await expect(phone.getByTestId('agent-session-view')).toHaveCount(0);
+          expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+          if (width === 390) {
+            await phone.screenshot({
+              path: testInfo.outputPath(`mobile-cli-agent-${path.startsWith('/projects/') ? 'project' : 'global'}.png`),
+              animations: 'disabled'
+            });
+          }
+        }
+      }
       await back.click();
       await expect(phone).toHaveURL(serverUrl + destination);
       await expect(drawer).toBeHidden();

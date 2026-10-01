@@ -38,6 +38,15 @@ describe('PaneEmptyState', () => {
     expect(html).not.toContain('pane-empty-hint');
   });
 
+  it('illustrates desktop-only content with a terminal and desktop badge', () => {
+    const html = renderToStaticMarkup(<PaneEmptyState art="desktop" title="Open on desktop" />);
+    expect(html).toContain('pane-empty-term');
+    expect(html).toContain('pane-empty-well--desktop');
+    expect(html).toContain('lucide-monitor');
+    expect(html).not.toContain('lucide-unplug');
+    expect(html).not.toContain('role="status"');
+  });
+
   it('announces loading while keeping its animated illustration decorative', () => {
     const html = renderToStaticMarkup(<PaneEmptyState art="loading" title="Loading conversation…" />);
     expect(html).toContain('role="status"');

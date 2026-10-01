@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { AlertTriangle, Bot, FolderX, Inbox, Unplug } from 'lucide-react';
+import { AlertTriangle, Bot, FolderX, Inbox, Monitor, Unplug } from 'lucide-react';
 
-export type PaneEmptyArt = 'ended' | 'missing' | 'agents' | 'error' | 'inbox' | 'loading';
+export type PaneEmptyArt = 'ended' | 'missing' | 'agents' | 'error' | 'inbox' | 'loading' | 'desktop';
 
 /**
  * Centered full-pane empty / gone / crash layout. Arts are CSS-only
@@ -54,7 +54,8 @@ function PaneEmptyArtVisual({ art }: { art: PaneEmptyArt }) {
     );
   }
 
-  if (art === 'ended') {
+  if (art === 'ended' || art === 'desktop') {
+    const Icon = art === 'desktop' ? Monitor : Unplug;
     return (
       <>
         <div className="pane-empty-term">
@@ -66,8 +67,8 @@ function PaneEmptyArtVisual({ art }: { art: PaneEmptyArt }) {
             <span className="pane-empty-caret" />
           </div>
         </div>
-        <span className="pane-empty-well pane-empty-well--ended">
-          <Unplug size={22} strokeWidth={1.75} />
+        <span className={`pane-empty-well pane-empty-well--${art}`}>
+          <Icon size={22} strokeWidth={1.75} />
         </span>
       </>
     );

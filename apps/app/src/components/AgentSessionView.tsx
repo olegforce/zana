@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { Maximize2, Minimize2, PanelRight, X } from 'lucide-react';
 import type { AgentState, CliPlanFile, SessionStats, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { product } from '../lib/product-client.js';
 import { AgentDetailPanel } from './AgentDetailPanel.js';
 import { AgentSessionHeader } from './AgentSessionHeader.js';
+import { CliAgentSurface } from './CliAgentSurface.js';
 import { AgentDiffPanel } from './AgentDiffPanel.js';
 import { useSessionStats } from './AgentInsights.js';
 import { ThreadSecondaryPanel } from './thread/secondary-panel/ThreadSecondaryPanel.js';
@@ -133,7 +134,11 @@ export function useCliPlanSnapshot(session: TerminalSession): CliPlanFile | null
   return snapshot;
 }
 
-export function AgentSessionView({
+export function AgentSessionView(props: ComponentProps<typeof DesktopAgentSessionView>) {
+  return <CliAgentSurface><DesktopAgentSessionView {...props} /></CliAgentSurface>;
+}
+
+function DesktopAgentSessionView({
   session,
   projectId,
   projectName,
