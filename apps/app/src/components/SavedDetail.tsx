@@ -4,10 +4,11 @@ import { deleteSavedRecord, useSaved, useSavedSelection, useUi } from '../store.
 import { DocContent, MarkdownContent } from './MarkdownContent.js';
 import { DelayedStencilLines } from './ui/Skeleton.js';
 import { PaneEmptyState } from './PaneEmptyState.js';
+import { confirmInboxDeletion, isInboxListShortcut } from '../lib/inbox-keyboard.js';
 import type { SavedDoc, SavedRecord } from '@zana-ai/zcc-domain/product';
 
 interface SavedDetailProps {
-  /** Gates the Delete/Backspace shortcut to when the Saved tab is actually visible. */
+  /** Gates the Delete shortcut to when the Saved tab is actually visible. */
   visible: boolean;
 }
 
@@ -34,6 +35,7 @@ export function SavedDetail({ visible }: SavedDetailProps) {
     async (id: string) => {
       const idx = records.findIndex((r) => r.id === id);
       if (idx < 0) return;
+      if (!confirmInboxDeletion('saved report')) return;
       // records are newest-first; advance to the next older, else previous.
       const nextId = records[idx + 1]?.id ?? records[idx - 1]?.id ?? null;
       select(nextId);
@@ -45,9 +47,7 @@ export function SavedDetail({ visible }: SavedDetailProps) {
   useEffect(() => {
     if (!visible || !selectedId) return;
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (e.key !== 'Delete' || e.repeat || !isInboxListShortcut(e)) return;
       e.preventDefault();
       void handleDelete(selectedId!);
     }
@@ -117,7 +117,7 @@ function Detail({ record, onDelete }: { record: SavedRecord; onDelete: () => voi
           type="button"
           onClick={onDelete}
           className="inbox-detail-trash"
-          title="Delete this saved report (Delete / Backspace)"
+          title="Delete this saved report (Delete)"
           aria-label="Delete this saved report"
         >
           <Trash2 size={14} strokeWidth={1.75} />

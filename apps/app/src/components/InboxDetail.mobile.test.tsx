@@ -7,13 +7,13 @@ import type { InboxEntry } from '@zana-ai/zcc-domain/product';
 const state = vi.hoisted(() => ({
   compact: true, selected: 'one', saved: false, kept: false, missing: false,
   entries: [] as InboxEntry[],
-  readFile: vi.fn(), resolveDoc: vi.fn(), copy: vi.fn(), openIn: vi.fn(), save: vi.fn(), keep: vi.fn(), remove: vi.fn(), exportPdf: vi.fn()
+  readFile: vi.fn(), resolveDoc: vi.fn(), copy: vi.fn(), openIn: vi.fn(), save: vi.fn(), keep: vi.fn(), remove: vi.fn(), exportPdf: vi.fn(), select: vi.fn(), markRead: vi.fn()
 }));
 vi.mock('../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => state.compact }));
 vi.mock('../store.js', () => ({
   useInbox: (pick: (s: unknown) => unknown) => pick({ entries: state.entries, loading: false }),
-  useInboxSelection: (pick: (s: unknown) => unknown) => pick({ selectedEntryId: state.selected, select: vi.fn() }),
-  useInboxRead: (pick: (s: unknown) => unknown) => pick({ markRead: vi.fn() }),
+  useInboxSelection: (pick: (s: unknown) => unknown) => pick({ selectedEntryId: state.selected, select: state.select }),
+  useInboxRead: (pick: (s: unknown) => unknown) => pick({ markRead: state.markRead }),
   useData: (pick: (s: unknown) => unknown) => pick({ projects: state.missing ? [] : [{ id: 'p', name: 'My project', path: '/project' }], terminals: {}, structuredQuestionsEnabled: false, restoreTerminal: vi.fn(), createTerminal: vi.fn() }),
   useUi: (pick: (s: unknown) => unknown) => pick({ setNav: vi.fn(), selectTab: vi.fn(), pushToast: vi.fn() }),
   useInboxKeep: (pick: (s: unknown) => unknown) => pick({ keptIds: state.kept ? { one: true } : {} }),
@@ -49,10 +49,62 @@ beforeEach(() => {
   state.save.mockResolvedValue(undefined);
   state.exportPdf.mockResolvedValue({ ok: true });
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+  vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-const view = () => <MemoryRouter><InboxDetail visible /></MemoryRouter>;
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+const view = (visible = true) => <MemoryRouter><section className="inbox-view"><InboxDetail visible={visible} /></section></MemoryRouter>;
 const actions = () => fireEvent.click(screen.getByRole('button', { name: 'Message actions', exact: true }));
+
+it('requires confirmation before deletion or advancing and marking the next message read', () => {
+  state.compact = false;
+  state.entries.push({ id: 'two', ts: Date.now() - 1, projectId: 'p', comments: 'Keep me too' });
+  render(view());
+  const button = screen.getByRole('button', { name: 'Delete this inbox entry' });
+  vi.mocked(window.confirm).mockReturnValue(false);
+  fireEvent.click(button);
+  expect(state.remove).not.toHaveBeenCalled();
+  expect(state.select).not.toHaveBeenCalled();
+  expect(state.markRead).not.toHaveBeenCalled();
+  vi.mocked(window.confirm).mockReturnValue(true);
+  button.focus();
+  fireEvent.keyDown(button, { key: 'Delete' });
+  expect(state.remove).toHaveBeenCalledExactlyOnceWith('one');
+  expect(state.select).toHaveBeenCalledWith('two');
+  expect(state.markRead).toHaveBeenCalledWith('two');
+});
+
+it('ignores Backspace, held Delete, editors and popup buttons without even asking to delete', () => {
+  state.compact = false;
+  const { container } = render(view());
+  const button = screen.getByRole('button', { name: 'Delete this inbox entry' });
+  button.focus();
+  fireEvent.keyDown(button, { key: 'Backspace' });
+  fireEvent.keyDown(button, { key: 'Delete', repeat: true });
+  const scope = container.querySelector('.inbox-view')!;
+  for (const markup of ['<div contenteditable="true"><span>Draft</span></div>', '<div role="dialog" aria-modal="true"><button>Options</button></div>']) {
+    scope.insertAdjacentHTML('beforeend', markup);
+    const popup = scope.lastElementChild!;
+    fireEvent.keyDown(popup.firstElementChild!, { key: 'Delete' });
+    fireEvent.keyDown(popup.firstElementChild!, { key: 'Backspace' });
+    popup.remove();
+  }
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(state.remove).not.toHaveBeenCalled();
+});
+
+it('does not register a delete shortcut while hidden, unselected or after unmount', () => {
+  state.compact = false;
+  const { rerender, unmount } = render(view(false));
+  const button = screen.getByRole('button', { name: 'Delete this inbox entry' });
+  fireEvent.keyDown(button, { key: 'Delete' });
+  state.selected = '';
+  rerender(view());
+  fireEvent.keyDown(document.querySelector('.inbox-view')!, { key: 'Delete' });
+  unmount();
+  fireEvent.keyDown(window, { key: 'Delete' });
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(state.remove).not.toHaveBeenCalled();
+});
 
 it('keeps reading chrome compact and loads documents only when opened', async () => {
   render(view());

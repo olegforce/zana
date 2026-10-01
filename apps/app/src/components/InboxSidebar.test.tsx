@@ -63,6 +63,7 @@ vi.mock('../store.js', () => ({
 }));
 
 import { InboxSidebar } from './InboxSidebar.js';
+import { deleteInboxEntry } from '../store.js';
 
 describe('InboxSidebar embedded selection', () => {
   afterEach(() => {
@@ -70,6 +71,8 @@ describe('InboxSidebar embedded selection', () => {
     select.mockClear();
     onSelect.mockClear();
     markRead.mockClear();
+    vi.restoreAllMocks(); vi.unstubAllGlobals();
+    vi.mocked(deleteInboxEntry).mockClear();
   });
   it('does not write global selection when onSelect is provided', () => {
     render(
@@ -93,6 +96,38 @@ describe('InboxSidebar embedded selection', () => {
     renderToStaticMarkup(<InboxSidebar grouping="time" autoSelect={false} />);
     expect(select).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('scopes j/k navigation to the Inbox and ignores editor and dialog events', () => {
+    const { container } = render(<section className="inbox-view"><InboxSidebar grouping="time" /></section>);
+    const row = screen.getByText('Ship the report').closest('[role="button"]') as HTMLElement;
+    row.focus();
+    fireEvent.keyDown(row, { key: 'j' });
+    expect(select).toHaveBeenCalledWith('e1');
+    select.mockClear();
+    fireEvent.keyDown(document.body, { key: 'j' });
+    const scope = container.querySelector('.inbox-view')!;
+    scope.insertAdjacentHTML('beforeend', '<div contenteditable="true"><span>Draft</span></div>');
+    fireEvent.keyDown(scope.lastElementChild!.firstElementChild!, { key: 'j' });
+    fireEvent.keyDown(scope.lastElementChild!.firstElementChild!, { key: 'k' });
+    scope.insertAdjacentHTML('beforeend', '<div role="dialog" aria-modal="true"><button>Options</button></div>');
+    fireEvent.keyDown(row, { key: 'j' });
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('confirms context-menu deletion and preserves the message on cancel', () => {
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal('confirm', confirm);
+    render(<InboxSidebar grouping="time" />);
+    const row = screen.getByText('Ship the report').closest('[role="button"]')!;
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByText('Delete', { exact: true }));
+    expect(confirm).toHaveBeenCalled();
+    expect(deleteInboxEntry).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByText('Delete', { exact: true }));
+    expect(deleteInboxEntry).toHaveBeenCalledExactlyOnceWith('e1');
   });
 
   it('auto-selects the newest visible row without writing global selection', async () => {

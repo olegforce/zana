@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { confirmInboxDeletion, isInboxListShortcut } from '../lib/inbox-keyboard.js';
 import {
   CalendarClock,
   Check,
@@ -368,9 +369,8 @@ export function InboxSidebar({
   useEffect(() => {
     if (controlled) return;
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== 'j' && e.key !== 'k') return;
+      if (!isInboxListShortcut(e)) return;
       if (visibleIds.length === 0) return;
       const idx = visibleIds.indexOf(selectedId ?? '');
       const next = e.key === 'j' ? Math.min(visibleIds.length - 1, idx + 1) : Math.max(0, idx - 1);
@@ -606,7 +606,9 @@ export function InboxSidebar({
               : markRead(rowMenu.entry.id)
           }
           onToggleKeep={() => toggleInboxKeep(rowMenu.entry.id)}
-          onDelete={() => void deleteInboxEntry(rowMenu.entry.id)}
+          onDelete={() => {
+            if (confirmInboxDeletion('message')) void deleteInboxEntry(rowMenu.entry.id);
+          }}
         />
       )}
     </div>

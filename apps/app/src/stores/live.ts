@@ -1838,7 +1838,7 @@ export function useAgentNavCounts(projectId?: string): { active: number; blocked
 
 /**
  * Optimistic delete + IPC. Called from the detail view's trash button and
- * the Delete/Backspace shortcut. Removes locally first so the UI doesn't
+ * the confirmed Delete shortcut. Removes locally first so the UI doesn't
  * lag the IPC round-trip; the main process's onRemoved push echoes back
  * and is a no-op (already filtered out).
  */
