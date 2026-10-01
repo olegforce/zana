@@ -145,7 +145,9 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
       }
       for (const [key, entry] of previewEntries) {
         const active = await registry.resolveServer(entry.server.label);
-        if (!active || active.credential_hash !== entry.server.credential_hash || !entries.get(entry.server.id)?.relay.connected() || (entry.machine && !await registry.authorizeMachineGrant(entry.server, entry.machine))) { entry.relay.close(); previewEntries.delete(key); }
+        const invalid = !active || active.credential_hash !== entry.server.credential_hash || !entries.get(entry.server.id)?.relay.connected() || (!entry.relay.connected() && Date.now() - entry.createdAt > 15_000) || (entry.machine && !await registry.authorizeMachineGrant(entry.server, entry.machine));
+        // A publisher may reconnect while the authorization query is in flight.
+        if (invalid && previewEntries.get(key) === entry) { entry.relay.close(); previewEntries.delete(key); }
       }
       // A DB-backed check also covers revocations from another web process.
       for (const [ws, value] of visitors) if (!await authorizeVisitor(value)) ws.close(1008, 'Session expired or revoked');
@@ -255,7 +257,7 @@ export function createConnectGateway({ registry, db, sessionSecret, allowLocal =
             visitors.set(ws, { ...device, server, serverId: server.id, deviceId: device.id });
             ws.once('close', () => visitors.delete(ws));
           } });
-          previewEntries.set(key, { relay, server, machine });
+          previewEntries.set(key, { relay, server, machine, createdAt: Date.now() });
           req.url = '/_relay/connect'; req.headers.authorization = `Bearer ${token}`;
           routeToTunnel(req, server); relay.handleUpgrade(req, socket, head); return;
         }

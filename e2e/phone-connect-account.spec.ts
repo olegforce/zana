@@ -37,10 +37,10 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
   const registry = createRegistry(db, { domain: `connect.zana.localhost:${port}`, browserDomain: `zana.localhost:${port}`, accountUrl: origin });
   gateway = createConnectGateway({ db, registry, sessionSecret: 'test-account-secret' });
   const lookup = (_hostname: string, options: any, callback: any) => callback(null, options?.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4);
-  function remote(url: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+  function remote(url: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }> {
     return new Promise((resolve, reject) => {
       const req = request(url, { lookup, ca: readFileSync(cert), method, headers: { 'content-type': 'application/json', ...headers } }, res => {
-        let text = ''; res.on('data', data => text += data); res.on('end', () => resolve({ status: res.statusCode!, body: text }));
+        let text = ''; res.on('data', data => text += data); res.on('end', () => resolve({ status: res.statusCode!, body: text, headers: res.headers }));
       }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
     });
   }
@@ -48,6 +48,7 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
   const dev = createDevServer((req, res) => {
     devHeaders.push(req.headers);
     if (req.url === '/large') { res.end('x'.repeat(32_768)); return; }
+    if (req.url === '/unsafe-redirect') { res.writeHead(302, { location: '/\\attacker.example/path' }); res.end(); return; }
     res.setHeader('content-type', 'text/html');
     res.end(`<h1>Private shared preview</h1><p id="asset"></p><p id="reload"></p><script>
       fetch('/large').then(r => r.text()).then(t => document.querySelector('#asset').textContent = 'Asset bytes: ' + t.length);
@@ -175,6 +176,10 @@ test('Connect enrolls through desktop IPC and serves authenticated phone traffic
     await expect(previewPage.getByRole('heading', { name: 'Private shared preview' })).toBeVisible();
     await expect(previewPage.locator('#asset')).toHaveText('Asset bytes: 32768');
     await expect(previewPage.locator('#reload')).toHaveText('Hot reload connected');
+    const previewCookie = (await context.cookies(sharedUrl)).map(item => `${item.name}=${item.value}`).join('; ');
+    const unsafeRedirect = await remote(`${sharedUrl}/unsafe-redirect`, 'GET', undefined, { cookie: previewCookie });
+    expect(unsafeRedirect.status).toBe(302);
+    expect(unsafeRedirect.headers.location).toBeUndefined();
     expect(JSON.stringify(devHeaders)).not.toMatch(/zcc_connect_session|x-zcc-|Bearer/);
     await previewPage.screenshot({ path: testInfo.outputPath('shared-preview.png') });
     const protectedPort = Number(new URL(win.url()).port);

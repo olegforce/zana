@@ -28,6 +28,20 @@ export function previewTargets(value, now = Date.now()) {
 
 const secretCookie = name => /^(?:__Host-|__Secure-|zcc_|zana_|session(?:[._-]|$)|better-auth\.)/i.test(name);
 const skip = new Set(['host', 'connection', 'upgrade', 'content-length', 'transfer-encoding', 'proxy-authorization', 'proxy-authenticate', 'authorization', 'keep-alive', 'te', 'trailer', 'proxy-connection']);
+function previewRedirect(value, port) {
+  // URL parsing normalizes backslashes and removes tabs. Check the raw value
+  // before either can turn a root-relative path into a different authority.
+  if (/[\\\u0000-\u0020\u007f]/.test(value)) return null;
+  let path = value;
+  if (!path.startsWith('/')) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || Number(url.port) !== port) return null;
+      path = url.pathname + url.search + url.hash;
+    } catch { return null; }
+  }
+  return path.startsWith('//') ? null : path;
+}
 export function previewHeaders(input, response = false, port) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Buffer.byteLength(JSON.stringify(input)) > 32 * 1024) throw new Error('Invalid preview headers');
   const out = {};
@@ -45,14 +59,8 @@ export function previewHeaders(input, response = false, port) {
       const cookies = values.filter(value => !secretCookie(value.split('=')[0].trim())).map(value => value.split(';').filter(part => !/^\s*domain\s*=/i.test(part)).join(';'));
       if (cookies.length) out[name] = cookies;
     } else if (name === 'location' && response) {
-      const value = values[0];
-      if (value.startsWith('/') && !value.startsWith('//')) out[name] = value;
-      else {
-        try {
-          const url = new URL(value);
-          if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && Number(url.port) === port) out[name] = url.pathname + url.search + url.hash;
-        } catch { /* Relative redirects are preserved only when they cannot change authority. */ }
-      }
+      const location = previewRedirect(values[0], port);
+      if (location) out[name] = location;
     } else if (name === 'origin' && !response) {
       out.origin = `http://127.0.0.1:${port}`;
     } else if (name !== 'set-cookie' && name !== 'cookie') out[name] = values.join(', ');

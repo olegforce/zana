@@ -244,8 +244,8 @@ it('shows an offline page only after browser authorization and refuses unknown C
 
 async function previewLane(server: any, port = 5173, machineCredential?: string) {
   const ws = socket(server, '/_relay/previews', { authorization: `Bearer ${server.credential}`, 'x-zcc-preview-version': '1', ...(machineCredential ? { 'x-zcc-machine-credential': machineCredential } : {}) });
-  const hello = once(ws, 'message'); await once(ws, 'open');
-  expect(JSON.parse((await hello)[0].toString()).previewVersion).toBe(1);
+  const [hello] = await Promise.all([once(ws, 'message'), once(ws, 'open')]);
+  expect(JSON.parse(hello[0].toString()).previewVersion).toBe(1);
   ws.send(JSON.stringify({ type: 'preview-targets', id: 0, targets: [{ port, expiresAt: Date.now() + 60_000 }] }));
   const requests: any[] = [];
   ws.on('message', raw => {
@@ -311,4 +311,48 @@ it('fails closed for incompatible preview versions and unauthorized preview publ
   for (const [headers, status] of [[{ authorization: `Bearer ${a.credential}` }, 409], [{ authorization: `Bearer ${b.credential}`, 'x-zcc-preview-version': '1' }, 401]] as const) {
     const ws = socket(a, '/_relay/previews', headers); expect((await once(ws, 'unexpected-response'))[1].statusCode).toBe(status); ws.terminate();
   }
+});
+
+it('releases disconnected preview capacity while the parent computer stays online', async () => {
+  const { randomUUID, randomBytes } = await import('node:crypto');
+  await gateway.close();
+  gateway = createConnectGateway({ db, registry, sessionSecret: secret, checkIntervalMs: 30, maxTunnels: 1 });
+  const a = await enroll('alice'); await laptop(a, 'A');
+  const principal = await registry.authenticateServer(a.credential);
+  const issued = await registry.createMachineCode(principal, { hostId: randomUUID(), instanceId: randomUUID(), name: 'Remote', enrollToken: `zcde_${randomBytes(18).toString('base64url')}` });
+  const joined = await registry.redeemMachineCode(issued.code, randomBytes(32).toString('base64url'));
+  const first = await previewLane(a);
+  const closed = once(first, 'close'); first.close(); await closed;
+  const now = Date.now(); const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 16_000);
+  try {
+    await expect.poll(async () => {
+      try { await previewLane(a, 5173, joined.credential); return true; }
+      catch { return false; }
+    }).toBe(true);
+    expect(gateway.connectionCount()).toBe(1);
+  } finally { clock.mockRestore(); }
+});
+
+it('does not discard a replacement preview while an older authorization check is in flight', async () => {
+  const { randomUUID, randomBytes } = await import('node:crypto');
+  const { machinePreviewKey } = await import('../relay/mobile/preview-policy.mjs');
+  const a = await enroll('alice'); await laptop(a, 'A');
+  await registry.claimAddress('alice', a.serverId, 'alice-mac');
+  const principal = await registry.authenticateServer(a.credential); const hostId = randomUUID();
+  const issued = await registry.createMachineCode(principal, { hostId, instanceId: randomUUID(), name: 'Remote', enrollToken: `zcde_${randomBytes(18).toString('base64url')}` });
+  const joined = await registry.redeemMachineCode(issued.code, randomBytes(32).toString('base64url'));
+  await previewLane(a, 5173, joined.credential);
+  let entered!: () => void, release!: (value: boolean) => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const pending = new Promise<boolean>(resolve => { release = resolve; });
+  const authorize = vi.spyOn(registry, 'authorizeMachineGrant').mockImplementationOnce(() => { entered(); return pending; });
+  try {
+    await checking;
+    const replacement = await previewLane(a, 5173, joined.credential);
+    release(false);
+    await expect.poll(() => authorize.mock.calls.length).toBeGreaterThan(1);
+    expect(replacement.readyState).toBe(WebSocket.OPEN);
+    const host = `alice-mac--${machinePreviewKey(hostId)}--5173.example.com`;
+    expect((await call(host, '/')).status).toBe(401);
+  } finally { release(false); authorize.mockRestore(); }
 });

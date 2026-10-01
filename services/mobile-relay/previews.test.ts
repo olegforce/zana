@@ -83,6 +83,14 @@ it('validates preview labels, bounded expiring targets and unsafe headers', () =
   expect(previewHeaders({ 'cache-control': 'public, max-age=86400', connection: 'x-hop', 'x-hop': 'secret' }, true, 3000)).toEqual({ 'cache-control': 'private, no-store' });
 });
 
+it.each(['/\\attacker.example/path', '/\t/attacker.example/path', '//attacker.example/path', 'http://localhost:3000//attacker.example/path', 'https://attacker.example/path'])('drops redirects that can escape the preview origin: %j', location => {
+  expect(previewHeaders({ location }, true, 3000)).not.toHaveProperty('location');
+});
+
+it.each(['/done?next=%2Fapp#ok', 'http://localhost:3000/done?next=%2Fapp#ok'])('preserves safe redirects on the preview origin: %s', location => {
+  expect(previewHeaders({ location }, true, 3000).location).toBe('/done?next=%2Fapp#ok');
+});
+
 it.each(['handshake', 'http'])('reports an old peer as update-required (%s) without falling back to the control tunnel', async mode => {
   const edge = createServer(); const port = await listen(edge);
   const wss = new WebSocketServer({ noServer: true });
