@@ -69,6 +69,7 @@ describe('BaseLaunchProvider defaults — a minimal subclass is substitutable', 
 
   it('the -c-channel + persona + project builders default to empty', () => {
     expect(p.mcpArgs('shell', 'http://x/mcp/p/s')).toEqual([]);
+    expect(p.mcpApprovalArgs('shell', { tools: ['inbox_push'] })).toEqual([]);
     expect(p.guidanceArgs('shell', 'guidance')).toEqual([]);
     expect(p.hookArgs('shell', { stop: 'http://x/hook/stop/p/s' })).toEqual([]);
     expect(p.personaArgs({ id: 'p', name: 'P', appendSystemPrompt: 'x' }, 'shell')).toEqual([]);

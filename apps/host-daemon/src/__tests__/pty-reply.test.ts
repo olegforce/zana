@@ -205,6 +205,78 @@ describe('PtyManager.reply', () => {
     }
   });
 
+  it.each(Array.from({ length: 7 }, (_, i) => i + 1))('tracks paste enable and disable split at offset %i', (split) => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const session = makeCodexSession(mgr);
+    try {
+      const proc = spawned[0];
+      const emit = (data: string) => proc.dataCbs.forEach((cb) => cb(data));
+      const assignment = 'First line\nSecond line';
+      for (const enabled of [true, false]) {
+        const control = `\x1b[?2004${enabled ? 'h' : 'l'}`;
+        emit('output'.repeat(5000) + control.slice(0, split));
+        emit(control.slice(split) + 'ready');
+        const start = proc.writes.length;
+        mgr.reply(session.id, assignment);
+        vi.advanceTimersByTime(200);
+        expect(proc.writes.slice(start)).toEqual([
+          enabled ? `\x1b[200~${assignment}\x1b[201~` : assignment,
+          '\r'
+        ]);
+      }
+    } finally {
+      mgr.close(session.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['\x1b[?2004l\x1b[?2004h', true],
+    ['\x1b[?2004h\x1b[?2004l', false]
+  ] as const)('uses the last paste-mode transition in %j', (data, enabled) => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const session = makeCodexSession(mgr);
+    try {
+      const proc = spawned[0];
+      proc.dataCbs.forEach((cb) => cb(data));
+      // A later ordinary chunk must not replay a previously completed control.
+      proc.dataCbs.forEach((cb) => cb('output'));
+      const start = proc.writes.length;
+      mgr.reply(session.id, 'first\nsecond');
+      vi.advanceTimersByTime(200);
+      expect(proc.writes.slice(start)).toEqual([
+        enabled ? '\x1b[200~first\nsecond\x1b[201~' : 'first\nsecond', '\r'
+      ]);
+    } finally {
+      mgr.close(session.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps paste-mode state and partial controls separate between workers', () => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const first = makeCodexSession(mgr);
+    const second = makeCodexSession(mgr);
+    try {
+      spawned[0].dataCbs.forEach((cb) => cb('\x1b[?20'));
+      spawned[1].dataCbs.forEach((cb) => cb('04h'));
+      spawned[0].dataCbs.forEach((cb) => cb('04h'));
+      const starts = spawned.map((proc) => proc.writes.length);
+      mgr.reply(first.id, 'one\ntwo');
+      mgr.reply(second.id, 'one\ntwo');
+      vi.advanceTimersByTime(200);
+      expect(spawned[0].writes.slice(starts[0])).toEqual(['\x1b[200~one\ntwo\x1b[201~', '\r']);
+      expect(spawned[1].writes.slice(starts[1])).toEqual(['one\ntwo', '\r']);
+    } finally {
+      mgr.close(first.id);
+      mgr.close(second.id);
+      vi.useRealTimers();
+    }
+  });
+
   it('skips the deferred CR when the session exits during the delay', () => {
     vi.useFakeTimers();
     try {

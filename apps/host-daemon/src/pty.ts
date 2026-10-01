@@ -1953,6 +1953,7 @@ export class PtyManager extends EventEmitter {
     },
     caps: { injectsClaudeMcpConfig: boolean }
   ): void {
+    let pasteModeTail = '';
     proc.onData((data) => {
       this.bufferData(session.id, data);
       // Applications that opt into bracketed paste emit these standard terminal
@@ -1961,8 +1962,13 @@ export class PtyManager extends EventEmitter {
       // of newline keypresses. The prompt's Return stays outside the envelope.
       const live = this.live.get(session.id);
       if (live?.proc === proc) {
-        if (data.includes('\x1b[?2004h')) live.bracketedPasteEnabled = true;
-        if (data.includes('\x1b[?2004l')) live.bracketedPasteEnabled = false;
+        const output = pasteModeTail + data;
+        // Mode controls are eight characters. Keep only an incomplete control
+        // across output chunks, and apply complete controls in stream order.
+        pasteModeTail = output.slice(-7);
+        for (const match of output.matchAll(/\x1b\[\?2004([hl])/g)) {
+          live.bracketedPasteEnabled = match[1] === 'h';
+        }
       }
     });
     const diagnosticFile = this.diagnosticFiles.get(session.id);
@@ -3007,8 +3013,8 @@ export class PtyManager extends EventEmitter {
    * paste. Gated by provider so the Claude path stays byte-identical.
    *
    * Other TUIs, including current Codex, advertise bracketed-paste mode at
-   * runtime. Honor that standard mode too. The 200ms gap gives a large pasted
-   * assignment time to leave the TUI paste buffer before Return is delivered.
+   * runtime. Honor that standard mode too. The 200ms gap allows time for the
+   * TUI to process the paste before Return; it is not a drain acknowledgement.
    */
   reply(id: string, text: string): boolean {
     const live = this.live.get(id);

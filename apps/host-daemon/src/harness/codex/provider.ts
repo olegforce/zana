@@ -303,10 +303,12 @@ export class CodexProvider extends BaseLaunchProvider {
       return ['-c', 'mcp_servers.zcc-inbox.default_tools_approval_mode="approve"'];
     }
 
-    return [...new Set(approval.tools ?? [])].flatMap((tool) => [
-      '-c',
-      `mcp_servers.zcc-inbox.tools.${tomlValue(tool)}.approval_mode="approve"`
-    ]);
+    const tools = [...new Set(approval.tools ?? [])];
+    if (tools.length === 0) return [];
+    // Codex splits CLI override keys on every dot, without interpreting quoted
+    // segments. Keep tool names in the TOML value so dots remain part of the name.
+    const entries = tools.map((tool) => `${tomlValue(tool)} = { approval_mode = "approve" }`);
+    return ['-c', `mcp_servers.zcc-inbox.tools={ ${entries.join(', ')} }`];
   }
 
   guidanceArgs(_profile: LaunchProfileId, guidance: string): string[] {

@@ -19,9 +19,9 @@
  *         → Launch team (data-testid="team-command-send")
  *     → Agents board shows the titled durable job
  *
- * The orchestrator is a `shell`-based persona so the spawn is lightweight and
- * needs no model. The fixture snapshots/restores ~/.zcc config; we remove the
- * tmp project and stop the launched execution in `finally`.
+ * Claude and Codex personas run deterministic fake binaries with no model spend.
+ * App configuration is isolated by the Electron fixture; each test removes its
+ * temporary project and stops the launched sessions in `finally`.
  */
 import { test, expect } from './fixtures/app.js';
 import { makeJobTeamCoordinatorBinary } from './sdk/harness.js';
@@ -34,6 +34,7 @@ test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true, composerShowA
 
 test.setTimeout(120_000);
 
+for (const profile of ['claude', 'codex'] as const) {
 for (const {
   planningLabel,
   coordinationMode
@@ -41,14 +42,12 @@ for (const {
   { planningLabel: 'Infer plan from goal', coordinationMode: 'freeform' },
   { planningLabel: 'Plan provided in goal', coordinationMode: 'structured' }
 ] as const) {
-test(`launching a ${coordinationMode} Team through the real UI completes durable work`, async ({ app }) => {
+test(`launching a ${coordinationMode} Team with ${profile} through the real UI completes durable work`, async ({ app }) => {
   const { window } = app;
 
-  // The orchestrator is a claude-family persona pointed at a fake stub: the job
-  // team delivers the goal as an initial task bound at spawn (spawn-arg), which
-  // the `shell` adapter cannot do — only claude/codex/cursor/pi/opencode can. The
-  // stub emits the working spinner then settles to idle, so the durable job spawns
-  // and surfaces on the board with no model call.
+  // The same DAG runs through each provider's native launch and input dialect.
+  // The Codex fixture requires exact approval entries and a bracketed assignment
+  // followed by Return, with working/idle transitions between assignments.
   const agent = makeJobTeamCoordinatorBinary();
 
   const projectDir = mkdtempSync(join(tmpdir(), 'zcc-job-team-ui-proj-'));
@@ -58,29 +57,34 @@ test(`launching a ${coordinationMode} Team through the real UI completes durable
   try {
     // Job Team mode is gated on `teamJobLaunchEnabled` (default true) AND a
     // configured team. Set the flag explicitly and seed an orchestrator-led team.
-    await window.evaluate((bin) => window.cc.config.set({
+    await window.evaluate(({ bin, profile }) => window.cc.config.set({
       teamJobLaunchEnabled: true,
       sponsorPromptDismissed: true,
       claudeBinary: bin,
-      defaultHarness: 'claude'
-    }), agent.path);
+      codexBinary: bin,
+      trustZccToolsEnabled: false,
+      defaultCodexSandbox: 'workspace-write',
+      defaultCodexApproval: 'on-request',
+      tmuxScope: 'off',
+      defaultHarness: profile
+    }), { bin: agent.path, profile });
 
-    await window.evaluate(() => window.cc.personas.save({
+    await window.evaluate((profile) => window.cc.personas.save({
       id: 'e2e-orchestrator',
       name: 'E2E Orchestrator',
-      description: 'Claude orchestrator for the job-team launch spec',
-      baseProfile: 'claude',
+      description: 'Orchestrator for the job-team launch spec',
+      baseProfile: profile,
       permissionMode: 'default',
       systemPrompt: ''
-    }));
-    await window.evaluate(() => window.cc.personas.save({
+    }), profile);
+    await window.evaluate((profile) => window.cc.personas.save({
       id: 'e2e-worker',
       name: 'E2E Worker',
-      description: 'Claude worker for the job-team launch spec',
-      baseProfile: 'claude',
+      description: 'Worker for the job-team launch spec',
+      baseProfile: profile,
       permissionMode: 'default',
       systemPrompt: ''
-    }));
+    }), profile);
 
     await window.evaluate(() => window.cc.teams.save({
       id: 'e2e-job-team',
@@ -188,6 +192,15 @@ test(`launching a ${coordinationMode} Team through the real UI completes durable
     });
     await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
     expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');
+  } catch (error) {
+    const logPath = join(projectDir, '.fake-coordinator.log');
+    const log = existsSync(logPath) ? readFileSync(logPath, 'utf8').slice(-16_384) : 'no fake coordinator log';
+    const state = projectId ? await window.evaluate(async id => ({
+      sessions: (await window.cc.terminals.list(id)).map(({ id, profile, status, exitCode, headless }) =>
+        ({ id, profile, status, exitCode, headless })),
+      executions: await window.cc.executionBoard.listProject(id)
+    }), projectId).catch(() => null) : null;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify(state)}\n${log}`);
   } finally {
     if (projectId) {
       await window.evaluate(async (pid) => {
@@ -222,6 +235,7 @@ test(`launching a ${coordinationMode} Team through the real UI completes durable
     agent.cleanup();
   }
 });
+}
 }
 
 /**
