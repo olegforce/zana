@@ -13,7 +13,7 @@ import { posixQuote } from '../lib/quote.js';
 import { registerFinder, registerTerminal } from '../lib/findRegistry.js';
 import { scrapeUrls } from '../lib/urlScrape.js';
 import { shouldSuppressWheelArrows } from '../lib/terminalWheel.js';
-import { createResizeSettleScheduler, resyncXtermAndPty } from '../lib/terminalResync.js';
+import { createResizeSettleScheduler, isTerminalHostVisible, resyncXtermAndPty } from '../lib/terminalResync.js';
 import { perfCount, perfTime } from '../lib/perfMark.js';
 import { resolveTerminalTheme } from '../lib/terminalThemes.js';
 import { openXtermHttpLink } from '../lib/xterm-http-link.js';
@@ -96,7 +96,9 @@ function TerminalViewImpl({ session, area }: Props) {
   );
   runResyncRef.current = (opts) => {
     const term = termRef.current;
-    if (!term || disposedRef.current) return;
+    // An assigned area can be parked under a hidden portal ancestor during
+    // navigation. Nudging it queues costly resizes in xterm's paused renderer.
+    if (!term || disposedRef.current || !isTerminalHostVisible(ref.current)) return;
     const pin = opts?.pinViewport === true || stickToBottomRef.current;
     ignoreProgrammaticScrollRef.current = true;
     try {
@@ -265,7 +267,7 @@ function TerminalViewImpl({ session, area }: Props) {
     // done, so a fit() here re-measures against the final metrics.
     void document.fonts?.ready
       ?.then(() => {
-        if (disposedRef.current) return;
+        if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
         try {
           fit.fit();
           void product.terminals.resize(session.id, term.cols, term.rows).catch(() => {});
@@ -457,8 +459,7 @@ function TerminalViewImpl({ session, area }: Props) {
     const settle = createResizeSettleScheduler(() => {
       if (disposedRef.current) return;
       const el = ref.current;
-      if (!el || el.clientHeight <= 0 || el.clientWidth <= 0) return;
-      if (el.offsetParent === null) return;
+      if (!isTerminalHostVisible(el)) return;
       // Reflow during the drag already moved the viewport off the TUI frame
       // and may have cleared the tail lock via onScroll. Always pin: a layout
       // resize is not a user scroll, and the old scroll offset is meaningless
@@ -474,6 +475,11 @@ function TerminalViewImpl({ session, area }: Props) {
       // Hidden / not-yet-laid-out, or unchanged from the last fit — nothing to do.
       if (w === 0 || h === 0) {
         settle.cancel();
+        if (roRaf) cancelAnimationFrame(roRaf);
+        roRaf = 0;
+        // Showing the terminal at its previous size still needs a refit.
+        lastW = -1;
+        lastH = -1;
         return;
       }
       if (w === lastW && h === lastH) return;
@@ -482,7 +488,8 @@ function TerminalViewImpl({ session, area }: Props) {
       if (roRaf) return; // a fit is already scheduled for this frame
       roRaf = requestAnimationFrame(() => {
         roRaf = 0;
-        if (disposedRef.current) return;
+        // The host can be hidden after ResizeObserver queued this frame.
+        if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
         try {
           perfCount('terminal-fit'); // TEMP diagnostic — remove after verifying
           ignoreProgrammaticScrollRef.current = true;
@@ -530,7 +537,7 @@ function TerminalViewImpl({ session, area }: Props) {
     term.options.fontSize = fontSize;
     requestAnimationFrame(() => {
       try {
-        if (disposedRef.current) return;
+        if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
         fitRef.current?.fit();
         void product.terminals.resize(session.id, term.cols, term.rows).catch(() => {});
       } catch {
@@ -571,7 +578,7 @@ function TerminalViewImpl({ session, area }: Props) {
     let cancelResync: (() => void) | undefined;
     const raf = requestAnimationFrame(() => {
       try {
-        if (disposedRef.current) return;
+        if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
         // Split open/close can change layout without a lasting pixel delta
         // (ResizeObserver then skips). The settled-style nudge still has to
         // run so a Claude TUI redraws and xterm busts a stale cell cache.

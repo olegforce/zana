@@ -2,9 +2,28 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_RESIZE_SETTLE_MS,
   createResizeSettleScheduler,
+  isTerminalHostVisible,
   resyncXtermAndPty,
   type ResyncTerminal
 } from '../terminalResync.js';
+
+describe('isTerminalHostVisible', () => {
+  const visible = { isConnected: true, offsetParent: {} as Element, clientWidth: 800, clientHeight: 600 };
+
+  it('accepts a connected, laid-out terminal', () => {
+    expect(isTerminalHostVisible(visible)).toBe(true);
+  });
+
+  it.each([
+    null,
+    { ...visible, isConnected: false },
+    { ...visible, offsetParent: null },
+    { ...visible, clientWidth: 0 },
+    { ...visible, clientHeight: 0 }
+  ])('rejects detached, parked, or zero-sized hosts: %j', (host) => {
+    expect(isTerminalHostVisible(host)).toBe(false);
+  });
+});
 
 function fakeTerm(cols: number, rows: number): {
   term: ResyncTerminal;
