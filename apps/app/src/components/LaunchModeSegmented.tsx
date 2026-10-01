@@ -24,6 +24,7 @@ export function LaunchModeSegmented({
           className={value === 'agent' ? 'active' : ''}
           onClick={() => onChange('agent')}
           aria-pressed={value === 'agent'}
+          data-launch-mode="agent"
         >
           CLI Agent
         </button>
@@ -34,6 +35,7 @@ export function LaunchModeSegmented({
           className={value === 'thread' ? 'active' : ''}
           onClick={() => onChange('thread')}
           aria-pressed={value === 'thread'}
+          data-launch-mode="thread"
         >
           Modern
           <span className="launch-segmented-new" aria-hidden="true">NEW</span>

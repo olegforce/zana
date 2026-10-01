@@ -7,6 +7,8 @@ import '@/lib/monacoSetup';
 import { useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, Star } from 'lucide-react';
+import { HelpProvider } from './components/help/HelpProvider.js';
+import { HelpToggle } from './components/help/HelpToggle.js';
 import { Sidebar } from './components/Sidebar.js';
 import { MobileAgentNavigation } from './components/MobileAgentNavigation.js';
 import {
@@ -211,6 +213,11 @@ function AppRoutes({ suggestionsEnabled }: { suggestionsEnabled: boolean }) {
 }
 
 export function App() {
+  const location = useLocation();
+  return <HelpProvider pageKey={`${location.pathname}${location.search}`}><AppShell /></HelpProvider>;
+}
+
+function AppShell() {
   useRouteSync();
   useEffect(installAgentBoardMoves, []);
   const init = useData((s) => s.init);
@@ -740,6 +747,7 @@ export function App() {
         <span className="titlebar-title" title={titlebarProject?.path ?? undefined}>
           {titlebarLabel}
         </span>
+        <HelpToggle />
         <button
           type="button"
           className={`titlebar-fav ${favoriteCount > 0 ? 'has-favs' : ''} ${favoritesOpen ? 'active' : ''}`}
@@ -789,13 +797,16 @@ export function App() {
         enabled={mobileNavigation.isCompact}
         open={!sidebarCollapsed}
         onClose={() => mobileNavigation.setDrawerOpen(false)}
-        shortcuts={<button type="button" className="mobile-nav-notifications" onClick={() => {
-          mobileNavigation.setDrawerOpen(false);
-          useUi.getState().toggleNotificationsDrawer();
-        }} aria-label={unreadInbox > 0 ? `Notifications — ${unreadInbox} unread` : 'Notifications'}>
-          <Bell size={18} aria-hidden="true" /> Notifications
-          {unreadInbox > 0 && <span className="nav-badge" aria-hidden="true">{unreadInbox > 99 ? '99+' : unreadInbox}</span>}
-        </button>}
+        shortcuts={<>
+          <button type="button" className="mobile-nav-notifications" onClick={() => {
+            mobileNavigation.setDrawerOpen(false);
+            useUi.getState().toggleNotificationsDrawer();
+          }} aria-label={unreadInbox > 0 ? `Notifications — ${unreadInbox} unread` : 'Notifications'}>
+            <Bell size={18} aria-hidden="true" /> Notifications
+            {unreadInbox > 0 && <span className="nav-badge" aria-hidden="true">{unreadInbox > 99 ? '99+' : unreadInbox}</span>}
+          </button>
+          <HelpToggle variant="mobile" />
+        </>}
         headerStart={nav === 'settings' ? <MobileSettingsBack onNavigate={() => mobileNavigation.setDrawerOpen(false)} /> : undefined}
       >
       <MobileAgentNavigation

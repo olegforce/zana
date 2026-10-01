@@ -1,0 +1,147 @@
+.contextual-help { width: 100%; }
+.contextual-help-invitation {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 0 24px 16px 0;
+}
+.contextual-help-arrow {
+  width: 112px;
+  height: 72px;
+  margin-top: 8px;
+  color: var(--accent);
+  opacity: .7;
+  overflow: visible;
+  pointer-events: none;
+}
+.contextual-help-arrow path {
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.contextual-help-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-panel));
+  color: var(--text-primary);
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 7%, transparent);
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s, box-shadow .15s;
+}
+.contextual-help-toggle > svg { color: var(--accent); }
+.contextual-help-toggle strong { display: block; font-size: 13px; font-weight: 600; }
+.contextual-help-toggle small { display: block; margin-top: 3px; font-size: 11px; color: var(--text-secondary); }
+.contextual-help-toggle:hover,
+.is-active > .contextual-help-toggle { background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel)); }
+.contextual-help-stage { position: relative; }
+.contextual-help-surface { display: flex; flex-direction: column; gap: 16px; }
+.contextual-help-dots { position: absolute; inset: 0; pointer-events: none; }
+.contextual-help-tip-dot {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 50%;
+  background: var(--bg-panel);
+  color: var(--accent);
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 0 0 3px var(--bg-panel), 0 2px 8px #00000015;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.contextual-help-tip-dot:hover,
+.contextual-help-tip-dot.is-active { background: var(--accent); color: white; }
+.contextual-help-tip-card {
+  width: min(400px, 100%);
+  box-sizing: border-box;
+  margin: 20px 0 0 auto;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 16px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 32px #0000000d;
+  animation: contextual-help-tip-appear .18s ease-out;
+}
+.contextual-help-tip-card-heading { display: flex; align-items: center; gap: 9px; }
+.contextual-help-tip-card-number {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.contextual-help-tip-card h3 { flex: 1; margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.contextual-help-tip-card p { margin: 12px 0 16px; color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
+.contextual-help-tip-card footer { display: flex; align-items: center; gap: 6px; }
+.contextual-help-tip-card footer > span { flex: 1; color: var(--text-muted); font-size: 11px; }
+.contextual-help-tip-card button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.contextual-help-tip-card button:hover:not(:disabled) { color: var(--accent); background: var(--bg-hover); }
+.contextual-help-tip-card button:disabled { opacity: .35; cursor: default; }
+.contextual-help button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@keyframes contextual-help-tip-appear { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
+@media (max-width: 640px) {
+  .contextual-help-invitation { padding-right: 0; }
+  .contextual-help-arrow { width: 88px; }
+  .contextual-help-tip-card { width: 100%; }
+  .contextual-help-tip-dot { width: 24px; height: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .contextual-help-toggle { transition: none; }
+  .contextual-help-tip-card { animation: none; }
+}
+
+.titlebar-help {
+  position: absolute;
+  right: 72px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.titlebar-help:hover { background: var(--bg-hover); color: var(--text-primary); }
+.titlebar-help.is-active, .mobile-nav-help.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
+}
+.titlebar-help:focus-visible, .mobile-nav-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mobile-nav-help-status { margin-left: auto; font-size: 12px; }
+.app-shell[data-mobile='true'] .titlebar-help { display: none; }
