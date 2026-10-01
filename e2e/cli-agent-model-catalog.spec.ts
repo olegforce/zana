@@ -5,8 +5,8 @@
  * selectedOnly aliases and the mode chip sits left of the harness trigger.
  */
 import { test, expect, launchApp } from './fixtures/app.js';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { delimiter, join, resolve } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { makeFakeAgentBinary } from './sdk/harness.js';
 
@@ -15,8 +15,9 @@ const catalogAgent = makeFakeAgentBinary({ script: [
   'if [ "$1" = "--version" ]; then echo "2.1.284 (Claude Code)"; exit 0; fi',
   'exit 78'
 ].join('\n') });
+symlinkSync(resolve('e2e/fixtures/claude-model-cli.cjs'), join(catalogAgent.dir, 'claude'));
+const catalogEnv = { PATH: `${catalogAgent.dir}${delimiter}${process.env.PATH ?? ''}` };
 
-test.use({ initialConfig: { claudeBinary: catalogAgent.path, defaultHarness: 'claude' } });
 test.afterAll(() => catalogAgent.cleanup());
 
 async function openCliAgentLauncher(window: Page) {
@@ -44,27 +45,37 @@ async function assertChipLeftOf(left: Locator, right: Locator) {
   expect(leftBox!.x).toBeLessThan(rightBox!.x);
 }
 
-test('CLI Agent mode sits left of harness and uses the Thread catalog, not PTY aliases', async ({ app }) => {
-  const { window } = app;
-  const modal = await openCliAgentLauncher(window);
-  const mode = modal.getByTestId('composer-mode-picker-trigger');
-  const trigger = modal.getByTestId('model-reasoning-picker-trigger');
-  await expect(trigger.locator('[data-model-loading-placeholder="trigger-model"]')).toHaveCount(0, {
-    timeout: 30_000
+test('CLI Agent mode sits left of harness and uses the Thread catalog, not PTY aliases', async ({ home }) => {
+  const app = await launchApp(home, {
+    // PATH is headed by the deterministic SDK fixture, so no live Claude runs.
+    allowLiveClaude: true,
+    env: catalogEnv,
+    initialConfig: { claudeBinary: catalogAgent.path, defaultHarness: 'claude' }
   });
-  await assertChipLeftOf(mode, trigger);
+  try {
+    const { window } = app;
+    const modal = await openCliAgentLauncher(window);
+    const mode = modal.getByTestId('composer-mode-picker-trigger');
+    const trigger = modal.getByTestId('model-reasoning-picker-trigger');
+    await expect(trigger.locator('[data-model-loading-placeholder="trigger-model"]')).toHaveCount(0, {
+      timeout: 30_000
+    });
+    await assertChipLeftOf(mode, trigger);
 
-  await trigger.click();
-  const menu = window.getByTestId('model-reasoning-picker-menu');
-  await expect(menu).toBeVisible();
-  await expect(window.getByTestId('model-reasoning-more-toggle')).toBeVisible({ timeout: 30_000 });
-  for (const id of PTY_ALIAS_IDS) {
-    await expect(menu.getByTestId(`model-reasoning-model-${id}`)).toHaveCount(0);
+    await trigger.click();
+    const menu = window.getByTestId('model-reasoning-picker-menu');
+    await expect(menu).toBeVisible();
+    await expect(window.getByTestId('model-reasoning-more-toggle')).toBeVisible({ timeout: 30_000 });
+    for (const id of PTY_ALIAS_IDS) {
+      await expect(menu.getByTestId(`model-reasoning-model-${id}`)).toHaveCount(0);
+    }
+    await expect(menu.locator('[data-testid^="model-reasoning-model-claude-"]').first()).toBeVisible();
+
+    await window.getByTestId('model-reasoning-more-toggle').click();
+    await expect(window.getByTestId('model-reasoning-more-menu')).toBeVisible();
+  } finally {
+    await app.electron.close();
   }
-  await expect(menu.locator('[data-testid^="model-reasoning-model-claude-"]').first()).toBeVisible();
-
-  await window.getByTestId('model-reasoning-more-toggle').click();
-  await expect(window.getByTestId('model-reasoning-more-menu')).toBeVisible();
 });
 
 test('CLI Agent offers Opus 5.5 1M and launches its exact model id', async ({ home }) => {
@@ -86,6 +97,8 @@ test('CLI Agent offers Opus 5.5 1M and launches its exact model id', async ({ ho
     'cat'
   ].join('\n') });
   const app = await launchApp(home, {
+    allowLiveClaude: true,
+    env: catalogEnv,
     initialConfig: { claudeBinary: agent.path, defaultHarness: 'claude', lastProjectId: 'opus-project' }
   });
   try {
@@ -95,6 +108,7 @@ test('CLI Agent offers Opus 5.5 1M and launches its exact model id', async ({ ho
       if (!response.ok) throw new Error(`Execution options: ${response.status}`);
       return response.json();
     });
+    expect(catalog.modelLoadError, JSON.stringify(catalog)).toBeNull();
     expect(catalog.models).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'claude-opus-5-5[1m]', model: 'claude-opus-5-5[1m]', displayName: 'Opus 5.5 (1M)' }),
       expect.objectContaining({ id: 'claude-opus-5-5', displayName: 'Opus 5.5' })

@@ -35,7 +35,15 @@ describe('probeClaudeIdentity', () => {
   it('classifies a genuine Claude Code --version banner as genuine', () => {
     const dir = makeDir('claude-genuine-');
     const bin = writeFixture(dir, 'claude', 'echo "2.1.270 (Claude Code)"');
-    expect(probeClaudeIdentity(bin)).toBe(true);
+    // Keep real subprocess coverage without racing the production 800ms
+    // probe deadline when the full suite is spawning other CLI fixtures.
+    const exec = (command: string, args: readonly string[]) =>
+      execFileSync(command, [...args], {
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+    expect(probeClaudeIdentity(bin, exec)).toBe(true);
   });
 
   it('classifies an afcode-style banner as not genuine', () => {

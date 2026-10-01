@@ -148,6 +148,11 @@ interface Live {
    * swapped in after the backend boots.
    */
   proc: pty.IPty | ExecutionSession;
+  /**
+   * The TUI has advertised bracketed-paste support. Treat injected multi-line
+   * text as one paste so the following synthetic Return is a discrete submit.
+   */
+  bracketedPasteEnabled?: boolean;
   /** Local tmux owns the inner process; app shutdown should drop only our client. */
   localTmuxBacked?: boolean;
   /**
@@ -1388,11 +1393,9 @@ export class PtyManager extends EventEmitter {
       : [];
     // `inbox_search` is read-only (never mutates the inbox), so it's safe to
     // pre-approve alongside the other read tools — same rationale as `agent_inbox`.
-    const inboxAllow = !mcpConfigPath
+    const narrowInboxAllow = !mcpServerUrl
       ? []
-      : trustAllZcc
-        ? ['mcp__zcc-inbox', ...alwaysOnPluginMcpAllowlist()]
-        : opts.scheduled
+      : opts.scheduled
           ? [
               'mcp__zcc-inbox__inbox_push',
               'mcp__zcc-inbox__inbox_search',
@@ -1418,6 +1421,11 @@ export class PtyManager extends EventEmitter {
               ...remoteFsAllow,
               ...runInTerminalAllow
             ];
+    const inboxAllow = !mcpConfigPath
+      ? []
+      : trustAllZcc
+        ? ['mcp__zcc-inbox', ...alwaysOnPluginMcpAllowlist()]
+        : narrowInboxAllow;
     // Per-tab Claude session id. Forcing `--session-id <uuid>` at first launch
     // gives each claude tab a *stable, distinct* transcript id, so restore can
     // resume that exact conversation (`--resume <id>`) rather than the blunt
@@ -1499,8 +1507,9 @@ export class PtyManager extends EventEmitter {
     // Job Team's MCP allowlist and AskUserQuestion denial use Claude-only argv
     // flags. Passing them to another harness makes its CLI reject the launch
     // before it can consume the already-bound kickoff prompt.
-    const claudeJobTeamPolicy = (isDurableCoordination(opts.coordinationMode)) && caps.injectsClaudeMcpConfig;
-    const jobTeamAllow = claudeJobTeamPolicy
+    const durableJobTeam = isDurableCoordination(opts.coordinationMode);
+    const claudeJobTeamPolicy = durableJobTeam && caps.injectsClaudeMcpConfig;
+    const jobTeamAllow = durableJobTeam
       ? [
           'mcp__zcc-inbox__execution.snapshot',
           'mcp__zcc-inbox__execution.source.list',
@@ -1526,6 +1535,20 @@ export class PtyManager extends EventEmitter {
     const jobTeamArgs = claudeJobTeamPolicy
       ? ['--disallowedTools', 'AskUserQuestion']
       : [];
+    // Codex supports native MCP approval configuration via `-c`. Keep ordinary
+    // sessions on their configured on-request policy; durable Job Teams get only
+    // the same safe tools Claude already receives. The explicit Trust-all switch
+    // is intentionally broader and maps to Codex's server-wide approval mode.
+    const mcpApprovalArgs = !mcpServerUrl
+      ? []
+      : trustAllZcc
+        ? provider.mcpApprovalArgs(effectiveProfile, { defaultToolsApprovalMode: 'approve' })
+        : durableJobTeam
+          ? provider.mcpApprovalArgs(effectiveProfile, {
+              tools: [...narrowInboxAllow, ...jobTeamAllow]
+                .map((tool) => tool.replace(/^mcp__zcc-inbox__/, ''))
+            })
+          : [];
     // Precedence order (lowest → highest):
     //   base profile args → AppConfig globals (already in `args`)
     //   → claudeMcpArgs → providerMcpArgs → providerGuidanceArgs → providerHookArgs
@@ -1553,6 +1576,7 @@ export class PtyManager extends EventEmitter {
           ...nativeMintArgs,
           ...claudeMcpArgs,
            ...(providerIntegration.mcpArgs ?? []),
+          ...mcpApprovalArgs,
            ...(providerIntegration.guidanceArgs ?? []),
            ...(providerIntegration.hookArgs ?? []),
            ...(providerIntegration.authArgs ?? []),
@@ -1566,7 +1590,7 @@ export class PtyManager extends EventEmitter {
            ...lifecycleContribution.args,
           ...cleanedExtra
         ],
-        [...inboxAllow, ...jobTeamAllow]
+        [...inboxAllow, ...(claudeJobTeamPolicy ? jobTeamAllow : [])]
       ),
       opts.remoteToolProxy && caps.injectsClaudeMcpConfig
         ? [...REMOTE_TOOL_PROXY_DISALLOWED_TOOLS]
@@ -1929,8 +1953,23 @@ export class PtyManager extends EventEmitter {
     },
     caps: { injectsClaudeMcpConfig: boolean }
   ): void {
+    let pasteModeTail = '';
     proc.onData((data) => {
       this.bufferData(session.id, data);
+      // Applications that opt into bracketed paste emit these standard terminal
+      // mode controls. Remember the current mode so an injected multi-line
+      // assignment is delivered like a real terminal paste, not as a sequence
+      // of newline keypresses. The prompt's Return stays outside the envelope.
+      const live = this.live.get(session.id);
+      if (live?.proc === proc) {
+        const output = pasteModeTail + data;
+        // Mode controls are eight characters. Keep only an incomplete control
+        // across output chunks, and apply complete controls in stream order.
+        pasteModeTail = output.slice(-7);
+        for (const match of output.matchAll(/\x1b\[\?2004([hl])/g)) {
+          live.bracketedPasteEnabled = match[1] === 'h';
+        }
+      }
     });
     const diagnosticFile = this.diagnosticFiles.get(session.id);
     if (diagnosticFile) {
@@ -2972,11 +3011,15 @@ export class PtyManager extends EventEmitter {
    * as a premature Enter and a worker assignment submits only its truncated
    * first line (`turnCount: 0`). The deferred CR still submits the buffered
    * paste. Gated by provider so the Claude path stays byte-identical.
+   *
+   * Other TUIs, including current Codex, advertise bracketed-paste mode at
+   * runtime. Honor that standard mode too. The 200ms gap allows time for the
+   * TUI to process the paste before Return; it is not a drain acknowledgement.
    */
   reply(id: string, text: string): boolean {
     const live = this.live.get(id);
     if (!live) return false;
-    const bracketed = providerFor(live.session.profile).submitViaBracketedPaste;
+    const bracketed = providerFor(live.session.profile).submitViaBracketedPaste || live.bracketedPasteEnabled === true;
     const body = bracketed ? `\x1b[200~${text}\x1b[201~` : text;
     // Mid-reconnect gap: when a tmux-backed remote drops, the old proc may be
     // dead while the detached agent still runs in tmux. In this window
@@ -2991,7 +3034,7 @@ export class PtyManager extends EventEmitter {
       // Re-resolve: the session may have exited during the delay.
       const stillLive = this.live.get(id);
       stillLive?.proc.write('\r');
-    }, 50);
+    }, 200);
     return true;
   }
 

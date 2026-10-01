@@ -1,0 +1,1 @@
+Sign in with GitHub, then choose your subdomain.

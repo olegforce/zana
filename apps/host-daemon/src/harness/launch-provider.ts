@@ -79,6 +79,14 @@ export interface HarnessAuthInjection {
   args?: string[];
 }
 
+/** Native MCP approval overrides supported by a provider's CLI. */
+export interface McpToolApproval {
+  /** Approve every tool on the zcc-inbox server. */
+  defaultToolsApprovalMode?: 'approve';
+  /** Approve only these zcc-inbox tool names. */
+  tools?: readonly string[];
+}
+
 /** Inputs to auto-mode resolution — the precedence sources that can pin or
  *  override the default permission mode. Mirrors the old `computeAutoModeActive`
  *  signature exactly. */
@@ -381,6 +389,12 @@ export interface LaunchProvider {
    * the concrete `-c mcp_servers…` string lives ONLY in the codex provider (Rule 6).
    */
   mcpArgs(profile: LaunchProfileId, mcpUrl: string): string[];
+
+  /**
+   * Argv fragment that applies native per-server or per-tool MCP approval
+   * settings for the zcc-inbox MCP server.
+   */
+  mcpApprovalArgs(profile: LaunchProfileId, approval: McpToolApproval): string[];
 
   /**
    * ENV fragment that wires the zcc-inbox MCP server into the launch, given the

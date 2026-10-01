@@ -2,20 +2,27 @@ import { browserAccount, bearer, json, readJson } from '../connect/http.mjs';
 import { createSlackRegistry } from './registry.mjs';
 import { createScopedSlack } from './api.mjs';
 import { envelope, hash, rateLimiter, readBody, SlackError, verifiedSlack } from './security.mjs';
+import { createSlackbotMcp } from './mcp.mjs';
+import { createTaskEndpoint, taskBase, taskId, taskTrigger } from './embeds.mjs';
+import { createSlackOnboarding } from './onboarding.mjs';
 
 const notice = text => ({ response_type: 'ephemeral', text });
 const offline = 'Your computer or Slack plugin is unavailable. No new request has been queued. Open Zana on your chosen computer, then try again.';
-const uncertain = 'Delivery is unconfirmed. Check Slack Bridge → Diagnostics on your computer before sending the task again.';
+const uncertain = 'Delivery is unconfirmed. Check Zana for Slack → Diagnostics on your computer before sending the task again.';
 
 export async function createSlackService({ db, connect, dispatchPlugin, pluginId, sessionSecret, signingSecret, identity, call, now = Date.now, intervalMs = 1000 }) {
   const registry = createSlackRegistry({ db, sessionSecret, identity, now });
-  const scoped = createScopedSlack({ call, registry, identity });
+  const scoped = createScopedSlack({ call, registry, identity, origin: connect.accountUrl });
   const rate = rateLimiter(now); let closed = false; let processing;
   const jobs = new Set();
   const run = job => { const promise = job.catch(() => {}).finally(() => jobs.delete(promise)); jobs.add(promise); return promise; };
   // An interrupted send is never re-executed after a dyno restart.
   await db.query("UPDATE slack_requests SET state='needs-review',payload='' WHERE state='dispatching'");
-  const send = (link, body) => dispatchPlugin({ accountId: link.user_id, serverId: link.server_id, pluginId, payload: envelope(link, registry.key(link), body, now()), timeoutMs: 1800 });
+  await db.query("UPDATE slack_mcp_requests SET state='needs-review' WHERE state='dispatching'");
+  const send = (link, body) => dispatchPlugin({ accountId: link.user_id, serverId: link.server_id, pluginId, payload: envelope(link, registry.key(link), body, now()), timeoutMs: body.kind === 'tool' ? 10_000 : 1800 });
+  const taskEndpoint = createTaskEndpoint({ registry, send, rate });
+  const startConnection = createSlackOnboarding({ registry, connect });
+  const mcp = createSlackbotMcp({ db, registry, identity, signingSecret, send, rate, now, startConnection });
   const refreshLink = link => registry.authenticate(`${link.id}.${registry.key(link)}`);
   async function publishHome(user, text, connectButton = false) {
     const blocks = [{ type: 'header', text: { type: 'plain_text', text: 'Zana · Your computer' } }, { type: 'section', text: { type: 'plain_text', text } }];
@@ -67,15 +74,37 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     const team = event ? payload.team_id : payload.team?.id ?? payload.team_id;
     const user = event ? payload.event?.user : payload.user?.id ?? payload.user_id;
     if (team !== identity.team || payload.api_app_id !== identity.app || !/^[UW][A-Z0-9]{5,30}$/.test(user ?? '')) throw new SlackError('wrong_identity', 403);
-    if (event && !['app_mention', 'app_home_opened'].includes(payload.event?.type)) return {};
+    if (event && !['app_mention', 'app_home_opened', 'entity_details_requested'].includes(payload.event?.type)) return {};
     if (payload.event?.bot_id || payload.event?.subtype) return {};
     rate(`actor:${user}`, 90);
+    if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'connect_account') return {};
+    // Account setup is handled by the gateway even before a local link exists.
+    const setup = payload.command === '/zana' && typeof payload.text === 'string' && /^connect(?:\s+(.*))?$/i.exec(payload.text.trim());
+    if (setup) {
+      try {
+        const connection = await startConnection(user, setup[1]);
+        return { ...notice(connection.message), blocks: [
+          { type: 'section', text: { type: 'plain_text', text: connection.domain ? `Connect your Slack identity to ${connection.domain}. ${connection.message}` : connection.message } },
+          { type: 'actions', elements: [{ type: 'button', action_id: 'connect_account', text: { type: 'plain_text', text: 'Connect my Zana' }, url: connection.connect_url }] },
+        ] };
+      } catch (error) {
+        if (error?.message === 'invalid_domain') return notice(`Use /zana connect my-domain.${connect.browserDomain} with your own Zana address.`);
+        throw error;
+      }
+    }
     const link = await registry.owner(user);
     if (!link) {
       if (jobs.size >= 20) throw new SlackError('busy', 503);
-      run(publishHome(user, 'Link your Slack identity to your Zana account, choose your computer, then approve access in its Slack Bridge plugin.', true));
-      if (event) run(explain(payload, user, 'Open Zana → Home in Slack and choose Connect my computer.'));
+      run(publishHome(user, `Link your Slack identity to your Zana account, choose your domain or computer, then approve access in its Zana for Slack plugin. You can also use /zana connect my-domain.${connect.browserDomain}.`, true));
+      if (event && payload.event.type !== 'app_home_opened') run(explain(payload, user, 'Open Zana → Home in Slack and choose Connect my computer.'));
       return notice('Open Zana → Home in Slack and choose Connect my computer.');
+    }
+    if (event && payload.event.type === 'entity_details_requested') {
+      const e = payload.event;
+      if (!taskId(e.external_ref?.id) || e.external_ref.type !== 'zana_task' || e.entity_url !== `${taskBase(connect.accountUrl, link)}/tasks/${e.external_ref.id}` || typeof e.trigger_id !== 'string' || !e.trigger_id || e.trigger_id.length > 256) throw new SlackError('invalid_entity');
+      await registry.object(link, e.external_ref.id, 'entity');
+      await registry.remember(link, taskTrigger(e.trigger_id), 'entity-trigger', 60_000);
+      await registry.remember(link, taskTrigger(e.trigger_id, e.external_ref.id), 'entity-trigger', 60_000);
     }
     if (event && payload.event.type === 'app_mention') {
       const e = payload.event;
@@ -105,6 +134,8 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     try {
       if (closed || new URL(request.url).origin !== connect.accountUrl) throw new SlackError('service_unavailable', 503);
       const path = new URL(request.url).pathname.replace(/\/$/, '');
+      if (path.startsWith('/api/slack/tasks/')) { const work = taskEndpoint(request, clientKey); run(work); return await work; }
+      if (path === '/api/slack/mcp') { const work = mcp(request, clientKey); run(work); return await work; }
       if (path === '/api/slack/events' && request.method === 'POST') {
         rate(`ingress:${clientKey}`, 300);
         const raw = await readBody(request);
@@ -141,8 +172,13 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
       rate(`account:${user.id}`, 60);
       if (path.endsWith('/info') && request.method === 'GET') {
         const info = await registry.info(new URL(request.url).searchParams.get('code'));
+        let target;
+        if (info.domain) {
+          target = (await connect.listServers(user.id)).find(s => s.address === info.domain && !s.revoked && s.paired);
+          if (!target) throw new SlackError('domain_not_owned', 403);
+        }
         const member = await call('users.info', { user: info.slack_user });
-        return json({ team: identity.teamName ?? identity.team, user: member.user?.real_name ?? info.slack_user, userId: info.slack_user });
+        return json({ team: identity.teamName ?? identity.team, user: member.user?.real_name ?? info.slack_user, userId: info.slack_user, ...(target ? { domain: new URL(target.browserUrl).host, serverId: target.id } : {}) });
       }
       if (path.endsWith('/links') && request.method === 'GET') {
         const links = await registry.list(user.id);

@@ -1,5 +1,4 @@
-import { bridgeLaunchForProvider } from '../services/threads/thread-provider-catalog.js';
-import type { ProviderListModelsResult } from '@zana-ai/zcc-contracts/host-rpc';
+import { bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
 import { join } from 'node:path';
 import {
   createPluginService,
@@ -32,7 +31,7 @@ import type { ProductHttpContext } from './product-context.js';
 import { conversationThreadOutput } from '../plugins/thread-events.js';
 import { readHostFile } from './files-via-host.js';
 import type { PluginSdkProject, PluginSdkThreadSummary } from '@zana-ai/zcc-plugin-sdk/server';
-import { pluginHostModelCatalog, resolvePluginDefaultExecutionOptions, classifyModelListError, modelListErrorDetail } from '../services/threads/thread-execution-options.js';
+import { resolvePluginDefaultExecutionOptions, overlayCustomModels } from '../services/threads/thread-execution-options.js';
 import { readLastThreadExecution } from '../services/threads/thread-last-execution.js';
 
 export async function productPushInbox(
@@ -90,10 +89,6 @@ function toPluginThreadSummary(row: {
     createdAt: row.createdAt,
     parentThreadId: row.parentThreadId
   };
-}
-
-function fallbackModelCatalog(providerId: string) {
-  return pluginHostModelCatalog(providerId);
 }
 
 export async function attachProductPluginService(
@@ -156,10 +151,22 @@ export async function attachProductPluginService(
       const thread = getConversationThread(ctx.db, threadId);
       if (!thread) throw new Error('unknown-thread');
       const last = readLastThreadExecution(ctx, threadId);
+      const environment = thread.environmentId ? getEnvironment(ctx.db, thread.environmentId) : null;
+      const provider = getThreadProvider(thread.providerId);
+      const discovered = await ctx.modelCatalogs.read({
+        hostId: thread.hostId,
+        providerId: thread.providerId,
+        scope: provider?.models?.scope ?? 'workspace',
+        bridgeLaunch: bridgeLaunchForProvider(thread.providerId, ctx.pluginHostArtifacts),
+        ...(environment?.path ? { cwd: environment.path } : {}),
+        ...(last.model ? { requiredModel: last.model } : {})
+      });
+      const catalog = overlayCustomModels(discovered, ctx.config.getConfig(), provider);
       return resolvePluginDefaultExecutionOptions({
         providerId: thread.providerId,
         lastModel: last.model,
-        lastReasoningLevel: last.reasoningLevel
+        lastReasoningLevel: last.reasoningLevel,
+        catalog
       });
     },
     getEnvironment: async ({ environmentId }) => {
@@ -200,16 +207,15 @@ export async function attachProductPluginService(
       const environment = environmentId ? getEnvironment(ctx.db, environmentId) : null;
       if (environmentId && !environment) throw new Error('unknown-environment');
       if (environment && hostId && environment.hostId !== hostId) throw new Error('environment does not belong to host');
-      try {
-        return await ctx.hostHub.callHostOnlineRpc<ProviderListModelsResult>({
-          hostId: ctx.hostHub.resolveHostId(environment?.hostId ?? hostId), timeoutMs: 45_000,
-          command: { type: 'provider.list_models', providerId,
-            bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
-            ...(environment?.path ? { cwd: environment.path } : {}) }
-        }).then(result => ({ ...result, modelLoadError: null }));
-      } catch (error) {
-        return { ...fallbackModelCatalog(providerId), modelLoadError: { providerId, code: classifyModelListError(error), detail: modelListErrorDetail(error) } };
-      }
+      const provider = getThreadProvider(providerId);
+      const result = await ctx.modelCatalogs.read({
+        hostId: ctx.hostHub.resolveHostId(environment?.hostId ?? hostId),
+        providerId,
+        scope: provider?.models?.scope ?? 'workspace',
+        bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
+        ...(environment?.path ? { cwd: environment.path } : {})
+      });
+      return { ...result, ...overlayCustomModels(result, ctx.config.getConfig(), provider) };
     },
     archiveThread: async ({ threadId }) => {
       const ok = await archiveConversation(ctx, threadId);
@@ -300,6 +306,21 @@ export async function attachProductPluginService(
   });
   ctx.plugins = plugins;
   await plugins.start();
+  for (const hostId of ctx.hostHub.connectedHostIds()) {
+    for (const provider of listThreadProviders().filter((row) => row.models?.scope === 'host')) {
+      try {
+        void ctx.modelCatalogs.read({
+          hostId,
+          providerId: provider.id,
+          scope: 'host',
+          prewarm: true,
+          bridgeLaunch: bridgeLaunchForProvider(provider.id, ctx.pluginHostArtifacts)
+        }).catch(() => undefined);
+      } catch {
+        // Host artifacts may still be settling during plugin startup.
+      }
+    }
+  }
   return plugins;
 }
 

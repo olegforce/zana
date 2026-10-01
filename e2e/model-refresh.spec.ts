@@ -15,7 +15,7 @@ test('Automatic retry, Settings and command palette recover project model picker
   await win.route('**/api/v1/system/execution-options*', async (route) => {
     const url = new URL(route.request().url());
     requests.push(url.search);
-    await gate;
+    if (url.searchParams.get('projectId') === targetProjectId) await gate;
     const transient = transientFailures > 0 && url.searchParams.has('providerId') && url.searchParams.get('projectId') === targetProjectId;
     if (transient) { transientFailures -= 1; transientQuery = url.search; }
     await route.fulfill({ json: {
@@ -29,6 +29,9 @@ test('Automatic retry, Settings and command palette recover project model picker
         ? { providerId: 'claude-code', code: 'auth_required', detail: null } : null
     } });
   });
+  // Install the discovery fixture before startup requests enter the shared
+  // queue; refresh operations below must retain this document after warm-up.
+  await win.reload();
   const path = join(home, 'model-recovery');
   mkdirSync(path);
   const project = await win.evaluate(async (dir) => {

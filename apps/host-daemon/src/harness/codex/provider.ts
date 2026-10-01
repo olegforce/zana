@@ -51,6 +51,7 @@ import type {
   HarnessAuthInjection,
   ProviderHookUrls,
   RemoteCommandInput,
+  McpToolApproval,
   RemoteCommandResult,
   ResolvedLaunch
 } from '../launch-provider.js';
@@ -295,6 +296,19 @@ export class CodexProvider extends BaseLaunchProvider {
     // (verified), so appending it to the base argv is safe for both profiles.
     const tomlValue = `"${mcpUrl.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     return ['-c', `mcp_servers.zcc-inbox.url=${tomlValue}`];
+  }
+
+  mcpApprovalArgs(_profile: LaunchProfileId, approval: McpToolApproval): string[] {
+    if (approval.defaultToolsApprovalMode === 'approve') {
+      return ['-c', 'mcp_servers.zcc-inbox.default_tools_approval_mode="approve"'];
+    }
+
+    const tools = [...new Set(approval.tools ?? [])];
+    if (tools.length === 0) return [];
+    // Codex splits CLI override keys on every dot, without interpreting quoted
+    // segments. Keep tool names in the TOML value so dots remain part of the name.
+    const entries = tools.map((tool) => `${tomlValue(tool)} = { approval_mode = "approve" }`);
+    return ['-c', `mcp_servers.zcc-inbox.tools={ ${entries.join(', ')} }`];
   }
 
   guidanceArgs(_profile: LaunchProfileId, guidance: string): string[] {

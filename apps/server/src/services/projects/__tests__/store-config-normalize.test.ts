@@ -50,6 +50,20 @@ describe('normalizeConfig — global Claude launch settings', () => {
   });
 });
 
+describe('normalizeConfig — custom models', () => {
+  it('trims, bounds, and rejects malformed overlay rows', () => {
+    expect(normalizeConfig({
+      customModels: [
+        { providerId: ' codex ', model: ' custom/model ', displayName: ' Custom ', description: ' Local ' },
+        { providerId: '', model: 'missing-provider' },
+        { providerId: 'codex', model: '' }
+      ]
+    }).customModels).toEqual([{
+      providerId: 'codex', model: 'custom/model', displayName: 'Custom', description: 'Local'
+    }]);
+  });
+});
+
 describe('normalizeConfig — sidebarWidth', () => {
   it('clamps to the current sidebar width as the minimum and 480 as the max', () => {
     expect(normalizeConfig({ sidebarWidth: 320 }).sidebarWidth).toBe(320);

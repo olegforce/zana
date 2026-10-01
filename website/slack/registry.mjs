@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { equal, hash, linkKey, SlackError, token } from './security.mjs';
+import { addressError } from '../connect/addresses.mjs';
 
 /** Slack identities come exclusively from verified Slack ingress. */
 export function createSlackRegistry({ db, sessionSecret, identity, now = Date.now }) {
@@ -8,20 +9,22 @@ export function createSlackRegistry({ db, sessionSecret, identity, now = Date.no
   const credential = link => `${link.id}.${linkKey(sessionSecret, link.id)}`;
   return {
     key: link => linkKey(sessionSecret, link.id),
-    async start(user) {
+    async start(user, domain = null) {
       if (!/^[UW][A-Z0-9]{5,30}$/.test(user)) throw new SlackError('invalid_user');
+      if (domain !== null && addressError(domain)) throw new SlackError('invalid_domain');
       return db.transaction(actorLock(user), async query => {
         await query('DELETE FROM slack_link_codes WHERE expires_at<$1', [now()]);
         const count = (await query('SELECT COUNT(*) AS n FROM slack_link_codes'))[0];
         if (Number(count.n) >= 2000) throw new SlackError('busy', 429);
         const code = randomBytes(16).toString('base64url');
         await query('INSERT INTO slack_link_codes(hash,team_id,slack_user,expires_at,app_id) VALUES($1,$2,$3,$4,$5)', [hash(code), identity.team, user, now() + 600_000, identity.app]);
+        if (domain !== null) await query('INSERT INTO slack_link_domains(code_hash,label) VALUES($1,$2)', [hash(code), domain]);
         return code;
       });
     },
     async info(code) {
       if (!/^[A-Za-z0-9_-]{22}$/.test(code ?? '')) throw new SlackError('invalid_code');
-      const value = (await db.query('SELECT * FROM slack_link_codes WHERE hash=$1 AND expires_at>$2 AND consumed_at IS NULL', [hash(code), now()]))[0];
+      const value = (await db.query('SELECT c.*,d.label AS domain FROM slack_link_codes c LEFT JOIN slack_link_domains d ON d.code_hash=c.hash WHERE c.hash=$1 AND c.expires_at>$2 AND c.consumed_at IS NULL', [hash(code), now()]))[0];
       if (!value || (value.team_id !== identity.team || value.app_id !== identity.app)) throw new SlackError('expired_code', 410);
       return value;
     },
@@ -32,6 +35,10 @@ export function createSlackRegistry({ db, sessionSecret, identity, now = Date.no
         if (!pending) throw new SlackError('expired_code', 410);
         const computer = (await query('SELECT * FROM connect_servers WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL', [serverId, accountId]))[0];
         if (!computer) throw new SlackError('computer_not_owned', 403);
+        if (info.domain) {
+          const address = (await query('SELECT label FROM connect_addresses WHERE label=$1 AND server_id=$2 AND user_id=$3', [info.domain, serverId, accountId]))[0];
+          if (!address || !computer.credential_hash) throw new SlackError('domain_not_owned', 403);
+        }
         if (Number((await query('SELECT COUNT(*) AS n FROM slack_links WHERE user_id=$1', [accountId]))[0].n) >= 200) throw new SlackError('too_many_links', 429);
         const old = (await query("SELECT * FROM slack_links WHERE team_id=$1 AND slack_user=$2 AND app_id=$3 AND state='active'", [identity.team, info.slack_user, identity.app]))[0];
         if (old && old.user_id !== accountId) throw new SlackError('unlink_previous_account_first', 409);
@@ -68,6 +75,11 @@ export function createSlackRegistry({ db, sessionSecret, identity, now = Date.no
         return { active: true };
       });
     },
+    async activeById(id) {
+      const link = (await db.query(`${activeSql} AND l.id=$1 AND l.team_id=$2 AND l.app_id=$3 AND l.state='active'`, [id, identity.team, identity.app]))[0];
+      if (!link) throw new SlackError('link_revoked', 403);
+      return link;
+    },
     async owner(user) { return (await db.query(`${activeSql} AND l.team_id=$1 AND l.slack_user=$2 AND l.app_id=$3 AND l.state='active'`, [identity.team, user, identity.app]))[0]; },
     async revoke(id, accountId) {
       const link = (await db.query('SELECT * FROM slack_links WHERE id=$1 AND user_id=$2', [id, accountId]))[0];
@@ -92,6 +104,9 @@ export function createSlackRegistry({ db, sessionSecret, identity, now = Date.no
       await db.query('INSERT INTO slack_objects(id,link_id,kind,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING', [key, link.id, kind, now() + ttl]);
       await this.object(link, id, kind);
     },
+    async count(link, kind) {
+      return Number((await db.query('SELECT COUNT(*) AS n FROM slack_objects WHERE link_id=$1 AND kind=$2 AND expires_at>$3', [link.id, kind, now()]))[0].n);
+    },
     async object(link, id, kind) {
       const row = (await db.query('SELECT link_id FROM slack_objects WHERE id=$1 AND expires_at>$2', [`${identity.team}:${kind}:${id}`, now()]))[0];
       if (row?.link_id !== link.id) throw new SlackError('object_not_owned', 403);
@@ -101,6 +116,7 @@ export function createSlackRegistry({ db, sessionSecret, identity, now = Date.no
         await query('DELETE FROM slack_link_codes WHERE expires_at<$1', [now()]);
         await query('DELETE FROM slack_objects WHERE id IN (SELECT id FROM slack_objects WHERE expires_at<$1 LIMIT 500)', [now()]);
         await query('DELETE FROM slack_requests WHERE id IN (SELECT id FROM slack_requests WHERE expires_at<$1 LIMIT 500)', [now()]);
+        await query('DELETE FROM slack_mcp_requests WHERE id IN (SELECT id FROM slack_mcp_requests WHERE expires_at<$1 LIMIT 500)', [now()]);
         await query("DELETE FROM slack_links WHERE id IN (SELECT id FROM slack_links WHERE (state='revoked' OR (state='pending' AND expires_at<$1)) AND created_at<$2 LIMIT 20)", [now(), now() - 30 * 86400_000]);
         await query('DELETE FROM slack_conversations WHERE (team_id,channel,root) IN (SELECT team_id,channel,root FROM slack_conversations WHERE created_at<$1 LIMIT 500)', [now() - 90 * 86400_000]);
       });

@@ -33,7 +33,8 @@ import { DelayedStencilLines, StencilLines } from './ui/Skeleton.js';
 import { AgentLauncher } from './AgentLauncher.js';
 import { inspectAgentSession } from '../lib/inspect-session.js';
 import { QuestionBlock } from './InboxQuestionBlock.js';
-import { DocContent, MarkdownContent } from './MarkdownContent.js';
+import { MarkdownContent } from './MarkdownContent.js';
+import { InboxDocContent, readInboxDocPreview } from './InboxDocContent.js';
 import { renderReportHtml, type ReportDoc } from '../lib/renderReportHtml.js';
 import { inboxPrimaryTitle, inboxShortTitle, inboxContextLine } from '../lib/inboxPresentation.js';
 import { classifyEntry } from '@zana-ai/zcc-domain/feed-categories';
@@ -1105,7 +1106,7 @@ function DocExplorer({
 }
 
 /**
- * Render one doc, fetched live via product.fs.readFile against the project's
+ * Render one doc, fetched live via the text or image reader against the project's
  * root path. Re-fetches on doc change. If the project is tombstoned (deleted)
  * we render a "project missing" message — without a project root, we have no
  * anchor to resolve the relative path.
@@ -1176,7 +1177,7 @@ function DocPreview({
       const abs = joinPath(projectPath, doc.path);
       let r: FsReadResult;
       try {
-        r = await product.fs.readFile(abs);
+        r = await readInboxDocPreview(abs);
       } catch (err) {
         r = { ok: false, message: err instanceof Error ? err.message : 'Read failed' };
       }
@@ -1192,7 +1193,7 @@ function DocPreview({
         if (found.ok && found.rel) {
           setResolvedPath(found.rel);
           setRelocated(!!found.relocated);
-          const r2 = await product.fs.readFile(joinPath(projectPath, found.rel));
+          const r2 = await readInboxDocPreview(joinPath(projectPath, found.rel));
           if (!cancelled) setResult(r2);
           return;
         }
@@ -1257,7 +1258,7 @@ function DocPreview({
         ) : result.ok && absResolved && videoContentType(resolvedPath) ? (
           <ThreadVideoPreview key={absResolved} src={videoPreviewUrl(absResolved)} path={resolvedPath} />
         ) : canPreview ? (
-          <DocContent path={resolvedPath} content={result!.content as string} exportable />
+          <InboxDocContent path={resolvedPath} content={result!.content as string} />
         ) : (
           <DocTombstone result={result!} project={project} />
         )}

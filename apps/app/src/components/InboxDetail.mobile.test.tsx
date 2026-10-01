@@ -7,7 +7,7 @@ import type { InboxEntry } from '@zana-ai/zcc-domain/product';
 const state = vi.hoisted(() => ({
   compact: true, selected: 'one', saved: false, kept: false, missing: false,
   entries: [] as InboxEntry[],
-  readFile: vi.fn(), resolveDoc: vi.fn(), copy: vi.fn(), openIn: vi.fn(), save: vi.fn(), keep: vi.fn(), remove: vi.fn(), exportPdf: vi.fn(), select: vi.fn(), markRead: vi.fn()
+  readFile: vi.fn(), readDataUrl: vi.fn(), resolveDoc: vi.fn(), copy: vi.fn(), openIn: vi.fn(), save: vi.fn(), keep: vi.fn(), remove: vi.fn(), exportPdf: vi.fn(), select: vi.fn(), markRead: vi.fn()
 }));
 vi.mock('../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => state.compact }));
 vi.mock('../store.js', () => ({
@@ -26,7 +26,7 @@ vi.mock('../store.js', () => ({
   replyToInboxEntry: vi.fn()
 }));
 vi.mock('../lib/product-client.js', () => ({ product: {
-  fs: { readFile: (...args: unknown[]) => state.readFile(...args), resolveDoc: (...args: unknown[]) => state.resolveDoc(...args) },
+  fs: { readFile: (...args: unknown[]) => state.readFile(...args), readDataUrl: (...args: unknown[]) => state.readDataUrl(...args), resolveDoc: (...args: unknown[]) => state.resolveDoc(...args) },
   clipboard: { writeText: (...args: unknown[]) => state.copy(...args) },
   openers: { openIn: (...args: unknown[]) => state.openIn(...args) },
   inbox: { exportPdf: (...args: unknown[]) => state.exportPdf(...args) }
@@ -43,6 +43,7 @@ beforeEach(() => {
   state.compact = true; state.selected = 'one'; state.saved = false; state.kept = false; state.missing = false;
   state.entries = [{ id: 'one', ts: Date.now(), projectId: 'p', subject: 'A mobile report', comments: 'The useful summary.', docs: [{ path: '.zcc/library/report.md' }] }];
   state.readFile.mockResolvedValue({ ok: true, content: 'Full document content' });
+  state.readDataUrl.mockReset().mockResolvedValue({ ok: true, dataUrl: 'data:image/png;base64,cGl4ZWxz' });
   state.resolveDoc.mockResolvedValue({ ok: false });
   state.copy.mockResolvedValue({ ok: true });
   state.openIn.mockResolvedValue({ ok: true });
@@ -54,6 +55,61 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const view = (visible = true) => <MemoryRouter><section className="inbox-view"><InboxDetail visible={visible} /></section></MemoryRouter>;
 const actions = () => fireEvent.click(screen.getByRole('button', { name: 'Message actions', exact: true }));
+
+it.each([true, false])('renders image attachments without the text reader (compact=%s)', async (compact) => {
+  state.compact = compact;
+  state.entries[0]!.docs = [{ path: 'screenshots/preview #1.PNG' }];
+  render(view());
+  if (compact) {
+    expect(state.readDataUrl).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'preview #1.PNG', exact: true }));
+  }
+  const image = await screen.findByRole('img', { name: 'screenshots/preview #1.PNG' });
+  expect(image.getAttribute('src')).toBe('data:image/png;base64,cGl4ZWxz');
+  expect(state.readDataUrl).toHaveBeenCalledWith('/project/screenshots/preview #1.PNG');
+  expect(state.readFile).not.toHaveBeenCalled();
+  expect(state.resolveDoc).not.toHaveBeenCalled();
+});
+
+it('re-reads relocated images with the image reader and copies the resolved path', async () => {
+  state.compact = false;
+  state.entries[0]!.docs = [{ path: 'preview.png' }];
+  state.readDataUrl.mockImplementation(async (path: string) => path === '/project/preview.png'
+    ? { ok: false, message: 'Missing' }
+    : { ok: true, dataUrl: 'data:image/png;base64,cGl4ZWxz' });
+  state.resolveDoc.mockResolvedValue({ ok: true, rel: 'screenshots/preview.png', relocated: true });
+  render(view());
+  await screen.findByRole('img', { name: 'screenshots/preview.png' });
+  expect(state.readDataUrl).toHaveBeenLastCalledWith('/project/screenshots/preview.png');
+  expect(screen.getByText('relocated')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Copy path to screenshots/preview.png' }));
+  await waitFor(() => expect(state.copy).toHaveBeenCalledWith('/project/screenshots/preview.png'));
+  expect(state.readFile).not.toHaveBeenCalled();
+});
+
+it('surfaces failed image reads and does not reuse an old image after selection changes', async () => {
+  state.compact = false;
+  state.entries[0]!.docs = [{ path: 'good.png' }, { path: 'missing.png' }];
+  render(view());
+  await screen.findByRole('img', { name: 'good.png' });
+  state.readDataUrl.mockResolvedValue({ ok: false, message: 'Image not found' });
+  fireEvent.click(screen.getByRole('option', { name: 'missing.png' }));
+  await screen.findByText('Image not found');
+  expect(screen.queryByRole('img')).toBeNull();
+});
+
+it('ignores an image read completing after a different document is selected', async () => {
+  state.compact = false;
+  state.entries[0]!.docs = [{ path: 'slow.png' }, { path: 'report.md' }];
+  let finish!: (result: unknown) => void;
+  state.readDataUrl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  render(view());
+  await waitFor(() => expect(state.readDataUrl).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('option', { name: 'report.md' }));
+  await screen.findByText('Full document content');
+  finish({ ok: true, dataUrl: 'data:image/png;base64,cGl4ZWxz' });
+  await waitFor(() => expect(screen.queryByRole('img')).toBeNull());
+});
 
 it('requires confirmation before deletion or advancing and marking the next message read', () => {
   state.compact = false;

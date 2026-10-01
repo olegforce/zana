@@ -214,7 +214,7 @@ test('model refresh invalidates the launch inventory and preserves large CLI dis
     writeFileSync(join(projectDir, '.zcc-model-list'), inventory('llmgw/recovery-new'));
     // Live provider discovery is the same product request made by Settings and the palette.
     const refreshed = await window.evaluate(async (id) => {
-      const response = await fetch(`/api/v1/system/execution-options?providerId=acp-opencode&projectId=${encodeURIComponent(id)}`);
+      const response = await fetch(`/api/v1/system/execution-options?providerId=acp-opencode&projectId=${encodeURIComponent(id)}&refresh=1`);
       return { status: response.status, body: await response.json() };
     }, projectId);
     expect(refreshed.status).toBe(200);

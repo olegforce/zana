@@ -55,6 +55,23 @@ afterEach(() => {
 });
 
 describe('thread model catalog', () => {
+  it('shares discovery capacity across project scopes and cancels queued scopes on reset', async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn<ThreadExecutionOptionsFetcher>((_query, options) => {
+      signals.push(options!.signal);
+      return new Promise(() => undefined);
+    });
+    resetThreadModelCatalog(fetcher);
+    const pending = ['one', 'two', 'three', 'four'].map(project => threadModelCatalogForHost('local', project).ensure());
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    resetThreadModelCatalog(async () => optionsBody(['codex'], 'recovered'));
+    await Promise.all(pending);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await threadModelCatalogForHost().ensure();
+    expect(getThreadModelCatalog().byProvider.codex.models[0].model).toBe('recovered-model');
+  });
+
   it('refreshes all scopes, shares concurrent recovery, and preserves rows while loading', async () => {
     let version = 'old';
     let release!: () => void;

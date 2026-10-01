@@ -5,6 +5,7 @@ import {
   buildThreadExecutionOptions,
   classifyModelListError,
   modelListErrorDetail,
+  overlayCustomModels,
   isThreadProviderOffered,
   modelsForThreadProvider,
   pluginHostModelCatalog,
@@ -247,7 +248,7 @@ describe('buildThreadExecutionOptions', () => {
     expect(body.providers.find((row) => row.id === 'pi')?.composerActions).toEqual([]);
   });
 
-  it('still returns models for a requested uninstalled provider so an existing thread can hydrate', () => {
+  it('does not invent models for a requested uninstalled provider before live discovery', () => {
     const body = buildThreadExecutionOptions({
       providerId: 'codex',
       availability: [
@@ -258,62 +259,31 @@ describe('buildThreadExecutionOptions', () => {
       ]
     });
     expect(body.providers.map((row) => row.id)).not.toContain('codex');
-    expect(body.models.map((row) => row.displayName)).toEqual([
-      'GPT-5.5',
-      'GPT-5.4',
-      'GPT-5.4 Mini',
-      'GPT-5.6 Sol'
-    ]);
-    expect(body.models[0]?.supportedReasoningEfforts.length).toBeGreaterThan(0);
+    expect(body.models).toEqual([]);
   });
 
-  it('returns the Claude fallback catalog for claude-code', () => {
+  it('has no core-owned Claude fallback catalog', () => {
     const models = modelsForThreadProvider('claude-code', []);
-    expect(models.map((row) => row.displayName)).toEqual([
-      'Fable 5',
-      'Opus 5.5 (1M)',
-      'Opus 5.5',
-      'Opus 4.8 (1M)',
-      'Opus 4.7 (1M)',
-      'Sonnet 5'
-    ]);
-    expect(models.map((row) => row.model)).toContain('claude-opus-5-5[1m]');
-    expect(models.map((row) => row.model)).toContain('claude-opus-5-5');
-    expect(models.map((row) => row.model)).not.toContain('claude-opus-5[1m]');
-    expect(models.find((row) => row.isDefault)?.model).toBe('claude-sonnet-5');
-    expect(models[0]?.supportedReasoningEfforts.map((effort) => effort.reasoningEffort)[0]).toBe('none');
+    expect(models).toEqual([]);
   });
 
-  it('returns Claude aliases under selectedOnlyModels so the picker can show More models', () => {
+  it('does not invent Claude aliases before live discovery', () => {
     const body = buildThreadExecutionOptions({
       providerId: 'claude-code',
       availability: [verify('claude')]
     });
-    expect(body.selectedOnlyModels.map((row) => row.displayName)).toEqual([
-      'Opus Alias (1M, Current)',
-      'Opus Alias (Current)',
-      'Sonnet Alias (1M, Legacy)',
-      'Sonnet Alias (Legacy)',
-      'Haiku Alias (Legacy)',
-      'Fable Alias',
-      'Best Alias'
-    ]);
+    expect(body.selectedOnlyModels).toEqual([]);
     expect(selectedOnlyModelsForThreadProvider('codex')).toEqual([]);
   });
 
-  it('keeps static Codex models and reports auth_required when listing needs login', () => {
+  it('reports auth_required without synthesizing a Codex catalog', () => {
     const body = buildThreadExecutionOptions({
       providerId: 'codex',
       availability: [verify('codex')],
       listError: 'auth_required'
     });
     expect(body.modelLoadError).toEqual({ providerId: 'codex', code: 'auth_required', detail: null });
-    expect(body.models.map((row) => row.displayName)).toEqual([
-      'GPT-5.5',
-      'GPT-5.4',
-      'GPT-5.4 Mini',
-      'GPT-5.6 Sol'
-    ]);
+    expect(body.models).toEqual([]);
   });
 
   it('prefers a live host catalog over the static fallback', () => {
@@ -336,6 +306,27 @@ describe('buildThreadExecutionOptions', () => {
     expect(body.models).toHaveLength(1);
     expect(body.models[0]?.description).toBe('Live Codex model');
   });
+
+  it('merges bounded custom models without replacing live rows', () => {
+    const provider = { id: 'codex', capabilities: { reasoningLevels: ['low', 'medium', 'high'] } } as never;
+    const live = {
+      models: [{
+        id: 'live', model: 'live', displayName: 'Live', description: 'Live',
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium' as const, description: 'Medium' }],
+        defaultReasoningEffort: 'medium' as const, isDefault: true
+      }],
+      selectedOnlyModels: []
+    };
+    const result = overlayCustomModels(live, {
+      customModels: [
+        { providerId: 'codex', model: 'custom/new', displayName: 'Custom New' },
+        { providerId: 'claude-code', model: 'wrong-provider' },
+        { providerId: 'codex', model: 'live' }
+      ]
+    }, provider);
+    expect(result.models.map((row) => row.model)).toEqual(['live', 'custom/new']);
+    expect(result.models[1]).toMatchObject({ displayName: 'Custom New', isDefault: false });
+  });
 });
 
 describe('execution-options API wiring', () => {
@@ -344,12 +335,13 @@ describe('execution-options API wiring', () => {
     expect(source).toContain("/api/v1/system/execution-options");
     expect(source).toContain('buildThreadExecutionOptions');
     expect(source).toContain('harnessVerify');
-    expect(source).toContain('provider.list_models');
+    expect(source).toContain('ctx.modelCatalogs.read');
     expect(source).toContain('parseReasoningLevel(body.reasoningLevel)');
     expect(source).toContain('readLastThreadExecution');
-    expect(source).toContain('classifyModelListError');
     expect(source).toContain('listError');
-    expect(source).toContain('timeoutMs: 45_000');
+    const store = readFileSync(new URL('./provider-model-catalog-store.ts', import.meta.url), 'utf8');
+    expect(store).toContain("type: 'provider.list_models'");
+    expect(store).toContain('timeoutMs: 45_000');
     expect(source).toContain('probeInstalledProviderHealth');
     expect(source).toContain('mergeHealthIntoExtraInstalled');
     const probe = readFileSync(new URL('./provider-health-probe.ts', import.meta.url), 'utf8');
@@ -417,6 +409,19 @@ describe('plugin host default execution options', () => {
     })).toEqual({
       model: 'fake-model',
       reasoningLevel: 'low',
+      permissionMode: 'full'
+    });
+  });
+
+  it('keeps the prior selection when discovery has no usable catalog', () => {
+    expect(resolvePluginDefaultExecutionOptions({
+      providerId: 'fake',
+      lastModel: 'offline-model',
+      lastReasoningLevel: 'high',
+      catalog: { models: [] }
+    })).toEqual({
+      model: 'offline-model',
+      reasoningLevel: 'high',
       permissionMode: 'full'
     });
   });

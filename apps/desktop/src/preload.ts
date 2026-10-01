@@ -522,6 +522,10 @@ const api: CcApi = {
       void cb;
       return () => {};
     },
+    onModelCatalogChanged: (cb) => {
+      void cb;
+      return () => {};
+    },
     events: async () => ({ events: [] }),
     executionOptions: async () => ({
       providers: [],

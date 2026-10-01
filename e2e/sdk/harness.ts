@@ -23,6 +23,7 @@
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 
 export type HarnessProfile = 'claude' | 'generic';
 
@@ -303,7 +304,24 @@ const path = require('path');
 // The launcher probes --version before a real spawn; answer and exit.
 if (process.argv.includes('--version')) { console.log('2.1.220 (fake)'); process.exit(0); }
 
-const MCP_URL = process.env.ZCC_MCP_URL || '';
+const codexUrl = process.argv.find(arg => arg.startsWith('mcp_servers.zcc-inbox.url='));
+const IS_CODEX = !!codexUrl;
+const MCP_URL = process.env.ZCC_MCP_URL || (codexUrl ? JSON.parse(codexUrl.slice(codexUrl.indexOf('=') + 1)) : '');
+if (IS_CODEX) {
+  const { parse } = require(${JSON.stringify(createRequire(import.meta.url).resolve('smol-toml'))});
+  const override = process.argv.find(arg => arg.startsWith('mcp_servers.zcc-inbox.tools='));
+  const tools = override && parse(override).mcp_servers['zcc-inbox'].tools;
+  if (!tools || !['execution.work.complete', 'execution.work.block', 'execution.delivery.ack'].every(name => tools[name]?.approval_mode === 'approve')) {
+    console.error('Missing native Codex per-tool approvals'); process.exit(64);
+  }
+  if (tools.remote_exec || tools.library_remove) {
+    console.error('Unexpected privileged tool approval'); process.exit(64);
+  }
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  // A repaint can disable and re-enable paste in the same output chunk.
+  // Correct stream ordering is required before any assignment can be accepted.
+  process.stdout.write('\x1b[?2004l\x1b[?2004h');
+}
 const PROMPT = process.argv.slice(2).join('\n');
 const CWD = process.cwd();
 // executionId arrives backtick-delimited (execution <bt>id<bt>). Build the
@@ -768,7 +786,7 @@ async function worker() {
   // Sentinel that terminates every pushAssignments() message (see service.ts).
   const END = 'coordinator.';
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', function (chunk) {
+  function consumeAssignment(chunk) {
     const s = String(chunk);
     // Delivery-pull nudge is NOT an assignment and must be observed even while
     // busy (we set the OSC to idle during a blocker wait, but the internal busy
@@ -795,6 +813,39 @@ async function worker() {
       if (!seen[id]) { seen[id] = true; queue.push(id); }
     }
     void drain();
+  }
+  let pasteBuffer = '';
+  let pastedText = '';
+  let inPaste = false;
+  process.stdin.on('data', function (chunk) {
+    if (!IS_CODEX) { consumeAssignment(chunk); return; }
+    log('Codex stdin', JSON.stringify(String(chunk).slice(0, 100)), 'length=' + String(chunk).length);
+    pasteBuffer += String(chunk);
+    const start = ESC + '[200~';
+    const end = ESC + '[201~';
+    while (pasteBuffer) {
+      if (inPaste) {
+        const endIndex = pasteBuffer.indexOf(end);
+        if (endIndex === -1) break;
+        pastedText += pasteBuffer.slice(0, endIndex);
+        pasteBuffer = pasteBuffer.slice(endIndex + end.length);
+        inPaste = false;
+      } else if (pasteBuffer.startsWith('\r')) {
+        pasteBuffer = pasteBuffer.slice(1);
+        // Concurrent delivery nudges can paste twice before their Returns.
+        // A TUI submits the accumulated draft, then ignores the empty Return.
+        if (pastedText) consumeAssignment(pastedText);
+        pastedText = '';
+      } else if (pasteBuffer.startsWith(start)) {
+        pasteBuffer = pasteBuffer.slice(start.length);
+        inPaste = true;
+      } else if (start.startsWith(pasteBuffer)) {
+        break; // split start delimiter
+      } else {
+        throw new Error('Assignment was not bracketed');
+      }
+    }
+    if (pasteBuffer.length + pastedText.length > 1024 * 1024) throw new Error('Assignment input overflow');
   });
   process.stdin.resume();
   setIdle(); // announce ready-idle so the kickoff dispatch delivers immediately

@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "zana_connect",
+      "title": "Connect your Zana domain",
+      "description": "Create a private sign-in link to connect your own Zana domain to your Slack identity. Use when the user asks to connect or change their Zana connection. Accepts their my-domain address or its label; omit it to choose an owned computer after sign-in. Does not grant access or run a job: account ownership and approval on that computer are required. Share the returned link only with this user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Your own Zana domain, for example my-domain.zana-ide.com",
+            "minLength": 1,
+            "maxLength": 253
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_list_projects",
+      "title": "List available Zana Projects",
+      "description": "List registered Projects on your linked computer, whether imported, and their approved Slack destinations. No filesystem paths or credentials. To import an unconnected Project use zana_import_project only at the user’s request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_import_project",
+      "title": "Import a Project into Slack",
+      "description": "Import one exact Project ID from zana_list_projects at the user’s explicit request. Creates a private Project channel using locally saved defaults and adds only the linked user and bot. Requires imports from Slack to be enabled in Zana. Repeating the same import reuses the existing channel. Does not launch a job. Check zana_list_projects for the resulting destination if the response is interrupted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "Exact registered Project ID",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_launch_job",
+      "title": "Launch a Zana job",
+      "description": "Start an agent task on your linked computer using an approved Project and channel from zana_list_projects. This posts the task in that channel and uses its configured model. Only call when the user requests work. Generate a unique request_id for each new task; reuse it unchanged on retries. Returns acceptance, not completion. Never retry an unconfirmed launch with a new request_id; check zana_job_status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "Exact connected Project ID",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "channel_id": {
+            "type": "string",
+            "pattern": "^[CG][A-Z0-9]{5,30}$"
+          },
+          "task": {
+            "type": "string",
+            "description": "Task the user wants the agent to perform",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{8,80}$",
+            "description": "Unique idempotency key; reuse for retries of this same task."
+          }
+        },
+        "required": [
+          "project_id",
+          "channel_id",
+          "task",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_job_status",
+      "title": "Check a Zana job",
+      "description": "Check the job_id returned by zana_launch_job. Returns queue/agent state, its Slack conversation, and only the latest confirmed shared answer. Permission prompts remain in Zana. An uncertain launch must be inspected before requesting another.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_list_capabilities",
+      "title": "List enabled plugin capabilities",
+      "description": "Discover the locally enabled read-only capabilities contributed by installed Zana plugins, including their input schema. Never assume an installed plugin is enabled for Slack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zana_run_capability",
+      "title": "Use an enabled plugin capability",
+      "description": "Call an explicitly enabled read-only plugin capability from zana_list_capabilities. Use its exact capability ID and a JSON object matching its input_schema. The linked user must enable it locally. No arbitrary plugin RPC or tool access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "capability_id": {
+            "type": "string",
+            "description": "Exact enabled capability ID",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "arguments_json": {
+            "type": "string",
+            "description": "JSON object matching the capability input_schema",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "capability_id",
+          "arguments_json"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "commands": [
+    {
+      "command": "/zana",
+      "description": "Choose an imported Project and start an agent"
+    },
+    {
+      "command": "/zana run <project> <task>",
+      "description": "Prepare a job in an imported Project"
+    },
+    {
+      "command": "/zana projects",
+      "description": "List imported Projects"
+    },
+    {
+      "command": "/zana import [project]",
+      "description": "List available Projects or import one by exact name or ID"
+    },
+    {
+      "command": "/zana status [project]",
+      "description": "Check agent activity"
+    },
+    {
+      "command": "/zana connect",
+      "description": "Open connection setup"
+    },
+    {
+      "command": "/zana help",
+      "description": "Show shortcuts"
+    },
+    {
+      "command": "@Zana <task>",
+      "description": "Start work or continue a Project conversation"
+    },
+    {
+      "command": "@Zana stop / mute / unmute",
+      "description": "Control an existing conversation"
+    }
+  ],
+  "features": [
+    {
+      "id": "projects",
+      "title": "Browse Projects",
+      "description": "List registered Project names and approved Slack destinations. Launching and importing also require this to be enabled.",
+      "tools": [
+        "zana_list_projects"
+      ]
+    },
+    {
+      "id": "imports",
+      "title": "Import Projects",
+      "description": "Create or reuse a private channel for a requested Project, using your saved import defaults.",
+      "tools": [
+        "zana_import_project"
+      ]
+    },
+    {
+      "id": "launch",
+      "title": "Start new jobs",
+      "description": "Start agents from Slackbot, /zana or a new @Zana conversation. Turning this off also blocks jobs still waiting to start.",
+      "tools": [
+        "zana_launch_job"
+      ]
+    },
+    {
+      "id": "followups",
+      "title": "Continue conversations",
+      "description": "Send follow-up tasks to existing Zana threads from Slack. Running work continues when this is turned off.",
+      "tools": []
+    },
+    {
+      "id": "status",
+      "title": "View job progress",
+      "description": "Show job state, activity updates and task previews in Slack. Basic stop and mute controls stay available.",
+      "tools": [
+        "zana_job_status"
+      ]
+    },
+    {
+      "id": "answers",
+      "title": "Share answers",
+      "description": "Allow new answers in Slack and answer previews. Agent summaries also follow each channel’s sharing setting. Previously posted Slack messages remain visible.",
+      "tools": []
+    },
+    {
+      "id": "plugins",
+      "title": "Use plugin tools",
+      "description": "Discover and call the read-only plugin tools you individually enable below.",
+      "tools": [
+        "zana_list_capabilities",
+        "zana_run_capability"
+      ]
+    }
+  ]
+}

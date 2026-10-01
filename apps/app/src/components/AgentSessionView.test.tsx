@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { SessionStats, TerminalSession } from '@zana-ai/zcc-domain/product';
 
+const layout = vi.hoisted(() => ({ compact: false }));
+vi.mock('../hooks/useCompactLayout.js', () => ({ useCompactLayout: () => layout.compact }));
+
 vi.mock('./AgentDetailPanel.js', () => ({
   AgentDetailPanel: () => <div data-testid="agent-info-body">Status PID</div>
 }));
@@ -83,7 +86,20 @@ function installMemoryStorage(): void {
 
 describe('AgentSessionView', () => {
   afterEach(() => {
+    layout.compact = false;
     if (typeof localStorage !== 'undefined') localStorage.clear();
+  });
+  it.each([false, true])('shows the mobile fallback for the shared agent view (modal=%s)', (modal) => {
+    layout.compact = true;
+    const html = renderToStaticMarkup(
+      <AgentSessionView session={session()} projectId="p1" projectName="demo" state="idle"
+        terminalAnchorId="agent-terminal" modal={modal} footer={<button type="button">Delete</button>} />
+    );
+    expect(html).toContain('cli-agent-mobile-unsupported');
+    expect(html).not.toContain('agent-terminal');
+    expect(html).not.toContain('agent-info-body');
+    expect(html).not.toContain('thread-secondary-panel');
+    expect(html).not.toContain('Delete');
   });
   it.each([
     { modal: true, isFocused: false, allowed: true },

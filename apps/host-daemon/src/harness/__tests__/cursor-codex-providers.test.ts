@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parse } from 'smol-toml';
 import { providerFor } from '../registry.js';
 import { CursorProvider } from '../cursor/provider.js';
 import { CodexProvider } from '../codex/provider.js';
@@ -370,6 +371,41 @@ describe('CodexProvider — the three -c bridges (exact argv + TOML escaping)', 
     it('is identical for the resume profile (-c is a global option)', () => {
       const url = 'http://127.0.0.1:5123/mcp/p/s';
       expect(p.mcpArgs('codex-resume', url)).toEqual(p.mcpArgs('codex', url));
+    });
+  });
+
+  describe('mcpApprovalArgs', () => {
+    it('uses Codex native per-tool approval overrides and deduplicates tools', () => {
+      const args = p.mcpApprovalArgs('codex', {
+        tools: ['execution.work.complete', 'inbox_push', 'execution.work.complete']
+      });
+      expect(args).toHaveLength(2);
+      expect(args[0]).toBe('-c');
+      const prefix = 'mcp_servers.zcc-inbox.tools=';
+      expect(args[1].startsWith(prefix)).toBe(true);
+      expect(parse(`tools=${args[1].slice(prefix.length)}`).tools).toEqual({
+        'execution.work.complete': { approval_mode: 'approve' },
+        inbox_push: { approval_mode: 'approve' }
+      });
+      expect(args[1].match(/execution\.work\.complete/g)).toHaveLength(1);
+    });
+
+    it('does not override tools for an empty approval list', () => {
+      expect(p.mcpApprovalArgs('codex', {})).toEqual([]);
+      expect(p.mcpApprovalArgs('codex-resume', { tools: [] })).toEqual([]);
+    });
+
+    it('preserves quoted tool names in the TOML value', () => {
+      const tool = 'tool."quoted"\\suffix';
+      const [, override] = p.mcpApprovalArgs('codex', { tools: [tool] });
+      const value = override.slice(override.indexOf('=') + 1);
+      expect(parse(`tools=${value}`).tools).toEqual({ [tool]: { approval_mode: 'approve' } });
+    });
+
+    it('uses the native server-wide approval mode only when requested', () => {
+      expect(p.mcpApprovalArgs('codex', { defaultToolsApprovalMode: 'approve', tools: ['inbox_push'] })).toEqual([
+        '-c', 'mcp_servers.zcc-inbox.default_tools_approval_mode="approve"'
+      ]);
     });
   });
 

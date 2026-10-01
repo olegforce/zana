@@ -7,6 +7,7 @@ interface FakeProc {
   pid: number;
   writes: string[];
   exitCb?: (e: { exitCode: number }) => void;
+  dataCbs: Array<(d: string) => void>;
   write: (data: string) => void;
   onData: (cb: (d: string) => void) => void;
   onExit: (cb: (e: { exitCode: number }) => void) => void;
@@ -21,11 +22,12 @@ vi.mock('node-pty', () => ({
     const proc: FakeProc = {
       pid: 1000 + spawned.length,
       writes: [],
+      dataCbs: [],
       write(data: string) {
         this.writes.push(data);
       },
-      onData() {
-        // no-op; reply tests don't exercise the data stream
+      onData(cb: (d: string) => void) {
+        this.dataCbs.push(cb);
       },
       onExit(cb: (e: { exitCode: number }) => void) {
         // Record the handler so kill() can drive the exit path, which is what
@@ -84,6 +86,17 @@ function makeOpenCodeSession(mgr: PtyManager) {
   });
 }
 
+function makeCodexSession(mgr: PtyManager) {
+  return mgr.create({
+    projectId: 'p1',
+    profile: 'codex',
+    cwd: '/tmp',
+    cols: 80,
+    rows: 24,
+    config: { ...CONFIG, harnessCodexEnabled: true }
+  });
+}
+
 describe('PtyManager.reply', () => {
   beforeEach(() => {
     spawned.length = 0;
@@ -103,7 +116,11 @@ describe('PtyManager.reply', () => {
       expect(ok).toBe(true);
       expect(proc.writes).toEqual(['yes, proceed']);
 
-      vi.runAllTimers();
+      // A short timer can fire before a large paste has left Codex's input
+      // buffer. Return stays independently observable and arrives after 200ms.
+      vi.advanceTimersByTime(199);
+      expect(proc.writes).toEqual(['yes, proceed']);
+      vi.advanceTimersByTime(1);
       expect(proc.writes).toEqual(['yes, proceed', '\r']);
     } finally {
       vi.useRealTimers();
@@ -161,6 +178,101 @@ describe('PtyManager.reply', () => {
       // The whole multi-line body is one paste; a single trailing CR submits it.
       expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`, '\r']);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses advertised bracketed-paste mode for a multi-line Codex worker assignment', () => {
+    vi.useFakeTimers();
+    try {
+      const mgr = new PtyManager();
+      const session = makeCodexSession(mgr);
+      const proc = spawned[0];
+      const startWrites = proc.writes.length;
+      const assignment = 'You are assigned work unit `x`.\nTask: do it\n\nClose the unit.';
+
+      // Codex opts into the standard terminal bracketed-paste protocol when its
+      // composer is ready. Its long assignment must be a single paste, then a
+      // separate synthetic Return after the paste buffer has drained.
+      for (const cb of proc.dataCbs) cb('\x1b[?2004h');
+      mgr.reply(session.id, assignment);
+      expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`]);
+
+      vi.advanceTimersByTime(200);
+      expect(proc.writes.slice(startWrites)).toEqual([`\x1b[200~${assignment}\x1b[201~`, '\r']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(Array.from({ length: 7 }, (_, i) => i + 1))('tracks paste enable and disable split at offset %i', (split) => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const session = makeCodexSession(mgr);
+    try {
+      const proc = spawned[0];
+      const emit = (data: string) => proc.dataCbs.forEach((cb) => cb(data));
+      const assignment = 'First line\nSecond line';
+      for (const enabled of [true, false]) {
+        const control = `\x1b[?2004${enabled ? 'h' : 'l'}`;
+        emit('output'.repeat(5000) + control.slice(0, split));
+        emit(control.slice(split) + 'ready');
+        const start = proc.writes.length;
+        mgr.reply(session.id, assignment);
+        vi.advanceTimersByTime(200);
+        expect(proc.writes.slice(start)).toEqual([
+          enabled ? `\x1b[200~${assignment}\x1b[201~` : assignment,
+          '\r'
+        ]);
+      }
+    } finally {
+      mgr.close(session.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['\x1b[?2004l\x1b[?2004h', true],
+    ['\x1b[?2004h\x1b[?2004l', false]
+  ] as const)('uses the last paste-mode transition in %j', (data, enabled) => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const session = makeCodexSession(mgr);
+    try {
+      const proc = spawned[0];
+      proc.dataCbs.forEach((cb) => cb(data));
+      // A later ordinary chunk must not replay a previously completed control.
+      proc.dataCbs.forEach((cb) => cb('output'));
+      const start = proc.writes.length;
+      mgr.reply(session.id, 'first\nsecond');
+      vi.advanceTimersByTime(200);
+      expect(proc.writes.slice(start)).toEqual([
+        enabled ? '\x1b[200~first\nsecond\x1b[201~' : 'first\nsecond', '\r'
+      ]);
+    } finally {
+      mgr.close(session.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps paste-mode state and partial controls separate between workers', () => {
+    vi.useFakeTimers();
+    const mgr = new PtyManager();
+    const first = makeCodexSession(mgr);
+    const second = makeCodexSession(mgr);
+    try {
+      spawned[0].dataCbs.forEach((cb) => cb('\x1b[?20'));
+      spawned[1].dataCbs.forEach((cb) => cb('04h'));
+      spawned[0].dataCbs.forEach((cb) => cb('04h'));
+      const starts = spawned.map((proc) => proc.writes.length);
+      mgr.reply(first.id, 'one\ntwo');
+      mgr.reply(second.id, 'one\ntwo');
+      vi.advanceTimersByTime(200);
+      expect(spawned[0].writes.slice(starts[0])).toEqual(['\x1b[200~one\ntwo\x1b[201~', '\r']);
+      expect(spawned[1].writes.slice(starts[1])).toEqual(['one\ntwo', '\r']);
+    } finally {
+      mgr.close(first.id);
+      mgr.close(second.id);
       vi.useRealTimers();
     }
   });

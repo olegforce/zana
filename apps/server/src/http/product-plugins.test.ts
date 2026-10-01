@@ -146,7 +146,7 @@ describe('listen.ts', () => {
     expect(source).toContain('threadOutput:');
     expect(source).toContain('defaultExecutionOptions:');
     expect(source).toContain('resolvePluginDefaultExecutionOptions');
-    expect(source).toContain('pluginHostModelCatalog');
+    expect(source).toContain('ctx.modelCatalogs.read');
     expect(source).toContain('readLastThreadExecution');
     expect(source).toContain('readWorkspaceFile:');
     expect(source).toContain('conversationThreadOutput');

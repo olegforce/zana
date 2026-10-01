@@ -18,6 +18,19 @@ durable `navigation-label` blocker (answered "About Atlas" through the Inbox UI)
 No real model is called — the coordinator/workers are a deterministic fake binary
 and the Modern owner thread uses the fake `opencode` ACP fixture.
 
+The Squad UI spec runs both planning modes with Claude and Codex cohorts. The
+Codex fixture validates the native per-tool approval map, rejects privileged
+tool approvals, and consumes each assignment only after its bracketed paste and
+separate Return arrive. It also emits disable/enable controls in one output
+chunk and exercises working/idle transitions between assignments. Headless
+Squad sessions intentionally omit native lifecycle hooks.
+
+Check the approval arguments against an installed Codex without a model call:
+
+```bash
+ZCC_LIVE_CODEX=1 pnpm exec vitest run apps/host-daemon/src/harness/__tests__/codex-mcp-approval.live.test.ts
+```
+
 ### Run
 
 ```bash

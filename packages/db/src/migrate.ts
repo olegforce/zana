@@ -407,6 +407,20 @@ export function migrate(database: SqliteDatabase): void {
     `CREATE INDEX threads_live_host_idx ON threads(host_id)
       WHERE status IN ('starting', 'active', 'stopping')`
   ]);
+  if (!applied.has(26)) applyVersion(database, 26, [
+    `CREATE TABLE provider_model_catalogs (
+      host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+      provider_id TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      models_json TEXT NOT NULL CHECK (length(models_json) <= 2097152),
+      selected_only_models_json TEXT NOT NULL CHECK (length(selected_only_models_json) <= 2097152),
+      acp_mode_json TEXT CHECK (acp_mode_json IS NULL OR length(acp_mode_json) <= 262144),
+      fetched_at INTEGER NOT NULL,
+      PRIMARY KEY (host_id, provider_id, scope_key)
+    )`,
+    'CREATE INDEX provider_model_catalogs_fetched_idx ON provider_model_catalogs(fetched_at)'
+  ]);
 }
 
 export { CREATE_TABLES_V1 as SCHEMA_STATEMENTS_V1 };

@@ -6,15 +6,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { InboxEntry, Project } from '@zana-ai/zcc-domain/product';
 
-const { pushToast, readFile, exportPdf } = vi.hoisted(() => ({
+const { pushToast, readFile, readDataUrl, exportPdf } = vi.hoisted(() => ({
   pushToast: vi.fn(),
   readFile: vi.fn(async () => ({ ok: true, content: '# Doc' })),
+  readDataUrl: vi.fn(),
   exportPdf: vi.fn(async () => ({ ok: true, path: '/tmp/out.pdf' }))
 }));
 
 vi.mock('../lib/product-client.js', () => ({
   product: {
-    fs: { readFile },
+    fs: { readFile, readDataUrl },
     inbox: { exportPdf }
   }
 }));
@@ -43,7 +44,37 @@ describe('InboxEntryBody', () => {
     cleanup();
     pushToast.mockClear();
     readFile.mockClear();
+    readDataUrl.mockReset();
     exportPdf.mockClear();
+  });
+
+  it('displays image attachments in compact reports', async () => {
+    readDataUrl.mockResolvedValue({ ok: true, dataUrl: 'data:image/png;base64,cGl4ZWxz' });
+    render(<InboxEntryBody entry={{ id: 'image', ts: 1, projectId: 'p1', docs: [{ path: 'preview.png' }] }} project={project} />);
+    const image = await screen.findByRole('img', { name: 'preview.png' });
+    expect(image.getAttribute('src')).toBe('data:image/png;base64,cGl4ZWxz');
+    expect(readDataUrl).toHaveBeenCalledWith('/tmp/alpha/preview.png');
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('shows image read failures and deleted projects', async () => {
+    readDataUrl.mockRejectedValue(new Error('Image unavailable'));
+    const entry: InboxEntry = { id: 'image', ts: 1, projectId: 'p1', docs: [{ path: 'preview.png' }] };
+    const { rerender } = render(<InboxEntryBody entry={entry} project={project} />);
+    await screen.findByText('Image unavailable');
+    rerender(<InboxEntryBody entry={entry} project={null} />);
+    await screen.findByText('Project no longer exists');
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('ignores an image load after the report is unmounted', async () => {
+    let finish!: (result: unknown) => void;
+    readDataUrl.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { unmount } = render(<InboxEntryBody entry={{ id: 'image', ts: 1, projectId: 'p1', docs: [{ path: 'preview.png' }] }} project={project} />);
+    await waitFor(() => expect(readDataUrl).toHaveBeenCalled());
+    unmount();
+    finish({ ok: true, dataUrl: 'data:image/png;base64,cGl4ZWxz' });
+    await waitFor(() => expect(screen.queryByRole('img')).toBeNull());
   });
 
   it('renders comments and export actions', () => {

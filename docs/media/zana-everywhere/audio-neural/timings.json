@@ -1,0 +1,58 @@
+[
+  {
+    "start": 0.4,
+    "end": 2.026,
+    "slot_end": 3.6,
+    "speech_seconds": 1.626,
+    "tempo": 1,
+    "text": "Use Zana everywhere."
+  },
+  {
+    "start": 4.4,
+    "end": 10.303,
+    "slot_end": 13.6,
+    "speech_seconds": 5.903,
+    "tempo": 1,
+    "text": "On your computer, click the Remote access icon in the bottom-left corner, then Get a connect code."
+  },
+  {
+    "start": 14.4,
+    "end": 20.57,
+    "slot_end": 24.6,
+    "speech_seconds": 6.17,
+    "tempo": 1,
+    "text": "Sign in with GitHub and enter my-domain. Reserve your address, then copy the connect code."
+  },
+  {
+    "start": 25.4,
+    "end": 32.456,
+    "slot_end": 34.6,
+    "speech_seconds": 7.056,
+    "tempo": 1,
+    "text": "Back in Zana, paste the code. Your computer connects automatically, and your dedicated address is ready."
+  },
+  {
+    "start": 35.4,
+    "end": 40.484,
+    "slot_end": 43.6,
+    "speech_seconds": 5.084,
+    "tempo": 1,
+    "text": "Now pick up your iPhone. Open Safari and enter your new Zana address."
+  },
+  {
+    "start": 44.4,
+    "end": 48.574,
+    "slot_end": 51.6,
+    "speech_seconds": 4.174,
+    "tempo": 1,
+    "text": "Sign in with the same GitHub account, then tap Open Zana."
+  },
+  {
+    "start": 52.4,
+    "end": 59.186,
+    "slot_end": 62.8,
+    "speech_seconds": 6.786,
+    "tempo": 1,
+    "text": "And voil\u00e0! Your agents, right on your phone. Follow their progress from the kanban, wherever you are."
+  }
+]

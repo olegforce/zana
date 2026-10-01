@@ -36,6 +36,21 @@ const FAKE_DECLARATION: PluginProviderDeclaration & { pluginId: string; hostEntr
     permissionModes: ['full'],
     reasoningLevels: ['none', 'low', 'medium', 'high']
   },
+  models: {
+    scope: 'host',
+    fallback: [{
+      id: 'fake-model',
+      displayName: 'Fake Model',
+      description: 'In-process fake provider model',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low', description: 'Low' },
+        { reasoningEffort: 'medium', description: 'Medium' },
+        { reasoningEffort: 'high', description: 'High' }
+      ],
+      defaultReasoningEffort: 'medium',
+      isDefault: true
+    }]
+  },
   composerActions: ['plan']
 };
 

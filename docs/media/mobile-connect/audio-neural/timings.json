@@ -1,0 +1,86 @@
+[
+  {
+    "start": 0.3,
+    "end": 3.7,
+    "speech_seconds": 2.185,
+    "tempo": 1,
+    "text": "Connect Zana Mobile to your computer."
+  },
+  {
+    "start": 4.4,
+    "end": 11.6,
+    "speech_seconds": 6.142,
+    "tempo": 1,
+    "text": "On your computer, open Settings, then Remote access. Select Get a connect code."
+  },
+  {
+    "start": 12.3,
+    "end": 20.7,
+    "speech_seconds": 3.231,
+    "tempo": 1,
+    "text": "Sign in with GitHub, then choose your subdomain."
+  },
+  {
+    "start": 20.8,
+    "end": 23.7,
+    "speech_seconds": 2.601,
+    "tempo": 1,
+    "text": "Reserve the address, then copy your code."
+  },
+  {
+    "start": 24.4,
+    "end": 31.6,
+    "speech_seconds": 5.081,
+    "tempo": 1,
+    "text": "Return to Zana and paste the code. Your computer connects automatically."
+  },
+  {
+    "start": 32.4,
+    "end": 39.5,
+    "speech_seconds": 6.645,
+    "tempo": 1,
+    "text": "Once your computer is connected, open Settings, then Phone. Scan the QR code with your iPhone camera."
+  },
+  {
+    "start": 39.7,
+    "end": 45.6,
+    "speech_seconds": 4.799,
+    "tempo": 1,
+    "text": "Accept the TestFlight invitation and install Zana. Then open the app."
+  },
+  {
+    "start": 46.4,
+    "end": 54.6,
+    "speech_seconds": 6.154,
+    "tempo": 1,
+    "text": "Now open Zana Mobile. Tap Continue with GitHub, and use the same account as your computer."
+  },
+  {
+    "start": 55.4,
+    "end": 63.6,
+    "speech_seconds": 5.119,
+    "tempo": 1,
+    "text": "In the browser, tap Approve phone. Then tap Return to Zana Mobile."
+  },
+  {
+    "start": 64.4,
+    "end": 70.5,
+    "speech_seconds": 2.857,
+    "tempo": 1,
+    "text": "Choose your computer from the list, and tap Connect."
+  },
+  {
+    "start": 71.4,
+    "end": 78.9,
+    "speech_seconds": 5.986,
+    "tempo": 1,
+    "text": "You\u2019re connected. Follow your agents from the mobile kanban, with their status at a glance."
+  },
+  {
+    "start": 79.2,
+    "end": 83.6,
+    "speech_seconds": 3.643,
+    "tempo": 1,
+    "text": "Keep Zana running, and your computer awake and online."
+  }
+]

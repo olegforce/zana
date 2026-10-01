@@ -676,8 +676,9 @@ export interface CcApi {
       } | null;
     }): Promise<{ delivered: number }>;
     onOpen(cb: (payload: unknown) => void): () => void;
+    onModelCatalogChanged(cb: (payload: { hostId: string; providerId: string; scopeKey: string }) => void): () => void;
     events(threadId: string): Promise<{ events: unknown[] }>;
-    executionOptions(query?: { providerId?: string; hostId?: string; projectId?: string }, options?: { signal: AbortSignal }): Promise<{
+    executionOptions(query?: { providerId?: string; hostId?: string; projectId?: string; refresh?: boolean }, options?: { signal: AbortSignal }): Promise<{
       providers: Array<{
         id: string;
         displayName: string;

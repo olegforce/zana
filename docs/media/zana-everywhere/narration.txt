@@ -1,0 +1,13 @@
+Use Zana everywhere.
+
+On your computer, click the Remote access icon in the bottom-left corner, then Get a connect code.
+
+Sign in with GitHub and enter my-domain. Reserve your address, then copy the connect code.
+
+Back in Zana, paste the code. Your computer connects automatically, and your dedicated address is ready.
+
+Now pick up your iPhone. Open Safari and enter your new Zana address.
+
+Sign in with the same GitHub account, then tap Open Zana.
+
+And voilà! Your agents, right on your phone. Follow their progress from the kanban, wherever you are.

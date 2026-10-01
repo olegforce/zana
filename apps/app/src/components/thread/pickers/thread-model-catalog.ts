@@ -28,7 +28,7 @@ export type ThreadModelCatalogSnapshot = {
 };
 
 type ExecutionOptionsBody = Awaited<ReturnType<typeof product.threads.executionOptions>>;
-export type ThreadExecutionOptionsQuery = { providerId?: string; hostId?: string; projectId?: string };
+export type ThreadExecutionOptionsQuery = { providerId?: string; hostId?: string; projectId?: string; refresh?: boolean };
 export type ThreadExecutionOptionsFetcher = (
   query?: ThreadExecutionOptionsQuery,
   options?: { signal: AbortSignal }
@@ -42,8 +42,8 @@ export const MODEL_CATALOG_RETRY_DELAYS_MS = [1_000, 4_000, 15_000] as const;
 export const MODEL_CATALOG_FOCUS_COOLDOWN_MS = 60_000;
 const MAX_IDLE_HOST_CATALOGS = 8;
 let fetchOptions: ThreadExecutionOptionsFetcher = (query, options) => product.threads.executionOptions(query, options);
-const scheduleDiscovery = createModelDiscoveryQueue();
 const catalogs = new Map<string, ReturnType<typeof createCatalog>>();
+const scheduleDiscovery = createModelDiscoveryQueue();
 export type ModelCatalogRefreshResult = { failedCatalogs: number; failedProviders: string[] };
 let catalogReload: Promise<ModelCatalogRefreshResult> | null = null;
 const providerReloads = new Map<string, Promise<void>>();
@@ -74,6 +74,7 @@ function createCatalog(
   let rosterSuccessAt = 0;
   let paused = false;
   let lastRecoveryAt = -Infinity;
+  let forceProviderLoads = false;
   const attempts = new Map<string, number>();
   const retries = new Map<string, number>();
   const controllers = new Set<AbortController>();
@@ -196,12 +197,13 @@ function createCatalog(
     providers = rows;
   }
 
-  function optionsQuery(providerId?: string): ThreadExecutionOptionsQuery | undefined {
+  function optionsQuery(providerId?: string, refresh = false): ThreadExecutionOptionsQuery | undefined {
     if (!providerId && !catalogHostId && !catalogProjectId) return undefined;
     return {
       ...(providerId ? { providerId } : {}),
       ...(catalogHostId ? { hostId: catalogHostId } : {}),
-      ...(catalogProjectId ? { projectId: catalogProjectId } : {})
+      ...(catalogProjectId ? { projectId: catalogProjectId } : {}),
+      ...(refresh ? { refresh: true } : {})
     };
   }
 
@@ -213,7 +215,7 @@ function createCatalog(
       inflight = new Set(inflight).add(providerId);
       emit();
       try {
-        const body = await fetchBounded(optionsQuery(providerId));
+        const body = await fetchBounded(optionsQuery(providerId, forceProviderLoads));
         if (epoch !== catalogEpoch) return;
         inherited.delete(providerId);
         applyRoster(mapProviders(body.providers));
@@ -297,13 +299,14 @@ function createCatalog(
       if (prefetchInflight !== pending) return;
       prefetchInflight = null;
       if (prefetchDirty) return prefetchThreadModelCatalog();
+      forceProviderLoads = false;
       scheduleRecovery();
     });
     prefetchInflight = pending;
     return pending;
   }
 
-  function resetForRecovery(): void {
+  function resetForRecovery(forceServer = false): void {
     catalogEpoch += 1;
     for (const controller of controllers) controller.abort();
     controllers.clear();
@@ -313,6 +316,7 @@ function createCatalog(
     rosterError = null;
     prefetchInflight = null;
     initialized = false;
+    forceProviderLoads = forceServer;
     loads.clear();
     inherited.clear();
     // Keep usable rows and project-local roles visible until their replacements
@@ -322,8 +326,8 @@ function createCatalog(
     emit();
   }
 
-  function reloadThreadModelCatalog(): Promise<void> {
-    resetForRecovery();
+  function reloadThreadModelCatalog(forceServer = true): Promise<void> {
+    resetForRecovery(forceServer);
     prefetchDirty = true;
     return prefetchThreadModelCatalog();
   }
@@ -355,7 +359,8 @@ function createCatalog(
     if (existing) return existing;
     attempts.delete(providerId);
     retries.delete(providerId);
-    return loadProvider(providerId);
+    forceProviderLoads = true;
+    return loadProvider(providerId).finally(() => { forceProviderLoads = false; });
   }
 
 
@@ -393,6 +398,10 @@ function createCatalog(
     reload: reloadThreadModelCatalog,
     ensureProvider: ensureThreadProviderModels,
     reloadProvider: reloadThreadProviderModels,
+    refreshProviderFromPush: (providerId: string) => {
+      inherited.add(providerId);
+      return loadProvider(providerId);
+    },
     hasSubscribers: () => listeners.size > 0,
     refreshResult: () => ({
       failedCatalogs: initialized && !rosterError ? 0 : 1,
@@ -406,7 +415,7 @@ function createCatalog(
         || Object.values(byProvider).some((entry) => entry.modelLoadError && Date.now() - (entry.lastAttemptAt ?? 0) >= MODEL_CATALOG_FOCUS_COOLDOWN_MS);
       if (!force && !stale) return;
       lastRecoveryAt = Date.now();
-      void reloadThreadModelCatalog();
+      void reloadThreadModelCatalog(false);
     },
     setOnline: (online: boolean) => {
       const wasPaused = paused;
@@ -462,7 +471,14 @@ export function prefetchThreadModelCatalog(): Promise<void> {
 }
 export function reloadThreadModelCatalog(): Promise<ModelCatalogRefreshResult> {
   if (catalogReload) return catalogReload;
-  const targets = [...new Set([threadModelCatalogForHost(), ...catalogs.values()])];
+  const defaultCatalog = threadModelCatalogForHost();
+  // The shared discovery queue deliberately leaves browser capacity free. Put
+  // project-scoped catalogs first so a slow global probe cannot starve the
+  // picker the user just asked to refresh.
+  const targets = [...new Set([
+    ...[...catalogs.values()].sort((a, b) => Number(Boolean(b.getSnapshot().projectId)) - Number(Boolean(a.getSnapshot().projectId))),
+    defaultCatalog
+  ])];
   const pending = Promise.all(targets.map((catalog) => catalog.reload())).then(() => {
     const results = targets.map((catalog) => catalog.refreshResult());
     return {
@@ -488,6 +504,13 @@ export function reloadThreadProviderModels(providerId: string): Promise<void> {
     .finally(() => { if (providerReloads.get(providerId) === pending) providerReloads.delete(providerId); });
   providerReloads.set(providerId, pending);
   return pending;
+}
+export function refreshThreadProviderModelsFromPush(hostId: string, providerId: string): void {
+  for (const catalog of catalogs.values()) {
+    const catalogHostId = catalog.getSnapshot().hostId ?? primaryCatalogHost;
+    if (catalogHostId !== hostId) continue;
+    void catalog.refreshProviderFromPush(providerId);
+  }
 }
 export function resetThreadModelCatalog(fetcher?: ThreadExecutionOptionsFetcher | null): void {
   for (const catalog of catalogs.values()) catalog.invalidate();

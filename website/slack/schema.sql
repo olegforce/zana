@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS slack_link_codes (
   consumed_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS slack_link_codes_expiry ON slack_link_codes(expires_at);
+CREATE TABLE IF NOT EXISTS slack_link_domains (
+  code_hash TEXT PRIMARY KEY REFERENCES slack_link_codes(hash) ON DELETE CASCADE,
+  label TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS slack_requests (
   id TEXT PRIMARY KEY,
   link_id TEXT NOT NULL REFERENCES slack_links(id) ON DELETE CASCADE,
@@ -52,3 +56,14 @@ CREATE INDEX IF NOT EXISTS slack_objects_link ON slack_objects(link_id);
 CREATE INDEX IF NOT EXISTS slack_conversations_link ON slack_conversations(link_id);
 CREATE INDEX IF NOT EXISTS slack_conversations_created ON slack_conversations(created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS slack_links_active ON slack_links(team_id,app_id,slack_user) WHERE state='active';
+CREATE TABLE IF NOT EXISTS slack_mcp_requests (
+  id TEXT PRIMARY KEY,
+  link_id TEXT NOT NULL REFERENCES slack_links(id) ON DELETE CASCADE,
+  payload_hash TEXT NOT NULL,
+  state TEXT NOT NULL,
+  response TEXT,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS slack_mcp_requests_link ON slack_mcp_requests(link_id);
+CREATE INDEX IF NOT EXISTS slack_mcp_requests_expiry ON slack_mcp_requests(expires_at);

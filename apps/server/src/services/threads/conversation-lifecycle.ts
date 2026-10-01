@@ -64,6 +64,7 @@ import { archiveConversationOnHost, unarchiveConversationOnHost } from './thread
 import { collectConversationArchiveDescendants } from './conversation-child-ops.js';
 import { bridgeLaunchForProvider, getThreadProvider } from './thread-provider-catalog.js';
 import { readLastThreadExecution } from './thread-last-execution.js';
+import { validateProviderModelSelection } from './provider-model-validation.js';
 import { threadPermissionMode } from './thread-permission-mode.js';
 import { packConversationSessionTooling } from './conversation-session-tools.js';
 import { withResolvedPluginMentionContext } from '../../plugins/plugin-mentions.js';
@@ -231,6 +232,17 @@ async function sendConversationTurnWithLease(
   if (prompt.length === 0) {
     throw new ThreadCreateError(400, 'invalid-input', 'input is required');
   }
+  if (!live.environmentId) {
+    throw new ThreadCreateError(409, 'environment_not_ready', 'thread has no environment');
+  }
+  const environment = getEnvironment(ctx.db, live.environmentId);
+  await validateProviderModelSelection(ctx, {
+    hostId: live.hostId,
+    providerId: live.providerId,
+    ...(environment?.path ? { cwd: environment.path } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
+    ...(execution.reasoningLevel ? { reasoningLevel: execution.reasoningLevel } : {})
+  });
   const steerTurnId = resolvedMode === 'steer'
     ? findOpenConversationTurn(ctx.db, live.id)?.turnId ?? null
     : null;

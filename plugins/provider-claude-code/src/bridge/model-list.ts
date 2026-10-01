@@ -10,7 +10,7 @@ function buildModelProbeOptions(env: NodeJS.ProcessEnv): Options {
     cwd: process.cwd(),
     maxTurns: 0,
     persistSession: false,
-    settingSources: [],
+    settingSources: ["user", "project", "local"],
     ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
   };
 }
@@ -33,7 +33,11 @@ export async function listClaudeCodeBridgeModels(
 
   try {
     const initialization = await session.initializationResult();
-    return buildClaudeCodeModels(initialization.models);
+    const catalog = buildClaudeCodeModels(initialization.models);
+    if (catalog.models.length === 0) {
+      throw new Error("Claude Code returned an empty model catalog");
+    }
+    return catalog;
   } catch (error) {
     throw translateMissingClaudeCliCatalogError(error);
   } finally {

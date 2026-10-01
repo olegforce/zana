@@ -22,7 +22,7 @@ export async function createHostedConnect(env) {
   const gateway = createConnectGateway(deps);
   let slack;
   const account = new URL(deps.registry.accountUrl);
-  const slackPath = req => req.headers.host === account.host && /^\/(?:api\/slack\/events|api\/connect\/slack\/)/.test(req.url ?? '');
+  const slackPath = req => req.headers.host === account.host && /^\/(?:api\/slack\/(?:(?:events|mcp)(?:\/?(?:\?|$))|tasks\/)|api\/connect\/slack\/)/.test(req.url ?? '');
   try {
     // Registration owns the concrete plugin id; the tunnel remains generic.
     if (env.SLACK_BOT_TOKEN && env.SLACK_SIGNING_SECRET && env.SLACK_APP_ID && env.SLACK_TEAM_ID) {

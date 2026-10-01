@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { providerCapabilities } from '@zana-ai/zcc-domain/launch-provider';
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 import { useData, useAgentStatus } from '../../store.js';
@@ -5,6 +6,7 @@ import { agentSessionAnchorId } from '../../lib/split-layout/agentSessionPortal.
 import { AgentSessionView } from '../../components/AgentSessionView.js';
 import { AgentSessionActions } from '../../components/AgentSessionActions.js';
 import { PaneEmptyState } from '../../components/PaneEmptyState.js';
+import { CliAgentSurface } from '../../components/CliAgentSurface.js';
 
 function findSessionById(
   terminals: Record<string, TerminalSession[]>,
@@ -28,7 +30,11 @@ function findSessionById(
  * hosts {@link AgentSessionView} with the same footer actions as the inspector
  * modal. A vanished session (terminated and dismissed) shows an empty state.
  */
-export function AgentSessionPage({
+export function AgentSessionPage(props: ComponentProps<typeof DesktopAgentSessionPage>) {
+  return <CliAgentSurface><DesktopAgentSessionPage {...props} /></CliAgentSurface>;
+}
+
+function DesktopAgentSessionPage({
   projectId,
   sessionId
 }: {

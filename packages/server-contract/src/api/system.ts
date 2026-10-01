@@ -93,6 +93,7 @@ export const systemExecutionOptionsQuerySchema = z
   .object({
     ...systemProviderHostQueryFields,
     providerId: z.string().min(1),
+    refresh: z.enum(['0', '1']),
   })
   .partial()
   .superRefine(rejectMultipleProviderHostSelectors);

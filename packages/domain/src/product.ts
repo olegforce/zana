@@ -1689,6 +1689,13 @@ export interface AppConfig {
   defaultHarness?: HarnessFamily;
   /** Structured global model defaults, keyed by owning harness. */
   harnessRouting?: HarnessModelRoutingV1;
+  /** User-declared provider models merged over live discovery (bounded and main-validated). */
+  customModels?: Array<{
+    providerId: string;
+    model: string;
+    displayName?: string;
+    description?: string;
+  }>;
   /** Global Claude text appended before project, persona, and agent prompt layers. */
   claudeAppendSystemPrompt?: string;
   /** Global Claude CLI arguments. Later project, persona, and agent layers take priority on conflicts. */

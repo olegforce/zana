@@ -29,6 +29,7 @@ export default function plugin(zcc) {
       permissionModes: ['accept-edits', 'auto', 'full'],
       reasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
     },
+    models: { scope: 'host' },
     composerActions: ['plan', 'goal'],
     deriveProviderOptions(context) {
       const flag = (value, fallback) => (typeof value === 'boolean' ? value : fallback);

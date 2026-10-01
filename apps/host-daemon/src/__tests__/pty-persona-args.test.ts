@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { parse } from 'smol-toml';
 
 // PtyManager imports node-pty (real subprocesses). Mock it with a fake IPty
 // that RECORDS the argv it was spawned with, so we can assert exactly what
@@ -484,6 +485,82 @@ describe('PtyManager.create — trustZccToolsEnabled (whole-server pre-approval)
     const idx = argv.indexOf('--allowedTools');
     const tools = argv[idx + 1].split(',');
     expect(tools).toContain('mcp__zcc-inbox__run_in_terminal');
+  });
+});
+
+describe('PtyManager.create — Codex MCP approval overrides', () => {
+  beforeEach(() => {
+    spawned.length = 0;
+  });
+
+  it.each(['job-team', 'structured', 'freeform'] as const)('keeps workspace-write + on-request and safe tool approvals for %s', (coordinationMode) => {
+    const mgr = new PtyManager();
+    mgr.setMcpBaseUrl('http://127.0.0.1:3000');
+    mgr.create({
+      projectId: 'proj1',
+      profile: 'codex',
+      cwd: '/tmp',
+      cols: 80,
+      rows: 24,
+      coordinationMode,
+      config: {
+        ...CONFIG,
+        defaultCodexSandbox: 'workspace-write',
+        defaultCodexApproval: 'on-request',
+        trustZccToolsEnabled: false
+      }
+    });
+    const argv = spawned[0].args;
+    expect(argv).toEqual(expect.arrayContaining(['-s', 'workspace-write', '-a', 'on-request']));
+    const prefix = 'mcp_servers.zcc-inbox.tools=';
+    const override = argv.find((arg) => arg.startsWith(prefix));
+    expect(override).toBeDefined();
+    const tools = parse(`tools=${override!.slice(prefix.length)}`).tools;
+    expect(tools).toMatchObject({
+      'execution.work.complete': { approval_mode: 'approve' },
+      'execution.work.block': { approval_mode: 'approve' },
+      inbox_push: { approval_mode: 'approve' }
+    });
+    expect(argv).not.toContain('--allowedTools');
+    expect(tools).not.toHaveProperty('remote_exec');
+    expect(tools).not.toHaveProperty('library_remove');
+  });
+
+  it('maps Trust all ZCC tools to Codex server-wide approval mode', () => {
+    const mgr = new PtyManager();
+    mgr.setMcpBaseUrl('http://127.0.0.1:3000');
+    mgr.create({
+      projectId: 'proj1',
+      profile: 'codex',
+      cwd: '/tmp',
+      cols: 80,
+      rows: 24,
+      coordinationMode: 'job-team',
+      config: {
+        ...CONFIG,
+        defaultCodexSandbox: 'workspace-write',
+        defaultCodexApproval: 'on-request',
+        trustZccToolsEnabled: true
+      }
+    });
+    const argv = spawned[0].args;
+    expect(argv).toContain('mcp_servers.zcc-inbox.default_tools_approval_mode="approve"');
+    expect(argv.some((arg) => arg.startsWith('mcp_servers.zcc-inbox.tools='))).toBe(false);
+  });
+
+  it.each([undefined, 'interactive-team'] as const)('does not add native approval overrides to an ordinary %s session', (coordinationMode) => {
+    const mgr = new PtyManager();
+    mgr.setMcpBaseUrl('http://127.0.0.1:3000');
+    mgr.create({ projectId: 'proj1', profile: 'codex', cwd: '/tmp', cols: 80, rows: 24,
+      coordinationMode, config: { ...CONFIG, trustZccToolsEnabled: false } });
+    expect(spawned[0].args.some((arg) => arg.includes('approval_mode'))).toBe(false);
+  });
+
+  it('does not add native approvals without a wired MCP server', () => {
+    const mgr = new PtyManager();
+    mgr.create({ projectId: 'proj1', profile: 'codex', cwd: '/tmp', cols: 80, rows: 24,
+      coordinationMode: 'job-team', config: { ...CONFIG, trustZccToolsEnabled: true } });
+    expect(spawned[0].args.some((arg) => arg.includes('approval_mode'))).toBe(false);
   });
 });
 

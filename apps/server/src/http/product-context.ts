@@ -49,6 +49,8 @@ import { startDeferredRetryLoop } from '../services/threads/deferred-retry-loop.
 import { disposeLocalHostDaemon } from '../services/hosts/host-relaunch.js';
 import { startConversationHistoryMaintenance } from '../services/threads/conversation-history-maintenance.js';
 import { PersistentTerminalSessions } from './persistent-terminal-sessions.js';
+import { ProviderModelCatalogStore } from '../services/threads/provider-model-catalog-store.js';
+import { bridgeLaunchForProvider, listThreadProviders } from '../services/threads/thread-provider-catalog.js';
 
 export interface ProductTerminalRecord extends TerminalSession {
   hostId: string;
@@ -67,6 +69,7 @@ export interface ProductHttpContext {
   joinCodes: JoinCodeStore;
   db: ZccDatabase;
   hostHub: HostHub;
+  modelCatalogs: ProviderModelCatalogStore;
   projects: ProjectStore;
   config: ReturnType<typeof createConfigStore>;
   inbox: IInboxStore;
@@ -162,6 +165,19 @@ export function createProductHttpContext(
       if (!ctx) return;
       void reconcileStoppingConversationThreadsOnHostConnect(ctx, hostId).catch(() => undefined);
       void flushDueConversationSendsForHost(ctx, hostId).catch(() => undefined);
+      for (const provider of listThreadProviders().filter((row) => row.models?.scope === 'host')) {
+        try {
+          void ctx.modelCatalogs.read({
+            hostId,
+            providerId: provider.id,
+            scope: 'host',
+            prewarm: true,
+            bridgeLaunch: bridgeLaunchForProvider(provider.id, ctx.pluginHostArtifacts)
+          }).catch(() => undefined);
+        } catch {
+          // A provider plugin can still be building while the host reconnects.
+        }
+      }
     },
     onConversationEvent: ({ threadId }) => {
       const thread = getConversationThread(db, threadId);
@@ -185,6 +201,11 @@ export function createProductHttpContext(
         healDisconnectedConversationThreadsForHost(ctx.db, ctx.hub, hostId);
       }, HOST_ACTIVE_WORK_DISCONNECT_GRACE_MS));
     }
+  });
+  const modelCatalogs = new ProviderModelCatalogStore({
+    db,
+    callHostOnlineRpc: (input) => hostHub.callHostOnlineRpc(input),
+    onChanged: (payload) => hub.emit('provider-model-catalog:changed', payload)
   });
   pendingInteractions = new PendingInteractionLifecycle({
     db,
@@ -319,6 +340,7 @@ export function createProductHttpContext(
     joinCodes: createJoinCodeStore(db),
     db,
     hostHub,
+    modelCatalogs,
     projects,
     config,
     inbox,

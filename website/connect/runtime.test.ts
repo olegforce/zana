@@ -39,8 +39,18 @@ it.each([true, false])('registers the Slack HTTP receiver without interrupting m
   try {
     const body = { type: 'url_verification', challenge: 'hello' }; const time = String(Math.floor(Date.now() / 1000));
     expect(runtime.matches({ headers: { host: 'example.com' }, url: '/api/slack/events/' })).toBe(true);
+    expect(runtime.matches({ headers: { host: 'example.com' }, url: '/api/slack/mcp/' })).toBe(true);
+    expect(runtime.matches({ headers: { host: 'other.example' }, url: '/api/slack/mcp/' })).toBe(false);
+    expect(runtime.matches({ headers: { host: 'example.com' }, url: '/api/slack/tasks/id/view/task' })).toBe(true);
+    expect(runtime.matches({ headers: { host: 'other.example' }, url: '/api/slack/tasks/id/view/task' })).toBe(false);
+    expect(runtime.matches({ headers: { host: 'example.com' }, url: '/api/slack/tasks-extra' })).toBe(false);
+    expect(runtime.matches({ headers: { host: 'example.com' }, url: '/api/slack/mcp-extra' })).toBe(false);
     const result = await post('/api/slack/events/', body, { 'x-slack-request-timestamp': time, 'x-slack-signature': `v0=${createHmac('sha256', 'signing').update(`v0:${time}:${JSON.stringify(body)}`).digest('hex')}` });
     expect(result).toEqual(ready ? { status: 200, body: { challenge: 'hello' } } : { status: 503, body: { error: 'slack_not_configured' } });
+    const discovery = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
+    const tools = await post('/api/slack/mcp/', discovery, { 'x-slack-request-timestamp': time, 'x-slack-signature': `v0=${createHmac('sha256', 'signing').update(`v0:${time}:${JSON.stringify(discovery)}`).digest('hex')}` });
+    expect(tools.status).toBe(ready ? 200 : 503);
+    if (ready) expect(tools.body.result.tools.map((tool: any) => tool.name)).toContain('zana_launch_job');
     expect((await post('/api/connect/device/start', { name: 'Test laptop' })).status).toBe(200);
   } finally { await runtime.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
