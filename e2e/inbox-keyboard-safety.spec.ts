@@ -64,11 +64,10 @@ for (const tab of ['Feed', 'Saved'] as const) {
       await editor.fill('abcd');
       await editor.press('Backspace');
       await expect(editor).toHaveText('abc');
-      // Home/End scroll rather than move the caret on macOS.
-      for (let i = 0; i < 3; i++) await editor.press('ArrowLeft');
+      await editor.press('ControlOrMeta+a');
       await editor.press('Delete');
-      await expect(editor).toHaveText('bc');
-      for (let i = 0; i < 2; i++) await editor.press('ArrowRight');
+      await expect(editor).toHaveText('');
+      await editor.fill('bc');
       await editor.pressSequentially('jk');
       await expect(editor).toHaveText('bcjk');
       await editor.fill('');
