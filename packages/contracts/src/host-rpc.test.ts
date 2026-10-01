@@ -820,7 +820,7 @@ describe('host-rpc contract', () => {
   });
 
   it('parses desktop.browser commands, results, and a non-UUID thread payload', () => {
-    expect(HOST_RPC_PROTOCOL_VERSION).toBe(39);
+    expect(HOST_RPC_PROTOCOL_VERSION).toBe(40);
     expect(HostRpcCommandSchema.parse({
       type: 'desktop.browser.list_instances'
     }).type).toBe('desktop.browser.list_instances');
@@ -865,4 +865,12 @@ describe('host-rpc contract', () => {
     expect(batch.events[0]?.kind).toBe('desktop.browser.changed');
     expect((batch.events[0]?.payload as { threadId: string }).threadId).toBe('thr_abcdefghij');
   });
+});
+
+it('validates bounded preview declarations and their owner generation', () => {
+  const command = { type: 'preview.replace', epoch: '11111111-1111-4111-8111-111111111111', generation: 1, targets: [{ port: 5173, expiresAt: Date.now() + 60000 }] };
+  expect(HostRpcCommandSchema.parse(command)).toEqual(command);
+  for (const patch of [{ epoch: 'forged' }, { generation: -1 }, { targets: [{ port: 22, expiresAt: 1 }] }, { targets: Array(33).fill(command.targets[0]) }, { targetHost: 'other' }]) {
+    expect(HostRpcCommandSchema.safeParse({ ...command, ...patch }).success).toBe(false);
+  }
 });

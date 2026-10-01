@@ -316,7 +316,7 @@ describe('pty tmux wrapping (remote)', () => {
       ...dims
     });
     const remoteCmd = spawned[0].args.at(-1) as string;
-    expect(remoteCmd).not.toContain('cd ');
+    expect(remoteCmd).not.toMatch(/\bcd\s/);
     expect(remoteCmd).toContain('exec');
   });
 

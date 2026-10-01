@@ -1,3 +1,4 @@
+import { HostPreviewTunnel } from './preview-tunnel.js';
 import { randomUUID } from 'node:crypto';
 import {
   HOST_RPC_PROTOCOL_VERSION,
@@ -221,6 +222,8 @@ export function startEnrolledHostConnection(options: {
     }).catch(() => null)
     : Promise.resolve(null);
 
+  const previewTunnel = new HostPreviewTunnel(options.serverUrl, options.connectCredential);
+  runtime.previewTunnel = previewTunnel;
   socket = createHostServerSocket({
     serverUrl: options.serverUrl,
     hostId: options.hostId,
@@ -234,6 +237,7 @@ export function startEnrolledHostConnection(options: {
     onConnectionChange: connected => {
       if (!connected) delivery.cancel();
       desktopBrowserBroker?.setConnected(connected);
+      previewTunnel.setConnected(connected);
       options.onConnectionChange?.(connected);
       if (connected) void sink.flush();
     },
@@ -254,6 +258,7 @@ export function startEnrolledHostConnection(options: {
     delivery.cancel();
     options.onConnectionChange?.(false);
     socket?.close();
+    previewTunnel.close();
     await pluginHosts.shutdown();
     adapter?.dispose();
     enrolledPty?.dispose();

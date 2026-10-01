@@ -1,0 +1,11 @@
+export const PREVIEW_TARGET: unique symbol;
+export const PREVIEW_PROTOCOL: unique symbol;
+export const PREVIEW_PATH: string;
+export const PREVIEW_LIMIT: number;
+export const PREVIEW_TTL: number;
+export function machinePreviewKey(hostId: string): string;
+export function validPreviewPort(port: unknown): port is number;
+export function previewPathAllowed(path: unknown): boolean;
+export function parsePreviewLabel(label: string): { base: string; machine: string | null; port: number } | null;
+export function previewTargets(value: unknown, now?: number): Array<{ port: number; expiresAt: number }>;
+export function previewHeaders(input: unknown, response?: boolean, port?: number): Record<string, string | string[]>;

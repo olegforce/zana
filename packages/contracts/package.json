@@ -67,7 +67,8 @@
     },
     "./cli-discovery": "./src/cli-discovery.ts",
     "./cli-callbacks": "./src/cli-callbacks.ts",
-    "./cli-terminal": "./src/cli-terminal.ts"
+    "./cli-terminal": "./src/cli-terminal.ts",
+    "./previews": "./src/previews.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

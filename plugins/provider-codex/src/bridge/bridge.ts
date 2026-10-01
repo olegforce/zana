@@ -503,6 +503,9 @@ function decodeCodexOptions(
   return {
     sessionOptions: {
       ...options,
+      // The host's sentinel means use Codex's configured model. Sending it as
+      // a model id bypasses that default and can fail in the provider router.
+      model: options.model === "default" ? undefined : options.model,
       ...(decoded.memoryEnabled !== undefined
         ? { memoryEnabled: decoded.memoryEnabled }
         : {}),

@@ -46,3 +46,12 @@ open; release any automation lease when finished. Respect Stop/Take over.
 
 For files, use `preview_file`. For your own web research, use the available
 search/fetch tools.
+
+## Phone or remote previews
+
+When the user requests a phone or remote preview, start their dev server, then
+in a Modern thread use `share_preview` with `action: "share"` and the port. The tool uses this
+thread's execution machine. Return the private URL and its status; the user
+signs in with the same Connect account. Requires Remote access and expires
+after eight hours. `action: "stop"` removes this thread's share. Never share
+ports automatically. Keep desktop Open in the in-app browser.

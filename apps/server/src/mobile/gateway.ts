@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../../services/mobile-relay/protected-ports.mjs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   createServer,
@@ -402,7 +403,8 @@ export async function startMobileGateway(options: MobileGatewayOptions) {
   try {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
-      server.listen(options.port ?? 8785, host, () => {
+      protectPreviewServer(server);
+    server.listen(options.port ?? 8785, host, () => {
         server.off('error', reject);
         resolve();
       });

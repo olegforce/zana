@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../../services/mobile-relay/protected-ports.mjs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { WebSocketServer } from 'ws';
@@ -66,6 +67,7 @@ export async function startProductServer(options: StartProductServerOptions): Pr
     });
   });
 
+  protectPreviewServer(server);
   const address = server.address();
   if (!address || typeof address === 'string') {
     server.close();

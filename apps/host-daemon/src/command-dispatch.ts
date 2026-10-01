@@ -154,6 +154,7 @@ export type ThreadArchiveInput = {
 };
 
 export interface CommandRuntime {
+  previewTunnel?: import('./preview-tunnel.js').HostPreviewTunnel;
   pluginHosts?: PluginHostManager;
   dataDir: string;
   environments: Map<string, {
@@ -1245,6 +1246,9 @@ export async function dispatchHostCommand(
         artifactPath: command.artifactPath
       });
     }
+    case 'preview.replace':
+      if (!runtime.previewTunnel) throw new HostCommandError('unsupported', 'Preview sharing is unavailable on this machine');
+      return runtime.previewTunnel.replace(command);
     case 'desktop.browser.list_instances':
     case 'desktop.browser.list_tabs':
     case 'desktop.browser.create_tab':

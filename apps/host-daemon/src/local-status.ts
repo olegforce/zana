@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 import { createServer, type Server } from 'node:http';
 
 export interface LocalStatusState {
@@ -22,6 +23,7 @@ export function startLocalStatusServer(port: number, state: () => LocalStatusSta
     });
     response.end(body);
   });
+  protectPreviewServer(server);
   server.listen(port, '127.0.0.1');
   return server;
 }
