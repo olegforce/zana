@@ -1,5 +1,7 @@
 # Slack through Zana Connect
 
+For the reproducible app manifest, Zana logo, iframe settings, and a portable Project/channel configuration template, see [the saved Slack configuration](slack-configuration/README.md).
+
 Current: Zana for Slack **0.11.0** and Heroku **v71** provide selective Project imports, a shared capability inventory, and locally enabled read-only plugin tools in **BT Internal Sandbox**. Connecting a computer no longer synchronizes every Project. Existing 38 managed Project channels and the manual mapping were preserved. See [imports and plugin capabilities](slack-capabilities.md).
 
 The installed app uses app `A0C5F0XK3TP` in workspace `T04SR5XV56X`. Signed HTTP event verification, MCP discovery, per-domain linking, local approval, and earlier real job verification remain in place. Slack `groups:write` is approved. The hosted proxy still creates private channels, invites only the verified link owner, and restricts renames to link-owned channels.
