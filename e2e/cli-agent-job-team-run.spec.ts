@@ -1,15 +1,26 @@
 /** CLI Agent owner starts and completes the same durable Job Team scenario as direct Job Team UI. */
-import { test, expect } from './fixtures/app.js';
+import { test, expect, launchApp } from './fixtures/app.js';
 import { makeJobTeamCoordinatorBinary } from './sdk/harness.js';
 import { answerJobBlockerThroughUi } from './sdk/job-team-scenario.js';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 test.use({ e2e: true, initialConfig: { teamJobLaunchEnabled: true, sponsorPromptDismissed: true } });
 test.setTimeout(120_000);
 
-test('CLI Agent starts a durable Job Team, surfaces its question, and completes', async ({ app }) => {
+test('CLI Agent starts a durable Job Team, surfaces its question, and completes', async ({ home }) => {
+  const catalogDir = mkdtempSync(join(tmpdir(), 'zcc-job-team-catalog-'));
+  symlinkSync(fileURLToPath(new URL('./fixtures/claude-model-cli.cjs', import.meta.url)), join(catalogDir, 'claude'));
+  // The picker discovers models through the SDK. Its PATH points only at our
+  // deterministic catalog fixture; the PTY uses the coordinator configured below.
+  const app = await launchApp(home, {
+    e2e: true,
+    allowLiveClaude: true,
+    env: { PATH: `${catalogDir}${delimiter}${process.env.PATH ?? ''}` },
+    initialConfig: { teamJobLaunchEnabled: true, sponsorPromptDismissed: true }
+  });
   const { window } = app;
   const diagnostics: string[] = [];
   window.on('console', (message) => diagnostics.push(`[renderer:${message.type()}] ${message.text()}`));
@@ -117,5 +128,7 @@ test('CLI Agent starts a durable Job Team, surfaces its question, and completes'
     }
     rmSync(projectDir, { recursive: true, force: true });
     agent.cleanup();
+    await app.electron.close();
+    rmSync(catalogDir, { recursive: true, force: true });
   }
 });
