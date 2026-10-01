@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { packedPtyFiles } from './packed-pty-files.mjs';
+import { piExtensionLoaderPlugin } from './pi-extension-loader.mjs';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '../..');
@@ -69,6 +70,7 @@ await build({
 await build({
   ...shared,
   entryPoints: [join(repoRoot, 'packages/agent-runtime/src/pi/bridge/bridge.ts')],
+  plugins: [piExtensionLoaderPlugin],
   outfile: join(outDir, PI_BRIDGE_FILE)
 });
 
