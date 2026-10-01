@@ -1,3 +1,4 @@
+import { SHARE_PREVIEW_TOOL, invokeSharePreview } from './host-share-preview-tool.js';
 /**
  * Host DynamicTools packed onto every conversation session.
  *
@@ -76,6 +77,7 @@ export type { PackedSessionTooling };
 
 export const HOST_SHARE_TOOL_NAMES = [
   HOST_PREVIEW_FILE_TOOL_NAME,
+  'share_preview',
   INBOX_PUSH_NAME,
   INBOX_SEARCH_NAME,
   SUGGEST_ACTION_NAME,
@@ -125,6 +127,7 @@ export const HOST_PTY_ONLY_TOOL_NAMES = [
 
 const HOST_SESSION_TOOLS: DynamicTool[] = [
   HOST_PREVIEW_FILE_TOOL,
+  SHARE_PREVIEW_TOOL,
   ...HOST_INBOX_TOOLS,
   ...HOST_LIBRARY_TOOLS,
   ...HOST_GOAL_TOOLS,
@@ -186,6 +189,7 @@ export async function invokeHostSessionTool(
   args: { name: string; threadId: string; projectId: string; input: unknown }
 ): Promise<ToolCallResponse> {
   const { name } = args;
+  if (name === 'share_preview') return invokeSharePreview(ctx, args);
   if (name === HOST_PREVIEW_FILE_TOOL_NAME) {
     return invokeHostPreviewFileTool(ctx, args);
   }

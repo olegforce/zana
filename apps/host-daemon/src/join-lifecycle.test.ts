@@ -35,7 +35,7 @@ describe('join lifecycle', () => {
   it('closes both listeners before restarting after a protocol mismatch and coalesces callbacks', async () => {
     const f = fixture();
     const restart = vi.fn(async () => { expect(f.close).toHaveBeenCalled(); expect(f.statusClose).toHaveBeenCalled(); });
-    await runJoin(options, restart);
+    const running = await runJoin(options, restart);
     const events = deps.start.mock.calls[0]![0]; events.onSocketClose(4001); events.onSocketClose(4002);
     await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1)); expect(deps.update).toHaveBeenCalledTimes(1);
     events.onSocketClose(4001); expect(deps.update).toHaveBeenCalledTimes(1);
@@ -50,6 +50,30 @@ describe('join lifecycle', () => {
     const restart = vi.fn(async () => {});
     await expect(runJoin(options, restart)).rejects.toThrow('409');
     expect(restart).toHaveBeenCalledTimes(1); expect(f.statusClose).toHaveBeenCalledTimes(1);
+  });
+  it('cancels an offline startup and releases its listener before a successful protocol restart', async () => {
+    const f = fixture();
+    deps.start.mockImplementation(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new Error('closed')));
+      queueMicrotask(() => input.onSocketClose(4001));
+    }));
+    const restart = vi.fn(async () => { expect(f.statusClose).toHaveBeenCalledOnce(); });
+    const running = await runJoin(options, restart);
+    expect(restart).toHaveBeenCalledOnce();
+    expect(deps.start.mock.calls[0][0]).toMatchObject({ keepRetryingStartup: true });
+    await running.close();
+  });
+  it.each([false, true])('stops replaced ownership without a supervisor restart loop, managed=%s', async managed => {
+    vi.stubEnv('ZCC_HOST_SERVICE_MANAGED', managed ? '1' : '0');
+    const f = fixture(); const restart = vi.fn();
+    const running = await runJoin(options, restart);
+    deps.start.mock.calls[0][0].onSocketClose(4003);
+    await vi.waitFor(() => expect(f.close).toHaveBeenCalledOnce());
+    if (managed) expect(f.statusClose).not.toHaveBeenCalled();
+    await running.close();
+    expect(f.close).toHaveBeenCalledTimes(managed ? 2 : 1);
+    expect(f.statusClose).toHaveBeenCalledOnce();
+    expect(restart).not.toHaveBeenCalled();
   });
   it.each([true, false])('restarts through the correct owner, service managed=%s', async managed => {
     vi.stubEnv('ZCC_HOST_SERVICE_MANAGED', managed ? '1' : '');
@@ -86,7 +110,7 @@ describe('bundled join CLI entry', () => {
       expect(readFileSync(join(dir, 'host-daemon.pid'), 'utf8')).toBe(String(process.pid));
       const stop = process.listeners('SIGTERM').find(fn => !before.get('SIGTERM')!.includes(fn));
       stop!('SIGTERM');
-      await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0));
+      await vi.waitFor(() => expect(deps.status.mock.results.at(-1)!.value.close).toHaveBeenCalledOnce());
       const cleanup = process.listeners('exit').find(fn => !before.get('exit')!.includes(fn));
       cleanup!(0);
       expect(() => readFileSync(join(dir, 'host-daemon.pid'))).toThrow();

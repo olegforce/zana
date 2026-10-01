@@ -1,6 +1,7 @@
 import type { AvailableModel } from '@zana-ai/zcc-domain/thread-runtime';
 import { product } from '../../../lib/product-client.js';
 import { composerActionsFromProvider } from './composer-mode.js';
+import { createModelDiscoveryQueue } from './model-discovery-queue.js';
 import {
   fallbackModelsForProvider,
   fallbackMoreModelsForProvider,
@@ -41,6 +42,7 @@ export const MODEL_CATALOG_RETRY_DELAYS_MS = [1_000, 4_000, 15_000] as const;
 export const MODEL_CATALOG_FOCUS_COOLDOWN_MS = 60_000;
 const MAX_IDLE_HOST_CATALOGS = 8;
 let fetchOptions: ThreadExecutionOptionsFetcher = (query, options) => product.threads.executionOptions(query, options);
+const scheduleDiscovery = createModelDiscoveryQueue();
 const catalogs = new Map<string, ReturnType<typeof createCatalog>>();
 export type ModelCatalogRefreshResult = { failedCatalogs: number; failedProviders: string[] };
 let catalogReload: Promise<ModelCatalogRefreshResult> | null = null;
@@ -363,7 +365,7 @@ function createCatalog(
     controllers.add(controller);
     let onAbort: () => void = () => undefined;
     try {
-      return await Promise.race([
+      return await scheduleDiscovery(() => Promise.race([
         fetchOptions(query, { signal: controller.signal }),
         new Promise<never>((_, reject) => {
           onAbort = () => reject(new Error('Model discovery cancelled'));
@@ -375,7 +377,7 @@ function createCatalog(
             controller.abort();
           }, MODEL_CATALOG_TIMEOUT_MS);
         })
-      ]);
+      ]), controller.signal);
     } finally {
       clearTimeout(timer);
       controller.signal.removeEventListener('abort', onAbort);

@@ -144,7 +144,10 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
         const member = await call('users.info', { user: info.slack_user });
         return json({ team: identity.teamName ?? identity.team, user: member.user?.real_name ?? info.slack_user, userId: info.slack_user });
       }
-      if (path.endsWith('/links') && request.method === 'GET') return json({ links: await registry.list(user.id) });
+      if (path.endsWith('/links') && request.method === 'GET') {
+        const links = await registry.list(user.id);
+        return json({ links: links.map(link => ({ ...link, team_name: link.team_id === identity.team ? identity.teamName ?? null : null })) });
+      }
       if (path.endsWith('/approve') && request.method === 'POST') {
         const input = await readJson(request);
         if (input.approved !== true || typeof input.serverId !== 'string' || input.serverId.length > 100) throw new SlackError('approval_required');

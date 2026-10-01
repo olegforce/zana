@@ -7,6 +7,7 @@ import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { useInboxThread } from '../hooks/useInboxThread.js';
 import { reopenInboxThread, sendInboxThreadReply } from '../lib/inbox-thread.js';
 import { getThreadRoutePath } from '../lib/route-paths.js';
+import { confirmInboxDeletion, isInboxListShortcut } from '../lib/inbox-keyboard.js';
 import { InboxMobileActions } from './InboxMobileActions.js';
 import { InboxMobileDocument } from './InboxMobileDocument.js';
 import { videoContentType } from '@zana-ai/zcc-domain';
@@ -53,7 +54,7 @@ import type {
 
 interface InboxDetailProps {
   /**
-   * Gates the page-level Delete/Backspace shortcut so the inbox view only
+   * Gates the Delete shortcut so the inbox view only
    * intercepts when it's actually visible.
    */
   visible: boolean;
@@ -90,6 +91,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
     async (id: string) => {
       const idx = entries.findIndex((e) => e.id === id);
       if (idx < 0) return;
+      if (!confirmInboxDeletion('message')) return;
 
       // entries are newest-first; "the one after this" is the next older.
       const nextId = entries[idx + 1]?.id ?? entries[idx - 1]?.id ?? null;
@@ -110,9 +112,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
     if (!visible) return;
     if (!selectedId) return;
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (e.key !== 'Delete' || e.repeat || !isInboxListShortcut(e)) return;
       e.preventDefault();
       void handleDelete(selectedId!);
     }
@@ -673,7 +673,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               type="button"
               onClick={onDelete}
               className="inbox-detail-trash"
-              title="Delete this entry (Delete / Backspace)"
+              title="Delete this entry (Delete)"
               aria-label="Delete this inbox entry"
             >
               <Trash2 size={14} strokeWidth={1.75} />

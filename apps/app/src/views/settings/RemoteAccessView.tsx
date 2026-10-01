@@ -1,3 +1,4 @@
+import { SharedPreviews } from './SharedPreviews.js';
 import { SharedInstancePicker } from './SharedInstancePicker.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, ExternalLink, Smartphone } from 'lucide-react';
@@ -89,6 +90,7 @@ export function RemoteAccessView({ config, onConfigDraft }: {
     <Smartphone size={24} aria-hidden="true" />
     <h2>Remote access is managed on your computer</h2>
     <p>Open Zana on the computer you want to reach, then choose Remote access beside the bug icon. Sign in with the same account when you open its address in a browser.</p>
+    <SharedPreviews />
   </section>;
 
   return <section className="remote-access-card" aria-label="Remote access setup">
@@ -148,5 +150,6 @@ export function RemoteAccessView({ config, onConfigDraft }: {
     <details className="remote-access-advanced"><summary>Open an existing Zana instead</summary><SharedInstancePicker /></details>
     {error && <p role="alert">{error}</p>}
     {statusError && <button type="button" className="btn" onClick={() => void refresh()}>Try again</button>}
+    <SharedPreviews />
   </section>;
 }

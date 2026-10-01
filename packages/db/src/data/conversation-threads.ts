@@ -179,13 +179,15 @@ export function listLiveConversationThreads(db: ZccDatabase): ConversationThread
 
 export function listLiveConversationThreadsForHost(
   db: ZccDatabase,
-  hostId: string
+  hostId: string,
+  opts?: { limit: number }
 ): ConversationThreadRow[] {
+  const limit = opts ? Math.max(1, Math.min(Math.trunc(opts.limit) || 1, 4096)) : -1;
   return (db.sqlite.prepare(
     `SELECT * FROM threads
      WHERE host_id = ? AND archived_at IS NULL AND status IN ('starting', 'active', 'stopping')
-     ORDER BY updated_at DESC`
-  ).all(hostId) as ConversationThreadSqlRow[]).map(toThread);
+     ORDER BY updated_at DESC LIMIT ?`
+  ).all(hostId, limit) as ConversationThreadSqlRow[]).map(toThread);
 }
 
 /** Cap for the unscoped visible-thread list (idle + error included). */

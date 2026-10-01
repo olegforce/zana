@@ -287,13 +287,13 @@ describe('conversation host recovery', () => {
     }));
   });
 
-  it('heals ghost-active threads to error and settles stopping to idle', () => {
+  it('heals ghost-active threads to error and preserves undelivered stop intent', () => {
     const database = openTestDb();
     const host = seedHost(database);
     const active = seedThread(database, host.id, { status: 'active', title: 'Ghost' });
     const stopping = seedThread(database, host.id, { status: 'stopping', title: 'Stop' });
     healDisconnectedConversationThreadsForHost(database, hub(), host.id);
     expect(getConversationThread(database, active.id)?.status).toBe('error');
-    expect(getConversationThread(database, stopping.id)?.status).toBe('idle');
+    expect(getConversationThread(database, stopping.id)?.status).toBe('stopping');
   });
 });
