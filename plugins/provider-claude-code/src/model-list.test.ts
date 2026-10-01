@@ -2,143 +2,44 @@ import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { buildClaudeCodeModels } from "./model-list.js";
 
-const DISCOVERED_MODELS: ModelInfo[] = [
+const discovered: ModelInfo[] = [
+  { value: "default", resolvedModel: "claude-opus-5-5[1m]", displayName: "Default", description: "Recommended" },
+  { value: "opus[1m]", resolvedModel: "claude-opus-5-5[1m]", displayName: "Opus", description: "Alias" },
+  { value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Sonnet", description: "Alias" },
   {
-    value: "default",
-    resolvedModel: "claude-opus-5-5[1m]",
-    displayName: "Default (recommended)",
-    description: "Opus 5.5 with 1M context",
+    value: "claude-future-6",
+    resolvedModel: "claude-future-6",
+    displayName: "Future 6",
+    description: "New model",
+    supportedEffortLevels: ["low", "xhigh"],
   },
-  {
-    value: "opus[1m]",
-    resolvedModel: "claude-opus-5-5[1m]",
-    displayName: "Opus",
-    description: "Opus 5.5 with 1M context",
-  },
-  {
-    value: "claude-fable-5-1[1m]",
-    resolvedModel: "claude-fable-5-1",
-    displayName: "Fable",
-    description: "Fable 5.1",
-  },
-  {
-    value: "sonnet",
-    resolvedModel: "claude-sonnet-5",
-    displayName: "Sonnet",
-    description: "Sonnet 5",
-  },
-  {
-    value: "haiku",
-    resolvedModel: "claude-haiku-4-5-20251001",
-    displayName: "Haiku",
-    description: "Haiku 4.5",
-  },
-];
-
-const CURATED_MODELS = [
-  "claude-fable-5-1",
-  "claude-opus-5-5[1m]",
-  "claude-opus-5-5",
-  "claude-opus-4-8[1m]",
-  "claude-opus-4-7[1m]",
-  "claude-sonnet-5",
 ];
 
 describe("buildClaudeCodeModels", () => {
-  it("offers Opus 5.5 1M when discovery only reports standard-context Opus", () => {
-    const result = buildClaudeCodeModels([
-      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default", description: "Opus" },
-      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "Opus" },
-    ]);
-
-    expect(result.models.filter((model) => model.model.startsWith("claude-opus-5")))
-      .toEqual([
-        expect.objectContaining({ id: "claude-opus-5-5[1m]", model: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)", isDefault: false }),
-        expect.objectContaining({ id: "claude-opus-5-5", model: "claude-opus-5-5", displayName: "Opus 5.5", isDefault: true }),
-      ]);
-    expect(result.models.filter((model) => model.isDefault)).toHaveLength(1);
-  });
-
-  it("preserves older Opus versions when the provider explicitly reports them", () => {
-    const result = buildClaudeCodeModels([
-      { value: "default", resolvedModel: "claude-opus-5[1m]", displayName: "Default", description: "Older installation" },
-    ]);
-
-    expect(result.models.find((model) => model.isDefault)?.model).toBe("claude-opus-5[1m]");
-    expect(result.models.filter((model) => model.model === "claude-opus-5[1m]")).toHaveLength(1);
-    expect(result.models.map((model) => model.model)).toContain("claude-opus-5-5[1m]");
-  });
-
-  it("always offers the curated catalog and appends discovered extras", () => {
-    const result = buildClaudeCodeModels(DISCOVERED_MODELS);
-
-    expect(result.models.map((model) => model.model)).toEqual([
-      ...CURATED_MODELS,
-      "claude-haiku-4-5-20251001",
-    ]);
-    expect(result.models.find((model) => model.isDefault)?.model).toBe(
+  it("uses only SDK-discovered concrete models and keeps aliases selected-only", () => {
+    const result = buildClaudeCodeModels(discovered);
+    expect(result.models.map((row) => row.model)).toEqual([
       "claude-opus-5-5[1m]",
-    );
-    expect(result.selectedOnlyModels.map((model) => model.model)).toEqual([
-      "opus[1m]",
-      "sonnet",
-      "haiku",
-    ]);
-    expect(
-      [...result.models, ...result.selectedOnlyModels].some(
-        (model) => model.model === "claude-mythos-5",
-      ),
-    ).toBe(false);
-  });
-
-  it("still offers the curated catalog when the provider reports no models", () => {
-    const result = buildClaudeCodeModels([]);
-
-    expect(result.models.map((model) => model.model)).toEqual(CURATED_MODELS);
-    expect(result.models.find((model) => model.isDefault)?.model).toBe(
-      "claude-opus-5-5[1m]",
-    );
-    expect(result.selectedOnlyModels).toEqual([]);
-  });
-
-  it("keeps authoritative models that do not have curated metadata yet", () => {
-    const result = buildClaudeCodeModels([
-      {
-        value: "future",
-        resolvedModel: "claude-future-6",
-        displayName: "Future 6",
-        description: "Newly discovered model",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "high"],
-      },
-    ]);
-
-    expect(result.models.map((model) => model.model)).toEqual([
-      ...CURATED_MODELS,
+      "claude-sonnet-5",
       "claude-future-6",
     ]);
-    expect(result.models.at(-1)).toEqual(
-      expect.objectContaining({
-        model: "claude-future-6",
-        displayName: "Future 6",
-        isDefault: false,
-        defaultReasoningEffort: "high",
-      }),
-    );
+    expect(result.models.filter((row) => row.isDefault).map((row) => row.model))
+      .toEqual(["claude-opus-5-5[1m]"]);
+    expect(result.selectedOnlyModels.map((row) => row.model)).toEqual(["opus[1m]", "sonnet"]);
+    expect(result.models.at(-1)?.supportedReasoningEfforts.map((row) => row.reasoningEffort))
+      .toEqual(["low", "xhigh", "ultracode"]);
   });
 
-  it("prefers the discovered default model", () => {
-    const result = buildClaudeCodeModels([
-      {
-        value: "default",
-        resolvedModel: "claude-sonnet-5",
-        displayName: "Default (recommended)",
-        description: "Sonnet 5",
-      },
-    ]);
+  it("returns an empty catalog when the SDK reports none", () => {
+    expect(buildClaudeCodeModels([])).toEqual({ models: [], selectedOnlyModels: [] });
+  });
 
-    expect(result.models.find((model) => model.isDefault)?.model).toBe(
-      "claude-sonnet-5",
-    );
+  it("chooses the first discovered concrete model when no default is reported", () => {
+    const result = buildClaudeCodeModels([{
+      value: "claude-future-6",
+      displayName: "Future 6",
+      description: "New model",
+    }]);
+    expect(result.models[0]).toEqual(expect.objectContaining({ model: "claude-future-6", isDefault: true }));
   });
 });

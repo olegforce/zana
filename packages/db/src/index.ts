@@ -1,6 +1,12 @@
 export { openDatabase, type ZccDatabase, type SqliteDatabase } from './connection.js';
 export { createSqliteDatabase } from './sqlite.js';
 export { migrate } from './migrate.js';
+export {
+  getProviderModelCatalog,
+  putProviderModelCatalog,
+  type ProviderModelCatalogKey,
+  type StoredProviderModelCatalog
+} from './data/provider-model-catalogs.js';
 export { conversationTimelineWindowStart, hasConversationEventsBefore, conversationEventCursorExists, conversationTimelineHeadEvents } from './data/conversation-events.js';
 export { hydrateConversationOutputs, maintainConversationHistory, CONVERSATION_OUTPUT_RETENTION_MS } from './data/conversation-output.js';
 export { maintainConversationEventHistory, CONVERSATION_PRUNING_POLICIES, CONVERSATION_PRUNING_BATCH_SIZE } from './data/conversation-pruning.js';

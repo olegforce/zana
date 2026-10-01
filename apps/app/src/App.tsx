@@ -1,4 +1,7 @@
-import { recoverStaleModelCatalogs } from './components/thread/pickers/thread-model-catalog.js';
+import {
+  recoverStaleModelCatalogs,
+  refreshThreadProviderModelsFromPush
+} from './components/thread/pickers/thread-model-catalog.js';
 import { ConversationHistoryDialog } from './components/history/ConversationHistoryDialog.js';
 import '@/lib/monacoSetup';
 import { useEffect, useRef } from 'react';
@@ -548,6 +551,9 @@ export function App() {
       useUi.getState().enterProjectFocus(event.projectId);
       navigateRef.current(`/projects/${event.projectId}/threads/${event.threadId}`);
     });
+    const offModelCatalogChanged = product.threads.onModelCatalogChanged(({ hostId, providerId }) => {
+      refreshThreadProviderModelsFromPush(hostId, providerId);
+    });
     // Main may be waiting to deliver a cold-start menu-bar Thread open. Ack only
     // after this listener exists and its ProductHub WebSocket can receive it.
     void waitForProductWsOpen()
@@ -590,6 +596,7 @@ export function App() {
       offMenu();
       offFocusSession();
       offOpenThread();
+      offModelCatalogChanged();
       offOpenScheduler();
       offOpenAgents();
       offFocusInboxEntry();

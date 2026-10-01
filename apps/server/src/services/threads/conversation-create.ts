@@ -39,6 +39,7 @@ import {
   permissionModeForLaunchProfile
 } from './thread-provider-catalog.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
+import { validateProviderModelSelection } from './provider-model-validation.js';
 import { appendClientTurnRequested } from './client-turn-requested.js';
 import { withConversationSend, type ConversationSendLease } from './conversation-send-guard.js';
 import { startLiveTurnCommand } from './conversation-live-turn.js';
@@ -167,9 +168,17 @@ async function startConversationOnHost(
   }
 ): Promise<{ permissionMode: string }> {
   const providerId = canonicalThreadProviderId(args.input.providerId);
-  if (!getThreadProvider(providerId)) {
+  const provider = getThreadProvider(providerId);
+  if (!provider) {
     throw new ThreadCreateError(400, 'invalid-provider', `unknown thread provider: ${args.input.providerId}`);
   }
+  await validateProviderModelSelection(ctx, {
+    hostId: args.hostId,
+    providerId,
+    ...(args.input.cwd ? { cwd: args.input.cwd } : {}),
+    ...(args.input.model ? { model: args.input.model } : {}),
+    ...(args.input.reasoningLevel ? { reasoningLevel: args.input.reasoningLevel } : {})
+  });
   const sessionTooling = await packConversationSessionTooling(ctx, {
     threadId: args.thread.id,
     projectId: args.project.id

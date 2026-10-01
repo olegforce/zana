@@ -28,6 +28,7 @@ export type ProductEventType =
   | 'projects:cloneProgress'
   | 'library:changed'
   | 'hosts:changed'
+  | 'provider-model-catalog:changed'
   | 'relay:changed'
   | 'terminals:data'
   | 'terminals:exit'

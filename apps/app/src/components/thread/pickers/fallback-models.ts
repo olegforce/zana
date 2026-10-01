@@ -1,8 +1,4 @@
-import {
-  reasoningEffortsForLevels,
-  type AvailableModel,
-  type ReasoningLevel
-} from '@zana-ai/zcc-domain/thread-runtime';
+import type { AvailableModel } from '@zana-ai/zcc-domain/thread-runtime';
 
 export interface ThreadComposerProviderOption {
   id: string;
@@ -10,67 +6,6 @@ export interface ThreadComposerProviderOption {
   permissionModes: string[];
   composerActions: string[];
 }
-
-const CLAUDE_REASONING_LEVELS: readonly ReasoningLevel[] = [
-  'none',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'ultracode',
-  'max'
-];
-
-const CLAUDE_FALLBACK_MODELS: ReadonlyArray<{
-  id: string;
-  model: string;
-  displayName: string;
-  description: string;
-  defaultReasoningEffort: ReasoningLevel;
-}> = [
-  {
-    id: 'claude-fable-5',
-    model: 'claude-fable-5',
-    displayName: 'Fable 5',
-    description: 'Fable 5 for demanding reasoning; requires Claude Code v2.1.170+',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-opus-5-5[1m]',
-    model: 'claude-opus-5-5[1m]',
-    displayName: 'Opus 5.5 (1M)',
-    description: 'Opus 5.5 with 1M context; requires Claude Code v2.1.280+',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-opus-5-5',
-    model: 'claude-opus-5-5',
-    displayName: 'Opus 5.5',
-    description: 'Opus 5.5 for complex coding tasks; requires Claude Code v2.1.280+',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-opus-4-8[1m]',
-    model: 'claude-opus-4-8[1m]',
-    displayName: 'Opus 4.8 (1M)',
-    description: 'Opus 4.8 with 1M context for complex long coding sessions',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-opus-4-7[1m]',
-    model: 'claude-opus-4-7[1m]',
-    displayName: 'Opus 4.7 (1M)',
-    description: 'Opus 4.7 with 1M context for complex long coding sessions',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'claude-sonnet-5',
-    model: 'claude-sonnet-5',
-    displayName: 'Sonnet 5',
-    description: 'Sonnet 5 for everyday coding tasks with deeper reasoning',
-    defaultReasoningEffort: 'medium'
-  }
-];
 
 const FALLBACK_PROVIDERS: readonly ThreadComposerProviderOption[] = [
   { id: 'claude-code', displayName: 'Claude Code', permissionModes: ['accept-edits', 'auto', 'full'], composerActions: ['plan'] },
@@ -88,14 +23,13 @@ export function fallbackProviderOption(providerId: string): ThreadComposerProvid
     ?? { id: providerId, displayName: providerId, permissionModes: ['accept-edits', 'full'], composerActions: [] };
 }
 
-/** Builtin harnesses for a new thread before execution-options returns. Omits `fake` and installed-only OpenCode. */
+/** Bootstrap provider chrome only; models always come from server-owned discovery. */
 export function fallbackProvidersForNewThread(): ThreadComposerProviderOption[] {
   return FALLBACK_PROVIDERS.filter((row) =>
     row.id !== 'fake' && row.id !== 'acp-opencode' && row.id !== 'acp-grok' && row.id !== 'acp-mastracode'
   );
 }
 
-/** True when a new-thread send can use this provider (it is in the live roster). */
 export function isOfferedModernProvider(
   registeredProviderIds: readonly string[],
   providerId: string | undefined
@@ -103,248 +37,31 @@ export function isOfferedModernProvider(
   return typeof providerId === 'string' && registeredProviderIds.includes(providerId);
 }
 
-/**
- * New-thread tabs: builtin fallbacks until execution-options returns, then only
- * the live catalog. Do not re-insert builtins the host omitted.
- */
 export function composerProvidersFromCatalog(
   catalogProviders: readonly ThreadComposerProviderOption[],
   locked: boolean,
   providerId: string
 ): ThreadComposerProviderOption[] {
-  if (locked) {
-    if (catalogProviders.length > 0) return [...catalogProviders];
-    return [fallbackProviderOption(providerId)];
-  }
-  if (catalogProviders.length === 0) return fallbackProvidersForNewThread();
-  return [...catalogProviders];
+  if (locked) return catalogProviders.length > 0 ? [...catalogProviders] : [fallbackProviderOption(providerId)];
+  return catalogProviders.length > 0 ? [...catalogProviders] : fallbackProvidersForNewThread();
 }
 
-/** Snap off a remembered id the live (or fallback) roster no longer offers. */
 export function snapNewThreadProviderId(
   offeredIds: readonly string[],
   providerId: string,
   preferredProviderId?: string | null
 ): string | null {
-  if (offeredIds.length === 0) return null;
-  if (offeredIds.includes(providerId)) return null;
+  if (offeredIds.length === 0 || offeredIds.includes(providerId)) return null;
   if (preferredProviderId && offeredIds.includes(preferredProviderId)) return preferredProviderId;
   return offeredIds[0] ?? null;
 }
 
-const CLAUDE_MORE_MODELS: ReadonlyArray<{
-  id: string;
-  model: string;
-  displayName: string;
-  description: string;
-  defaultReasoningEffort: ReasoningLevel;
-}> = [
-  {
-    id: 'opus[1m]',
-    model: 'opus[1m]',
-    displayName: 'Opus Alias (1M, Current)',
-    description: 'Moving Opus 1M alias; resolves to the current Opus 1M model',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'opus',
-    model: 'opus',
-    displayName: 'Opus Alias (Current)',
-    description: 'Moving Opus alias; resolves to the current Opus model',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'sonnet[1m]',
-    model: 'sonnet[1m]',
-    displayName: 'Sonnet Alias (1M, Legacy)',
-    description: 'Legacy moving Sonnet 1M alias',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'sonnet',
-    model: 'sonnet',
-    displayName: 'Sonnet Alias (Legacy)',
-    description: 'Legacy moving Sonnet alias',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'haiku',
-    model: 'haiku',
-    displayName: 'Haiku Alias (Legacy)',
-    description: 'Legacy moving Haiku alias',
-    defaultReasoningEffort: 'low'
-  },
-  {
-    id: 'fable',
-    model: 'fable',
-    displayName: 'Fable Alias',
-    description: 'Moving Fable alias; resolves to Claude Fable 5',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'best',
-    model: 'best',
-    displayName: 'Best Alias',
-    description: 'Moving best alias; resolves to Fable 5 where available',
-    defaultReasoningEffort: 'high'
-  }
-];
-
-function withClaudeEfforts(
-  entries: ReadonlyArray<{
-    id: string;
-    model: string;
-    displayName: string;
-    description: string;
-    defaultReasoningEffort: ReasoningLevel;
-  }>,
-  defaultModel?: string
-): AvailableModel[] {
-  const efforts = reasoningEffortsForLevels(CLAUDE_REASONING_LEVELS);
-  return entries.map((entry) => ({
-    ...entry,
-    supportedReasoningEfforts: efforts.map((effort) => ({ ...effort })),
-    isDefault: defaultModel ? entry.model === defaultModel : false
-  }));
-}
-
-const CODEX_REASONING_LEVELS: readonly ReasoningLevel[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-
-const CODEX_FALLBACK_MODELS: ReadonlyArray<{
-  id: string;
-  model: string;
-  displayName: string;
-  description: string;
-  defaultReasoningEffort: ReasoningLevel;
-}> = [
-  {
-    id: 'gpt-5.5',
-    model: 'gpt-5.5',
-    displayName: 'GPT-5.5',
-    description: 'GPT-5.5 for everyday Codex coding tasks',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'gpt-5.4',
-    model: 'gpt-5.4',
-    displayName: 'GPT-5.4',
-    description: 'GPT-5.4 for faster Codex turns',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'gpt-5.4-mini',
-    model: 'gpt-5.4-mini',
-    displayName: 'GPT-5.4 Mini',
-    description: 'Smaller GPT-5.4 variant for cheap Codex turns',
-    defaultReasoningEffort: 'low'
-  },
-  {
-    id: 'gpt-5.6-sol',
-    model: 'gpt-5.6-sol',
-    displayName: 'GPT-5.6 Sol',
-    description: 'GPT-5.6 Sol for demanding Codex reasoning',
-    defaultReasoningEffort: 'high'
-  }
-];
-
-const CURSOR_REASONING_LEVELS: readonly ReasoningLevel[] = ['low', 'medium', 'high', 'xhigh'];
-
-/** Same primary ids as ACP Cursor's Modern picker (`BUILT_IN_ACP_MODEL_PICKER`). */
-const CURSOR_FALLBACK_MODELS: ReadonlyArray<{
-  id: string;
-  model: string;
-  displayName: string;
-  description: string;
-  defaultReasoningEffort: ReasoningLevel;
-}> = [
-  {
-    id: 'default',
-    model: 'default',
-    displayName: 'Default',
-    description: 'Cursor’s native model pin',
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'grok-4.6',
-    model: 'grok-4.6',
-    displayName: 'Grok 4.6',
-    description: 'Grok 4.6 on Cursor',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'gpt-5.6-sol',
-    model: 'gpt-5.6-sol',
-    displayName: 'GPT-5.6 Sol',
-    description: 'GPT-5.6 Sol on Cursor',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-opus-5',
-    model: 'claude-opus-5',
-    displayName: 'Opus 5',
-    description: 'Opus 5 on Cursor',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'claude-fable-5',
-    model: 'claude-fable-5',
-    displayName: 'Fable 5',
-    description: 'Fable 5 on Cursor',
-    defaultReasoningEffort: 'high'
-  },
-  {
-    id: 'composer-2.5',
-    model: 'composer-2.5',
-    displayName: 'Composer 2.5',
-    description: 'Composer 2.5 on Cursor',
-    defaultReasoningEffort: 'medium'
-  }
-];
-
-function withCatalogEfforts(
-  entries: ReadonlyArray<{
-    id: string;
-    model: string;
-    displayName: string;
-    description: string;
-    defaultReasoningEffort: ReasoningLevel;
-  }>,
-  levels: readonly ReasoningLevel[],
-  defaultModel?: string
-): AvailableModel[] {
-  const efforts = reasoningEffortsForLevels(levels);
-  return entries.map((entry) => ({
-    ...entry,
-    supportedReasoningEfforts: efforts.map((effort) => ({ ...effort })),
-    isDefault: defaultModel ? entry.model === defaultModel : false
-  }));
-}
-
-export function fallbackModelsForProvider(providerId: string): AvailableModel[] {
-  if (providerId === 'claude-code' || providerId === 'claude') {
-    return withClaudeEfforts(CLAUDE_FALLBACK_MODELS, 'claude-sonnet-5');
-  }
-  if (providerId === 'codex') {
-    return withCatalogEfforts(CODEX_FALLBACK_MODELS, CODEX_REASONING_LEVELS, 'gpt-5.5');
-  }
-  if (providerId === 'acp-cursor' || providerId === 'cursor') {
-    return withCatalogEfforts(CURSOR_FALLBACK_MODELS, CURSOR_REASONING_LEVELS, 'default');
-  }
-  if (providerId === 'fake') {
-    return withCatalogEfforts([{
-      id: 'fake-model',
-      model: 'fake-model',
-      displayName: 'Fake Model',
-      description: 'In-process fake provider model',
-      defaultReasoningEffort: 'medium'
-    }], ['low', 'medium', 'high'], 'fake-model');
-  }
+/** There is deliberately no renderer-owned model catalog. */
+export function fallbackModelsForProvider(_providerId: string): AvailableModel[] {
   return [];
 }
 
-export function fallbackMoreModelsForProvider(providerId: string): AvailableModel[] {
-  if (providerId === 'claude-code' || providerId === 'claude') {
-    return withClaudeEfforts(CLAUDE_MORE_MODELS);
-  }
+/** Aliases are provider data and arrive through live discovery. */
+export function fallbackMoreModelsForProvider(_providerId: string): AvailableModel[] {
   return [];
 }

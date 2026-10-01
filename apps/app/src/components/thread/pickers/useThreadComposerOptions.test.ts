@@ -153,7 +153,7 @@ describe('composer host cache subscriptions', () => {
     expect(fetcher).not.toHaveBeenCalled();
     await act(async () => local.result.current.refreshAcpModeOptions());
     expect(fetcher).toHaveBeenCalledWith(
-      { providerId: 'codex', hostId: 'local-model' },
+      { providerId: 'codex', hostId: 'local-model', refresh: true },
       { signal: expect.objectContaining({ aborted: false }) }
     );
   });

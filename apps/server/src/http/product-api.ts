@@ -95,13 +95,14 @@ import {
 import { openThreadFilePreview, previewFileDepsFromContext } from '../services/threads/preview-file.js';
 import { openThreadTerminal, openThreadTerminalDepsFromContext } from '../services/threads/open-thread-terminal.js';
 import { createMenubarThreadSource, MENUBAR_THREAD_LIMIT } from '../services/threads/menubar-thread-source.js';
-import { listThreadProviders, bridgeLaunchForProvider } from '../services/threads/thread-provider-catalog.js';
+import { listThreadProviders, bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
 import { resolveHarnessWorkspacePath } from '../services/threads/remote-tool-proxy.js';
 import { toRemoteStartPathHost } from '../services/hosts/host-public.js';
 import {
   buildThreadExecutionOptions,
   classifyModelListError,
   modelListErrorDetail,
+  overlayCustomModels,
   type ThreadModelLoadErrorCode
 } from '../services/threads/thread-execution-options.js';
 import { archiveThread, destroyEnvironment, destroyEnvironmentIfIdle } from '../services/environments/environment-cleanup.js';
@@ -125,7 +126,6 @@ import { provisionProjectEnvironment } from '../services/threads/spawn-environme
 import { isZccManagedWorkspacePath } from '../services/threads/worktree-paths.js';
 import { VALID_PROFILES } from '@zana-ai/zcc-domain/launch-provider';
 import { jsonValueSchema, pendingInteractionResolutionSchema, reasoningLevelSchema, validatePluginMetadata, type ReasoningLevel } from '@zana-ai/zcc-domain/thread-runtime';
-import type { ProviderListModelsResult } from '@zana-ai/zcc-contracts/host-rpc';
 import { systemInstallCliSkillsRequestSchema, threadOpenRequestSchema, editMessageRequestSchema, hostFileWriteRequestSchema, hostMkdirRequestSchema, hostMovePathRequestSchema, hostRemovePathRequestSchema, hostFileReadRequestSchema, hostFileListRequestSchema, hostPathListRequestSchema, threadPluginMetadataQuerySchema, updateThreadPluginMetadataRequestSchema } from '@zana-ai/zcc-server-contract';
 import { normalizeRepoUrl } from '../services/projects/git-clone.js';
 import { harnessAgentDescriptors, harnessDescriptors, harnessEffectiveDefault, harnessVerify, harnessVerifyBundle } from './harness-via-rpc.js';
@@ -3376,6 +3376,7 @@ export async function handleProductHttp(
 
     if (path === '/api/v1/system/execution-options' && method === 'GET') {
       const providerId = requestUrl.searchParams.get('providerId') ?? undefined;
+      const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
       const requestedHostId = requestUrl.searchParams.get('hostId') ?? undefined;
       const projectId = requestUrl.searchParams.get('projectId') ?? undefined;
       const scope = await resolveExecutionOptionsScope({ ctx, projectId, requestedHostId });
@@ -3401,30 +3402,30 @@ export async function handleProductHttp(
         sendHostFailure(response, error);
         return true;
       }
-      let listed: ProviderListModelsResult | null = null;
+      let listed: Awaited<ReturnType<ProductHttpContext['modelCatalogs']['read']>> | null = null;
       let listError: ThreadModelLoadErrorCode | null = null;
       let listErrorDetail: string | null = null;
       if (providerId) {
         try {
           const hostId = ctx.hostHub.resolveHostId(discoveryHostId);
-          listed = await ctx.hostHub.callHostOnlineRpc<ProviderListModelsResult>({
+          if (forceRefresh) {
+            ctx.modelCatalogs.invalidate({ hostId, providerId });
+            invalidateHarnessModelCatalog(providerId);
+            await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
+          }
+          const provider = getThreadProvider(providerId);
+          listed = await ctx.modelCatalogs.read({
             hostId,
-            // ACP discovery (Cursor session/new + a short reasoning probe) can
-            // exceed the default 30s RPC budget; 45s stays above the 30s
-            // bridge MODEL_LIST_TIMEOUT so a hang still returns the synthetic
-            // fallback instead of an empty picker.
-            timeoutMs: 45_000,
-            command: {
-              type: 'provider.list_models',
-              providerId,
-              bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
-              ...(scope.cwd ? { cwd: scope.cwd } : {})
-            }
+            providerId,
+            scope: provider?.models?.scope ?? 'workspace',
+            bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
+            ...(scope.cwd ? { cwd: scope.cwd } : {}),
+            forceRefresh
           });
-          invalidateHarnessModelCatalog(providerId);
-          // Desktop owns an independent preflight cache. Complete its invalidation
-          // before returning so a launch immediately after Refresh uses fresh ids.
-          await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
+          const overlaid = overlayCustomModels(listed, ctx.config.getConfig(), provider);
+          listed = { ...listed, ...overlaid };
+          listError = listed.modelLoadError?.code ?? null;
+          listErrorDetail = listed.modelLoadError?.detail ?? null;
         } catch (error) {
           listed = null;
           listError = classifyModelListError(error);

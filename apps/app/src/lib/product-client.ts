@@ -832,12 +832,14 @@ function httpProduct(): Pick<
           body: JSON.stringify(body)
         }),
       onOpen: (cb) => subscribeProductEvent('threads:open', cb),
+      onModelCatalogChanged: (cb) => subscribeProductEvent('provider-model-catalog:changed', cb),
       events: async (threadId) => apiJson(`/threads/${encodeURIComponent(threadId)}/events`),
       executionOptions: async (query, options) => {
         const params = new URLSearchParams();
         if (query?.providerId) params.set('providerId', query.providerId);
         if (query?.hostId) params.set('hostId', query.hostId);
         if (query?.projectId) params.set('projectId', query.projectId);
+        if (query?.refresh) params.set('refresh', '1');
         const suffix = params.size ? `?${params.toString()}` : '';
         return apiJson(`/system/execution-options${suffix}`, { signal: options?.signal });
       },

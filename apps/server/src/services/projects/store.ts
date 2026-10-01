@@ -570,6 +570,17 @@ export function normalizeConfig(input: Partial<AppConfig>): Partial<AppConfig> {
     );
     if (Object.keys(byAdapter).length) normalized.harnessRouting = { schemaVersion: 1, byAdapter };
   }
+  if (Array.isArray(input.customModels)) {
+    normalized.customModels = input.customModels.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : '';
+      const model = typeof value.model === 'string' ? value.model.trim() : '';
+      if (!providerId || !model || providerId.length > 128 || model.length > 512) return [];
+      const displayName = typeof value.displayName === 'string' ? value.displayName.trim().slice(0, 256) : '';
+      const description = typeof value.description === 'string' ? value.description.trim().slice(0, 1000) : '';
+      return [{ providerId, model, ...(displayName ? { displayName } : {}), ...(description ? { description } : {}) }];
+    }).slice(0, 100);
+  }
   if (isSelectableHarness(input.defaultHarness)) normalized.defaultHarness = input.defaultHarness;
   if (input.theme === 'dark' || input.theme === 'light' || input.theme === 'system') {
     normalized.theme = input.theme;

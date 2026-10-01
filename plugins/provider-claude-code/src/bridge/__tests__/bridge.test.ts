@@ -2626,17 +2626,13 @@ describe("bridge", () => {
       PATH: binDir,
     });
     expect(models.map((model) => model.model)).toEqual([
-      "claude-fable-5-1",
       "claude-opus-5-5[1m]",
-      "claude-opus-5-5",
-      "claude-opus-4-8[1m]",
-      "claude-opus-4-7[1m]",
       "claude-sonnet-5",
     ]);
     expect(models.filter((model) => model.isDefault)).toEqual([
       expect.objectContaining({
         model: "claude-opus-5-5[1m]",
-        displayName: "Opus 5.5 (1M)",
+        displayName: "Default (recommended)",
       }),
     ]);
     expect(selectedOnlyModels.map((model) => model.model)).toEqual([
@@ -2669,6 +2665,16 @@ describe("bridge", () => {
     await expect(listClaudeCodeBridgeModels()).rejects.toThrow(
       "temporary discovery failure",
     );
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an empty SDK model catalog instead of reviving curated ids", async () => {
+    const close = vi.fn();
+    queryMock.mockReturnValueOnce({
+      initializationResult: vi.fn().mockResolvedValue({ models: [] }),
+      close,
+    });
+    await expect(listClaudeCodeBridgeModels()).rejects.toThrow("empty model catalog");
     expect(close).toHaveBeenCalledOnce();
   });
 
