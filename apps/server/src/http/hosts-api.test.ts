@@ -229,6 +229,8 @@ createServer((_req, res) => {
         detached: true,
         env: {
           ...process.env,
+          HOME: dataDir,
+          ZCC_NODE: process.execPath,
           ZCC_INSTALL_SKIP_SERVICE: '1',
           ZCC_INSTALL_WAIT_ATTEMPTS: '20',
           ZCC_INSTALL_WAIT_DELAY: '0.2',

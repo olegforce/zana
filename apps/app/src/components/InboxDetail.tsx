@@ -7,6 +7,7 @@ import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { useInboxThread } from '../hooks/useInboxThread.js';
 import { reopenInboxThread, sendInboxThreadReply } from '../lib/inbox-thread.js';
 import { getThreadRoutePath } from '../lib/route-paths.js';
+import { confirmInboxDeletion, isInboxListShortcut } from '../lib/inbox-keyboard.js';
 import { InboxMobileActions } from './InboxMobileActions.js';
 import { InboxMobileDocument } from './InboxMobileDocument.js';
 import { videoContentType } from '@zana-ai/zcc-domain';
@@ -32,7 +33,8 @@ import { DelayedStencilLines, StencilLines } from './ui/Skeleton.js';
 import { AgentLauncher } from './AgentLauncher.js';
 import { inspectAgentSession } from '../lib/inspect-session.js';
 import { QuestionBlock } from './InboxQuestionBlock.js';
-import { DocContent, MarkdownContent } from './MarkdownContent.js';
+import { MarkdownContent } from './MarkdownContent.js';
+import { InboxDocContent, readInboxDocPreview } from './InboxDocContent.js';
 import { renderReportHtml, type ReportDoc } from '../lib/renderReportHtml.js';
 import { inboxPrimaryTitle, inboxShortTitle, inboxContextLine } from '../lib/inboxPresentation.js';
 import { classifyEntry } from '@zana-ai/zcc-domain/feed-categories';
@@ -53,7 +55,7 @@ import type {
 
 interface InboxDetailProps {
   /**
-   * Gates the page-level Delete/Backspace shortcut so the inbox view only
+   * Gates the Delete shortcut so the inbox view only
    * intercepts when it's actually visible.
    */
   visible: boolean;
@@ -90,6 +92,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
     async (id: string) => {
       const idx = entries.findIndex((e) => e.id === id);
       if (idx < 0) return;
+      if (!confirmInboxDeletion('message')) return;
 
       // entries are newest-first; "the one after this" is the next older.
       const nextId = entries[idx + 1]?.id ?? entries[idx - 1]?.id ?? null;
@@ -110,9 +113,7 @@ export function InboxDetail({ visible, onBack }: InboxDetailProps) {
     if (!visible) return;
     if (!selectedId) return;
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (e.key !== 'Delete' || e.repeat || !isInboxListShortcut(e)) return;
       e.preventDefault();
       void handleDelete(selectedId!);
     }
@@ -673,7 +674,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               type="button"
               onClick={onDelete}
               className="inbox-detail-trash"
-              title="Delete this entry (Delete / Backspace)"
+              title="Delete this entry (Delete)"
               aria-label="Delete this inbox entry"
             >
               <Trash2 size={14} strokeWidth={1.75} />
@@ -1105,7 +1106,7 @@ function DocExplorer({
 }
 
 /**
- * Render one doc, fetched live via product.fs.readFile against the project's
+ * Render one doc, fetched live via the text or image reader against the project's
  * root path. Re-fetches on doc change. If the project is tombstoned (deleted)
  * we render a "project missing" message — without a project root, we have no
  * anchor to resolve the relative path.
@@ -1176,7 +1177,7 @@ function DocPreview({
       const abs = joinPath(projectPath, doc.path);
       let r: FsReadResult;
       try {
-        r = await product.fs.readFile(abs);
+        r = await readInboxDocPreview(abs);
       } catch (err) {
         r = { ok: false, message: err instanceof Error ? err.message : 'Read failed' };
       }
@@ -1192,7 +1193,7 @@ function DocPreview({
         if (found.ok && found.rel) {
           setResolvedPath(found.rel);
           setRelocated(!!found.relocated);
-          const r2 = await product.fs.readFile(joinPath(projectPath, found.rel));
+          const r2 = await readInboxDocPreview(joinPath(projectPath, found.rel));
           if (!cancelled) setResult(r2);
           return;
         }
@@ -1257,7 +1258,7 @@ function DocPreview({
         ) : result.ok && absResolved && videoContentType(resolvedPath) ? (
           <ThreadVideoPreview key={absResolved} src={videoPreviewUrl(absResolved)} path={resolvedPath} />
         ) : canPreview ? (
-          <DocContent path={resolvedPath} content={result!.content as string} exportable />
+          <InboxDocContent path={resolvedPath} content={result!.content as string} />
         ) : (
           <DocTombstone result={result!} project={project} />
         )}

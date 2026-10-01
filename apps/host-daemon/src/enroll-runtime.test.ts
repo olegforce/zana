@@ -28,6 +28,7 @@ vi.mock('./server-connection.js', () => ({ startEnrolledHostConnection }));
 
 import { HOST_RPC_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/host-rpc';
 import { startEnrolledHostDaemon } from './enroll-runtime.js';
+import { HostAuthenticationError } from './server-socket.js';
 
 function openConnection(): { ready: Promise<void>; close: () => Promise<void> } {
   return {
@@ -38,7 +39,7 @@ function openConnection(): { ready: Promise<void>; close: () => Promise<void> } 
 
 function closedConnection(): { ready: Promise<void>; close: () => Promise<void> } {
   return {
-    ready: Promise.reject(new Error('host websocket closed before hello')),
+    ready: Promise.reject(new HostAuthenticationError('Host server rejected credentials (401)')),
     close: async () => undefined
   };
 }
@@ -125,3 +126,38 @@ it('consumes a Connect repair before reusing auth, then recovers a completed enr
   expect(enrollDaemonHost).not.toHaveBeenCalled();
   await recovered.close();
 });
+
+it('does not rotate credentials on a transient failure even when a join token is present', async () => {
+  vi.clearAllMocks();
+  readHostAuth.mockReturnValue({ hostId: '11111111-1111-4111-8111-111111111111', hostKey: 'existing-key' });
+  startEnrolledHostConnection.mockReturnValue({ ready: Promise.reject(new Error('Host server connection timed out')), close: vi.fn(async () => {}) });
+  await expect(startEnrolledHostDaemon({ dataDir: mkdtempSync(join(tmpdir(), 'zcc-enroll-outage-')), serverUrl: 'https://example.com/', token: 'unused-join-token' })).rejects.toThrow('timed out');
+  expect(enrollDaemonHost).not.toHaveBeenCalled();
+  expect(writeHostAuth).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('keeps saved credentials while startup is offline, cancellation=%s', async cancel => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    readHostAuth.mockReturnValue({ hostId: '11111111-1111-4111-8111-111111111111', hostKey: 'saved' });
+    let resolve!: () => void, reject!: (error: Error) => void;
+    const ready = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const close = vi.fn(async () => { reject(new Error('closed')); });
+    startEnrolledHostConnection.mockReturnValue({ ready, close });
+    const controller = new AbortController();
+    const starting = startEnrolledHostDaemon({ dataDir: mkdtempSync(join(tmpdir(), 'zcc-offline-')),
+      serverUrl: 'http://127.0.0.1:1', keepRetryingStartup: true, signal: controller.signal });
+    void starting.catch(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(180000);
+      expect(close).not.toHaveBeenCalled();
+      expect(enrollDaemonHost).not.toHaveBeenCalled();
+      if (cancel) {
+        controller.abort(); await expect(starting).rejects.toThrow('closed');
+      } else {
+        resolve(); const daemon = await starting;
+        expect(startEnrolledHostConnection).toHaveBeenCalledWith(expect.objectContaining({ keepRetryingStartup: true, hostKey: 'saved' }));
+        await daemon.close();
+      }
+    } finally { vi.useRealTimers(); }
+  });

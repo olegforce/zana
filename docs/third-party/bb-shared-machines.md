@@ -63,6 +63,19 @@ use the schema-entry fallback. Zana's root SDK keeps its existing registration
 contract so older plugins remain compatible. Distributed Electron and daemon
 bundles carry BB's complete MIT notice.
 
+`apps/host-daemon/src/server-socket.ts` adapts BB's `server-connection.ts`,
+`server-connection-support.ts` and `websocket-constructor.ts` at
+`fdd3de3b19b97e6cd1ef7300cbb54711431249d3`: PartySocket with the `ws` transport,
+unlimited 1–30 second exponential retries, connection/startup deadlines and
+acknowledged heartbeat leases. Zana retains its enrolled host protocol and
+daemon lifetime, authenticates through headers on both enrollment paths, and
+reconciles plugin generations before publishing readiness. The ready exchange
+reports bounded work/environment state, restoring surviving work only for the
+same daemon lifetime; replacement of a process retires its connection. Standalone
+startup retries continue during outages because the affected machines have no
+service manager. The server expires
+unresponsive leases, and the transport never buffers application mutations.
+
 The scoped desktop CDP regression suite in `apps/desktop/src/desktop-browser-cdp.test.ts` is ported from BB’s corresponding desktop test. It carries the full upstream MIT notice and complements the real packaged Browser Automation qualification.
 
 The BrowserView navigation/title notifications used by the scoped CDP bridge are ported from BB’s `wireWebContents` in `apps/desktop/src/desktop-browser-view.ts`. They ensure new automation targets finish initialization after their first navigation.

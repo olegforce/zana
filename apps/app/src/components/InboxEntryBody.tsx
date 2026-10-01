@@ -1,11 +1,12 @@
 import { product } from '../lib/product-client.js';
 import { useEffect, useState } from 'react';
 import { Copy, Download, Loader2 } from 'lucide-react';
-import type { InboxDoc, InboxEntry, Project } from '@zana-ai/zcc-domain/product';
+import type { FsReadResult, InboxDoc, InboxEntry, Project } from '@zana-ai/zcc-domain/product';
 import { useUi } from '../store.js';
 import { inboxPrimaryTitle } from '../lib/inboxPresentation.js';
 import { renderReportHtml, type ReportDoc as PdfReportDoc } from '../lib/renderReportHtml.js';
-import { DocContent, MarkdownContent } from './MarkdownContent.js';
+import { MarkdownContent } from './MarkdownContent.js';
+import { InboxDocContent, readInboxDocPreview } from './InboxDocContent.js';
 
 /** Cap on total source markdown re-read for a copy/PDF export; mirrors InboxDetail. */
 const EXPORT_TOTAL_BYTES_CAP = 32 * 1024 * 1024; // 32 MB
@@ -133,21 +134,21 @@ export function InboxEntryBody({ entry, project }: { entry: InboxEntry; project:
   );
 }
 
-/** One report doc, fetched live via product.fs.readFile against the project root. */
+/** One report doc, fetched live via the text or image reader against the project root. */
 function ReportDoc({ doc, project }: { doc: InboxDoc; project: Project | null }) {
-  const [content, setContent] = useState<string | null | undefined>(undefined);
+  const [result, setResult] = useState<FsReadResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setContent(undefined);
+    setResult(null);
     if (!project) {
-      setContent(null);
+      setResult({ ok: false, message: 'Project no longer exists' });
       return;
     }
     const abs = joinPath(project.path, doc.path);
-    void product.fs.readFile(abs).then((r) => {
+    void readInboxDocPreview(abs).then((r) => {
       if (cancelled) return;
-      setContent(r.ok && typeof r.content === 'string' ? r.content : null);
+      setResult(r);
     });
     return () => {
       cancelled = true;
@@ -159,14 +160,14 @@ function ReportDoc({ doc, project }: { doc: InboxDoc; project: Project | null })
       <div className="agent-report-doc-path" title={doc.path}>
         {doc.path}
       </div>
-      {content === undefined ? (
+      {result === null ? (
         <div className="agent-report-doc-loading">
           <Loader2 size={13} className="spin" /> Loading…
         </div>
-      ) : content === null ? (
-        <div className="agent-report-doc-missing">File could not be read.</div>
+      ) : result.ok && typeof result.content === 'string' ? (
+        <InboxDocContent path={doc.path} content={result.content} />
       ) : (
-        <DocContent path={doc.path} content={content} exportable />
+        <div className="agent-report-doc-missing">{result.message ?? 'File could not be read.'}</div>
       )}
     </div>
   );

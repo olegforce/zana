@@ -102,7 +102,8 @@ async function enrollHost(token: string, hostName: string, instanceId: string, h
 function openHostSocket(
   enrolled: { hostId: string; hostKey: string },
   instanceId: string,
-  handle: (request: HostRpcRequestMessage, reply: (ok: boolean, result?: unknown, error?: { code: string; message: string }) => void) => void
+  handle: (request: HostRpcRequestMessage, reply: (ok: boolean, result?: unknown, error?: { code: string; message: string }) => void) => void,
+  activeThreadIds: string[] = []
 ): Promise<WebSocket> {
   const url = new URL('internal/hosts/ws', server!.url.replace(/^http/, 'ws'));
   const socket = new WebSocket(url, {
@@ -113,6 +114,7 @@ function openHostSocket(
   });
   sockets.push(socket);
   socket.on('message', (raw) => {
+    if (JSON.parse(String(raw)).type === 'host.hello-ok') socket.send(JSON.stringify({ type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, runtime: { threads: activeThreadIds.map(threadId => ({ threadId, status: 'active' })), loadedEnvironments: activeThreadIds.map(id => getConversationThread(server!.ctx.db, id)!.environmentId) } }));
     const parsed = JSON.parse(String(raw)) as HostRpcRequestMessage;
     if (parsed.type !== 'host-rpc.request') return;
     handle(parsed, (ok, result, error) => {
@@ -294,7 +296,7 @@ describe('host enroll hub and thread create', () => {
     expect(server!.ctx.db.sqlite.prepare('SELECT length(value) AS size FROM conversation_event_outputs').all()).toEqual([{ size: 100_000 }]);
     await server!.close();
     server = await startProductServer({ dataDir, enrollToken, origins: { serverPort: 0, devAppPort: 5173 } });
-    socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root), [threadId]);
     await waitForHost(enrolled.hostId);
     expect(await send()).toMatchObject({ accepted: 5 });
     expect(server.ctx.terminalSessions.get(terminalId)).toMatchObject({ status: 'running', outputText: 'once\n', outputEndOffset: 5, daemonInstanceId: instanceId });
@@ -357,7 +359,7 @@ describe('host enroll hub and thread create', () => {
     expect(await send(aSocket, a.hostId, instanceA, 'terminal.output')).toMatchObject({ accepted: 1 });
     expect(server!.ctx.terminalSessions.get(id)?.outputText).toBe('owned output');
   });
-  it('sends host.hello-ok so waitUntilConnected resolves after hello', async () => {
+  it('waits for host.ready before publishing the machine and releasing queued work', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-proj-'));
     const { enrollToken } = await startServer(projectRoot);
     const instanceId = randomUUID();
@@ -387,6 +389,9 @@ describe('host enroll hub and thread create', () => {
       });
       socket.on('error', reject);
     });
+    await expect.poll(() => acks.some(row => row.type === 'host.hello-ok')).toBe(true);
+    expect(server!.ctx.hostHub.connectedHostIds()).not.toContain(enrolled.hostId);
+    socket.send(JSON.stringify({ type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, runtime: { threads: [], loadedEnvironments: [] } }));
     await waitForHost(enrolled.hostId);
     await server!.ctx.hostHub.waitUntilConnected(enrolled.hostId, 1_000);
     await expect.poll(
@@ -649,7 +654,7 @@ describe('host enroll hub and thread create', () => {
       });
       socket.close();
       await vi.waitFor(() => expect(server!.ctx.hostHub.connectedHostIds()).not.toContain(enrolled.hostId));
-      socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(projectRoot));
+      socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(projectRoot), [threadId]);
       await waitForHost(enrolled.hostId);
       const completion = (turnId: string, completionStatus: string) => ({
         threadId, kind: 'turn.completed', payload: {
@@ -807,7 +812,7 @@ describe('host enroll hub and thread create', () => {
     }).then((response) => response.json()) as { value: { id: string } };
     expect(getConversationThread(server!.ctx.db, spawned.value.id)?.status).toBe('active');
 
-    await openHostSocket(enrolled, instanceId, defaultRpcHandler(projectRoot));
+    await openHostSocket(enrolled, instanceId, defaultRpcHandler(projectRoot), [spawned.value.id]);
     await waitForHost(enrolled.hostId);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(getConversationThread(server!.ctx.db, spawned.value.id)?.status).toBe('active');

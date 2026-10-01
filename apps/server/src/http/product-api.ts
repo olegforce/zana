@@ -1,3 +1,4 @@
+import { handlePreviewsApi } from './previews-api.js';
 import { libraryDocumentOperation } from '../services/library/library-documents.js';
 import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
 import { recoverFailedTerminalStart } from './terminal-start-recovery.js';
@@ -477,6 +478,7 @@ export async function handleProductHttp(
   }
 
   try {
+    if (await handlePreviewsApi(request, response, ctx, path, method)) return true;
     if (path === '/api/v1/file-preview/video' && (method === 'GET' || method === 'HEAD')) {
       try {
         await sendVideoPreview(request, response, ctx, requestUrl.searchParams);

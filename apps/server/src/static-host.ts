@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -286,6 +287,7 @@ export async function startStaticHost(options: StartStaticHostOptions): Promise<
     }
   }
 
+  protectPreviewServer(server);
   const address = server.address();
   if (!address || typeof address === 'string') {
     server.close();

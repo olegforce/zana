@@ -6,6 +6,7 @@ import { detectHostName, persistHostId, resolveHostId } from './identity.js';
 import { acquireDaemonLock } from './lock.js';
 import { readHostAuth, writeHostAuth } from './machine-auth.js';
 import { startEnrolledHostConnection, type EnrolledHostConnection } from './server-connection.js';
+import { HostAuthenticationError, HOST_STARTUP_TIMEOUT_MS } from './server-socket.js';
 import { disposeHostFsWatcher } from './workspace-fs-watch.js';
 import { connectHostFetch, readConnectHostAccess } from './connect-access.js';
 
@@ -66,9 +67,12 @@ async function openSession(options: {
   hostKey: string;
   instanceId: string;
   connectCredential?: string;
+  keepRetryingStartup?: boolean;
+  signal?: AbortSignal;
   onSocketClose?: (code: number) => void;
   onConnectionChange?: (connected: boolean) => void;
 }): Promise<EnrolledHostConnection> {
+  options.signal?.throwIfAborted();
   const connection = startEnrolledHostConnection({
     serverUrl: options.serverUrl,
     hostId: options.hostId,
@@ -77,17 +81,23 @@ async function openSession(options: {
     dataDir: options.dataDir,
     connectCredential: options.connectCredential,
     onConnectionChange: options.onConnectionChange,
-    onSocketClose: options.onSocketClose
+    onSocketClose: options.onSocketClose,
+    keepRetryingStartup: options.keepRetryingStartup
   });
   void connection.ready.catch(() => {
     /* close() may reject after a timeout wins the race */
   });
+  const abort = () => { void connection.close().catch(() => undefined); };
+  options.signal?.addEventListener('abort', abort, { once: true });
   try {
-    await waitForHello(connection, 10_000);
+    if (options.keepRetryingStartup) await connection.ready;
+    else await waitForHello(connection, HOST_STARTUP_TIMEOUT_MS);
     return connection;
   } catch (error) {
     await connection.close();
     throw error;
+  } finally {
+    options.signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -100,6 +110,8 @@ export async function startEnrolledHostDaemon(options: {
   hostName?: string;
   /** Desktop co-started daemon: replace another holder of this data dir. */
   stealLock?: boolean;
+  keepRetryingStartup?: boolean;
+  signal?: AbortSignal;
   onSocketClose?: (code: number) => void;
   onConnectionChange?: (connected: boolean) => void;
 }): Promise<EnrolledHostDaemon> {
@@ -125,11 +137,15 @@ export async function startEnrolledHostDaemon(options: {
           hostKey: existing.hostKey,
           instanceId,
           onConnectionChange: options.onConnectionChange,
-          onSocketClose: options.onSocketClose
+          onSocketClose: options.onSocketClose,
+          keepRetryingStartup: options.keepRetryingStartup,
+          signal: options.signal
         });
         hostId = existing.hostId;
       } catch (error) {
-        if (!options.token) throw error;
+        // Transient connectivity must not consume a join code or rotate a
+        // machine key. Only an explicit authentication rejection can re-enroll.
+        if (!options.token || !(error instanceof HostAuthenticationError)) throw error;
         const minted = await mintCredentials({
           dataDir: options.dataDir,
           serverUrl: options.serverUrl,
@@ -148,7 +164,9 @@ export async function startEnrolledHostDaemon(options: {
           hostKey: minted.hostKey,
           instanceId,
           onConnectionChange: options.onConnectionChange,
-          onSocketClose: options.onSocketClose
+          onSocketClose: options.onSocketClose,
+          keepRetryingStartup: options.keepRetryingStartup,
+          signal: options.signal
         });
       }
     } else {
@@ -173,17 +191,23 @@ export async function startEnrolledHostDaemon(options: {
         hostKey: minted.hostKey,
         instanceId,
         onConnectionChange: options.onConnectionChange,
-        onSocketClose: options.onSocketClose
+        onSocketClose: options.onSocketClose,
+        keepRetryingStartup: options.keepRetryingStartup,
+        signal: options.signal
       });
     }
+    let closeTask: Promise<void> | undefined;
     return {
       hostId,
       instanceId,
       connection,
-      async close() {
-        await disposeHostFsWatcher();
-        await connection.close();
-        releaseLock();
+      close() {
+        return closeTask ??= (async () => {
+          try {
+            await disposeHostFsWatcher();
+            await connection.close();
+          } finally { releaseLock(); }
+        })();
       }
     };
   } catch (error) {

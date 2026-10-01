@@ -1,3 +1,4 @@
+import { previewService, disposePreviews } from '../services/previews/preview-service.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -354,6 +355,7 @@ export function createProductHttpContext(
     pluginHostArtifacts: new PluginHostArtifactRegistry(),
     toProjects: () => projects.list() as unknown as Project[],
     dispose: () => {
+      disposePreviews(ctx);
       stopHistoryMaintenance();
       ctx.cliCallbacks?.dispose();
       stopRetries();
@@ -365,6 +367,7 @@ export function createProductHttpContext(
       ctx.plugins?.stop?.();
     }
   };
+  previewService(ctx);
   const stopHistoryMaintenance = startConversationHistoryMaintenance(db);
   const stopRetries = startDeferredRetryLoop(() => retryDueConversationSends(ctx,
     (threadId) => flushHeldConversationSends(ctx, threadId, { enforceConcurrencyCap: true })));

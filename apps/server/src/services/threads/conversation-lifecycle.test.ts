@@ -195,6 +195,14 @@ function ctx(callHostOnlineRpc: (input: unknown) => Promise<unknown>): ProductHt
     dataDir: '/tmp/zcc-data',
     hub: { emit: vi.fn() },
     hostHub: { callHostOnlineRpc, connectedHostIds: () => ['host-1'] },
+    config: { getConfig: () => ({}) },
+    modelCatalogs: { read: vi.fn(async () => ({
+      models: ['claude-sonnet-5', 'chosen-model'].map(id => ({
+        id, model: id, displayName: id,
+        supportedReasoningEfforts: [{ reasoningEffort: 'high' }]
+      })),
+      selectedOnlyModels: []
+    })) },
     pluginHostArtifacts,
     plugins: {
       emitThreadEvent: vi.fn().mockResolvedValue(undefined)

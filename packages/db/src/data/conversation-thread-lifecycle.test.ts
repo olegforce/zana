@@ -9,6 +9,7 @@ import {
   createConversationThread,
   createEnvironment,
   getConversationThread,
+  listLiveConversationThreadsForHost,
   openDatabase,
   updateConversationThreadStatus,
   upsertHost,
@@ -132,4 +133,14 @@ describe('applyConversationThreadLifecycleEvent', () => {
     });
     expect(getConversationThread(db!, thread.id)?.status).toBe('idle');
   });
+});
+
+it('bounds a host recovery inventory query and excludes idle or foreign work', () => {
+  const first = seed('active');
+  createConversationThread(db!, { projectId: 'proj-1', hostId: first.hostId, providerId: 'fake', status: 'starting' });
+  createConversationThread(db!, { projectId: 'proj-1', hostId: first.hostId, providerId: 'fake', status: 'idle' });
+  expect(listLiveConversationThreadsForHost(db!, first.hostId, { limit: 1 })).toHaveLength(1);
+  expect(listLiveConversationThreadsForHost(db!, first.hostId, { limit: 0 })).toHaveLength(1);
+  expect(listLiveConversationThreadsForHost(db!, first.hostId, { limit: 5000 })).toHaveLength(2);
+  expect(listLiveConversationThreadsForHost(db!, 'unknown', { limit: 10 })).toEqual([]);
 });

@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
@@ -793,6 +794,7 @@ export async function createDesktopBrowserCdpBridge(args: {
       resolve();
     });
   });
+  protectPreviewServer(server);
   const address = server.address();
   if (address === null || typeof address === "string")
     throw new Error("CDP listener did not bind");

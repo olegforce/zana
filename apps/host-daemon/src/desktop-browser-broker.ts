@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -232,6 +233,7 @@ export async function startDesktopBrowserBroker(options: {
       resolve();
     });
   });
+  protectPreviewServer(server);
   const address = server.address();
   if (!address || typeof address === 'string') {
     throw new Error('Desktop broker missing loopback address');

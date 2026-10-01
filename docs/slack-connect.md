@@ -1,6 +1,12 @@
 # Slack through Zana Connect
 
-Implementation: 28 September 2026. This is the hosted counterpart of Slack Bridge 0.7.0. It is **not enabled on the public service until deployment and Slack app configuration are completed**.
+Current: Zana for Slack **0.11.0** and Heroku **v71** provide selective Project imports, a shared capability inventory, and locally enabled read-only plugin tools in **BT Internal Sandbox**. Connecting a computer no longer synchronizes every Project. Existing 38 managed Project channels and the manual mapping were preserved. See [imports and plugin capabilities](slack-capabilities.md).
+
+The installed app uses app `A0C5F0XK3TP` in workspace `T04SR5XV56X`. Signed HTTP event verification, MCP discovery, per-domain linking, local approval, and earlier real job verification remain in place. Slack `groups:write` is approved. The hosted proxy still creates private channels, invites only the verified link owner, and restricts renames to link-owned channels.
+
+Zana for Slack **0.8.0** also supports [jobs from Slackbot's Apps](slackbot-app.md) through signed MCP at `/api/slack/mcp/`. It reuses this linking and delivery architecture. The HTTP app manifest now includes `mcp:connect` and the MCP server definition; see that guide for activation and verification.
+
+The hosted service also implements per-user domain onboarding: **`/zana connect my-domain.zana-ide.com`** or Slackbot's **`zana_connect`** tool creates a private account-linking URL. The account approval verifies ownership of that registered domain and binds the requested computer before local activation. This adds no Slack scopes and does not accept arbitrary external endpoints. See [Connect your own domain](slackbot-app.md#connect-your-own-domain).
 
 ## Routing
 
@@ -12,8 +18,8 @@ flowchart LR
   V --> L[(Slack identity → account → selected computer)]
   L --> TA[Alice's existing outbound Connect tunnel]
   L --> TB[Bob's existing outbound Connect tunnel]
-  TA --> PA[Alice's Slack Bridge plugin]
-  TB --> PB[Bob's Slack Bridge plugin]
+  TA --> PA[Alice's Zana for Slack plugin]
+  TB --> PB[Bob's Zana for Slack plugin]
   PA --> AA[Locally authorized Projects and agents]
   PB --> AB[Locally authorized Projects and agents]
   PA --> API[Scoped Slack API service]
@@ -30,8 +36,8 @@ The cloud owns the Slack bot token and signing secret. A laptop has only a revoc
 1. Connect the computer using **Settings → Phone → Zana Connect**, and enable phone access so the shared tunnel is running. A phone itself is not required.
 2. Open **Zana → Home** in Slack. For an unlinked user the server shows **Connect my computer**.
 3. Sign in to the existing Connect account. Confirm the displayed Slack user/workspace and explicitly choose an enrolled computer.
-4. Copy the ten-minute activation code into **Slack Bridge → Connection settings → Connect through Zana Connect** on that computer. The cloud probes that exact computer before activating the link. A code pasted on another computer cannot complete activation.
-5. Choose the available Projects, execution machines, models and Slack channels locally. Only those destinations are available to the linked Slack user.
+4. Copy the ten-minute activation code into **Zana for Slack → Connection settings → Connect your Slack account** on that computer. The cloud probes that exact computer before activating the link. A code pasted on another computer cannot complete activation.
+5. Save import defaults and select the Projects to import. Optionally enable imports from Slack. Registered Project names/IDs can be discovered by the linked user, but jobs and plugin tools require an imported destination.
 
 One active computer is selected per Slack identity. Selecting a replacement revokes the previous link only after the new computer successfully activates. Existing conversation routes are not transferred: start a new conversation after replacing a computer. Another Slack user cannot continue or control a conversation owned by the original user.
 
@@ -54,8 +60,10 @@ Existing `SESSION_SECRET`, `PUBLIC_BASE_URL`, `CONNECT_DOMAIN` and `DATABASE_URL
 2. Configure the four Slack variables through the hosting secret store. On startup the bot token must resolve to the expected workspace. A Slack configuration/network failure leaves the mobile gateway running and logs a generic error; fix the configuration and restart to retry Slack initialization.
 3. Stop the old direct Socket Mode receiver for **this same app**, then disable Socket Mode in Slack. Keep a record of the previous configuration for rollback. Do not have competing desktop receivers.
 4. Set Events Request URL, Interactivity Request URL and the `/zana` Request URL to `https://zana-ide.com/api/slack/events/` (or your configured account origin). Slack's signed URL-verification challenge is supported.
-5. Subscribe to `app_mention` and `app_home_opened`; enable the Home tab. Bot scopes: `app_mentions:read`, `chat:write`, `channels:read`, `groups:read`, `users:read`, `commands`. Invite the bot to the intended internal channels. Complete any Slack reinstall/consent step separately if scopes changed.
-6. Install/reload Slack Bridge 0.7.0 on both test computers, then follow the user journey above independently for two Slack users.
+5. Subscribe to `app_mention` and `app_home_opened`; enable the Home tab. Bot scopes: `app_mentions:read`, `chat:write`, `channels:read`, `groups:read`, `users:read`, `commands`. Add `groups:write` only if automatic private Project channels are enabled. Invite the bot to manually managed internal channels. Complete any Slack reinstall/consent step separately if scopes changed.
+6. Install/reload Zana for Slack 0.10.0 on both test computers, then follow the user journey above independently for two Slack users.
+
+Automatic Project channels reuse one reviewed machine/provider/model/sharing profile. Zana uses the private name `zana-<project-name>` or `<prefix>-zana-<project-name>` when the owner provides an optional prefix. It adds a stable suffix only when Slack reports that the clean name is already taken. Managed channels are renamed in bounded batches when this rule or the prefix changes; their Slack IDs and history remain intact. Zana invites only the linked owner and checks periodically for new Projects. Removing a Project never deletes or archives its Slack channel. Slack custom sidebar sections remain personal UI state.
 
 The plugin's `slack-app-connect-manifest.json` is the HTTP variant of its direct-mode manifest. Adjust the hostname for self-hosting. Work Object iframe presentation is not forwarded by the shared transport; use Home and normal status cards. Existing direct mode retains its separate website-preview setup.
 

@@ -1,3 +1,4 @@
+import type { PreviewInput, PreviewList } from '@zana-ai/zcc-contracts/previews';
 import {
   DesktopBrowserHandle,
   importDesktopBrowserCookies,
@@ -61,6 +62,12 @@ export class Zcc {
   readonly projects = {
     list: () => listProjects(this.http),
     ensureLiveSandbox: (opts?: { path?: string }) => ensureLiveSandbox(this.http, opts)
+  };
+
+  readonly previews = {
+    list: () => this.http.request<PreviewList>('GET', '/api/v1/previews'),
+    share: (input: PreviewInput) => this.http.request<PreviewList>('POST', '/api/v1/previews', { body: input }),
+    stop: (input: PreviewInput) => this.http.request<PreviewList>('DELETE', '/api/v1/previews', { body: input })
   };
 
   readonly hosts = {

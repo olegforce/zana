@@ -1,3 +1,4 @@
+import { PREVIEW_TARGET, PREVIEW_PROTOCOL, previewTargets, previewHeaders, previewPathAllowed } from './preview-policy.mjs';
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -5,12 +6,14 @@ import { isMachinePath, machineIdentity } from './machine-routes.mjs';
 import { TUNNEL_PATH, LIMITS, headers, validPath, parseFrame, send, dataFrames, bytes, heartbeat, remoteOrigin, validToken } from './protocol.mjs';
 
 /** One authenticated computer per relay process. Pairing remains on that computer. */
-export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs = 20_000, requestTimeoutMs = 25_000, queueTimeoutMs = 5000, onVisitor = () => {} }) {
+export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs = 20_000, requestTimeoutMs = 25_000, queueTimeoutMs = 5000, onVisitor = () => {}, preview = false }) {
   if (!validToken(token)) throw new Error('Relay token must be 43–128 URL-safe characters');
   const origin = remoteOrigin(publicUrl, allowLocal);
   const streams = new Map();
   const pendingReads = new Map();
   let desktop = null;
+  let targets = [];
+  const allowedTarget = port => targets.some(item => item.port === port && item.expiresAt > Date.now());
   let nextId = 0;
   const id = () => { do { nextId = nextId % 0xffffffff + 1; } while (streams.has(nextId)); return nextId; };
   const fail = (res, status, message) => {
@@ -38,16 +41,18 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
     for (const [key, stream] of streams) {
       clearTimeout(stream.timer);
       if (stream.res) fail(stream.res, 503, 'Computer disconnected. Reconnect and check whether your last action completed.');
-      else stream.ws.terminate();
+      else if (stream.ws) stream.ws.terminate();
+      else stream.socket?.destroy();
       streams.delete(key);
     }
   };
-  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.frame, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.frame, perMessageDeflate: false, handleProtocols: (protocols, req) => preview ? req[PREVIEW_PROTOCOL] || false : protocols.values().next().value });
   const drainReads = () => {
     while (available() && pendingReads.size) {
       const pending = pendingReads.values().next().value;
       pending.remove();
       if (pending.res.destroyed || pending.req.destroyed) continue;
+      if (preview && !allowedTarget(pending.req[PREVIEW_TARGET])) { fail(pending.res, 404, 'Preview is not shared'); pending.req.resume(); continue; }
       forwardHttp(pending.req, pending.res, pending.incoming);
       pending.req.resume();
     }
@@ -73,7 +78,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
   };
   const forwardHttp = (req, res, incoming) => {
     const key = id();
-    const stream = { res, bytes: 0, timer: null };
+    const stream = { res, bytes: 0, timer: null, target: req[PREVIEW_TARGET] };
     const arm = () => {
       clearTimeout(stream.timer);
       stream.timer = setTimeout(() => { cancel(key); fail(res, 504, 'Computer response timed out'); }, requestTimeoutMs);
@@ -82,7 +87,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
     stream.arm = arm;
     streams.set(key, stream);
     arm();
-    send(desktop, { type: 'request', id: key, method: req.method, path: req.url, headers: incoming });
+    send(desktop, { type: 'request', id: key, method: req.method, path: req.url, headers: incoming, ...(preview ? { target: req[PREVIEW_TARGET] } : {}) });
     let size = 0;
     req.on('data', chunk => {
       if (!streams.has(key)) return;
@@ -100,10 +105,11 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       return res.end(JSON.stringify({ relay: 1, connected: desktop?.readyState === WebSocket.OPEN }));
     }
+    if (preview && (!allowedTarget(req[PREVIEW_TARGET]) || !previewPathAllowed(req.url))) return fail(res, 404, 'Preview is not shared');
     if (!validPath(req.url) || !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return fail(res, 404, 'Not found');
     if (desktop?.readyState !== WebSocket.OPEN) return fail(res, 503, 'Computer is offline. Keep Zana running and retry.');
     let incoming;
-    try { incoming = headers(req.headers); } catch { return fail(res, 400, 'Invalid headers'); }
+    try { incoming = preview ? previewHeaders(req.headers, false, req[PREVIEW_TARGET]) : headers(req.headers); } catch { return fail(res, 400, 'Invalid headers'); }
     if (Number(incoming['content-length'] ?? 0) > LIMITS.request) return fail(res, 413, 'Body too large');
     if (!available()) return queueRead(req, res, incoming);
     forwardHttp(req, res, incoming);
@@ -118,19 +124,33 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
       wss.handleUpgrade(req, socket, head, ws => {
         desktop = ws;
         heartbeat(ws, heartbeatMs);
-        send(ws, { type: 'hello', id: 0 });
+        send(ws, { type: 'hello', id: 0, ...(preview ? { previewVersion: 1 } : {}) });
         ws.on('error', () => ws.terminate());
-        ws.on('close', () => { if (desktop === ws) { desktop = null; disconnect(); } });
+        ws.on('close', () => { if (desktop === ws) { desktop = null; targets = []; disconnect(); } });
         ws.on('message', raw => {
           try {
             const frame = parseFrame(raw);
+            if (preview && frame.id === 0 && frame.type === 'preview-targets') {
+              targets = previewTargets(frame.targets);
+              for (const pending of pendingReads.values()) if (!allowedTarget(pending.req[PREVIEW_TARGET])) { pending.remove(); fail(pending.res, 404, 'Preview is not shared'); pending.req.resume(); }
+              for (const [key, stream] of streams) if (!allowedTarget(stream.target)) { stream.res?.destroy(); stream.ws?.terminate(); stream.socket?.destroy(); cancel(key); }
+              return;
+            }
             const stream = streams.get(frame.id);
             if (!stream) return;
-            if (stream.res) {
+            if (stream.socket) {
+              if (frame.type !== 'ws-ready' || typeof frame.protocol !== 'string' || (frame.protocol && !stream.protocols.includes(frame.protocol))) { stream.socket.destroy(); cancel(frame.id); return; }
+              clearTimeout(stream.timer);
+              stream.req[PREVIEW_PROTOCOL] = frame.protocol;
+              wss.handleUpgrade(stream.req, stream.socket, stream.head, visitor => {
+                streams.set(frame.id, { ws: visitor, target: stream.target });
+                wireVisitor(visitor, stream.req, frame.id);
+              });
+            } else if (stream.res) {
               stream.arm();
               if (frame.type === 'response') {
                 if (stream.res.headersSent || !Number.isInteger(frame.status) || frame.status < 200 || frame.status > 599) throw new Error('Invalid response');
-                stream.res.writeHead(frame.status, headers(frame.headers, true));
+                stream.res.writeHead(frame.status, preview ? previewHeaders(frame.headers, true, stream.target) : headers(frame.headers, true));
               } else if (frame.type === 'response-data') {
                 if (!stream.res.headersSent) throw new Error('Missing response');
                 const chunk = bytes(frame);
@@ -152,9 +172,22 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
         });
       });
     } else {
+      if (preview) {
+        if (!available() || !allowedTarget(req[PREVIEW_TARGET]) || !previewPathAllowed(req.url)) return reject(404);
+        const protocols = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map(value => value.trim()).filter(Boolean);
+        if (protocols.length > 16 || protocols.some(value => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/.test(value))) return reject(400);
+        const key = id();
+        let incoming;
+        try { incoming = previewHeaders(req.headers, false, req[PREVIEW_TARGET]); } catch { return reject(400); }
+        const timer = setTimeout(() => { socket.destroy(); cancel(key); }, 10_000);
+        streams.set(key, { socket, head, req, timer, protocols, target: req[PREVIEW_TARGET] });
+        socket.once('close', () => { if (streams.get(key)?.socket === socket) cancel(key); });
+        send(desktop, { type: 'ws-open', id: key, path: req.url, headers: incoming, target: req[PREVIEW_TARGET], protocols });
+        return;
+      }
       if ((!['/ws', '/ws/'].includes(req.url) && !(machineIdentity(req.headers) && isMachinePath('GET', req.url, true))) || !available()) return reject(503);
       let incoming;
-      try { incoming = headers(req.headers); } catch { return reject(400); }
+      try { incoming = preview ? previewHeaders(req.headers, false, req[PREVIEW_TARGET]) : headers(req.headers); } catch { return reject(400); }
       wss.handleUpgrade(req, socket, head, ws => {
         const key = id();
         streams.set(key, { ws });
@@ -170,11 +203,29 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
       });
     }
   };
+  const wireVisitor = (ws, req, key) => {
+    onVisitor(ws, req);
+    heartbeat(ws, heartbeatMs);
+    ws.on('message', (data, binary) => {
+      if (data.length > 1024 * 1024) { ws.close(1009); return; }
+      if (desktop) send(desktop, { type: 'ws-data', id: key, data: data.toString('base64'), binary });
+    });
+    ws.on('close', () => cancel(key));
+    ws.on('error', () => ws.terminate());
+  };
+  const expiryTimer = preview ? setInterval(() => {
+    for (const pending of pendingReads.values()) if (!allowedTarget(pending.req[PREVIEW_TARGET])) { pending.remove(); fail(pending.res, 404, 'Preview is not shared'); pending.req.resume(); }
+    for (const [key, stream] of streams) if (!allowedTarget(stream.target)) { stream.res?.destroy(); stream.ws?.terminate(); stream.socket?.destroy(); cancel(key); }
+  }, 1000) : null;
+  expiryTimer?.unref();
   return {
+    previewReady: () => preview && desktop?.readyState === WebSocket.OPEN,
+    hasPreview: allowedTarget,
     handleHttp,
     handleUpgrade,
     connected: () => desktop?.readyState === WebSocket.OPEN,
     close() {
+      clearInterval(expiryTimer);
       if (desktop) { const ws = desktop; desktop = null; ws.terminate(); }
       disconnect();
       for (const ws of wss.clients) ws.terminate();

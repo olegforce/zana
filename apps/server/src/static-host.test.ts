@@ -279,6 +279,9 @@ describe('startStaticHost', () => {
       socket.once('open', () => resolve());
       socket.once('error', reject);
     });
+    socket.on('message', raw => {
+      if (JSON.parse(String(raw)).type === 'host.hello-ok') socket.send(JSON.stringify({ type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, runtime: { threads: [], loadedEnvironments: [] } }));
+    });
     socket.send(JSON.stringify({
       type: 'host.hello',
       protocolVersion: HOST_RPC_PROTOCOL_VERSION,

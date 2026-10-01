@@ -8,6 +8,7 @@ import { startEnrolledHostDaemon, type EnrolledHostDaemon } from './enroll-runti
 import { parseJoinArgv, type JoinCliOptions } from './join-argv.js';
 import { startLocalStatusServer } from './local-status.js';
 import { handleProtocolMismatch, confirmHostUpdate, rollbackHostUpdate } from './protocol-self-update.js';
+import { restartInstalledHost } from './restart-installed-host.js';
 
 export type { JoinCliOptions } from './join-argv.js';
 export { parseJoinArgv } from './join-argv.js';
@@ -28,19 +29,29 @@ export async function runJoin(options: JoinCliOptions, restart = restartHostProc
   if (!options.dataDir) throw new Error('ZCC_DATA_DIR is required for an isolated machine install');
   let connected = false;
   let closing = false;
+  let closeTask: Promise<void> | undefined;
   let hostId = options.hostId ?? null;
   let daemon: EnrolledHostDaemon | null = null;
+  let startup: Promise<EnrolledHostDaemon> | undefined;
+  const controller = new AbortController();
   let updateTask: Promise<void> | null = null;
   const status = startLocalStatusServer(options.hostDaemonPort, () => ({
     hostId, serverUrl: options.serverUrl, connected,
     protocolVersion: HOST_RPC_PROTOCOL_VERSION, autoUpdate: options.autoUpdate
   }));
-  async function close(): Promise<void> {
-    if (closing) return;
+  function close(): Promise<void> {
+    if (closeTask) return closeTask;
     closing = true;
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
     connected = false;
-    await daemon?.close();
-    await new Promise<void>(resolve => status.close(() => resolve()));
+    closeTask = (async () => {
+      controller.abort();
+      const started = daemon ?? await startup?.catch(() => null);
+      try { await started?.close(); }
+      finally { await new Promise<void>(resolve => status.close(() => resolve())); }
+    })();
+    return closeTask;
   }
   function update(force: boolean): Promise<void> {
     if (closing) return Promise.resolve();
@@ -53,17 +64,32 @@ export async function runJoin(options: JoinCliOptions, restart = restartHostProc
     })().catch(error => { console.error('Host restart failed:', error); }).finally(() => { updateTask = null; });
     return updateTask;
   }
+  const shutdown = () => { void close(); };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
   try {
-    daemon = await startEnrolledHostDaemon({
+    startup = startEnrolledHostDaemon({
+      keepRetryingStartup: true,
+      signal: controller.signal,
       dataDir: options.dataDir,
       serverUrl: options.serverUrl.endsWith('/') ? options.serverUrl : `${options.serverUrl}/`,
       token: options.joinCode || readConnectEnrollment(options.dataDir, options.hostId), hostId: options.hostId,
       onConnectionChange: value => { connected = value && !closing; },
       onSocketClose: code => {
         connected = false;
+        if (code === 4003) {
+          // Existing launchd/systemd installs restart even a clean exit. Leave
+          // their status listener alive, with the runtime stopped, until an
+          // explicit service restart; otherwise two managers reclaim forever.
+          if (process.env.ZCC_HOST_SERVICE_MANAGED === '1' && daemon) void daemon.close();
+          else void close();
+          return;
+        }
         if (!closing && options.autoUpdate && (code === 4001 || code === 4002)) void update(code === 4001);
       }
     });
+    daemon = await startup;
+    if (closing) return { close };
     rmSync(join(options.dataDir, 'connect-enroll.json'), { force: true });
     hostId = daemon.hostId;
     connected = !closing;
@@ -71,15 +97,23 @@ export async function runJoin(options: JoinCliOptions, restart = restartHostProc
     process.stdout.write(`zcc-host-daemon joined hostId=${daemon.hostId}\n`);
     return { close };
   } catch (error) {
+    const cancelled = closing;
     if (updateTask) await updateTask;
     else if (options.autoUpdate && /incompatible host-rpc protocol version|409/.test(String(error))) await update(true);
     await close();
-    throw error;
+    if (!cancelled) throw error;
+    return { close };
   }
 }
 
 const entry = process.argv[1] ?? '';
 const launchedDirectly = /(?:join-cli\.[tj]s|join\.[cm]js)$/.test(entry);
+if (launchedDirectly && process.argv[2] === 'restart') {
+  const dataDir = process.env.ZCC_DATA_DIR;
+  if (!dataDir) throw new Error('ZCC_DATA_DIR is required for an isolated machine restart');
+  await restartInstalledHost(dataDir, entry);
+  process.stdout.write('Host daemon restarted using saved enrollment.\n');
+}
 if (launchedDirectly && process.argv.includes('--check-protocol')) {
   const value = process.argv[process.argv.indexOf('--check-protocol') + 1];
   process.exit(Number(value) === HOST_RPC_PROTOCOL_VERSION ? 0 : 1);
@@ -99,10 +133,7 @@ if (launchedDirectly && process.argv.includes('join')) {
     });
   }
   try {
-    const running = await runJoin(options);
-    const shutdown = () => { void running.close().finally(() => process.exit(0)); };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    await runJoin(options);
   } catch (error) {
     if (await rollbackHostUpdate(options.dataDir)) await restartHostProcess();
     throw error;

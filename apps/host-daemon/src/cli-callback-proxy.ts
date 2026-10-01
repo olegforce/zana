@@ -1,3 +1,4 @@
+import { protectPreviewServer } from '../../../services/mobile-relay/protected-ports.mjs';
 /**
  * Loopback authority/browser checks and socket ownership are adapted from BB's
  * machine-auth-proxy.ts (MIT; docs/third-party/BB-LICENSE). Zana restricts the
@@ -102,6 +103,7 @@ export async function startCliCallbackProxy(options: {
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
+    protectPreviewServer(server);
     server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
   });
   port = (server.address() as { port: number }).port;

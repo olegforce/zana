@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 
 export interface RelayOptions {
+  preview?: boolean;
   token: string;
   publicUrl: string;
   allowLocal?: boolean;
@@ -15,6 +16,8 @@ export function createRelay(options: RelayOptions): {
   handleHttp(request: IncomingMessage, response: ServerResponse): void;
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
   connected(): boolean;
+  hasPreview(port: number): boolean;
+  previewReady(): boolean;
   close(): void;
 };
 

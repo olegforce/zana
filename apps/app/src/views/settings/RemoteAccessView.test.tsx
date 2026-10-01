@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import { RemoteAccessView } from './RemoteAccessView.js';
 
+vi.mock('./SharedPreviews.js', () => ({ SharedPreviews: () => <div>Shared previews</div> }));
 const h = vi.hoisted(() => ({ desktop: true, mobile: { status: vi.fn(), browserAddress: vi.fn(), disconnectAccount: vi.fn() }, config: { set: vi.fn() } }));
 vi.mock('../../lib/product-client.js', () => ({ product: { mobile: h.mobile, config: h.config } }));
 vi.mock('../../lib/app-surface.js', () => ({ hasDesktopBridge: () => h.desktop }));

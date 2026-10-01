@@ -1,3 +1,4 @@
+import type { HostRuntimeSnapshot } from '@zana-ai/zcc-contracts/host-rpc';
 import {
   appendConversationThreadEvent,
   getConversationThread,
@@ -148,10 +149,10 @@ export function interruptLiveConversationThreadsForHost(
   args: InterruptLiveConversationThreadsForHostArgs
 ): ConversationThreadRow[] {
   const reason = args.reason ?? 'host-daemon-restarted';
-  const allowed = args.threadIds ? new Set(args.threadIds) : null;
-  const live = listLiveConversationThreadsForHost(db, args.hostId).filter((thread) => {
-    return allowed ? allowed.has(thread.id) : true;
-  });
+  const live = args.threadIds
+    ? [...new Set(args.threadIds)].map(id => getConversationThread(db, id)).filter((thread): thread is ConversationThreadRow =>
+      !!thread && thread.hostId === args.hostId && thread.archivedAt === null && ['starting', 'active', 'stopping'].includes(thread.status))
+    : listLiveConversationThreadsForHost(db, args.hostId);
   if (live.length === 0) {
     settleDanglingBackgroundTasks({ db, hub }, { hostId: args.hostId });
     return [];
@@ -221,7 +222,7 @@ export function interruptLiveConversationThreadsForHost(
   return interrupted;
 }
 
-/** After disconnect grace: active/starting become error; stopping settles idle. */
+/** After disconnect grace: active/starting become error; stop intent remains durable. */
 export function healDisconnectedConversationThreadsForHost(
   db: ZccDatabase,
   hub: ProductHub,
@@ -238,33 +239,35 @@ export function healDisconnectedConversationThreadsForHost(
       threadIds: runningIds
     })
     : [];
-  const settled: ConversationThreadRow[] = [];
-  for (const thread of live.filter((row) => row.status === 'stopping')) {
-    const storedEvents: ConversationThreadEventRow[] = [];
-    db.transaction(() => {
-      const openTurn = findOpenConversationTurn(db, thread.id);
-      if (openTurn) {
-        const completed = appendRecoveredEvent(db, thread.id, {
-          type: 'turn/completed',
-          threadId: thread.id,
-          scope: turnScope(openTurn.turnId),
-          providerThreadId: openTurn.providerThreadId,
-          status: 'interrupted'
-        });
-        if (completed) storedEvents.push(completed);
-      }
-      applyConversationThreadLifecycleEvent(db, {
-        threadId: thread.id,
-        event: { type: 'stop.settled' }
-      });
-    });
-    for (const stored of storedEvents) emitRecoveredEvent(hub, stored);
-    const next = getConversationThread(db, thread.id);
-    if (next) {
-      hub.emit('threads:updated', threadListView(db, next));
-      settled.push(next);
-    }
-  }
+  // A disconnect is not proof that a requested stop reached the daemon.
+  // Keep that intent until reconnect can deliver it, or a new lifetime proves
+  // the old process no longer owns the work.
   settleDanglingBackgroundTasks({ db, hub }, { hostId });
-  return [...healed, ...settled];
+  return healed;
+}
+
+/** Only the same authenticated daemon lifetime may restore its work. */
+export function reconcileHostRuntimeSnapshot(
+  db: ZccDatabase, hub: ProductHub, hostId: string, snapshot: HostRuntimeSnapshot
+): void {
+  const reported = new Set(snapshot.threads.map(thread => thread.threadId));
+  const missing = listLiveConversationThreadsForHost(db, hostId, { limit: 4096 })
+    .filter(thread => thread.status !== 'stopping' && !reported.has(thread.id))
+    .map(thread => thread.id);
+  if (missing.length) interruptLiveConversationThreadsForHost(db, hub, { hostId, threadIds: missing });
+  const loaded = new Set(snapshot.loadedEnvironments);
+  for (const state of snapshot.threads) {
+    const thread = getConversationThread(db, state.threadId);
+    if (!thread || thread.hostId !== hostId || thread.archivedAt || thread.status === 'stopping') continue;
+    // A snapshot cannot reassign a thread or establish an unknown environment.
+    if (!thread.environmentId || !loaded.has(thread.environmentId)) continue;
+    if (state.status !== 'error') {
+      applyConversationThreadLifecycleEvent(db, { threadId: thread.id, event: { type: 'run.started' } });
+    }
+    if (state.status !== 'active') {
+      applyConversationThreadLifecycleEvent(db, { threadId: thread.id, event: { type: state.status === 'idle' ? 'run.succeeded' : 'run.failed' } });
+    }
+    const next = getConversationThread(db, thread.id);
+    if (next && next.status !== thread.status) hub.emit('threads:updated', threadListView(db, next));
+  }
 }

@@ -1,15 +1,16 @@
 import { request } from 'node:http';
+import { PREVIEW_PATH, previewTargets, previewHeaders, previewPathAllowed } from './preview-policy.mjs';
 import { WebSocket } from 'ws';
 import { isMachinePath, machineIdentity } from './machine-routes.mjs';
 import { TUNNEL_PATH, LIMITS, headers, validPath, parseFrame, send, dataFramesFlushed, bytes, heartbeat, remoteOrigin, validToken } from './protocol.mjs';
 
 /** Dials ONLY the supplied loopback mobile gateway, never the product server or a frame-supplied host. */
-export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential, productInstanceId, allowLocal = false, onState = () => {}, retryMs = 1000, heartbeatMs = 20_000, helloTimeoutMs = 10_000 }) {
+export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential, productInstanceId, allowLocal = false, onState = () => {}, retryMs = 1000, heartbeatMs = 20_000, helloTimeoutMs = 10_000, previews, machineCredential }) {
   const origin = remoteOrigin(publicUrl, allowLocal);
   if (!validToken(token)) throw new Error('Invalid relay token');
   if (gatewayCredential !== undefined && !validToken(gatewayCredential)) throw new Error('Invalid local gateway credential');
   if (!Number.isInteger(gatewayPort) || gatewayPort < 1 || gatewayPort > 65535) throw new Error('Invalid gateway port');
-  const target = new URL(TUNNEL_PATH, origin);
+  const target = new URL(previews ? PREVIEW_PATH : TUNNEL_PATH, origin);
   target.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
   let socket;
   let retry;
@@ -30,9 +31,18 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
   const dial = () => {
     if (stopped) return;
     update('connecting');
-    const ws = new WebSocket(target, { headers: { authorization: `Bearer ${token}`, ...(productInstanceId ? { 'x-zcc-relay-machine-version': '1', 'x-zcc-product-instance': productInstanceId } : {}) }, handshakeTimeout: 10_000, maxPayload: LIMITS.frame, perMessageDeflate: false, followRedirects: false });
+    const ws = new WebSocket(target, { headers: { authorization: `Bearer ${token}`, ...(machineCredential ? { 'x-zcc-machine-credential': machineCredential } : {}), ...(previews ? { 'x-zcc-preview-version': '1' } : {}), ...(productInstanceId ? { 'x-zcc-relay-machine-version': '1', 'x-zcc-product-instance': productInstanceId } : {}) }, handshakeTimeout: 10_000, maxPayload: LIMITS.frame, perMessageDeflate: false, followRedirects: false });
     let ready = false;
     let helloTimer;
+    let previewTimer;
+    let previewSignature = '';
+    const targets = () => { try { return previewTargets(previews?.() ?? []); } catch { return []; } };
+    const syncPreviews = () => {
+      const active = targets();
+      for (const [id, stream] of streams) if (stream.previewPort && !active.some(item => item.port === stream.previewPort)) { send(ws, { type: 'error', id }); dispose(id); }
+      const signature = JSON.stringify(active);
+      if (signature !== previewSignature) { previewSignature = signature; send(ws, { type: 'preview-targets', id: 0, targets: active }); }
+    };
     // All HTTP responses share one socket budget. Pause each producer and drain
     // one chunk at a time, so concurrent app assets cannot overflow the tunnel.
     let responseWrites = Promise.resolve();
@@ -44,9 +54,15 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
       helloTimer = setTimeout(() => ws.terminate(), helloTimeoutMs);
       helloTimer.unref();
     });
+    ws.on('unexpected-response', (_req, response) => {
+      response.resume();
+      if (previews && [404, 409].includes(response.statusCode)) { stopped = true; update('update-required'); }
+      ws.terminate();
+    });
     ws.on('error', () => { /* close owns cleanup/retry; never surface headers or secrets */ });
     ws.on('close', () => {
       clearTimeout(helloTimer);
+      clearInterval(previewTimer);
       if (socket !== ws) return;
       cleanup();
       if (stopped) return;
@@ -58,13 +74,22 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
     ws.on('message', raw => {
       try {
         const frame = parseFrame(raw);
-        if (frame.type === 'hello' && frame.id === 0 && !ready) { clearTimeout(helloTimer); ready = true; backoff = retryMs; update('connected'); return; }
+        if (frame.type === 'hello' && frame.id === 0 && !ready) {
+          clearTimeout(helloTimer);
+          if (previews && frame.previewVersion !== 1) { update('update-required'); stopped = true; ws.close(1008, 'Preview protocol unavailable'); return; }
+          ready = true; backoff = retryMs; update('connected');
+          if (previews) { syncPreviews(); previewTimer = setInterval(syncPreviews, 1000); previewTimer.unref(); }
+          return;
+        }
         if (!ready) throw new Error('Missing relay handshake');
         if (frame.id === 0) throw new Error('Invalid stream');
         if (frame.type === 'cancel') { dispose(frame.id); return; }
         if (frame.type === 'request' || frame.type === 'ws-open') {
           if (streams.has(frame.id) || streams.size >= LIMITS.streams) throw new Error('Too many streams');
-          const incoming = { ...headers(frame.headers), host: origin.host };
+          const previewPort = previews ? frame.target : undefined;
+          if (previews && (!targets().some(item => item.port === previewPort) || !previewPathAllowed(frame.path))) { send(ws, { type: 'error', id: frame.id }); return; }
+          const incoming = previews ? previewHeaders(frame.headers, false, previewPort) : { ...headers(frame.headers), host: origin.host };
+          const localPort = previewPort ?? gatewayPort;
           const machine = gatewayCredential ? machineIdentity(incoming) : null;
           const path = frame.type === 'ws-open' ? frame.path ?? '/ws' : frame.path;
           if (machine && !isMachinePath(frame.type === 'ws-open' ? 'GET' : frame.method, path, frame.type === 'ws-open')) throw new Error('Invalid machine route');
@@ -77,13 +102,13 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
           }
           if (frame.type === 'request') {
             if (!validPath(frame.path) || !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(frame.method)) throw new Error('Invalid request');
-            const stream = { size: 0, ended: false };
+            const stream = { size: 0, ended: false, previewPort };
             streams.set(frame.id, stream);
-            const local = request({ hostname: '127.0.0.1', port: gatewayPort, path: frame.path, method: frame.method, headers: incoming, timeout: 120_000 }, response => {
+            const local = request({ hostname: '127.0.0.1', port: localPort, path: frame.path, method: frame.method, headers: incoming, timeout: 120_000 }, response => {
               if (!streams.has(frame.id)) { response.destroy(); return; }
               stream.response = response;
               let size = 0;
-              try { send(ws, { type: 'response', id: frame.id, status: response.statusCode, headers: headers(response.headers, true) }); }
+              try { send(ws, { type: 'response', id: frame.id, status: response.statusCode, headers: previews ? previewHeaders(response.headers, true, previewPort) : headers(response.headers, true) }); }
               catch { send(ws, { type: 'error', id: frame.id }); dispose(frame.id); return; }
               response.on('data', chunk => {
                 response.pause();
@@ -114,11 +139,11 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
             local.on('timeout', () => local.destroy(new Error('Timeout')));
             local.on('error', () => { if (streams.has(frame.id)) { send(ws, { type: 'error', id: frame.id }); dispose(frame.id); } });
           } else {
-            if (!machine && !['/ws', '/ws/'].includes(path)) throw new Error('Invalid socket route');
-            const local = new WebSocket(`ws://127.0.0.1:${gatewayPort}${path}`, { headers: incoming, handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false });
-            const stream = { ws: local, queued: [], queuedBytes: 0 };
+            if (!previews && !machine && !['/ws', '/ws/'].includes(path)) throw new Error('Invalid socket route');
+            const local = new WebSocket(`ws://127.0.0.1:${localPort}${path}`, previews ? frame.protocols ?? [] : [], { headers: incoming, handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false });
+            const stream = { ws: local, queued: [], queuedBytes: 0, previewPort };
             streams.set(frame.id, stream);
-            local.on('open', () => { for (const queued of stream.queued) local.send(queued.data, { binary: queued.binary }); stream.queued = []; stream.queuedBytes = 0; });
+            local.on('open', () => { if (previews) send(ws, { type: 'ws-ready', id: frame.id, protocol: local.protocol }); for (const queued of stream.queued) local.send(queued.data, { binary: queued.binary }); stream.queued = []; stream.queuedBytes = 0; });
             local.on('message', (data, binary) => send(ws, { type: 'ws-data', id: frame.id, data: data.toString('base64'), binary }));
             local.on('error', () => { /* close reports failure */ });
             local.on('close', () => { if (streams.delete(frame.id)) send(ws, { type: 'ws-close', id: frame.id }); });

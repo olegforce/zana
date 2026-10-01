@@ -158,12 +158,14 @@ export function parsePeerDaemonStatusOutput(
   const [token, maybeId] = statusLine.split(/\s+/);
   const hostId = maybeId && PEER_HOST_ID_RE.test(maybeId) ? maybeId : undefined;
   const withId = hostId ? { hostId } : {};
-  if (code === 2 || token === 'not_installed' || stdout.includes('not_installed')) {
+  if (token === 'not_installed') {
     return { state: 'not_installed', ...withId };
   }
-  if (code === 0 || token === 'connected' || stdout.includes('connected')) {
+  if (token === 'connected') {
     return { state: 'connected', ...withId };
   }
+  if (token === 'disconnected') return { state: 'disconnected', ...withId };
+  if (code === 2) return { state: 'not_installed', ...withId };
   return { state: 'disconnected', ...withId };
 }
 
@@ -192,10 +194,29 @@ export function peerRestartCommand(serverHost: string): string {
     'elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then',
     '  systemctl --user restart "$unit"',
     'else',
-    '  echo "No systemd user bus to restart" >&2',
-    '  exit 1',
+    `  data_dir="$HOME/.zcc-machines/${host}"`,
+    '  join_bin="$data_dir/runtime/join.mjs"',
+    ...peerNodeSelectionLines().map(line => `  ${line}`),
+    '  export PATH="$(dirname "$node_bin"):$PATH"',
+    '  ZCC_DATA_DIR="$data_dir" "$node_bin" "$join_bin" restart',
     'fi'
   ].join('\n');
+}
+
+function peerNodeSelectionLines(): string[] {
+  return [
+    'node_bin=""',
+    'if [ -n "${ZCC_NODE:-}" ] && [ -x "$ZCC_NODE" ]; then node_bin=$ZCC_NODE; fi',
+    'if [ -z "$node_bin" ] && command -v node >/dev/null 2>&1; then node_bin=$(command -v node); fi',
+    'if [ -z "$node_bin" ] || [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -lt 22 ]; then',
+    '  for cand in "$HOME/.nix-profile/bin/node" /nix/store/*-nodejs-22.*/bin/node /nix/store/*-nodejs-24.*/bin/node /nix/store/*-nodejs-slim-22.*/bin/node /nix/store/*-nodejs-slim-24.*/bin/node; do',
+    '    [ -x "$cand" ] || continue',
+    '    major=$("$cand" -p "parseInt(process.versions.node,10)" 2>/dev/null) || continue',
+    '    if [ "$major" -ge 22 ]; then node_bin=$cand; break; fi',
+    '  done',
+    'fi',
+    '[ -n "$node_bin" ] && [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -ge 22 ] || { echo "Node.js >= 22 is required" >&2; exit 1; }'
+  ];
 }
 
 export function peerUnpackCommand(serverHost: string): string {
@@ -246,17 +267,7 @@ export function peerInstallServiceCommand(input: {
     'port_dir="$HOME/.zcc-machines/host-daemon-ports"',
     'port_file="$data_dir/host-daemon.port"',
     'mkdir -p "$port_dir"',
-    'node_bin=""',
-    'if [ -n "${ZCC_NODE:-}" ] && [ -x "$ZCC_NODE" ]; then node_bin=$ZCC_NODE; fi',
-    'if [ -z "$node_bin" ] && command -v node >/dev/null 2>&1; then node_bin=$(command -v node); fi',
-    'if [ -z "$node_bin" ] || [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -lt 22 ]; then',
-    '  for cand in "$HOME/.nix-profile/bin/node" /nix/store/*-nodejs-22.*/bin/node /nix/store/*-nodejs-24.*/bin/node /nix/store/*-nodejs-slim-22.*/bin/node /nix/store/*-nodejs-slim-24.*/bin/node; do',
-    '    [ -x "$cand" ] || continue',
-    '    major=$("$cand" -p "parseInt(process.versions.node,10)" 2>/dev/null) || continue',
-    '    if [ "$major" -ge 22 ]; then node_bin=$cand; break; fi',
-    '  done',
-    'fi',
-    '[ -n "$node_bin" ] && [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -ge 22 ] || { echo "Node.js >= 22 is required" >&2; exit 1; }',
+    ...peerNodeSelectionLines(),
     'export PATH="$(dirname "$node_bin"):$PATH"',
     '[ -f "$join_bin" ] || { echo "join CLI missing from artifact" >&2; exit 1; }',
     // Stop the service first so it cannot race the replacement background daemon.

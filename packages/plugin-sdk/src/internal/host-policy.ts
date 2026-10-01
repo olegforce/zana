@@ -72,6 +72,7 @@ export function pluginCliCollisionWarning(
 export const RESERVED_AGENT_TOOL_NAMES: readonly string[] = [
   "update_environment_directory",
   "preview_file",
+  "share_preview",
   "run_in_terminal",
   "inbox_push",
   "inbox_search",
