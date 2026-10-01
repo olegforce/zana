@@ -40,7 +40,16 @@ export async function handleInstallHttp(
   }
 
   if (pathname === '/install.sh') {
-    const script = readFileSync(installScriptPath());
+    let script: Buffer;
+    try {
+      script = typeof __ZCC_BUNDLED_INSTALL_SCRIPT__ === 'string'
+        ? Buffer.from(__ZCC_BUNDLED_INSTALL_SCRIPT__, 'utf8')
+        : readFileSync(installScriptPath());
+    } catch {
+      response.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify({ error: 'machine installer unavailable' }));
+      return true;
+    }
     response.writeHead(200, {
       'cache-control': 'no-store',
       'content-type': 'text/x-shellscript; charset=utf-8',

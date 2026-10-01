@@ -175,7 +175,8 @@ export default defineConfig(({ command }) => {
     define: {
       __ZCC_BUNDLED_APP_URL__: JSON.stringify(bundledAppUrl()),
       __ZCC_BUNDLED_RELAY_TOKEN__: JSON.stringify(bundledRelayToken()),
-      __ZCC_BUNDLED_POSTHOG_API_KEY__: JSON.stringify(bundledPosthogApiKey())
+      __ZCC_BUNDLED_POSTHOG_API_KEY__: JSON.stringify(bundledPosthogApiKey()),
+      __ZCC_BUNDLED_INSTALL_SCRIPT__: JSON.stringify(readFileSync(resolve(__dirname, 'apps/server/src/assets/install-machine.sh'), 'utf8'))
     },
     // Leave jiti external. Rolldown emits an empty `jiti-*.js` chunk when it is
     // bundled (`exclude: ['jiti']`), and the static `import * as jiti from 'jiti'`
