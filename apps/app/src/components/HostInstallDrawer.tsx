@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { HardDrive, Loader2, X } from 'lucide-react';
+import { Copy, HardDrive, Loader2, X } from 'lucide-react';
 import { copyText } from '../lib/copy-text.js';
 import {
   HOST_INSTALL_SUCCESS_CLOSE_MS,
@@ -8,10 +8,11 @@ import {
   type HostInstallDrawerState
 } from '../lib/host-install-drawer.js';
 import { useUi } from '../store.js';
+import './quick-access-panel.css';
 
 /**
- * Right-edge slide-over for live host-daemon Install/Fix logs — the structural
- * twin of {@link NotificationsDrawer}. Opened automatically when composer
+ * Compact quick access panel for live host-daemon Install/Fix logs, styled like
+ * {@link NotificationsDrawer}. Opened automatically when composer
  * Install/Fix (or Add remote) starts, and reopened from the busy chip.
  */
 export function HostInstallDrawerView({
@@ -37,53 +38,61 @@ export function HostInstallDrawerView({
   const title = hostInstallDrawerTitle({ busy, kind, error });
 
   return (
-    <aside className="notifications-drawer host-install-drawer" aria-label="Host daemon install log" data-testid="host-install-drawer">
-      <header className="notifications-drawer-header">
+    <aside className="quick-access-panel host-install-drawer" aria-label="Host daemon install log" data-testid="host-install-drawer"
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}>
+      <header className="quick-access-header">
         {busy ? (
-          <Loader2 size={14} className="notifications-drawer-icon thread-command-send-spin" aria-hidden="true" />
+          <Loader2 size={16} className="host-install-drawer-icon thread-command-send-spin" aria-hidden="true" />
         ) : (
-          <HardDrive size={14} className="notifications-drawer-icon" aria-hidden="true" />
+          <HardDrive size={16} className="host-install-drawer-icon" aria-hidden="true" />
         )}
-        <span className="notifications-drawer-title">{title}</span>
-        {target ? <span className="notifications-drawer-count">{target}</span> : null}
-        <span className="grow" />
+        <h2 className="host-install-drawer-title" role="status">{title}</h2>
         <button
-          className="icon-button"
+          type="button"
+          className="quick-access-icon-button"
           onClick={onClose}
           aria-label="Close install log"
-          title="Close"
+          title="Close (Esc)"
         >
-          <X size={16} />
+          <X size={16} aria-hidden="true" />
         </button>
       </header>
 
-      {logs.length === 0 && !error ? (
-        <div className="notifications-drawer-empty">
-          <HardDrive size={26} aria-hidden="true" />
-          <h4>Waiting for install output</h4>
-          <p>SSH progress and the remote daemon log will show up here.</p>
-        </div>
-      ) : (
-        <pre ref={logRef} className="host-install-drawer-log" data-testid="host-install-log">
-          {logs.join('\n')}
-        </pre>
-      )}
+      <div className="quick-access-summary">Remote daemon{target ? ` · ${target}` : ''}</div>
 
-      {error ? (
-        <div className="host-install-drawer-error" data-testid="host-install-error">
-          {error}
-        </div>
-      ) : null}
+      <div className="quick-access-content host-install-drawer-content">
+        {error ? (
+          <div role="alert" className="host-install-drawer-error" data-testid="host-install-error">
+            {error}
+          </div>
+        ) : null}
+
+        {logs.length === 0 && !error ? (
+          <div className="quick-access-empty">
+            <span className="quick-access-empty-icon"><HardDrive size={22} aria-hidden="true" /></span>
+            <h3>Waiting for install output</h3>
+            <p>SSH progress and the remote daemon log will show up here.</p>
+          </div>
+        ) : logs.length > 0 ? (
+          <pre ref={logRef} className="host-install-drawer-log" data-testid="host-install-log">
+            {logs.join('\n')}
+          </pre>
+        ) : null}
+      </div>
 
       {pairingCommand && onCopyPairing ? (
-        <footer className="notifications-drawer-footer">
+        <footer className="quick-access-footer">
           <button
             type="button"
-            className="notifications-drawer-view-all"
             data-testid="host-install-copy-command"
             onClick={onCopyPairing}
           >
-            Copy install command
+            Copy install command<Copy size={14} aria-hidden="true" />
           </button>
         </footer>
       ) : null}

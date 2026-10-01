@@ -28739,31 +28739,60 @@ body.resizing-col .library-split-resizer::after {
   color: var(--text-primary);
 }
 
-.host-install-drawer {
-  width: 380px;
+.quick-access-panel.quick-access-panel.host-install-drawer {
+  bottom: auto;
+  max-height: calc(100dvh - var(--titlebar-h) - 16px);
   z-index: 41;
 }
 
+.host-install-drawer-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.host-install-drawer-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.host-install-drawer .host-install-drawer-content {
+  flex: 0 1 auto;
+  gap: 12px;
+  padding: 10px 16px 16px;
+}
+
 .host-install-drawer-log {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 320px;
   overflow: auto;
   margin: 0;
   padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   font-size: 11px;
   line-height: 1.45;
   font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-muted);
-  background: var(--bg-base);
+  background: var(--bg-panel);
 }
 
 .host-install-drawer-error {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 6%, var(--bg-base));
   font-size: 12px;
   line-height: 1.45;
   color: var(--danger);
+  overflow-wrap: anywhere;
 }
 
 /* ============================================================================
