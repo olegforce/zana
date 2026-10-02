@@ -29,15 +29,15 @@ function mount(onClose = vi.fn().mockResolvedValue(undefined)) {
 beforeEach(() => vi.clearAllMocks());
 afterEach(cleanup);
 
-it('follows a right swipe, closes on release and suppresses the resulting link click', async () => {
+it('follows a long left swipe, closes on release and suppresses the resulting link click', async () => {
   const { row, pointer, onClose, onOpen } = mount();
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 140);
-  expect(row.parentElement!.style.transform).toBe('translateX(120px)');
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 50);
+  expect(row.parentElement!.style.transform).toBe('translateX(-170px)');
   expect(row.closest('li')!.dataset.ready).toBe('true');
   expect(row.setPointerCapture).toHaveBeenCalledWith(1);
   expect(onClose).not.toHaveBeenCalled();
-  pointer('pointerUp', 140);
+  pointer('pointerUp', 50);
   fireEvent.click(row);
   expect(onOpen).not.toHaveBeenCalled();
   expect(row.releasePointerCapture).toHaveBeenCalledWith(1);
@@ -45,36 +45,118 @@ it('follows a right swipe, closes on release and suppresses the resulting link c
   expect(row.parentElement!.style.transform).toBe('translateX(0px)');
 });
 
+it('reveals a tappable close action after a short left swipe', async () => {
+  const { row, pointer, onClose, onOpen } = mount();
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 150);
+  pointer('pointerUp', 150);
+  fireEvent.click(row);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(row.parentElement!.style.transform).toBe('translateX(-88px)');
+  expect(row.closest('li')!.dataset.swiping).toBe('false');
+  const action = row.closest('li')!.querySelector('.mobile-agent-swipe-action button')!;
+  expect(action.getAttribute('aria-hidden')).toBe('false');
+  expect(action.getAttribute('tabindex')).toBe('0');
+  fireEvent.click(action);
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+});
+
+it.each(['tap', 'outside', 'escape', 'swipe back'])('dismisses the revealed action with %s without navigating or closing', (type) => {
+  const { row, pointer, onClose, onOpen } = mount();
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 150);
+  pointer('pointerUp', 150);
+  fireEvent.click(row); // synthetic post-drag click
+  if (type === 'tap') {
+    pointer('pointerDown', 150);
+    pointer('pointerUp', 150);
+    fireEvent.click(row);
+  }
+  if (type === 'outside') fireEvent.pointerDown(document.body);
+  if (type === 'escape') {
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(row.parentElement!.style.transform).toBe('translateX(-88px)');
+    fireEvent.keyDown(row, { key: 'Escape' });
+    expect(document.activeElement).toBe(row);
+  }
+  if (type === 'swipe back') {
+    pointer('pointerDown', 150);
+    pointer('pointerMove', 230);
+    pointer('pointerUp', 230);
+    fireEvent.click(row);
+  }
+  expect(row.parentElement!.style.transform).toBe('translateX(0px)');
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onOpen).not.toHaveBeenCalled();
+});
+
+it('keeps the action open when interacting within the row and cleans up its outside listener', () => {
+  const remove = vi.spyOn(document, 'removeEventListener');
+  const { row, pointer } = mount();
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 150);
+  pointer('pointerUp', 150);
+  fireEvent.pointerDown(row);
+  expect(row.parentElement!.style.transform).toBe('translateX(-88px)');
+  cleanup();
+  expect(remove).toHaveBeenCalledWith('pointerdown', expect.any(Function));
+  remove.mockRestore();
+});
+
 it.each([
-  ['short drag', 60, 30], ['left swipe', -120, 30], ['scroll', 30, 160], ['diagonal', 140, 170]
-])('does not close on a %s', (_label, x, y) => {
-  const { pointer, onClose } = mount();
-  pointer('pointerDown', 20);
+  ['small drag', 190, 30], ['right swipe', 390, 30], ['scroll', 230, 160], ['diagonal', 50, 170]
+])('does not close or reveal on a %s', (_label, x, y) => {
+  const { row, pointer, onClose } = mount();
+  pointer('pointerDown', 220);
   pointer('pointerMove', x as number, y as number);
   pointer('pointerUp', x as number, y as number);
   expect(onClose).not.toHaveBeenCalled();
+  expect(row.parentElement!.style.transform).toBe('translateX(0px)');
 });
 
 it.each(['pointerCancel', 'lostPointerCapture'] as const)('resets a swipe on %s without closing or following the link', (type) => {
   const { row, pointer, onClose, onOpen } = mount();
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 150);
-  pointer(type, 150);
-  pointer('pointerUp', 150);
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 50);
+  pointer(type, 50);
+  pointer('pointerUp', 50);
   fireEvent.click(row);
   expect(onClose).not.toHaveBeenCalled();
   expect(onOpen).not.toHaveBeenCalled();
   expect(row.parentElement!.style.transform).toBe('translateX(0px)');
 });
 
+it('restores an already revealed action when a second drag is cancelled', () => {
+  const { row, pointer, onClose } = mount();
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 150);
+  pointer('pointerUp', 150);
+  pointer('pointerDown', 150);
+  pointer('pointerMove', 50);
+  pointer('pointerCancel', 50);
+  expect(row.parentElement!.style.transform).toBe('translateX(-88px)');
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('keeps swiping when implicit touch capture transfers from a child to the link', () => {
+  const { row, pointer, onClose } = mount();
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 200);
+  fireEvent.lostPointerCapture(row.querySelector('.mobile-agent-status')!, { pointerId: 1 });
+  pointer('pointerMove', 50);
+  pointer('pointerUp', 50);
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 it('supports taps with slight jitter, including after an aborted swipe', () => {
   const { row, pointer, onClose, onOpen } = mount();
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 60);
-  pointer('pointerUp', 60);
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 24);
-  pointer('pointerUp', 24);
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 190);
+  pointer('pointerUp', 190);
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 216);
+  pointer('pointerUp', 216);
   fireEvent.click(row);
   expect(onOpen).toHaveBeenCalledOnce();
   expect(onClose).not.toHaveBeenCalled();
@@ -82,27 +164,27 @@ it('supports taps with slight jitter, including after an aborted swipe', () => {
 
 it('ignores other pointers and secondary mouse buttons', () => {
   const { row, pointer, onClose } = mount();
-  pointer('pointerDown', 20, 30, { isPrimary: false });
-  pointer('pointerMove', 150);
-  pointer('pointerUp', 150);
-  pointer('pointerDown', 20, 30, { button: 2 });
-  pointer('pointerMove', 150);
-  pointer('pointerUp', 150);
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 150, 30, { pointerId: 2 });
-  pointer('pointerUp', 150, 30, { pointerId: 2 });
+  pointer('pointerDown', 220, 30, { isPrimary: false });
+  pointer('pointerMove', 50);
+  pointer('pointerUp', 50);
+  pointer('pointerDown', 220, 30, { button: 2 });
+  pointer('pointerMove', 50);
+  pointer('pointerUp', 50);
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 50, 30, { pointerId: 2 });
+  pointer('pointerUp', 50, 30, { pointerId: 2 });
   expect(onClose).not.toHaveBeenCalled();
   expect(row.parentElement!.style.transform).toBe('translateX(0px)');
 });
 
 it('caps the visual drag and allows reversing it before release', () => {
   const { row, pointer, onClose } = mount();
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 400);
-  expect(row.parentElement!.style.transform).toBe('translateX(180px)');
-  pointer('pointerMove', 0);
+  pointer('pointerDown', 420);
+  pointer('pointerMove', 20);
+  expect(row.parentElement!.style.transform).toBe('translateX(-220px)');
+  pointer('pointerMove', 450);
   expect(row.parentElement!.style.transform).toBe('translateX(0px)');
-  pointer('pointerUp', 0);
+  pointer('pointerUp', 450);
   expect(onClose).not.toHaveBeenCalled();
 });
 
@@ -115,9 +197,9 @@ it('provides a close button and blocks repeated close attempts while pending', a
   expect(button.disabled).toBe(true);
   expect(row.closest('li')!.getAttribute('aria-busy')).toBe('true');
   fireEvent.click(button);
-  pointer('pointerDown', 20);
-  pointer('pointerMove', 150);
-  pointer('pointerUp', 150);
+  pointer('pointerDown', 220);
+  pointer('pointerMove', 50);
+  pointer('pointerUp', 50);
   fireEvent.click(row);
   expect(onClose).toHaveBeenCalledOnce();
   expect(onOpen).not.toHaveBeenCalled();

@@ -28,6 +28,12 @@ async function checkToolbar(composer: Locator, width: number, compactModel = tru
   const options = composer.getByRole('button', { name: 'Composer options', exact: true });
   await expect(options).toBeVisible();
   await expect(attach).toBeVisible();
+  await expect(composer.locator('input[type="file"]')).toBeHidden();
+  // Touch hover can persist after the file picker returns, including while
+  // focus has moved back into the draft. Accessible names remain available.
+  await attach.hover();
+  await composer.getByTestId('thread-command-input').focus();
+  expect(await attach.locator('..').evaluate((node) => getComputedStyle(node, '::after').display)).toBe('none');
   await expect(composer.locator('.thread-command-options')).toBeHidden();
   const controls = [model, composer.locator('.thread-command-permission button'), options,
     attach, composer.locator('.thread-command-send')];
@@ -51,6 +57,57 @@ async function checkToolbar(composer: Locator, width: number, compactModel = tru
         a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1).toBe(true);
     }
   }
+}
+
+async function checkChatScrollBounds(page: Page) {
+  const timeline = page.getByTestId('thread-timeline');
+  await expect(timeline).toHaveCSS('overscroll-behavior-y', 'none');
+  await expect(page.locator('html')).toHaveCSS('overscroll-behavior-y', 'none');
+  await expect(page.locator('body')).toHaveCSS('overscroll-behavior-y', 'none');
+  await expect.poll(() => timeline.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeGreaterThan(800);
+  const header = (await page.locator('.titlebar').boundingBox())!;
+  const composer = page.locator('.thread-command-composer');
+  const card = (await composer.boundingBox())!;
+  const bounds = (await timeline.boundingBox())!;
+  const chromiumTouch = page.context().browser()?.browserType().name() === 'chromium';
+  for (const edge of ['top', 'bottom']) {
+    await timeline.evaluate((node, edge) => { node.scrollTop = edge === 'top' ? 0 : node.scrollHeight; }, edge);
+    if (chromiumTouch) {
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+        for (let step = 1; step <= 8; step++) {
+          await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{
+            x: start.x, y: start.y + (edge === 'top' ? 1 : -1) * 120 * step / 8
+          }] });
+        }
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } finally {
+        await cdp.detach();
+      }
+    } else {
+      // Mobile WebKit does not expose native drag or wheel synthesis. Exercise
+      // clamping and layout here; Chromium above covers real touch boundary drags.
+      await timeline.evaluate((node, edge) => { node.scrollTop += edge === 'top' ? -1000 : 1000; }, edge);
+    }
+    // Let the native scrolling transaction settle before checking the shell.
+    await page.waitForTimeout(150);
+    const scroll = await timeline.evaluate((node) => ({ top: node.scrollTop, max: node.scrollHeight - node.clientHeight }));
+    expect(scroll.top).toBeGreaterThanOrEqual(0);
+    expect(scroll.top).toBeLessThanOrEqual(scroll.max + 1);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    expect((await page.locator('.titlebar').boundingBox())!.y).toBe(header.y);
+    expect((await composer.boundingBox())!.y).toBe(card.y);
+  }
+  // Reading older messages must survive keyboard/composer resizing.
+  await timeline.evaluate((node) => { node.scrollTop = 100; });
+  await expect(page.getByRole('button', { name: 'Scroll to bottom' })).toBeVisible();
+  await keyboardViewport(page, 400);
+  expect(await timeline.evaluate((node) => node.scrollTop)).toBe(100);
+  await keyboardViewport(page, 844);
+  await page.getByRole('button', { name: 'Scroll to bottom' }).tap();
+  await expect.poll(() => timeline.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(1);
 }
 
 async function checkCompactComposer(page: Page, composer: Locator) {
@@ -128,7 +185,8 @@ for (const engine of [chromium, webkit]) {
       if (!project.ok) throw new Error('Project registration failed');
       const response = await fetch('/api/v1/threads', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId: project.value.id, providerId: 'fake', input: 'Mobile layout delay:500' })
+        body: JSON.stringify({ projectId: project.value.id, providerId: 'fake', input:
+          Array.from({ length: 30 }, (_, index) => `Scroll paragraph ${index + 1}. A mobile conversation needs enough content to exercise both scroll boundaries.`).join('\n\n') })
       });
       if (!response.ok) throw new Error(await response.text());
       return (await response.json()).thread.id as string;
@@ -158,6 +216,8 @@ for (const engine of [chromium, webkit]) {
         localStorage.setItem('zcc.defaultLaunchMode', 'thread');
       });
       const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      page.setDefaultNavigationTimeout(15_000);
       let modelLabel = 'Auto';
       await page.route('**/api/v1/system/execution-options*', (route) => route.fulfill({ json: {
         providers: [{ id: 'fake', displayName: 'Fake', available: true,
@@ -174,6 +234,9 @@ for (const engine of [chromium, webkit]) {
         const composer = page.locator('.thread-command-composer');
         const editor = composer.getByTestId('thread-command-input');
         await expect(composer.getByTestId('model-reasoning-picker-trigger')).toContainText('Auto');
+        if (route === `/threads/${threadId}`) {
+          await test.step('Chat scroll boundaries and keyboard scrollback', () => checkChatScrollBounds(page));
+        }
         for (const width of [320, 390]) {
           await page.setViewportSize({ width, height: 844 });
           await checkCompactComposer(page, composer);
@@ -191,6 +254,7 @@ for (const engine of [chromium, webkit]) {
           await checkToolbar(composer, width, route !== '/');
           await editor.focus();
           await expect(editor).toHaveCSS('font-size', '16px');
+          await expect(editor).toHaveCSS('overscroll-behavior-y', 'none');
           for (const offset of [0, 160, 220]) {
             await keyboardViewport(page, 400, offset);
             await expect(page.locator('.app-shell')).toHaveCSS('top', `${offset}px`);
@@ -207,6 +271,10 @@ for (const engine of [chromium, webkit]) {
             const card = (await composer.locator('.thread-command-card').boundingBox())!;
             expect(offset + 400 - card.y - card.height).toBeLessThan(110);
             await expect(editor).toHaveText('Draft stays visible above the keyboard');
+            if (route === `/threads/${threadId}`) {
+              await expect.poll(() => page.getByTestId('thread-timeline').evaluate((node) =>
+                node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(1);
+            }
           }
           await keyboardViewport(page, 844);
         }
@@ -274,6 +342,8 @@ for (const engine of [chromium, webkit]) {
       await longComposer.getByTestId('thread-command-input').evaluate((node) => node.blur());
       await expect(longComposer.getByTestId('model-reasoning-picker-trigger')).toBeVisible();
       await expect(longComposer.getByRole('button', { name: 'Composer options', exact: true })).toBeHidden();
+      expect(await longComposer.locator('.thread-command-attach').locator('..').evaluate((node) =>
+        getComputedStyle(node, '::after').display)).not.toBe('none');
     } finally {
       await browser.close();
       await gateway.close();

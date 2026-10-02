@@ -668,7 +668,9 @@ body:has(.app-shell[data-mobile='true']) .thread-command-secondary-actions .comp
   display: inline-flex;
   align-items: center;
 }
-body:has(.app-shell[data-mobile='true']) .thread-command-secondary-actions .composer-control-tooltip::after {
+/* Touch hover/focus can stick after attaching a file. Keep accessible button
+   names, but never overlay a desktop tooltip on the phone's writing surface. */
+body:has(.app-shell[data-mobile='true']) .thread-command-composer .composer-control-tooltip::after {
   display: none;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-secondary-actions .ui-command-icon-button {
@@ -728,10 +730,17 @@ body:has(.app-shell[data-mobile='true'])
   min-width: 0;
   max-width: 100%;
 }
+/* Bound overscroll at both the document and the actual chat scrollports.
+   Body alone does not stop the root viewport or the transcript's rubber band. */
+html:has(.app-shell[data-mobile='true']),
+body:has(.app-shell[data-mobile='true']) {
+  overscroll-behavior: none;
+}
+body:has(.app-shell[data-mobile='true'])
+  :is(.thread-detail-timeline, .thread-command-editor, .thread-command-options) {
+  overscroll-behavior-y: none;
+}
 @media (max-width: 1024px) {
-  body:has(.app-shell[data-mobile='true']) {
-    overscroll-behavior: none;
-  }
   body:has(.app-shell[data-mobile='true']) :is(.modal, .modal-dialog, .agent-modal, .thread-modal) {
     max-width: calc(100vw - 16px);
     max-height: calc(100dvh - 16px);
