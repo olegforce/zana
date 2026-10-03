@@ -3,6 +3,22 @@ import { ModelDiscoveryLane } from './model-discovery-lane.js';
 
 afterEach(() => vi.useRealTimers());
 
+it('starts every provider in a full batch without waiting for any other provider', async () => {
+  const lane = new ModelDiscoveryLane();
+  const started: number[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const jobs = Array.from({ length: 16 }, (_, id) => lane.run(`provider-${id}`, async () => {
+    started.push(id);
+    await gate;
+  }));
+  await Promise.resolve();
+  expect(started).toHaveLength(16);
+  release();
+  await Promise.all(jobs);
+  lane.dispose();
+});
+
 it('coalesces identical scopes and serializes beyond the active limit', async () => {
   const lane = new ModelDiscoveryLane(1);
   let done!: (value: string) => void;

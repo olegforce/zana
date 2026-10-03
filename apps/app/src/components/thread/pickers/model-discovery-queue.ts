@@ -1,5 +1,5 @@
-// Chromium allows six HTTP/1.1 connections per origin. Discovery can take a
-// minute, so share two slots across every catalog and leave capacity for the UI.
+// Bound concurrent catalogue streams, not providers: each stream starts its
+// entire provider batch in parallel and leaves HTTP/1.1 capacity for the UI.
 export function createModelDiscoveryQueue() {
   let active = 0;
   const waiting: Array<() => void> = [];
