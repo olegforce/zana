@@ -54,6 +54,8 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await expect(city).toBeVisible();
   await expect(city.getByRole('button', { name: /district/i })).toHaveCount(0);
   const map = city.locator('.city-world');
+  await expect(city).toHaveCSS('border-radius', '0px');
+  await expect(map).toHaveCSS('border-radius', '0px');
   async function expectBuildingsInsideMap() {
     const bounds = await map.boundingBox();
     expect(bounds).not.toBeNull();
