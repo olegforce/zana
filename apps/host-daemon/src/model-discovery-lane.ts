@@ -1,11 +1,11 @@
-/** Bound temporary discovery runtimes across all projects and windows. */
+/** Allow a complete provider batch in parallel; bound extra projects/windows. */
 export class ModelDiscoveryLane {
   private active = 0;
   private closed = false;
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly queue: Array<{ start: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
 
-  constructor(private readonly concurrency = 3, private readonly maxQueue = 16, private readonly queueTimeoutMs = 10_000) {}
+  constructor(private readonly concurrency = 16, private readonly maxQueue = 16, private readonly queueTimeoutMs = 10_000) {}
 
   run<T>(key: string, load: () => Promise<T>): Promise<T> {
     if (this.closed) return Promise.reject(new Error('Model discovery is shutting down'));

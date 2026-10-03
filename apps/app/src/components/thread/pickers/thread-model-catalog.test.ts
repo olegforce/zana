@@ -55,14 +55,14 @@ afterEach(() => {
 });
 
 describe('thread model catalog', () => {
-  it('publishes fast providers and drains queued discovery before a slow provider finishes', async () => {
+  it('publishes fast providers while every slow provider starts in parallel', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const started: string[] = [];
-    const roster = ['slow', 'fast', 'queued'];
+    const roster = ['slow', 'slow-2', 'slow-3', 'fast', 'queued'];
     resetThreadModelCatalog(async (query) => {
       if (query?.providerId) started.push(query.providerId);
-      if (query?.providerId === 'slow') await gate;
+      if (query?.providerId?.startsWith('slow')) await gate;
       return optionsBody(roster, query?.providerId ?? 'roster');
     });
     const catalog = threadModelCatalogForHost();
@@ -79,7 +79,7 @@ describe('thread model catalog', () => {
       expect(started).toEqual(roster);
       expect(finished).toBe(false);
       expect(catalog.getSnapshot().byProvider.slow).toBeUndefined();
-      expect(catalog.getSnapshot().inflight).toEqual(new Set(['slow']));
+      expect(catalog.getSnapshot().inflight).toEqual(new Set(['slow', 'slow-2', 'slow-3']));
       expect(published).toContainEqual(['fast']);
       expect(published).toContainEqual(['fast', 'queued']);
     } finally {
@@ -90,7 +90,7 @@ describe('thread model catalog', () => {
     expect(catalog.getSnapshot().byProvider.slow?.models[0].model).toBe('slow-model');
   });
 
-  it('shares discovery capacity across project scopes and cancels queued scopes on reset', async () => {
+  it('starts project scopes independently and cancels all scopes on reset', async () => {
     const signals: AbortSignal[] = [];
     const fetcher = vi.fn<ThreadExecutionOptionsFetcher>((_query, options) => {
       signals.push(options!.signal);
@@ -98,11 +98,11 @@ describe('thread model catalog', () => {
     });
     resetThreadModelCatalog(fetcher);
     const pending = ['one', 'two', 'three', 'four'].map(project => threadModelCatalogForHost('local', project).ensure());
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     resetThreadModelCatalog(async () => optionsBody(['codex'], 'recovered'));
     await Promise.all(pending);
     expect(signals.every(signal => signal.aborted)).toBe(true);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     await threadModelCatalogForHost().ensure();
     expect(getThreadModelCatalog().byProvider.codex.models[0].model).toBe('recovered-model');
   });

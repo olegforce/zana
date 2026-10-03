@@ -33,7 +33,7 @@ import type {
 } from '@zana-ai/zcc-domain/product';
 import { browserRequestProblem, headerValue } from './browser-request-guard.js';
 import { listJsonFiles, readJsonFile, writeJsonFile } from './disk-json.js';
-import { applyTrustedOriginCors, readJsonBody, sendBytes, sendJson } from './json.js';
+import { applyTrustedOriginCors, readJsonBody, sendBytes, sendJson, beginNdjson } from './json.js';
 import {
   TEAM_GOAL_MAX_CHARS,
   TEAM_ID_MAX_CHARS,
@@ -3378,6 +3378,13 @@ export async function handleProductHttp(
 
     if (path === '/api/v1/system/execution-options' && method === 'GET') {
       const providerId = requestUrl.searchParams.get('providerId') ?? undefined;
+      const streaming = requestUrl.searchParams.get('stream') === '1';
+      const providerIds = [...new Set(requestUrl.searchParams.getAll('providerId'))];
+      if (streaming && (providerIds.length === 0 || providerIds.length > 16
+        || providerIds.some((id) => !getThreadProvider(id)))) {
+        sendJson(response, 400, { message: 'Supply between 1 and 16 registered providers' });
+        return true;
+      }
       const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
       const requestedHostId = requestUrl.searchParams.get('hostId') ?? undefined;
       const projectId = requestUrl.searchParams.get('projectId') ?? undefined;
@@ -3390,51 +3397,66 @@ export async function handleProductHttp(
       let availability: Awaited<ReturnType<typeof harnessVerify>> = [];
       let extraInstalled: Record<string, boolean> = {};
       try {
-        const bundle = await harnessVerifyBundle(ctx.hostHub, discoveryHostId);
+        const [bundle, health] = await Promise.all([
+          harnessVerifyBundle(ctx.hostHub, discoveryHostId),
+          probeInstalledProviderHealth({
+            hub: ctx.hostHub, hostId: discoveryHostId, artifacts: ctx.pluginHostArtifacts
+          })
+        ]);
         availability = bundle.availability;
         extraInstalled = mergeHealthIntoExtraInstalled(
           bundle.extraInstalled,
-          await probeInstalledProviderHealth({
-            hub: ctx.hostHub,
-            hostId: discoveryHostId,
-            artifacts: ctx.pluginHostArtifacts
-          })
+          health
         );
       } catch (error) {
         sendHostFailure(response, error);
         return true;
       }
-      let listed: Awaited<ReturnType<ProductHttpContext['modelCatalogs']['read']>> | null = null;
-      let listError: ThreadModelLoadErrorCode | null = null;
-      let listErrorDetail: string | null = null;
-      if (providerId) {
-        try {
-          const hostId = ctx.hostHub.resolveHostId(discoveryHostId);
-          if (forceRefresh) {
-            ctx.modelCatalogs.invalidate({ hostId, providerId });
-            invalidateHarnessModelCatalog(providerId);
-            await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
+      const discover = async (providerId?: string) => {
+        let listed: Awaited<ReturnType<ProductHttpContext['modelCatalogs']['read']>> | null = null;
+        let listError: ThreadModelLoadErrorCode | null = null;
+        let listErrorDetail: string | null = null;
+        if (providerId) {
+          try {
+            const hostId = ctx.hostHub.resolveHostId(discoveryHostId);
+            if (forceRefresh) {
+              ctx.modelCatalogs.invalidate({ hostId, providerId });
+              invalidateHarnessModelCatalog(providerId);
+              await ctx.cliAgentOps?.invalidateModelCatalog?.(providerId);
+            }
+            const provider = getThreadProvider(providerId);
+            listed = await ctx.modelCatalogs.read({
+              hostId,
+              providerId,
+              scope: provider?.models?.scope ?? 'workspace',
+              bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
+              ...(scope.cwd ? { cwd: scope.cwd } : {}),
+              forceRefresh
+            });
+            const overlaid = overlayCustomModels(listed, ctx.config.getConfig(), provider);
+            listed = { ...listed, ...overlaid };
+            listError = listed.modelLoadError?.code ?? null;
+            listErrorDetail = listed.modelLoadError?.detail ?? null;
+          } catch (error) {
+            listed = null;
+            listError = classifyModelListError(error);
+            listErrorDetail = modelListErrorDetail(error);
           }
-          const provider = getThreadProvider(providerId);
-          listed = await ctx.modelCatalogs.read({
-            hostId,
-            providerId,
-            scope: provider?.models?.scope ?? 'workspace',
-            bridgeLaunch: bridgeLaunchForProvider(providerId, ctx.pluginHostArtifacts),
-            ...(scope.cwd ? { cwd: scope.cwd } : {}),
-            forceRefresh
-          });
-          const overlaid = overlayCustomModels(listed, ctx.config.getConfig(), provider);
-          listed = { ...listed, ...overlaid };
-          listError = listed.modelLoadError?.code ?? null;
-          listErrorDetail = listed.modelLoadError?.detail ?? null;
-        } catch (error) {
-          listed = null;
-          listError = classifyModelListError(error);
-          listErrorDetail = modelListErrorDetail(error);
         }
+        return buildThreadExecutionOptions({ providerId, availability, extraInstalled, listed, listError, listErrorDetail });
+      };
+      if (streaming) {
+        const stream = beginNdjson(response);
+        // One connection, one availability probe, independent provider results.
+        // Discovery remains bounded/coalesced in the host and catalog store.
+        await Promise.all(providerIds.map(async (id) => {
+          const options = await discover(id);
+          if (!response.destroyed) stream.write({ providerId: id, options });
+        }));
+        stream.end();
+      } else {
+        sendJson(response, 200, await discover(providerId));
       }
-      sendJson(response, 200, buildThreadExecutionOptions({ providerId, availability, extraInstalled, listed, listError, listErrorDetail }));
       return true;
     }
 

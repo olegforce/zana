@@ -1,7 +1,7 @@
 import type { AvailableModel } from '@zana-ai/zcc-domain/thread-runtime';
 import { product } from '../../../lib/product-client.js';
 import { composerActionsFromProvider } from './composer-mode.js';
-import { createModelDiscoveryQueue } from './model-discovery-queue.js';
+import { createModelDiscoveryFetcher } from './model-discovery-fetcher.js';
 import {
   fallbackModelsForProvider,
   fallbackMoreModelsForProvider,
@@ -41,9 +41,9 @@ export const MODEL_CATALOG_FRESH_MS = 5 * 60_000;
 export const MODEL_CATALOG_RETRY_DELAYS_MS = [1_000, 4_000, 15_000] as const;
 export const MODEL_CATALOG_FOCUS_COOLDOWN_MS = 60_000;
 const MAX_IDLE_HOST_CATALOGS = 8;
-let fetchOptions: ThreadExecutionOptionsFetcher = (query, options) => product.threads.executionOptions(query, options);
+const defaultFetcher = createModelDiscoveryFetcher((query, options) => product.threads.executionOptions(query, options));
+let fetchOptions: ThreadExecutionOptionsFetcher = defaultFetcher;
 const catalogs = new Map<string, ReturnType<typeof createCatalog>>();
-const scheduleDiscovery = createModelDiscoveryQueue();
 export type ModelCatalogRefreshResult = { failedCatalogs: number; failedProviders: string[] };
 let catalogReload: Promise<ModelCatalogRefreshResult> | null = null;
 const providerReloads = new Map<string, Promise<void>>();
@@ -370,7 +370,7 @@ function createCatalog(
     controllers.add(controller);
     let onAbort: () => void = () => undefined;
     try {
-      return await scheduleDiscovery(() => Promise.race([
+      return await Promise.race([
         fetchOptions(query, { signal: controller.signal }),
         new Promise<never>((_, reject) => {
           onAbort = () => reject(new Error('Model discovery cancelled'));
@@ -382,7 +382,7 @@ function createCatalog(
             controller.abort();
           }, MODEL_CATALOG_TIMEOUT_MS);
         })
-      ]), controller.signal);
+      ]);
     } finally {
       clearTimeout(timer);
       controller.signal.removeEventListener('abort', onAbort);
@@ -472,9 +472,8 @@ export function prefetchThreadModelCatalog(): Promise<void> {
 export function reloadThreadModelCatalog(): Promise<ModelCatalogRefreshResult> {
   if (catalogReload) return catalogReload;
   const defaultCatalog = threadModelCatalogForHost();
-  // The shared discovery queue deliberately leaves browser capacity free. Put
-  // project-scoped catalogs first so a slow global probe cannot starve the
-  // picker the user just asked to refresh.
+  // Start visible project scopes before background scopes. Each scope streams
+  // its parallel provider discoveries over a single HTTP connection.
   const targets = [...new Set([
     ...[...catalogs.values()].sort((a, b) => Number(Boolean(b.getSnapshot().projectId)) - Number(Boolean(a.getSnapshot().projectId))),
     defaultCatalog
@@ -519,7 +518,7 @@ export function resetThreadModelCatalog(fetcher?: ThreadExecutionOptionsFetcher 
   providerReloads.clear();
   knownHostStates.clear();
   primaryCatalogHost = undefined;
-  fetchOptions = fetcher ?? ((query, options) => product.threads.executionOptions(query, options));
+  fetchOptions = fetcher ?? defaultFetcher;
 }
 
 /** Revalidate on a return from an external login/configuration edit, with a cooldown. */
