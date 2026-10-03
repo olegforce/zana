@@ -13,6 +13,16 @@ and checks the packaged OpenCode executable and node-pty/ConPTY. It uses the
 package's native modules instead of the checkout's modules. A smoke failure
 blocks uploading the installer and creating the draft release.
 
+Startup migration and product stores flush file contents before an atomic rename.
+They also flush the parent directory on POSIX; Windows skips that unsupported
+directory operation while retaining file flushes and conflict checks. The native
+smoke probe loads Node built-ins through `process.getBuiltinModule` so it works
+in Electron's ESM main process.
+
+Mac packages run the same boot/IPC smoke alongside packaged plugin authoring.
+Failed Mac checks retain a Playwright report per
+architecture, as the Windows job does.
+
 The release includes Windows `.exe`, `.blockmap`, and `latest.yml` assets alongside
 the Mac `.dmg`, `.zip`, `.blockmap`, and merged `latest-mac.yml` assets. Both update
 feeds use the existing public GitHub repository. Manual `workflow_dispatch` runs

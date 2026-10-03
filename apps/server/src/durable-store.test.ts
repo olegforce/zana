@@ -55,9 +55,7 @@ describe('durable store', () => {
       `fsync:${temp}`,
       `close:${temp}`,
       `rename:${temp}:${target}`,
-      `open:${dir}`,
-      `fsync:${dir}`,
-      `close:${dir}`
+      ...(process.platform === 'win32' ? [] : [`open:${dir}`, `fsync:${dir}`, `close:${dir}`])
     ]);
   });
 
