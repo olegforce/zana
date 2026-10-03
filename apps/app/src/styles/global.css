@@ -25468,6 +25468,22 @@ button.launch-persona {
   overflow: hidden;
 }
 
+/* Import has a label as well as an icon, so it must size to its contents. */
+.opener-btn.library-import-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  padding: 0 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.library-import-btn svg {
+  flex-shrink: 0;
+}
+
 /* Splitter between the doc list and the preview. Mirrors .list-pane-resizer:
    a thin invisible hit-target that tints on hover/drag. Positioned at the
    column boundary via an inline `left` from the component. */
