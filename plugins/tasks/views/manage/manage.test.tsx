@@ -1,4 +1,5 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
+// Radix portal queries are expensive in jsdom under coverage; Electron covers layout.
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "../../compat/testing-app";
@@ -785,6 +786,7 @@ describe("PresetDialog environment section", () => {
       }),
     );
 
+    await slot.findByRole("option", { name: "Codex" });
     fireEvent.change(await slot.findByLabelText("Provider"), {
       target: { value: "codex" },
     });
@@ -795,7 +797,7 @@ describe("PresetDialog environment section", () => {
     fireEvent.change(slot.getByLabelText("Reasoning level"), {
       target: { value: "high" },
     });
-    fireEvent.change(slot.getByLabelText("Service tier"), {
+    fireEvent.change(await slot.findByLabelText("Service tier"), {
       target: { value: "fast" },
     });
     fireEvent.click(slot.getByRole("button", { name: "Save preset" }));
@@ -1071,7 +1073,7 @@ describe("NewProjectDialog", () => {
   it("flags malformed prefixes before submit", async () => {
     const slot = renderEmptyState();
     fireEvent.click(await slot.findByRole("button", { name: /New project/ }));
-    const prefix = slot.getByPlaceholderText("TSK");
+    const prefix = await slot.findByPlaceholderText("TSK");
     fireEvent.change(prefix, { target: { value: "9x" } });
     expect((prefix as HTMLInputElement).value).toBe("9X");
     await slot.findByText(

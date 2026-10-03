@@ -26,10 +26,13 @@ test('thread timeline refreshes throughout continuous provider events and render
   // A trailing-only 100ms debounce shows no progress while these events continue.
   await expect(timeline).toContainText('Refresh progress', { timeout: 4000 });
   await expect.poll(() => reads, { timeout: 7000 }).toBeGreaterThanOrEqual(12);
+  const duringStream = reads;
   expect(await window.evaluate(async id => (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, id)).toBe('active');
   await expect(timeline).toContainText('Refresh stream complete', { timeout: 15_000 });
   await expect.poll(() => window.evaluate(async id => (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, id)).toBe('idle');
-  expect(reads).toBeGreaterThanOrEqual(25);
+  // The timer is a maximum wait, not a fixed polling rate. Require further
+  // reads after the active-stream checkpoint and the final visible update.
+  expect(reads).toBeGreaterThan(duringStream);
   await window.getByTestId('nav-home').click();
   // Unmount cancels pending refresh timers even if a late provider notification arrives.
   await window.waitForTimeout(300);

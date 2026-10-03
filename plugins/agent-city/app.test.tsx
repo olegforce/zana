@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { PluginAgentsViewProps } from '@zana-ai/zcc-plugin-sdk/app';
 vi.mock('./use-city.js', () => ({ useCityCanvas: () => ({ available: true, reduced: false, viewport: { width: 1120, height: 775 } }) }));
-import definition, { AgentCity } from './city-app.js';
+import definition from './app.tsx';
+import { AgentCity } from './city-app.js';
+import server from './server.ts';
 afterEach(cleanup);
 function data(n = 3): PluginAgentsViewProps {
   return { projectId: null, projects: Array.from({ length: 7 }, (_, i) => ({ id: `p${i}`, name: `Project ${i}` })),
@@ -90,4 +92,6 @@ it('registers World on capable hosts and never adds a separate plugin navigation
   expect(experimental_agentsView).toHaveBeenCalledWith(expect.objectContaining({ id: 'world', title: 'World', component: AgentCity }));
   definition.setup({ slots: { navPanel } } as never);
   expect(navPanel).not.toHaveBeenCalled();
+  // Fleet data comes from the app slot; activating the server starts no polling.
+  expect(server()).toBeUndefined();
 });

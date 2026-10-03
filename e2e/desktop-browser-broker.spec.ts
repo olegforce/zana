@@ -99,8 +99,10 @@ test('desktop browser broker leases loopback CDP and reveals a focused thread', 
     });
     ws.once('message', (data) => {
       clearTimeout(timer);
+      // The capability permits one socket at a time. Wait for the close
+      // handshake before reconnecting to exercise Target.createTarget.
+      ws.once('close', () => resolve(JSON.parse(String(data)) as Record<string, unknown>));
       ws.close();
-      resolve(JSON.parse(String(data)) as Record<string, unknown>);
     });
     ws.once('open', () => {
       ws.send(JSON.stringify({ id: 1, method: 'Browser.getVersion' }));

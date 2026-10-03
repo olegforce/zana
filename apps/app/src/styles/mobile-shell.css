@@ -532,7 +532,8 @@ body:has(.app-shell[data-mobile='true']) .home-agent-composer .mention-popover {
   top: auto;
   bottom: calc(100% + 8px);
 }
-body:has(.app-shell[data-mobile='true']) :is(input, textarea, [contenteditable='true']) {
+/* Avoid iOS input zoom while preserving the authored size of editable headings. */
+body:has(.app-shell[data-mobile='true']) :is(input, textarea, [contenteditable='true']:not(h1, h2, h3, h4, h5, h6)) {
   font-size: 16px;
 }
 body:has(.app-shell[data-mobile='true']) .thread-command-composer .thread-command-toolbar {

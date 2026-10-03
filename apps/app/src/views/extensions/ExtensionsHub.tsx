@@ -1241,7 +1241,7 @@ function AboutCard({ row }: { row: HubRow }) {
             Open
           </button>
         )}
-        {canUninstall ? (
+        {/* buildHubRows only supplies installed records to this detail card. */}
           <div className="ext-hub-more-wrap">
             <button
               type="button"
@@ -1270,7 +1270,6 @@ function AboutCard({ row }: { row: HubRow }) {
               </div>
             ) : null}
           </div>
-        ) : null}
       </div>
       <div className="ext-hub-about-grid">
         <span className="ext-hub-about-key">Status</span>

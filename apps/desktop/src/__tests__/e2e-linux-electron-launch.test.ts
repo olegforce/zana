@@ -13,8 +13,12 @@ describe('linux CI Electron launch', () => {
   it('emits sandbox + X11 ozone flags only on linux', () => {
     expect(linuxCiElectronArgs('linux')).toEqual([
       '--no-sandbox',
-      '--disable-gpu',
       '--ozone-platform=x11',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
     ]);
     expect(linuxCiElectronArgs('darwin')).toEqual([]);
     expect(linuxCiElectronArgs('win32')).toEqual([]);
