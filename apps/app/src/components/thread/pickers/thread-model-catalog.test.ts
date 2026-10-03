@@ -55,6 +55,41 @@ afterEach(() => {
 });
 
 describe('thread model catalog', () => {
+  it('publishes fast providers and drains queued discovery before a slow provider finishes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const roster = ['slow', 'fast', 'queued'];
+    resetThreadModelCatalog(async (query) => {
+      if (query?.providerId) started.push(query.providerId);
+      if (query?.providerId === 'slow') await gate;
+      return optionsBody(roster, query?.providerId ?? 'roster');
+    });
+    const catalog = threadModelCatalogForHost();
+    const published: string[][] = [];
+    const unsubscribe = catalog.subscribe(() => {
+      published.push(Object.keys(catalog.getSnapshot().byProvider));
+    });
+    let finished = false;
+    const pending = catalog.ensure().then(() => { finished = true; });
+    try {
+      await vi.waitFor(() => {
+        expect(catalog.getSnapshot().byProvider.queued?.models[0].model).toBe('queued-model');
+      });
+      expect(started).toEqual(roster);
+      expect(finished).toBe(false);
+      expect(catalog.getSnapshot().byProvider.slow).toBeUndefined();
+      expect(catalog.getSnapshot().inflight).toEqual(new Set(['slow']));
+      expect(published).toContainEqual(['fast']);
+      expect(published).toContainEqual(['fast', 'queued']);
+    } finally {
+      release();
+      await pending;
+      unsubscribe();
+    }
+    expect(catalog.getSnapshot().byProvider.slow?.models[0].model).toBe('slow-model');
+  });
+
   it('shares discovery capacity across project scopes and cancels queued scopes on reset', async () => {
     const signals: AbortSignal[] = [];
     const fetcher = vi.fn<ThreadExecutionOptionsFetcher>((_query, options) => {
