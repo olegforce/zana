@@ -252,6 +252,8 @@ export function isAppRendererUrl(url: string): boolean {
 }
 
 export interface LaunchOptions {
+  /** Launch through an isolated package manifest for real app-version checks. */
+  useAppManifest?: boolean;
   caCertPath?: string;
   env?: Record<string, string>;
   /** Arm the gated test-observability tap (ZCC_E2E=1 → window.__zccTest). */
@@ -272,6 +274,15 @@ export interface LaunchOptions {
  */
 export async function launchApp(home: string, opts: LaunchOptions = {}): Promise<AppHandle> {
   const packagedExecutable = process.env.ZCC_E2E_EXECUTABLE_PATH;
+  let launchEntry = MAIN_ENTRY;
+  if (opts.useAppManifest && !packagedExecutable) {
+    const manifestDir = join(home, 'app-launch');
+    mkdirSync(manifestDir, { recursive: true });
+    writeFileSync(join(manifestDir, 'package.json'), JSON.stringify({
+      name: 'zana-command-center', version: PACKAGE_VERSION, main: MAIN_ENTRY
+    }));
+    launchEntry = manifestDir;
+  }
   writeAppConfig(home, opts.initialConfig, opts.allowLiveClaude);
   const preserveHome = opts.env?.ZCC_E2E_PRESERVE_HOME === '1';
   const dataDir = join(home, '.zcc');
@@ -314,7 +325,7 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
     // processes spawned afterward, not this process's own early init — same class
     // of bug as the ozone flag above), so it must ride in argv, not be appended
     // at runtime, or macOS pops a real Keychain prompt on a headless E2E run.
-    args: [...linuxCiElectronArgs(), '--use-mock-keychain', `--user-data-dir=${userDataDir}`, ...(!packagedExecutable ? [MAIN_ENTRY] : [])],
+    args: [...linuxCiElectronArgs(), '--use-mock-keychain', `--user-data-dir=${userDataDir}`, ...(!packagedExecutable ? [launchEntry] : [])],
     env: isolateTmuxEnvironment(home, env),
     timeout: 60_000
   });
@@ -364,6 +375,8 @@ export async function dismissConsentOverlays(window: Page): Promise<void> {
 }
 
 type Fixtures = {
+  /** Give unpackaged Electron the product version through an isolated manifest. */
+  useAppManifest: boolean;
   /** Throwaway HOME for the test (auto-removed). */
   home: string;
   /** Opt the marketplace channel ON (boots a signed HTTPS registry). */
@@ -400,6 +413,7 @@ type Fixtures = {
 };
 
 export const test = base.extend<Fixtures>({
+  useAppManifest: [false, { option: true }],
   useRegistry: [false, { option: true }],
   isolateBundledCatalog: [false, { option: true }],
   requireSignature: [true, { option: true }],
@@ -436,7 +450,7 @@ export const test = base.extend<Fixtures>({
     }
   },
 
-  app: async ({ home, registry, requireSignature, e2e, launchEnv, initialConfig, seedClaudeAuth, seedOpenCodeAuth, isolateBundledCatalog }, use) => {
+  app: async ({ useAppManifest, home, registry, requireSignature, e2e, launchEnv, initialConfig, seedClaudeAuth, seedOpenCodeAuth, isolateBundledCatalog }, use) => {
     if (registry) {
       writeRegistryConfig(home, {
         enabled: true,
@@ -458,6 +472,7 @@ export const test = base.extend<Fixtures>({
     }
 
     const handle = await launchApp(home, {
+      useAppManifest,
       caCertPath: registry?.caCertPath,
       e2e,
       env,
