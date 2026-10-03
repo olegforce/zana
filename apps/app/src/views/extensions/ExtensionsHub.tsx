@@ -53,6 +53,7 @@ import { PluginDefinedSettings } from '@/plugins/PluginDefinedSettings';
 import { PluginSettingsSections } from '@/plugins/PluginSettingsSections';
 import { listSettingsSections, subscribePluginSlots } from '@/plugins/plugin-slots';
 import { PluginHubIncludes } from './PluginHubIncludes.js';
+import { PluginSubmissionAction } from './PluginSubmissionAction.js';
 import { PluginBrowseSplit } from './PluginBrowseSplit.js';
 import { PluginMoreFromAuthor, PluginOverviewLead, PluginReleaseSection, PluginDetailsSection } from './CatalogPluginDetail.js';
 import { PluginOverviewMarkdown } from './PluginOverviewMarkdown.js';
@@ -1254,6 +1255,7 @@ function AboutCard({ row }: { row: HubRow }) {
             </button>
             {aboutMenuOpen ? (
               <div className="ext-hub-more-menu" role="menu" aria-label="Plugin actions">
+                <PluginSubmissionAction row={row} onChoose={() => setAboutMenuOpen(false)} />
                 <button
                   type="button"
                   role="menuitem"

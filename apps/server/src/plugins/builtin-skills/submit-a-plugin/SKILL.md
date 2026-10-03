@@ -1,67 +1,85 @@
 ---
 name: submit-a-plugin
-description: Submit a Zana plugin to the community marketplace. Use when the user asks to submit, list, publish, or add a plugin to the marketplace, or asks for a marketplace pull request.
+description: "Prepare and submit a Zana plugin to a public or internal marketplace when publication or a marketplace PR is requested."
 ---
 
 # Submit a plugin
 
-Submit a public plugin to the community marketplace through a pull request.
+Submit a plugin through a marketplace pull request. The marketplace stores
+metadata and a Git or npm source reference; the code stays in its own repository.
 
-The marketplace lists **pointers only** (npm package + range, or git URL +
-ref). Refresh never executes plugin code. The plugin source stays in its Git
-repository or npm package.
+## Choose the task and target
 
-## Start with current contracts
+For an instructions-only question, explain the process without remote changes.
+For a submission request, prepare and validate everything possible. Ask only
+for information the plugin, installed registry, Git, npm, or marketplace
+cannot supply.
 
-1. Open the plugin repository and read `package.json`.
-2. Confirm `engines.zcc`, `engines.zccPluginSdk`, and the `zcc` block
-   (`name`, `description`, `branding`).
-3. Derive the plugin ID from the package name by stripping a `zcc-plugin-`
-   prefix (same algorithm as `derivePluginId`).
-4. Run the plugin's tests, `zcc plugin build`, and `zcc plugin types --check`.
+**Plugins → Installed → plugin details → More plugin actions → Submit to
+marketplace** opens a draft identifying the installed plugin. Resolve its
+source using that ID in the installed registry (`zcc plugin list --json`),
+then verify `package.json` and Git state. The current project may differ from
+the source. An install path is never a release source.
 
-Ask the user for the community marketplace git repository if none is
-configured (`zcc marketplace ls`). Add one with
-`zcc marketplace add <https-index-url>`.
+Read `zcc marketplace ls --json` to discover configured catalogs. Identify the
+target repository from its configuration and documentation. Confirm the target
+and public or internal visibility when ambiguous. Internal plugins may use
+private repositories accessible to the target audience. Public listings must
+use public sources. Never assume BB’s marketplace accepts a Zana plugin or
+that an internal plugin should become public.
 
-Read these files from the marketplace default branch before you write an entry:
+A submission request does not approve a release. Complete local preparation
+first. Before an unapproved Git push, tag, npm publication, or other release
+mutation, show the exact account, repository, commit, package, version, source,
+and commands, and get approval for that release. Honor exact authorization
+already given in the conversation rather than asking for it again.
 
-- `README.md`
-- `schema` / index schema matching `packages/domain/src/plugin-marketplace.ts`
-- two or more current entries
+Do not expose credentials, private account data, or secrets. Do not change the
+installed plugin’s settings or account data as part of publication.
 
-Treat those files as the source of truth.
+## Read current contracts
 
-## Prepare the entry
+Read the target marketplace default branch before writing its entry:
 
-An entry is provenance, not a bundle:
+- `README.md` and repository instructions.
+- The current entry schema and marketplace identity/category definitions.
+- Icon, screenshot, and overview conventions, when supported.
+- At least two current entries.
 
-```json
-{
-  "id": "notes",
-  "displayName": "Notes",
-  "description": "A notes panel for Zana.",
-  "author": { "name": "Ada", "github": "ada" },
-  "source": {
-    "git": { "url": "https://github.com/ada/zcc-plugin-notes", "ref": "v1.0.0" }
-  }
-}
-```
+Zana’s pointer catalog uses `schemaVersion: 1`. Its consumer contract is
+`packages/domain/src/plugin-marketplace.ts`. Do not copy BB-only v2 fields
+such as `category` or `screenshots` into a strict Zana v1 entry. Follow the
+target repository’s actual build format; an overview may be inline text rather
+than a file reference. Read current contracts, not a remembered schema.
 
-Use `source.npm` (`package` + `range`) when the plugin is published to npm.
+## Workflow
 
-Do not copy plugin source into the marketplace repo.
+1. Verify the manifest, installed ID, source tree, Git state, and release state.
+2. Run tests, type checks, `zcc plugin types --check`, and `zcc plugin build`.
+3. Select and verify one distributable Git or npm source.
+4. Prepare the listing, icon, overview, and screenshots supported by the target.
+5. Validate the marketplace using its documented checks.
+6. Obtain approval for release mutations not already authorized.
+7. Commit only submission files and required generated catalog outputs.
+8. Open a marketplace PR using the submitter’s authenticated account.
+9. Monitor checks; diagnose and repair actionable failures.
 
-## Open the pull request
+Read these references as the task reaches each stage:
 
-Use the author's `gh` auth. Do not expose tokens, npm credentials, or private
-URLs.
+- `references/plugin-release.md` before validating or releasing the plugin.
+- `references/marketplace-entry.md` before preparing listing assets.
+- `references/pull-request.md` before preparing the marketplace branch and PR.
 
-1. Fork or clone the marketplace repo.
-2. Add the entry + icon following existing files.
-3. Validate the index against the schema.
-4. Open a PR. Summarize what the plugin does and that install is full-trust
-   in-process on the server.
+If authentication or repository access is missing, finish local preparation
+and return the files, checks, and precise remaining steps. Do not claim a listing
+is published merely because a local entry or PR exists.
 
-Stop before each release mutation until the user approves the exact tag or
-npm publish.
+## Completion
+
+Return the PR URL, selected release source, validation results, and remaining
+approval or external blockers. A listing appears after the marketplace accepts
+and builds the entry and clients refresh. Do not wait for merge unless requested.
+
+A compatible release inside an existing tracking range usually needs no new
+marketplace PR. Submit another PR when source, branding, description, overview,
+ownership, supported screenshots, tags, or the tracking range changes.
