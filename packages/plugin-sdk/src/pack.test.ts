@@ -56,6 +56,11 @@ describe('npm pack @zana-ai/zcc-plugin-sdk', () => {
 import { PROJECT_ICONS, type ProjectIcon } from '@zana-ai/zcc-plugin-sdk';
 import { PROJECT_ICONS as SERVER_ICONS, type ZccPluginApi } from '@zana-ai/zcc-plugin-sdk/server';
 import { createFakePluginHost } from '@zana-ai/zcc-plugin-sdk/testing';
+import { definePluginApp, type PluginAgentsViewProps, type PluginFleetMember } from '@zana-ai/zcc-plugin-sdk/app';
+const member: PluginFleetMember = { key: 'thread:1', kind: 'thread', title: 'Review', projectId: 'p', status: 'needs-you', detail: 'Needs you', live: true, scheduled: false };
+definePluginApp((app) => app.slots.experimental_agentsView({ id: 'world', title: 'World', component: (props: PluginAgentsViewProps) => { props.onInspect(member.key); return null; } }));
+// @ts-expect-error A plan is not a live member.
+const badMember: PluginFleetMember = { ...member, kind: 'schedule' };
 const icon: ProjectIcon = PROJECT_ICONS[1];
 declare const zcc: ZccPluginApi;
 await zcc.sdk.projects.setIcon({ projectId: 'crm', icon });

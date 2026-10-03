@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { mergeThreadRoster, pendingChildThreads, applyThreadEventSequence, type ThreadListItem } from './thread-store.js';
+import { mergeThreadRoster, pendingChildThreads, applyThreadEventSequence, applyThreadEventSequences, type ThreadListItem } from './thread-store.js';
 
 function thread(over: Partial<ThreadListItem> & Pick<ThreadListItem, 'id'>): ThreadListItem {
   return {
@@ -19,6 +19,15 @@ function thread(over: Partial<ThreadListItem> & Pick<ThreadListItem, 'id'>): Thr
 }
 
 describe('mergeThreadRoster', () => {
+  it('reuses the roster for unchanged metadata including equivalent runtime/activity snapshots', () => {
+    const row = thread({ id: 'stable', lastReadSeq: null, maxSeq: 0, updatedAt: 1,
+      runtime: { displayStatus: 'idle', hostReconnectGraceExpiresAt: null },
+      activity: { activeWorkflowCount: 0, activeBackgroundAgentCount: 0, activeBackgroundCommandCount: 0, activePlanModeCount: 0, activeGoalCount: 0 } });
+    const rows = [row];
+    expect(mergeThreadRoster(rows, { ...row, runtime: { ...row.runtime! }, activity: { ...row.activity! } })).toBe(rows);
+    expect(mergeThreadRoster(rows, { ...row, runtime: { ...row.runtime!, displayStatus: 'active' } })).not.toBe(rows);
+    expect(mergeThreadRoster(rows, thread({ id: 'missing', archivedAt: 1 }))).toBe(rows);
+  });
   it('keeps existing threads in place when an opened thread is refreshed', () => {
     const hello = thread({ id: 'hello', title: 'Hello' });
     const other = thread({ id: 'other', title: 'hello' });
@@ -89,5 +98,14 @@ describe('applyThreadEventSequence', () => {
     const source = readFileSync(new URL('./thread-store.ts', import.meta.url), 'utf8');
     expect(source).toContain('product.threads.onEvent');
     expect(source).toContain('maxSeq: sequence');
+  });
+
+  it('merges a burst with one scan while preserving unaffected rows and newer metadata', () => {
+    const unchanged = thread({ id: 'other', maxSeq: 5 });
+    const rows = [thread({ id: 'live', maxSeq: 1, title: 'Latest title' }), unchanged];
+    const merged = applyThreadEventSequences(rows, new Map([['live', 10], ['other', 4], ['missing', 99]]), 200);
+    expect(merged[0]).toMatchObject({ title: 'Latest title', maxSeq: 10, updatedAt: 200 });
+    expect(merged[1]).toBe(unchanged);
+    expect(applyThreadEventSequences(merged, new Map([['live', 9]]))).toBe(merged);
   });
 });

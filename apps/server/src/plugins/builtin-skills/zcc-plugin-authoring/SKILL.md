@@ -30,7 +30,7 @@ Commands:
 - `zcc plugin new <name> [--app] [--dir]` — TypeScript scaffold (`package.json` `zcc` block). Default dest is `./zcc-plugin-<id>`. `--app` adds a frontend; default is server-only.
 - `zcc plugin types [dir]` — sync bundled SDK `.d.ts` (`--check` for CI). Look up the API here.
 - `zcc plugin install <source>` — `path:` | `git:` | `npm:` | `builtin:<name>`. Path installs load `server.ts` from source.
-- `zcc plugin reload <id>` — one-shot HTTP reload. Rebuild is not implied. Needs a running app.
+- `zcc plugin reload <id>` — one-shot HTTP reload. Path installs rebuild a declared TypeScript panel before activation. Needs a running app.
 - `zcc plugin dev [dir]` — optional watch loop **after** a path install. On save, rebuilds the declared **app** (unminified), then reloads. Needs a running app. A failed build keeps the last good generation. `zcc plugin dev --once` performs one cycle, checks backend health, and returns nonzero on failure; prefer it for agent-driven iteration.
 - `zcc plugin build [dir]` — one-shot `dist/` compile. No running app. CI / publish. Minified.
 - `zcc plugin list` / `zcc plugin logs <id> [-n] [-f]` — inspect status and persisted JSONL logs.
@@ -50,6 +50,14 @@ declare their JS entry (often under `dist`). `zcc plugin reload <id>` is a
 one-shot reload. `zcc plugin dev` is an optional watch loop for UI iteration
 after a path install; it is not required to create or run a plugin. `zcc plugin
 build` writes `dist/` for CI / publish and needs no running app.
+
+Build, install, and dev use pinned build tools. A packaged Zana installation
+downloads them on first use with its bundled npm runtime, then reuses them under
+`<ZCC_DATA_DIR>/plugins/toolchain-<platform>-<arch>-<versions>` (default
+`~/.zcc/plugins`). The first build needs registry access; later builds can run
+offline. No temporary CLI copy or global esbuild installation is needed.
+Development rereads `package.json` on each cycle, so adding or removing `zcc.app`
+updates the sidebar on reload. Path installs appear under **Plugins → Local**.
 
 ## Server factory
 
@@ -284,6 +292,20 @@ app.slots.projectStatusbarItem({
   Message actions and the command palette also receive `openPanel`.
 - `experimental_newThreadPanelAction` — same registration fields; props
   `pluginId`, `projectId`, `params`.
+- `experimental_agentsView` — adds a layout after Board, List and Flow in global
+  and project Agents view selectors. Registration: `id`, `title`, optional `icon`,
+  `component`. `PluginAgentsViewProps` supplies `projectId` (null globally),
+  `projects`, `members`, `schedules`, `executions`, `searchQuery`,
+  `includeScheduled`, and `onInspect(key)`. Props update with host state and
+  respect scope/search/calendar filters. Pass opaque record keys unchanged to
+  `onInspect`; no duplicate polling is needed. Count `member.live` for live
+  populations; an ended session is not proven task success. Schedules and team
+  executions are separate records. Desktop selection persists; phones select
+  independently. If unavailable, the host falls back to Board. Reload remounts
+  the component: clean up timers and subscriptions. This slot adds no sidebar
+  page. Optional `app.slots.experimental_agentsView?.({ id: 'world', title:
+  'World', icon: 'Building2', component: WorldView })` keeps older hosts working
+  without exposing the view; the host must implement this experimental API.
 - `experimental_threadList` — `id`, `title`, `description`, `component`.
   Exclusive replacement of the thread portion of the global and project
   sidebars. Projects and CLI Agents remain host-owned. Props: `pluginId`,

@@ -1,3 +1,4 @@
+import { isAgentsViewId } from '@zana-ai/zcc-domain/product';
 import { projectConfigCompatibility } from '@zana-ai/zcc-domain/harness-config-compatibility';
 import { isProjectIcon } from '@zana-ai/zcc-domain';
 import { app } from 'electron';
@@ -769,9 +770,7 @@ export function normalizeConfig(input: Partial<AppConfig>): Partial<AppConfig> {
     );
   }
   if (
-    input.agentsBoardView === 'board' ||
-    input.agentsBoardView === 'list' ||
-    input.agentsBoardView === 'flow'
+    isAgentsViewId(input.agentsBoardView)
   ) {
     normalized.agentsBoardView = input.agentsBoardView;
   }

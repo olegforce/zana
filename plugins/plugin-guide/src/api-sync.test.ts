@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { PluginAppSlots } from '@zana-ai/zcc-plugin-sdk';
-import { SURFACE_GROUPS, SURFACES } from './surfaces.js';
+import { SURFACE_GROUPS, SURFACES, GROUP_BY_SURFACE_ID, copyPluginSurfaceAgentReference } from './surfaces.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '../../..');
@@ -27,6 +27,7 @@ const SLOT_SURFACE_IDS = [
   'messageAction',
   'experimental_agentCardAction',
   'experimental_agentsBoardAction',
+  'experimental_agentsView',
   'experimental_timelineRenderer',
   'commandPaletteAction',
   'experimental_providerIcon'
@@ -49,6 +50,18 @@ describe('plugin guide surfaces', () => {
     expect(surface?.title).toBe('Thread side-panel tabs');
     expect(surface?.summary).toMatch(/side panel/);
     expect(surface?.bullets.some((line) => line.includes('agent-session'))).toBe(true);
+  });
+
+  it('documents additional Agents layouts in the project shell and carries the contract into Copy for agent', () => {
+    const surface = SURFACES.find((row) => row.id === 'experimental_agentsView')!;
+    expect(GROUP_BY_SURFACE_ID.get(surface.id)?.id).toBe('project-shell');
+    expect(surface.experimental).toBe(true);
+    const reference = copyPluginSurfaceAgentReference(surface);
+    for (const term of ['Board, List and Flow', 'app.slots.experimental_agentsView', 'PluginAgentsViewProps',
+      'members', 'schedules', 'executions', 'onInspect(item.key)', 'disabled', 'remounts', 'older hosts', 'Installed plugins']) {
+      expect(reference).toContain(term);
+    }
+    expect(surface.firstParty).toContain('Agent City');
   });
 
   it('documents composer, content scripts, and skill channels', () => {
@@ -113,5 +126,17 @@ describe('plugin guide public docs', () => {
     expect(readFileSync(join(websiteCopy, 'plugin-guide.css'), 'utf8')).toBe(
       readFileSync(join(repoRoot, 'plugins/plugin-guide/plugin-guide.css'), 'utf8')
     );
+  });
+
+  it('teaches the view registration and lifecycle in the SDK reference and authoring skill', () => {
+    const skill = readFileSync(join(repoRoot, 'apps/server/src/plugins/builtin-skills/zcc-plugin-authoring/SKILL.md'), 'utf8');
+    for (const text of [sdkReference, skill]) {
+      for (const term of ['experimental_agentsView', 'PluginAgentsViewProps', 'onInspect', 'includeScheduled', 'remount', 'older hosts']) {
+        expect(text).toContain(term);
+      }
+    }
+    expect(sdkReference).toContain('function WorldView');
+    expect(sdkReference).toContain('component: WorldView');
+    expect(sdkReference).toContain('onInspect(member.key)');
   });
 });

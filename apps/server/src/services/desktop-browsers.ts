@@ -1,3 +1,4 @@
+import { assertDesktopPresentation, remoteInteractionSurface } from './threads/interaction-surface.js';
 import { randomUUID } from 'node:crypto';
 import { getConversationThread, getThreadTabs, replaceThreadTabs } from '@zana-ai/zcc-db';
 import type { DesktopBrowserTab } from '@zana-ai/zcc-host-daemon-contract';
@@ -171,6 +172,7 @@ export function persistDesktopBrowserTab(
   tab: DesktopBrowserTab
 ) {
   if (tab.threadId !== scope.threadId || tab.url.length > 4096) return;
+  if (remoteInteractionSurface(ctx.db, scope.threadId)) return;
   requireThread(ctx, scope.threadId);
   const stored = getThreadTabs(ctx.db, scope.threadId);
   const tabs = stored ? parseStoredTabs(stored.tabsJson) : [];
@@ -263,6 +265,7 @@ export async function createDesktopBrowserTab(
   input: ExperimentalDesktopBrowserCreateRequest
 ) {
   authorize(ctx, input);
+  if (input.presentation === 'reveal') assertDesktopPresentation(ctx.db, input.threadId);
   const result = await callDesktopBrowserRpc<{ tab: DesktopBrowserTab }>(
     ctx,
     input.hostId,
@@ -350,6 +353,7 @@ export async function acquireDesktopBrowserControl(
     }
     await callDesktopBrowserRpc(ctx, input.hostId, {
       type: 'desktop.browser.acquire_control',
+      ...(remoteInteractionSurface(ctx.db, input.threadId) ? { allowPresentation: false } : {}),
       ...scopeCommand(input),
       leaseId: lease.leaseId,
       tabIds: lease.tabIds,
@@ -365,7 +369,9 @@ export async function acquireDesktopBrowserControl(
       throw new DesktopBrowserError(409, 'desktop_control_expired', 'Browser control was cancelled while connecting');
     }
     try {
-      await desktopBrowserTabAction(ctx, { ...input, tabId: input.tabIds[0]! }, 'reveal');
+      if (!remoteInteractionSurface(ctx.db, input.threadId)) {
+        await desktopBrowserTabAction(ctx, { ...input, tabId: input.tabIds[0]! }, 'reveal');
+      }
       if (!entry.active || lease.expiresAt <= Date.now()) {
         throw new DesktopBrowserError(
           409,
@@ -424,6 +430,7 @@ export async function desktopBrowserTabAction(
   action: 'reveal' | 'close'
 ) {
   authorize(ctx, input);
+  if (action === 'reveal') assertDesktopPresentation(ctx.db, input.threadId);
   const result = await callDesktopBrowserRpc(ctx, input.hostId, {
     type: action === 'close' ? 'desktop.browser.close_tab' : 'desktop.browser.reveal_tab',
     ...scopeCommand(input),
@@ -483,6 +490,7 @@ export function syncDesktopBrowserTabs(
   scope: ExperimentalDesktopBrowserScope,
   nativeTabs: DesktopBrowserTab[]
 ) {
+  if (remoteInteractionSurface(ctx.db, scope.threadId)) return;
   requireThread(ctx, scope.threadId);
   const stored = getThreadTabs(ctx.db, scope.threadId);
   const tabs = stored ? parseStoredTabs(stored.tabsJson) : [];

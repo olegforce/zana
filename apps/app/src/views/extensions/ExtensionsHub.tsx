@@ -53,6 +53,7 @@ import { PluginDefinedSettings } from '@/plugins/PluginDefinedSettings';
 import { PluginSettingsSections } from '@/plugins/PluginSettingsSections';
 import { listSettingsSections, subscribePluginSlots } from '@/plugins/plugin-slots';
 import { PluginHubIncludes } from './PluginHubIncludes.js';
+import { PluginSubmissionAction } from './PluginSubmissionAction.js';
 import { PluginBrowseSplit } from './PluginBrowseSplit.js';
 import { PluginMoreFromAuthor, PluginOverviewLead, PluginReleaseSection, PluginDetailsSection } from './CatalogPluginDetail.js';
 import { PluginOverviewMarkdown } from './PluginOverviewMarkdown.js';
@@ -1240,7 +1241,7 @@ function AboutCard({ row }: { row: HubRow }) {
             Open
           </button>
         )}
-        {canUninstall ? (
+        {/* buildHubRows only supplies installed records to this detail card. */}
           <div className="ext-hub-more-wrap">
             <button
               type="button"
@@ -1254,6 +1255,7 @@ function AboutCard({ row }: { row: HubRow }) {
             </button>
             {aboutMenuOpen ? (
               <div className="ext-hub-more-menu" role="menu" aria-label="Plugin actions">
+                <PluginSubmissionAction row={row} onChoose={() => setAboutMenuOpen(false)} />
                 <button
                   type="button"
                   role="menuitem"
@@ -1268,7 +1270,6 @@ function AboutCard({ row }: { row: HubRow }) {
               </div>
             ) : null}
           </div>
-        ) : null}
       </div>
       <div className="ext-hub-about-grid">
         <span className="ext-hub-about-key">Status</span>

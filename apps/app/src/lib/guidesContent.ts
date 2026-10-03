@@ -38,6 +38,16 @@ agent.
 A failed reload keeps the last good generation running. Plugins are full-trust
 in-process on the server after install.
 
+## 4. Submit to a marketplace
+
+Open your installed plugin’s details, then **More plugin actions → Submit to
+marketplace**. This prepares a message for an agent using the
+\`submit-a-plugin\` skill. Review it and send it. The agent validates the
+plugin, prepares a Git or npm source and listing, and opens a marketplace pull
+request. It confirms the target marketplace and asks for any required release
+approval after preparing the work. Catalog and built-in plugins already have
+a publisher-owned listing.
+
 ## Where things live
 
 - New plugins: \`./zcc-plugin-<id>\` inside the project you authored from.

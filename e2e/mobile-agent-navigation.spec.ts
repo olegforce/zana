@@ -12,7 +12,7 @@ test.use({ initialConfig: { sponsorPromptDismissed: true }, launchEnv: { ZCC_FAK
 async function swipe(page: Page, row: Locator, dx: number, dy = 0) {
   await row.scrollIntoViewIfNeeded();
   const box = (await row.boundingBox())!;
-  const start = { x: box.x + 30, y: box.y + box.height / 2 };
+  const start = { x: box.x + box.width - 30, y: box.y + box.height / 2 };
   const cdp = await page.context().newCDPSession(page);
   try {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
@@ -27,7 +27,7 @@ async function swipe(page: Page, row: Locator, dx: number, dy = 0) {
   }
 }
 
-test('Mobile agent drawer excludes ended agents, stays ordered, and swipes right to close', async ({ app }, testInfo) => {
+test('Mobile agent drawer excludes ended agents, stays ordered, and swipes left to reveal or close', async ({ app }, testInfo) => {
   test.setTimeout(150_000);
   const directory = join(app.home, 'mobile-swipe-project');
   mkdirSync(directory);
@@ -115,7 +115,7 @@ setInterval(() => {}, 1000);
     expect(await order()).toEqual(initialOrder);
     await expect(first.locator('.mobile-agent-status')).toHaveText('Idle');
     expect(await order()).toEqual(initialOrder);
-    await swipe(page, first, 45);
+    await swipe(page, first, -25);
     await expect(rows).toHaveCount(3);
     await expect(drawer).toBeVisible();
     await swipe(page, first, 0, -70);
@@ -123,13 +123,23 @@ setInterval(() => {}, 1000);
     await expect(page).toHaveURL(`${serverUrl}/agents`);
     await page.screenshot({ path: testInfo.outputPath('mobile-agent-drawer.png') });
     // Closing an agent leaves the overview and drawer intact.
-    await swipe(page, second, 145);
+    // A short swipe reveals a labelled action; a tap elsewhere tucks it away.
+    await swipe(page, second, -75);
+    const action = second.locator('xpath=ancestor::li').locator('.mobile-agent-swipe-action button');
+    await expect(action).toBeEnabled();
+    await expect(action).toHaveAttribute('aria-hidden', 'false');
+    await expect(action).toHaveCSS('min-height', '68px');
+    await page.screenshot({ path: testInfo.outputPath('mobile-agent-close-action.png') });
+    await drawer.getByText('Your agents', { exact: true }).tap();
+    await expect(action).toBeDisabled();
+    await swipe(page, second, -75);
+    await action.tap();
     await expect(second).toHaveCount(0);
     await expect(drawer).toBeVisible();
     await expect(page).toHaveURL(`${serverUrl}/agents`);
     const archived = await (await context.request.get(`${serverUrl}/api/v1/threads/${seed.threads[1]}`)).json();
     expect(archived.thread.archivedAt).toBeTruthy();
-    await swipe(page, cli, 145);
+    await swipe(page, cli, -180);
     await expect(cli).toHaveCount(0);
     await expect(drawer).toBeVisible();
     // Keyboard close also leaves the active page and persists after reload.

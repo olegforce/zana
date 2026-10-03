@@ -130,13 +130,30 @@
   inset: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  background: color-mix(in srgb, var(--danger) 12%, var(--sidebar-bg));
-  color: var(--danger);
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--danger) 75%, black);
+  color: white;
   font-size: 13px;
+  visibility: hidden;
 }
-.mobile-agent-swipe[data-ready='true'] .mobile-agent-swipe-action { background: var(--danger); color: white; }
+.mobile-agent-swipe:is([data-swiping='true'], [data-revealed='true']) .mobile-agent-swipe-action { visibility: visible; }
+.mobile-agent-swipe-action button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 88px;
+  min-height: 68px;
+  align-self: stretch;
+  border: 0;
+  padding: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.mobile-agent-swipe[data-ready='true'] .mobile-agent-swipe-action button { width: 144px; }
 .mobile-agent-row-surface {
   position: relative;
   display: flex;

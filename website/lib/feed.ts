@@ -5,8 +5,8 @@
  * own `fetchCatalog()` (`lib/registry.ts`). Both gate on `schema === 1 &&
  * Array.isArray(releases)`, so `buildIndex()` must always satisfy that.
  *
- * Two responsibilities live here (kept together since both read all
- * `releases` rows and need the same DB access):
+ * Two responsibilities live here (kept together since both use
+ * the release schema and the same DB access):
  *   - `buildIndex()` → the metadata-only `index.json` body (never archive
  *     bytes — that's what keeps it under the 1 MiB cap, design §6).
  *   - `findArchiveByFilename()` → the exact archive-bytes lookup for
@@ -14,6 +14,7 @@
  *     filename) since an extension id may itself contain `-` characters and a
  *     naive `lastIndexOf('-')` split is ambiguous.
  */
+import { sql } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
 // `@zana-ai/zcc-extension-sdk` (packages/extension-sdk) is not a dependency of
 // `website/` (not in the root npm workspace glob, not in package.json) —
@@ -22,37 +23,19 @@ import { getDb } from './db/index.ts';
 // there's exactly one copy of the shape inside `website/`.
 import type { RegistryIndex, RegistryRelease } from './registry.ts';
 
-/**
- * The `releases` row shape actually read (structurally identical between
- * `schema.sqlite.ts` and `schema.pg.ts` — same column names/types, see design
- * §3). `getDb()` returns a `dialect`-discriminated union (`SqliteDb | PgDb`)
- * so a caller can pick a branch; narrowing on `conn.dialect` lets TypeScript
- * resolve `db.select().from(schema.releases)` to ONE concrete overload
- * instead of an uncallable union of the sqlite/pg overloads.
- */
-interface ReleaseRow {
-  extensionId: string;
-  version: string;
-  zccApi: string;
-  sha256: string;
-  signature: string;
-  permissions: string | null;
-  title: string | null;
-  description: string | null;
-  author: string | null;
-  icon: string | null;
-  archiveBytes: Buffer;
+/** Explicit metadata projection: index requests must never materialize archive blobs. */
+function metadataColumns<T extends typeof import('./db/schema.sqlite.ts').releases | typeof import('./db/schema.pg.ts').releases>(table: T): Pick<T, 'extensionId' | 'version' | 'zccApi' | 'sha256' | 'signature' | 'permissions' | 'title' | 'description' | 'author' | 'icon'> {
+  return {
+    extensionId: table.extensionId, version: table.version, zccApi: table.zccApi,
+    sha256: table.sha256, signature: table.signature, permissions: table.permissions,
+    title: table.title, description: table.description, author: table.author, icon: table.icon
+  } as Pick<T, 'extensionId' | 'version' | 'zccApi' | 'sha256' | 'signature' | 'permissions' | 'title' | 'description' | 'author' | 'icon'>;
 }
 
-/** Read every `releases` row, narrowing the sqlite/pg dialect union first. */
-async function fetchAllReleaseRows(): Promise<ReleaseRow[]> {
+async function fetchReleaseMetadata() {
   const conn = await getDb();
-  if (conn.dialect === 'pg') {
-    const rows = await conn.db.select().from(conn.schema.releases);
-    return rows as ReleaseRow[];
-  }
-  const rows = await conn.db.select().from(conn.schema.releases);
-  return rows as ReleaseRow[];
+  if (conn.dialect === 'pg') return conn.db.select(metadataColumns(conn.schema.releases)).from(conn.schema.releases);
+  return conn.db.select(metadataColumns(conn.schema.releases)).from(conn.schema.releases);
 }
 
 /** Design §6 guard: the index carries metadata only, never archive bytes. */
@@ -122,7 +105,7 @@ function toRegistryRelease(row: {
  * size (design §6 guard).
  */
 export async function buildIndex(): Promise<RegistryIndex> {
-  const rows = await fetchAllReleaseRows();
+  const rows = await fetchReleaseMetadata();
   const releases = rows.map(toRegistryRelease);
   return { schema: 1, releases };
 }
@@ -130,17 +113,20 @@ export async function buildIndex(): Promise<RegistryIndex> {
 /**
  * Look up one release's raw archive bytes by the `<id>-<version>.json`
  * filename requested at `/extensions/archives/[file]`. Matches against actual
- * DB rows (computing each row's own filename and comparing) rather than
+ * an indexed filename expression rather than
  * parsing the filename — an extension id may itself contain `-`, and version
  * is semver-ish, so a naive split is ambiguous. Returns `null` when no row's
  * filename matches (the route responds 404).
  */
 export async function findArchiveByFilename(file: string): Promise<Buffer | null> {
-  const rows = await fetchAllReleaseRows();
-  for (const row of rows) {
-    if (archiveFilename(row.extensionId, row.version) === file) {
-      return Buffer.isBuffer(row.archiveBytes) ? row.archiveBytes : Buffer.from(row.archiveBytes);
-    }
-  }
-  return null;
+  const conn = await getDb();
+  const table = conn.schema.releases;
+  // This expression matches the indexed filename exactly without ambiguous
+  // splitting of ids or prerelease versions. Fetch at most one archive.
+  const match = sql`${table.extensionId} || '-' || ${table.version} || '.json' = ${file}`;
+  const rows = conn.dialect === 'pg'
+    ? await conn.db.select({ archiveBytes: conn.schema.releases.archiveBytes }).from(conn.schema.releases).where(match).limit(1)
+    : await conn.db.select({ archiveBytes: conn.schema.releases.archiveBytes }).from(conn.schema.releases).where(match).limit(1);
+  const row = rows[0];
+  return row ? Buffer.isBuffer(row.archiveBytes) ? row.archiveBytes : Buffer.from(row.archiveBytes) : null;
 }

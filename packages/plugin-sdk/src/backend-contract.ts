@@ -781,6 +781,8 @@ export type PluginAgentToolResult =
 
 /** Per-call context handed to a native tool's execute (design §4.4). */
 export interface PluginAgentToolContext {
+  /** Host-resolved; false when the controlling user cannot see desktop UI. */
+  desktopPresentation?: boolean;
   threadId: string;
   projectId: string;
   /** The tool-call request's abort signal (aborts if the daemon round-trip
@@ -825,6 +827,8 @@ export interface PluginAgentToolPresentation {
 }
 
 export interface PluginAgentToolRegistrationBase {
+  /** Hide/gate desktop-only tools, or gate the listed top-level action values. */
+  desktopOnly?: boolean | readonly string[];
   /** Tool name shown to the model: [a-zA-Z0-9_-]+, unique across plugins,
    * and not a built-in dynamic tool (see RESERVED_AGENT_TOOL_NAMES in the
    * server). */

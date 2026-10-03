@@ -1,5 +1,5 @@
-/* One restrained surface for both titlebar shortcuts. The doubled selector
-   also isolates these panels from the older host-install drawer styles. */
+/* Shared surface for titlebar shortcuts and remote daemon installation.
+   The doubled selector takes precedence over legacy drawer styles. */
 .quick-access-panel.quick-access-panel {
   position: fixed;
   top: calc(var(--titlebar-h) + 8px);

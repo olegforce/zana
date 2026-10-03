@@ -83,6 +83,8 @@ export const desktopBrowserCommandSchemas = {
   "desktop.browser.acquire_control": z
     .object({
       type: z.literal("desktop.browser.acquire_control"),
+      // Server-owned presentation policy; never taken from agent tool input.
+      allowPresentation: z.boolean().optional(),
       ...leaseTarget,
       tabIds,
       controllerLabel: z.string().min(1).max(256),

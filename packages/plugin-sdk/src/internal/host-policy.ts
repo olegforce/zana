@@ -2006,6 +2006,8 @@ export function parsePluginAgentToolPresentation(
 }
 
 export interface NormalizedPluginAgentTool {
+  /** Hide/gate desktop-only tools, or gate the listed top-level action values. */
+  desktopOnly?: boolean | readonly string[];
   name: string;
   description: string;
   presentation: PluginAgentToolPresentation | null;
@@ -2055,6 +2057,7 @@ export function normalizeRegisteredAgentTool(args: {
 }): NormalizedPluginAgentTool {
   const tool = args.tool as {
     name?: unknown;
+    desktopOnly?: unknown;
     description?: unknown;
     instructions?: unknown;
     presentation?: unknown;
@@ -2062,6 +2065,11 @@ export function normalizeRegisteredAgentTool(args: {
     inputSchema?: unknown;
     execute?: unknown;
   };
+  if (tool.desktopOnly !== undefined && typeof tool.desktopOnly !== 'boolean'
+    && !(Array.isArray(tool.desktopOnly) && tool.desktopOnly.length <= 64
+      && tool.desktopOnly.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 100))) {
+    throw new Error('desktopOnly must be a boolean or a bounded list of action names');
+  }
   const name = tool.name;
   if (typeof name !== "string" || !AGENT_TOOL_NAME_PATTERN.test(name)) {
     throw new Error(
@@ -2148,6 +2156,7 @@ export function normalizeRegisteredAgentTool(args: {
   return {
     name,
     description: tool.description,
+    ...(tool.desktopOnly !== undefined ? { desktopOnly: tool.desktopOnly as boolean | string[] } : {}),
     presentation,
     instructions:
       typeof tool.instructions === "string" && tool.instructions.trim().length > 0

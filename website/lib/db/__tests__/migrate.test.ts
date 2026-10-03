@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -14,6 +14,16 @@ import { execFileSync } from 'node:child_process';
  *      bytes column, works end to end.
  */
 const WEBSITE_ROOT = join(__dirname, '..', '..', '..');
+
+it('keeps the PostgreSQL expression index parenthesized in schema, migration and snapshot', () => {
+  const migration = readFileSync(join(WEBSITE_ROOT, 'drizzle/pg/0002_brown_colossus.sql'), 'utf8');
+  expect(migration).toMatch(/USING btree \(\("extension_id" \|\| '-' \|\| "version" \|\| '\.json'\)\)/);
+  const snapshot = JSON.parse(readFileSync(join(WEBSITE_ROOT, 'drizzle/pg/meta/0002_snapshot.json'), 'utf8'));
+  const expression = snapshot.tables['public.releases'].indexes.releases_archive_filename.columns[0].expression;
+  expect(expression).toBe(`("extension_id" || '-' || "version" || '.json')`);
+  const schema = readFileSync(join(WEBSITE_ROOT, 'lib/db/schema.pg.ts'), 'utf8');
+  expect(schema).toContain(".on(sql`(${table.extensionId} || '-' || ${table.version} || '.json')`)");
+});
 
 describe('db:migrate (sqlite)', () => {
   let dir: string;

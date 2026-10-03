@@ -1,13 +1,78 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { appendFile, mkdtemp, rm, readdir } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, readdir, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createInboxStore,
   createMemoryInboxStore,
+  MAX_INBOX_ENTRY_BYTES,
   type IInboxStore,
   type InboxEntry
 } from '@zana-ai/zcc-server';
+
+describe('bounded inbox pages and bytes', () => {
+  it('parses one page and its hasMore witness from a large retained history', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zcc-inbox-pages-'));
+    const file = join(dir, 'entries.jsonl');
+    try {
+      const lines = Array.from({ length: 5000 }, (_, index) => JSON.stringify({ id: String(index), ts: index, projectId: 'p', comments: 'x'.repeat(8192) }));
+      await writeFile(file, lines.join('\n') + '\n');
+      const parse = vi.spyOn(JSON, 'parse');
+      try {
+        const page = await createInboxStore({ filePath: file }).read({ limit: 100 });
+        expect(page.entries).toHaveLength(100);
+        expect(page.entries[0]?.id).toBe('4999');
+        expect(page.entries[99]?.id).toBe('4900');
+        expect(page.hasMore).toBe(true);
+        expect(parse).toHaveBeenCalledTimes(101);
+      } finally { parse.mockRestore(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it('preserves Unicode across block boundaries, filters before cursor lookup, and handles unknown cursors', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zcc-inbox-unicode-'));
+    const file = join(dir, 'entries.jsonl');
+    try {
+      const store = createInboxStore({ filePath: file });
+      const first = await store.append({ projectId: 'p', comments: '😀Ā'.repeat(20_000) });
+      const second = await store.append({ projectId: 'p', comments: 'second' });
+      const foreign = await store.append({ projectId: 'q', comments: 'foreign' });
+      expect((await store.read({ before: second.id, projectId: 'p', limit: 1 })).entries).toEqual([first]);
+      expect(await store.read({ before: foreign.id, projectId: 'p' })).toEqual({ entries: [], hasMore: false });
+      expect(await store.read({ before: 'missing' })).toEqual({ entries: [], hasMore: false });
+      expect((await store.read()).entries[2]?.comments).toBe(first.comments);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it('rejects oversized admissions and legacy lines without rewriting preserved data', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zcc-inbox-size-'));
+    const file = join(dir, 'entries.jsonl');
+    try {
+      for (const store of [createInboxStore({ filePath: file }), createMemoryInboxStore()]) {
+        await expect(store.append({ projectId: 'p', comments: 'x'.repeat(MAX_INBOX_ENTRY_BYTES) })).rejects.toMatchObject({ status: 413, code: 'inbox-entry-too-large' });
+        expect((await store.read()).entries).toEqual([]);
+      }
+      const legacy = JSON.stringify({ id: 'big', projectId: 'p', comments: 'x'.repeat(MAX_INBOX_ENTRY_BYTES + 1) });
+      for (const body of [legacy, legacy + '\n']) {
+        await writeFile(file, body);
+        await expect(createInboxStore({ filePath: file }).read()).rejects.toMatchObject({ status: 413 });
+        expect((await stat(file)).size).toBe(Buffer.byteLength(body));
+      }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it('bounds retained bytes and preserves protected entries against quiet traffic', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zcc-inbox-byte-retention-'));
+    const file = join(dir, 'entries.jsonl');
+    try {
+      const store = createInboxStore({ filePath: file, maxEntries: 100, quietMaxEntries: 100, maxBytes: 600, quietMaxBytes: 600 });
+      const protectedEntry = await store.append({ projectId: 'p', comments: 'protected'.repeat(10) });
+      const pruned: string[][] = [];
+      store.onPruned(ids => pruned.push(ids));
+      for (let index = 0; index < 15; index++) await store.append({ projectId: 'p', comments: 'quiet'.repeat(20), scheduled: true, notify: 'quiet' });
+      expect((await stat(file)).size).toBeLessThanOrEqual(1200);
+      expect((await store.read()).entries.map(entry => entry.id)).toContain(protectedEntry.id);
+      expect(pruned.flat().length).toBeGreaterThan(0);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
 
 describe('InboxStore (in-memory)', () => {
   let store: IInboxStore;

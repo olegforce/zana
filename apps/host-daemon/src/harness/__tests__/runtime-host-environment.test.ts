@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RuntimeSupervisor } from '../../../../desktop/src/runtime/runtime-supervisor.js';
 import type { TerminalHostEvent } from '@zana-ai/zcc-contracts/terminal-execution';
 import { TERMINAL_HOST_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/terminal-execution';
@@ -12,6 +12,59 @@ const binding = {
 };
 
 describe('runtime host execution environment', () => {
+  it('keeps local environment wrappers transparent and releases a failed live channel', async () => {
+    const unsubscribe = vi.fn();
+    const runtime = {
+      onTerminalEvent: () => unsubscribe,
+      executeTerminal: async (command: { kind: string; sessionId: string }) => {
+        if (command.kind === 'start') return [{ kind: 'started', protocolVersion: TERMINAL_HOST_PROTOCOL_VERSION, binding, sessionId: command.sessionId, launchEpoch: 0, pid: 12 }];
+        throw new Error('server disconnected');
+      },
+      terminalEventsSince: async () => { throw new Error('replay unavailable'); },
+    } as unknown as RuntimeSupervisor;
+    const environment = createRuntimeHostExecutionEnvironment({ runtime });
+    const inner = { command: '/bin/zsh', args: [] };
+    const env = { PATH: '/bin' };
+    expect(environment.wrap(inner, {} as never)).toBe(inner);
+    expect(environment.rewriteCallbackEnv(env, {} as never)).toBe(env);
+    expect(environment.status({} as never)).toEqual({ isolated: false });
+    const session = await environment.createSession!(inner, { sessionId: 'failed-channel', projectId: 'project-1', cwd: '/workspace', cols: 80, rows: 24, sessionEnv: {} });
+    const exits: number[] = [];
+    session.onData(() => {});
+    session.onExit(({ exitCode }) => exits.push(exitCode));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    session.write('probe');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(exits).toEqual([-1]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    session.resize(90, 30);
+    session.kill();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(exits).toEqual([-1]);
+  });
+
+  it('releases every terminal listener when repeated start commands reject', async () => {
+    const listeners = new Set<(event: TerminalHostEvent) => void>();
+    const unsubscribe = vi.fn((listener: (event: TerminalHostEvent) => void) => listeners.delete(listener));
+    const failure = new Error('server terminal-execute request timed out');
+    const runtime = {
+      onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => {
+        listeners.add(listener);
+        return () => { unsubscribe(listener); };
+      },
+      executeTerminal: vi.fn().mockRejectedValue(failure),
+    } as unknown as RuntimeSupervisor;
+    const environment = createRuntimeHostExecutionEnvironment({ runtime });
+    for (let index = 0; index < 100; index += 1) {
+      await expect(environment.createSession!(
+        { command: '/bin/zsh', args: [] },
+        { sessionId: `failed-${index}`, projectId: 'project-1', cwd: '/workspace', cols: 80, rows: 24, sessionEnv: {} },
+      )).rejects.toBe(failure);
+      expect(listeners.size).toBe(0);
+    }
+    expect(unsubscribe).toHaveBeenCalledTimes(100);
+  });
+
   it('owns local shell I/O through signed server-host commands', async () => {
     const commands: unknown[] = [];
     let listener: ((event: TerminalHostEvent) => void) | null = null;

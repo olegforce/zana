@@ -66,9 +66,44 @@
       }
     },
     {
+      "name": "zana_launch_options",
+      "title": "List available harnesses and models",
+      "description": "List available harness IDs and the Project default profile on its configured machine. Supply an exact harness ID to retrieve its available models. Read-only; does not launch work or change defaults. Use before a user-requested harness/model override.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Exact connected Project ID"
+          },
+          "channel_id": {
+            "type": "string",
+            "pattern": "^[CG][A-Z0-9]{5,30}$",
+            "description": "Optional connected destination to resolve a Project with several profiles"
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Optional exact available harness ID to list models for"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "zana_launch_job",
       "title": "Launch a Zana job",
-      "description": "Start an agent task on your linked computer using an approved Project and channel from zana_list_projects. This posts the task in that channel and uses its configured model. Only call when the user requests work. Generate a unique request_id for each new task; reuse it unchanged on retries. Returns acceptance, not completion. Never retry an unconfirmed launch with a new request_id; check zana_job_status.",
+      "description": "Start an agent task on your linked computer using an approved Project and channel from zana_list_projects. This posts the task in that channel and uses its saved profile unless the user requests a harness/model override. Discover exact available IDs with zana_launch_options; never guess model IDs. Per-task overrides do not change Project defaults. Only call when the user requests work. Generate a unique request_id for each new task; reuse it unchanged on retries. Returns acceptance, not completion. Never retry an unconfirmed launch with a new request_id; check zana_job_status.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -92,6 +127,18 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,80}$",
             "description": "Unique idempotency key; reuse for retries of this same task."
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Optional exact harness ID from zana_launch_options. Supply model too when changing harness."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150,
+            "description": "Optional exact available model ID for the chosen harness, from zana_launch_options."
           }
         },
         "required": [
@@ -222,7 +269,8 @@
       "title": "Browse Projects",
       "description": "List registered Project names and approved Slack destinations. Launching and importing also require this to be enabled.",
       "tools": [
-        "zana_list_projects"
+        "zana_list_projects",
+        "zana_launch_options"
       ]
     },
     {

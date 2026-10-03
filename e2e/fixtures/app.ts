@@ -271,6 +271,7 @@ export interface LaunchOptions {
  * path without duplicating it.
  */
 export async function launchApp(home: string, opts: LaunchOptions = {}): Promise<AppHandle> {
+  const packagedExecutable = process.env.ZCC_E2E_EXECUTABLE_PATH;
   writeAppConfig(home, opts.initialConfig, opts.allowLiveClaude);
   const preserveHome = opts.env?.ZCC_E2E_PRESERVE_HOME === '1';
   const dataDir = join(home, '.zcc');
@@ -280,12 +281,13 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     HOME: preserveHome ? homedir() : home,
+    ...(process.platform === 'win32' ? { USERPROFILE: home } : {}),
     ZCC_E2E_HOME: home,
     ZCC_DATA_DIR: dataDir,
     ZCC_EXTENSIONS_DIR: join(home, '.zcc', 'extensions'),
     // Electron's unpackaged default is "0.0". The main process uses this only
     // in E2E so the smoke test observes the same version as package.json.
-    ZCC_E2E_APP_VERSION: PACKAGE_VERSION,
+    ...(!packagedExecutable ? { ZCC_E2E_APP_VERSION: PACKAGE_VERSION } : {}),
     ...(opts.e2e ? { ZCC_E2E: '1' } : {}),
     ...opts.env,
     ...linuxCiElectronEnv(),
@@ -300,18 +302,19 @@ export async function launchApp(home: string, opts: LaunchOptions = {}): Promise
   if (!opts.env?.ZCC_DESKTOP_APP_URL) delete env.ZCC_DESKTOP_APP_URL;
   if (!opts.env?.ZCC_SERVER_URL) delete env.ZCC_SERVER_URL;
   if (!opts.env?.ZCC_HOST_ENROLL_TOKEN) delete env.ZCC_HOST_ENROLL_TOKEN;
+  if (packagedExecutable) delete env.ZCC_E2E_APP_VERSION;
   if (opts.caCertPath) env.NODE_EXTRA_CA_CERTS = opts.caCertPath;
 
   const app = await electron.launch({
     // Without this, Playwright downloads its own Electron (log: "Downloading
     // Electron binary...") which will not load this repo's native addons.
-    executablePath: projectElectronBinary(),
+    executablePath: packagedExecutable || projectElectronBinary(),
     // Chromium's os_crypt keychain init runs before any of our JS (bootstrap.ts's
     // `app.commandLine.appendSwitch('use-mock-keychain')` only reaches child
     // processes spawned afterward, not this process's own early init — same class
     // of bug as the ozone flag above), so it must ride in argv, not be appended
     // at runtime, or macOS pops a real Keychain prompt on a headless E2E run.
-    args: [...linuxCiElectronArgs(), '--use-mock-keychain', `--user-data-dir=${userDataDir}`, MAIN_ENTRY],
+    args: [...linuxCiElectronArgs(), '--use-mock-keychain', `--user-data-dir=${userDataDir}`, ...(!packagedExecutable ? [MAIN_ENTRY] : [])],
     env: isolateTmuxEnvironment(home, env),
     timeout: 60_000
   });

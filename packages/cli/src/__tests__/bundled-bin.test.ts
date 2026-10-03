@@ -22,7 +22,8 @@ describe('bundled zcc bin', () => {
     const copied = join(root, 'cli');
     cpSync(join(repoRoot, 'packages/cli/dist'), copied, { recursive: true, dereference: true });
     const bin = join(copied, 'bin/zcc');
-    const env = { ...process.env, ZCC_SKIP_PLUGIN_NPM: '1', NODE_PATH: '', ESBUILD_BINARY_PATH: '' };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, ZCC_DATA_DIR: join(root, 'data'),
+      npm_config_registry: 'https://registry.npmjs.org/', ZCC_SKIP_PLUGIN_NPM: '1', NODE_PATH: '', ESBUILD_BINARY_PATH: '' };
     await execFileAsync(process.execPath, [bin, 'plugin', 'new', 'portable', '--app'], { cwd: root, env });
     const plugin = join(root, 'zcc-plugin-portable');
     const { stdout } = await execFileAsync(process.execPath, [bin, 'plugin', 'build'], { cwd: plugin, env });
@@ -35,7 +36,14 @@ describe('bundled zcc bin', () => {
       readFileSync(join(repoRoot, 'packages/plugin-sdk/bundled-types/zcc-plugin-sdk.d.ts'), 'utf8')
     );
     expect(readFileSync(join(plugin, 'AGENTS.md'), 'utf8')).toContain('LIVE_TEST.md');
-  }, 30_000);
+    const offline = await execFileAsync(process.execPath, [bin, 'plugin', 'build'], {
+      cwd: plugin, env: { ...env, npm_config_registry: 'http://127.0.0.1:9', npm_config_fetch_retries: '0' }
+    });
+    expect(offline.stdout).toContain('Built');
+    expect(offline.stderr).not.toContain('Downloading');
+    expect(existsSync(join(copied, 'node_modules/esbuild'))).toBe(false);
+    expect(existsSync(join(copied, 'runtime/npm/bin/npm-cli.js'))).toBe(true);
+  }, 150_000);
 
   it('loads plugin ls under plain Node without walking TypeScript sources', async () => {
     expect(existsSync(bundledBin)).toBe(true);

@@ -201,6 +201,12 @@ describe('fixtures', () => {
     expect(markup).toContain('Explorer');
     expect(markup).toContain('Library');
     expect(markup).toContain('title="Agents board action"');
+    expect(markup).toContain('aria-label="Agents view selector"');
+    expect(markup).toContain('href="#surface-experimental_agentsView"');
+    expect(markup).toContain('Your view');
+    expect(markup.indexOf('>Board<')).toBeLessThan(markup.indexOf('>List<'));
+    expect(markup.indexOf('>List<')).toBeLessThan(markup.indexOf('>Flow<'));
+    expect(markup.indexOf('>Flow<')).toBeLessThan(markup.indexOf('Your view'));
     expect(markup).toContain('title="Agent card action"');
   });
 

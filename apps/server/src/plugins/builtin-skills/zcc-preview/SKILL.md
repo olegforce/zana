@@ -5,6 +5,11 @@ description: Open a file in Zana's thread side-panel preview. Use whenever the u
 
 # zcc-preview — visible file preview
 
+## Remote conversations
+
+If the host identifies a remote chat as the controlling surface, the user cannot see Zana's desktop panels or inline visualization UI. Do not follow the desktop presentation steps below. Return useful text through the configured conversation delivery tool; use a supported remote artifact or authenticated web-preview link only when available. Do not claim that a local file path, localhost URL, or desktop panel was shown to the remote user. Hidden browser automation and file creation for your own work remain available. A desktop handoff must be opened by the user in Zana.
+
+
 Use **`preview_file`** to open a file in this thread's right-hand **preview**
 tab so the user can look at it. This is a show-the-user action, not a substitute
 for `Read`.

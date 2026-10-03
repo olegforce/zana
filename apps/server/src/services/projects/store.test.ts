@@ -908,3 +908,12 @@ describe('ensureQuickAgentProject — legacy migration', () => {
     expect(project.tag).toBe('zcc-workspace');
   });
 });
+
+describe('plugin Agents-view preference', () => {
+  it('round-trips a generic plugin view key and rejects malformed preferences', () => {
+    expect(normalizeConfig({ agentsBoardView: 'plugin:example/world' }).agentsBoardView).toBe('plugin:example/world');
+    expect(normalizeConfig({ agentsBoardView: 'board' }).agentsBoardView).toBe('board');
+    expect(normalizeConfig({ agentsBoardView: 'world' as never }).agentsBoardView).toBeUndefined();
+    expect(normalizeConfig({ agentsBoardView: 'plugin:../bad' as never }).agentsBoardView).toBeUndefined();
+  });
+});

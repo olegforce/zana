@@ -18,10 +18,12 @@ export function isIgnoredPluginDevPath(relativePath: string): boolean {
 
 export interface PluginDevLoopDeps {
   pluginId: string;
-  hasApp: boolean;
-  hasServer: boolean;
+  hasApp?: boolean;
+  hasServer?: boolean;
+  targets?: () => Promise<{ hasApp: boolean; hasServer: boolean; hasHost?: boolean }>;
   buildApp: () => Promise<void>;
   buildServer: () => Promise<void>;
+  buildHost?: () => Promise<void>;
   reloadPlugin: () => Promise<void>;
   log: (line: string) => void;
   debounceMs?: number;
@@ -30,7 +32,7 @@ export interface PluginDevLoopDeps {
 
 export type PluginDevCycleResult =
   | { ok: true }
-  | { ok: false; stage: 'server' | 'app' | 'reload'; message: string };
+  | { ok: false; stage: 'manifest' | 'server' | 'app' | 'host' | 'reload'; message: string };
 
 export interface PluginDevLoop {
   handleChange: (relativePath: string) => void;
@@ -55,7 +57,14 @@ export function createPluginDevLoop(deps: PluginDevLoopDeps): PluginDevLoop {
   async function runCycle(files: readonly string[]): Promise<PluginDevCycleResult | null> {
     if (disposed) return null;
     const parts = [`${files.length} file${files.length === 1 ? '' : 's'} changed`];
-    if (deps.hasServer) {
+    let targets: { hasApp?: boolean; hasServer?: boolean; hasHost?: boolean };
+    try {
+      targets = deps.targets ? await deps.targets() : deps;
+    } catch (error) {
+      deps.log(`manifest read failed: ${errorMessage(error)} — fix and save to retry`);
+      return { ok: false, stage: 'manifest', message: errorMessage(error) };
+    }
+    if (targets.hasServer) {
       const startedAt = now();
       try {
         await deps.buildServer();
@@ -66,7 +75,7 @@ export function createPluginDevLoop(deps: PluginDevLoopDeps): PluginDevLoop {
         return { ok: false, stage: 'server', message: errorMessage(error) };
       }
     }
-    if (deps.hasApp) {
+    if (targets.hasApp) {
       const startedAt = now();
       try {
         await deps.buildApp();
@@ -75,6 +84,16 @@ export function createPluginDevLoop(deps: PluginDevLoopDeps): PluginDevLoop {
         parts.push(`app build failed: ${errorMessage(error)}`);
         deps.log(`${parts.join(' · ')} — fix and save to retry`);
         return { ok: false, stage: 'app', message: errorMessage(error) };
+      }
+    }
+    if (targets.hasHost) {
+      try {
+        if (!deps.buildHost) throw new Error('host builder unavailable');
+        await deps.buildHost();
+        parts.push('rebuilt host');
+      } catch (error) {
+        deps.log(`host build failed: ${errorMessage(error)} — fix and save to retry`);
+        return { ok: false, stage: 'host', message: errorMessage(error) };
       }
     }
     try {

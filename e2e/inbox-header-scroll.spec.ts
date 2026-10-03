@@ -4,7 +4,7 @@ import { test, expect } from './fixtures/app.js';
 
 test.use({ initialConfig: { sponsorPromptDismissed: true } });
 
-test.beforeEach(async ({ home }) => {
+test.beforeEach(async ({ home }, testInfo) => {
   const inboxDir = join(home, '.zcc', 'inbox');
   mkdirSync(inboxDir, { recursive: true });
   writeFileSync(join(inboxDir, 'entries.jsonl'), `${JSON.stringify({
@@ -15,6 +15,29 @@ test.beforeEach(async ({ home }) => {
     comments: Array.from({ length: 80 }, (_, i) => `Paragraph ${i + 1}: Report content that scrolls beneath the message header.`).join('\n\n'),
     report: true
   })}\n`);
+  if (testInfo.title.includes('bounded Inbox pages')) {
+    writeFileSync(join(inboxDir, 'entries.jsonl'), Array.from({ length: 5000 }, (_, index) => JSON.stringify({
+      id: `page-${index}`, projectId: 'proj-e2e', ts: Date.now() - (5000 - index) * 1000, subject: `Paged report ${index}`, comments: 'x'.repeat(8192), report: true
+    })).join('\n') + '\n');
+  }
+});
+
+test('bounded Inbox pages preserve cursors through built Electron HTTP and UI', async ({ app }) => {
+  const page = app.window;
+  const read = (query: string) => page.evaluate(async query => {
+    const response = await fetch(`/api/v1/inbox?${query}`);
+    return { status: response.status, data: await response.json() };
+  }, query);
+  const first = await read('limit=100&projectId=proj-e2e');
+  expect(first.status).toBe(200);
+  expect(first.data.entries).toHaveLength(100);
+  expect(first.data.entries[0].id).toBe('page-4999');
+  expect(first.data.hasMore).toBe(true);
+  const second = await read(`limit=100&projectId=proj-e2e&before=${first.data.entries.at(-1).id}`);
+  expect(second.data.entries[0].id).toBe('page-4899');
+  expect(second.data.entries).toHaveLength(100);
+  await page.getByTestId('nav-inbox').click();
+  await expect(page.locator('.inbox-row').filter({ hasText: 'Paged report 4999' })).toBeVisible();
 });
 
 test('inbox message header stays visible and usable while its content scrolls', async ({ app }, testInfo) => {

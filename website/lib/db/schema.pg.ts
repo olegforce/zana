@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 /**
  * Postgres drizzle schema for the extension marketplace registry — the SIX
  * tables in `docs/extension-marketplace-registry-design.md` §3.
@@ -14,7 +15,7 @@
  * `releases` has a COMPOSITE PRIMARY KEY `(extension_id, version)` — one row
  * per published version of an extension id.
  */
-import { pgTable, text, integer, bigint, primaryKey, customType } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, bigint, primaryKey, customType, index } from 'drizzle-orm/pg-core';
 
 /** `bytea` column mapped to/from Node `Buffer`, matching sqlite's `blob({mode:'buffer'})`. */
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -74,7 +75,8 @@ export const releases = pgTable(
     createdAt: bigint('created_at', { mode: 'number' }).notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.extensionId, table.version] })
+    pk: primaryKey({ columns: [table.extensionId, table.version] }),
+    archiveFilename: index('releases_archive_filename').on(sql`(${table.extensionId} || '-' || ${table.version} || '.json')`)
   })
 );
 

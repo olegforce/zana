@@ -12,7 +12,11 @@
  */
 export function linuxCiElectronArgs(platform: NodeJS.Platform = process.platform): string[] {
   if (platform !== 'linux') return [];
-  return ['--no-sandbox', '--disable-gpu', '--ozone-platform=x11'];
+  // Xvfb has no hardware GPU. Keep WebGL available for xterm via Chromium's
+  // software renderer, and keep frames flowing for screenshots in occluded windows.
+  return ['--no-sandbox', '--ozone-platform=x11', '--use-gl=angle',
+    '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+    '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
 }
 
 export function linuxCiElectronEnv(

@@ -21,6 +21,7 @@ import {
   markOwningThreadPlanTasksInterrupted,
   recordThreadExecutionMode,
   snapshotApprovedPlan,
+  shouldSyncPlanForConversationEvent,
   syncPlanFromLatestEvents,
   updateUserPlanTask
 } from './conversation-plan.js';
@@ -73,6 +74,16 @@ function completeItem(
 function planDir(): string {
   return join(dir!, '.zcc', 'plans');
 }
+
+describe('plan event invalidation', () => {
+  it.each(['item/completed', 'turn/completed', 'turn.completed', 'client/turn/requested'])('reconciles %s', type => {
+    expect(shouldSyncPlanForConversationEvent(type)).toBe(true);
+  });
+  it.each(['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/textDelta',
+    'thread/tokenUsage/updated', 'item/started', 'turn/started', 'turn.failed'])('ignores %s', type => {
+    expect(shouldSyncPlanForConversationEvent(type)).toBe(false);
+  });
+});
 
 describe('durable thread plan', () => {
   it('snapshots approved markdown as a new revision without replacing history', () => {

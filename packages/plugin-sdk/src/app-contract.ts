@@ -393,6 +393,52 @@ export interface PluginAgentsBoardActionRegistration extends PluginSlotBase {
   run(context: PluginAgentsBoardActionContext): void | Promise<void>;
 }
 
+/** Read-only fleet projection shared with the built-in Agents views. */
+export interface PluginFleetMember {
+  /** Opaque, kind-qualified key. Pass this to onInspect. */
+  key: string;
+  kind: 'agent' | 'thread';
+  title: string;
+  projectId: string;
+  status: 'working' | 'needs-you' | 'idle' | 'done' | 'error' | 'unknown';
+  /** Done means the process exited, not that its task succeeded. */
+  detail: string;
+  live: boolean;
+  scheduled: boolean;
+  teamId?: string;
+}
+export interface PluginFleetSchedule {
+  key: string;
+  title: string;
+  projectId: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  running: boolean;
+}
+export interface PluginFleetExecution {
+  key: string;
+  projectId: string;
+  title: string;
+  state: string;
+  needsAttention: boolean;
+}
+export interface PluginAgentsViewProps {
+  projectId: string | null;
+  projects: readonly { id: string; name: string; color?: string }[];
+  members: readonly PluginFleetMember[];
+  schedules: readonly PluginFleetSchedule[];
+  executions: readonly PluginFleetExecution[];
+  includeScheduled: boolean;
+  searchQuery: string;
+  /** Host resolves only keys in the current, scoped projection. */
+  onInspect(key: string): void;
+}
+export interface PluginAgentsViewRegistration extends PluginSlotBase {
+  title: string;
+  icon?: string;
+  component: ComponentType<PluginAgentsViewProps>;
+}
+
 export type PluginTimelineRowStatus = 'pending' | 'completed' | 'error' | 'interrupted';
 
 export interface PluginTimelineRendererRow {
@@ -641,6 +687,7 @@ export interface PluginAppSlots {
   experimental_agentCardAction(
     registration: Omit<PluginAgentCardActionRegistration, 'generation' | 'pluginId'>
   ): void;
+  experimental_agentsView(registration: Omit<PluginAgentsViewRegistration, 'generation' | 'pluginId'>): void;
   experimental_threadCardAction(
     registration: Omit<PluginThreadCardActionRegistration, 'generation' | 'pluginId'>
   ): void;
@@ -691,6 +738,7 @@ export interface PluginRegistrationSet {
   agentCardActions: PluginAgentCardActionRegistration[];
   threadCardActions: PluginThreadCardActionRegistration[];
   agentsBoardActions: PluginAgentsBoardActionRegistration[];
+  agentsViews: PluginAgentsViewRegistration[];
   timelineRenderers: PluginTimelineRendererRegistration[];
   commandPaletteActions: PluginCommandPaletteActionRegistration[];
   providerIcons: PluginProviderIconRegistration[];
@@ -850,6 +898,7 @@ export function emptyRegistrationSet(pluginId: string, generation: number): Plug
     agentCardActions: [],
     threadCardActions: [],
     agentsBoardActions: [],
+    agentsViews: [],
     timelineRenderers: [],
     commandPaletteActions: [],
     providerIcons: [],
@@ -953,6 +1002,7 @@ export function collectPluginApp(
     agentCardAction: new Set<string>(),
     threadCardAction: new Set<string>(),
     agentsBoardAction: new Set<string>(),
+    agentsView: new Set<string>(),
     timelineRenderer: new Set<string>(),
     commandPaletteAction: new Set<string>(),
     providerIcon: new Set<string>(),
@@ -1198,6 +1248,17 @@ export function collectPluginApp(
             ...(registration.run !== undefined ? { run: registration.run } : {})
           })
         );
+      },
+      experimental_agentsView: (registration) => {
+        const kind = 'slots.experimental_agentsView';
+        const id = requireSlotId(kind, registration.id);
+        requireUniqueId(kind, seen.agentsView, id);
+        set.agentsViews.push(stamp({
+          id,
+          title: requireNonEmptyString(kind, 'title', registration.title),
+          ...(registration.icon !== undefined ? { icon: requireNonEmptyString(kind, 'icon', registration.icon) } : {}),
+          component: requireComponent(kind, 'component', registration.component)
+        }));
       },
       experimental_threadList: (registration) => {
         const kind = 'slots.experimental_threadList';

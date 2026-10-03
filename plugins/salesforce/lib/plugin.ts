@@ -603,6 +603,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
   };
   registerRpc('actions.run', args => invokeAction(rpcString(args, 'action'), (args as { input?: unknown })?.input, { projectId: contexts.current()?.projectId ?? '', threadId: rpcString(args, 'threadId'), signal: new AbortController().signal }));
   zcc.agents.registerTool({
+    desktopOnly: ['ui.views', 'ui.command', 'ui.result'],
     name: 'sf_workbench',
     description: 'Control the Salesforce project workbench. Use capabilities to discover semantic operations for local draft creation, org source retrieval, org selection, query history, deployment jobs and acknowledged UI controls. UI views are explicit and project-scoped. Local drafts work without an org.',
     parameters: { ...actionParameters, properties: { ...actionParameters.properties, action: { type: 'string', enum: ['capabilities', ...workbenchActionNames] } } },
@@ -697,6 +698,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
   }).catch(() => ({})));
 
   zcc.agents.registerTool({
+    desktopOnly: ['ui.views', 'ui.command', 'ui.result'],
     name: 'sf_soql',
     description:
       'Salesforce SOQL/SOSL lifecycle: schema search/describe, validate, bounded sample/run, and confined export. Prefer this over raw sf data query.',
@@ -716,6 +718,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
   });
 
   zcc.agents.registerTool({
+    desktopOnly: ['ui.views', 'ui.command', 'ui.result'],
     name: 'sf_apex',
     description:
       'Salesforce Apex lifecycle: local diagnose, targeted tests, debug logs, and anonymous Apex. Source edits stay with file tools. Anonymous Apex always confirms.',
@@ -737,6 +740,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
   });
 
   zcc.agents.registerTool({
+    desktopOnly: ['ui.views', 'ui.command', 'ui.result'],
     name: 'sf_lwc',
     description:
       'Local Lightning Web Component scan, inspect, diagnose, and targeted Jest. No deploy, retrieve, preview, or create.',
@@ -753,6 +757,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
   });
 
   zcc.agents.registerTool({
+    desktopOnly: ['ui.views', 'ui.command', 'ui.result'],
     name: 'sf_agent',
     description:
       'Agentforce lifecycle: LSP diagnose (diagnostics/hover/complete/definition/symbols) on a confined .agent file, compile/inspect, preview (simulate by default; live confirms), eval via a confined spec (sf agent test run-eval) or an org AiEvaluationDefinition, and fail-closed publish/activate. Edit source in the Agentforce Playground side panel or file tools. Publish, activate, and live preview always confirm.',

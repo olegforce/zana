@@ -88,6 +88,7 @@ test('phone composer picks, previews, removes and sends screenshots through mobi
       expect(actionsBox.y).toBeGreaterThanOrEqual(settingsBox.y + settingsBox.height);
       await editor.focus();
       await expect(options).toHaveAttribute('aria-expanded', 'false');
+      expect(await attach.locator('..').evaluate((node) => getComputedStyle(node, '::after').display)).toBe('none');
       for (const control of [editor, options, send, thumb]) {
         const box = (await control.boundingBox())!;
         expect(box.y).toBeGreaterThanOrEqual(0);

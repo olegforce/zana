@@ -10,7 +10,8 @@ import {
   type TimelineViewWorkRow
 } from '@zana-ai/zcc-thread-view';
 import { isBackgroundAgentTaskType, isBackgroundCommandTaskType } from '@zana-ai/zcc-domain/thread-runtime';
-import { useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { TIMELINE_WINDOW_SIZE, windowTimelineRows } from './timeline-window.js';
 import type { ThreadChatMessageAction } from '@zana-ai/zcc-plugin-sdk/app';
 import { ExpandableTimelineRow } from './ExpandableTimelineRow.js';
 import { ConversationRow } from './ConversationRow.js';
@@ -27,7 +28,7 @@ import {
 } from './timeline-auto-expand.js';
 import { pastRowDimClassName } from './timeline-title.js';
 import { TimelineDetailScroll } from './TimelineDetailScroll.js';
-import { stickyTurnRanges } from './timeline-sticky-user.js';
+import { isUserConversationRow, observeStickyUserPrompts, stickyTurnRanges } from './timeline-sticky-user.js';
 import type { TimelineTitleActionHandler, TimelineTitleLinkHandler } from './TimelineTitleView.js';
 import type { PlanExecutionTask } from './plan-execution-card.js';
 import {
@@ -57,7 +58,7 @@ function shouldRenderCompactActivityIntentRows(
 
 interface TimelineRowsProps {
   rows: ThreadTimelineViewRow[];
-  now: number;
+  now?: number;
   expansion: ReturnType<typeof collectTimelineAutoExpansionRowIds>;
   unreadRowId?: string | null;
   onCopy?: (text: string) => void;
@@ -80,26 +81,54 @@ interface TimelineRowsProps {
   includePluginMessageActions?: boolean;
   planExecution?: { title: string; tasks: readonly PlanExecutionTask[] } | null;
   filePathHints?: readonly string[];
+  targetRowId?: string | null;
+  historyPage?: number;
+  latestPageRequest?: number;
 }
 
 export function TimelineRows(props: TimelineRowsProps) {
   const { rows, unreadRowId, nested, scopeActive = false, planExecution } = props;
+  const [pageAnchorId, setPageAnchorId] = useState<string | null>(null);
+  const windowRef = useRef<HTMLDivElement>(null);
+  const historyPageRef = useRef(props.historyPage);
+  useLayoutEffect(() => { setPageAnchorId(null); }, [props.latestPageRequest]);
+  useEffect(() => {
+    if (historyPageRef.current === props.historyPage) return;
+    historyPageRef.current = props.historyPage;
+    setPageAnchorId(rows[0]?.id ?? null);
+  }, [props.historyPage, rows]);
+  const targetRootId = rows.find(row => row.id === props.targetRowId || props.forceExpandedRowIds?.has(row.id))?.id;
+  const page = useMemo(() => windowTimelineRows(rows, TIMELINE_WINDOW_SIZE, {
+    startId: pageAnchorId, keepId: targetRootId, isContextRow: nested ? undefined : isUserConversationRow
+  }), [rows, pageAnchorId, targetRootId, nested]);
+  const visibleRows = page.visible;
+  useLayoutEffect(() => {
+    if (nested || !windowRef.current) return;
+    const pane = windowRef.current.closest<HTMLElement>('[data-testid="thread-timeline"]');
+    if (pane) return observeStickyUserPrompts(pane);
+  }, [visibleRows, nested]);
   const filePathHintsRef = useRef<readonly string[]>([]);
+  const collectedPaths = useMemo(() => props.filePathHints ?? collectTimelineFilePreviewPaths(rows), [props.filePathHints, rows]);
   const filePathHints = reuseStringListIfEqual(
     filePathHintsRef.current,
-    props.filePathHints ?? collectTimelineFilePreviewPaths(rows)
+    collectedPaths
   );
   filePathHintsRef.current = filePathHints;
   const rowProps = { ...props, filePathHints };
-  const activeLatestBundleId = findActiveLatestBundleId(rows);
-  const turns = stickyTurnRanges(rows);
-  const latestUserRowId = !nested && turns.length > 0 ? rows[turns[turns.length - 1]!.start]?.id : null;
-  const renderItems = (slice: ThreadTimelineViewRow[]) =>
+  const activeLatestBundleId = useMemo(() => findActiveLatestBundleId(rows), [rows]);
+  const turns = useMemo(() => stickyTurnRanges(visibleRows), [visibleRows]);
+  const titles = useMemo(() => new Map(visibleRows.map(row => [row.id, buildTimelineRowTitle(row, {
+    ...TITLE_OPTIONS,
+    isActiveLatestBundle: scopeActive && row.kind === 'bundle-summary' && row.id === activeLatestBundleId
+  })])), [visibleRows, scopeActive, activeLatestBundleId]);
+  const latestUserRowId = useMemo(() => {
+    if (nested) return null;
+    const allTurns = stickyTurnRanges(rows);
+    return allTurns.length > 0 ? rows[allTurns[allTurns.length - 1]!.start]?.id : null;
+  }, [nested, rows]);
+  const renderItems = (slice: readonly ThreadTimelineViewRow[]) =>
     slice.map((row) => {
-      const title = buildTimelineRowTitle(row, {
-        ...TITLE_OPTIONS,
-        isActiveLatestBundle: scopeActive && row.kind === 'bundle-summary' && row.id === activeLatestBundleId
-      });
+      const title = titles.get(row.id)!;
       return (
         <div
           key={row.id}
@@ -121,23 +150,33 @@ export function TimelineRows(props: TimelineRowsProps) {
       );
     });
   const list = (() => {
-    if (turns.length === 0) return renderItems(rows);
-    const prefix = turns[0]!.start > 0 ? renderItems(rows.slice(0, turns[0]!.start)) : null;
+    if (turns.length === 0) return renderItems(visibleRows);
+    const prefix = turns[0]!.start > 0 ? renderItems(visibleRows.slice(0, turns[0]!.start)) : null;
     return (
       <>
         {prefix}
         {turns.map((turn) => (
-          <div key={`sticky-turn:${rows[turn.start]!.id}`} className="thread-timeline-current-turn">
-            {renderItems(rows.slice(turn.start, turn.end))}
+          <div key={`sticky-turn:${visibleRows[turn.start]!.id}`} className="thread-timeline-current-turn">
+            {renderItems(visibleRows.slice(turn.start, turn.end))}
           </div>
         ))}
       </>
     );
   })();
+  const boundedList = <>
+    {page.hiddenCount > 0 && <button type="button" data-testid="timeline-earlier-page" onClick={() => {
+      setPageAnchorId(rows[Math.max(0, page.hiddenCount - TIMELINE_WINDOW_SIZE)]!.id);
+    }}>{nested ? 'Earlier details' : 'Earlier messages'}</button>}
+    {list}
+    {page.hiddenAfterCount > 0 && <button type="button" data-testid="timeline-later-page" onClick={() => {
+      const start = rows.length - page.hiddenAfterCount;
+      setPageAnchorId(start >= rows.length - TIMELINE_WINDOW_SIZE ? null : rows[start]!.id);
+    }}>{nested ? 'Later details' : 'Later messages'}</button>}
+  </>;
   if (nested) {
-    return <div className="thread-timeline-nested">{list}</div>;
+    return <div className="thread-timeline-nested">{boundedList}</div>;
   }
-  return list;
+  return <div ref={windowRef} className="thread-timeline-window">{boundedList}</div>;
 }
 
 function TimelineRowView({
@@ -163,7 +202,8 @@ function TimelineRowView({
   messageActions,
   includePluginMessageActions,
   planExecution,
-  filePathHints
+  filePathHints,
+  targetRowId
 }: TimelineRowsProps & {
   row: ThreadTimelineViewRow;
   title: TimelineTitle;
@@ -175,6 +215,7 @@ function TimelineRowView({
     <TimelineTitleView
       title={title}
       now={now}
+      live={threadIdle !== true}
       onAction={onTitleAction}
       onLink={onTitleLink}
     />
@@ -198,7 +239,8 @@ function TimelineRowView({
     onFork,
     messageActions,
     includePluginMessageActions,
-    filePathHints
+    filePathHints,
+    targetRowId
   };
 
   if (row.kind === 'conversation') {
@@ -280,6 +322,7 @@ function TimelineRowView({
         messageActions={messageActions}
         includePluginMessageActions={includePluginMessageActions}
         filePathHints={filePathHints}
+        targetRowId={targetRowId}
       />
     );
   }
@@ -298,7 +341,7 @@ function TimelineRowView({
             >
               <div className="thread-timeline-work-header">
                 <TimelineWorkGlyph name={activityIntentTitleGlyph(entry)} />
-                <TimelineTitleView title={entry.title} now={now} onAction={onTitleAction} onLink={onTitleLink} />
+                <TimelineTitleView title={entry.title} now={now} live={threadIdle !== true} onAction={onTitleAction} onLink={onTitleLink} />
               </div>
             </article>
           ))}

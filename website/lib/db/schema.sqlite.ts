@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 /**
  * SQLite drizzle schema for the extension marketplace registry — the SIX
  * tables in `docs/extension-marketplace-registry-design.md` §3.
@@ -14,7 +15,7 @@
  * `releases` has a COMPOSITE PRIMARY KEY `(extension_id, version)` — one row
  * per published version of an extension id.
  */
-import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(), // internal uuid
@@ -67,7 +68,8 @@ export const releases = sqliteTable(
     createdAt: integer('created_at').notNull()
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.extensionId, table.version] })
+    pk: primaryKey({ columns: [table.extensionId, table.version] }),
+    archiveFilename: index('releases_archive_filename').on(sql`${table.extensionId} || '-' || ${table.version} || '.json'`)
   })
 );
 

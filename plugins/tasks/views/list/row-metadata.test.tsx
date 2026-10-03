@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "../../compat/testing-app";
 import type { Label, Task, TaskThread } from "../../shared/contract.js";
@@ -85,13 +85,16 @@ interface ListFixture {
   tasks: Task[];
   labels?: Label[];
   threadsByTask?: Record<string, TaskThread[]>;
+  pageSize?: number;
+  failPage?: boolean;
+  failSummaries?: boolean;
 }
 
-function renderList(fixture: ListFixture) {
-  const calls = { listComments: 0, listAttachments: 0 };
+function renderList(fixture: ListFixture, view = "list") {
+  const calls = { listComments: 0, listAttachments: 0, listTasks: [] as { cursor?: string; limit?: number; activeOnly?: boolean; parentTaskId?: string | null }[], summaries: [] as string[][], threads: 0 };
   const slot = renderSlot(
     app.navPanels[0]!,
-    { subPath: PROJECT_ID },
+    { subPath: `${PROJECT_ID}?view=${view}` },
     {
       rpc: {
         listProjects: () => ({ projects: [project] }),
@@ -99,10 +102,23 @@ function renderList(fixture: ListFixture) {
         listPresets: () => ({ presets: [] }),
         sidebarSummary: () => ({ projects: [] }),
         listLabels: () => ({ labels: fixture.labels ?? [] }),
-        listTasks: () => ({ tasks: fixture.tasks }),
-        listTaskThreads: ({ taskId }: { taskId: string }) => ({
-          taskThreads: fixture.threadsByTask?.[taskId] ?? [],
-        }),
+        listTasks: (input: { cursor?: string; limit?: number }) => {
+          calls.listTasks.push(input);
+          if (fixture.failPage && input.cursor) throw new Error('Page temporarily unavailable');
+          if ('activeOnly' in input && input.activeOnly && !('parentTaskId' in input)) return { tasks: [], nextCursor: null };
+          const start = Number(input.cursor ?? 0);
+          const size = fixture.pageSize ?? fixture.tasks.length;
+          return { tasks: fixture.tasks.slice(start, start + size), nextCursor: start + size < fixture.tasks.length ? String(start + size) : null };
+        },
+        listTaskSummaries: ({ taskIds }: { taskIds: string[] }) => {
+          calls.summaries.push(taskIds);
+          if (fixture.failSummaries) throw new Error('Summary temporarily unavailable');
+          return { summaries: taskIds.map(taskId => {
+            const activeThreads = (fixture.threadsByTask?.[taskId] ?? []).filter(thread => thread.liveStatus === 'starting' || thread.liveStatus === 'working');
+            return { taskId, activeThreads, activeThreadCount: activeThreads.length, attachmentCount: 0, subDone: 0, subTotal: 0 };
+          }) };
+        },
+        listTaskThreads: () => { calls.threads += 1; return { taskThreads: [] }; },
         listComments: () => {
           calls.listComments += 1;
           return { comments: [] };
@@ -212,4 +228,109 @@ describe("list-row metadata rail", () => {
     );
     expect(slot.queryByText("needs-design")).toBeNull();
   });
+});
+
+
+describe('bounded task pages and summary invalidation', () => {
+  it('loads only visible pages and refreshes one affected summary', async () => {
+    const fixture: ListFixture = { tasks: Array.from({ length: 1000 }, (_, i) => task(i + 1)), pageSize: 100, threadsByTask: {} };
+    const { slot, calls } = renderList(fixture);
+    await slot.findByText('TSK-1');
+    await waitFor(() => expect(calls.summaries).toHaveLength(1));
+    expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(1);
+    expect(calls.listTasks.find(input => 'parentTaskId' in input)).toMatchObject({ limit: 100, parentTaskId: null, sort: 'manual' });
+    expect(calls.summaries[0]).toHaveLength(100);
+    expect(slot.queryByText('TSK-101')).toBeNull();
+    fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+    await slot.findByText('TSK-101');
+    await waitFor(() => expect(calls.summaries).toHaveLength(2));
+    expect(calls.summaries[1]).toHaveLength(100);
+    expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(2);
+    const changed = fixture.tasks[100]!;
+    fixture.threadsByTask![changed.id] = [thread(changed.id, 'working', 'changed')];
+    await slot.emitRealtime('threads:changed', { taskId: changed.id });
+    await slot.findByTitle('Agent working');
+    expect(calls.summaries.at(-1)).toEqual([changed.id]);
+    expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(2);
+    expect(calls.threads).toBe(0);
+    await slot.emitRealtime('threads:changed', { taskId: fixture.tasks[999]!.id });
+    expect(calls.summaries).toHaveLength(3);
+    await slot.emitRealtime('tasks:changed', { taskId: changed.id });
+    await waitFor(() => expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(3));
+  });
+
+  it('retries a failed next page without losing the first page', async () => {
+    const fixture: ListFixture = { tasks: Array.from({ length: 110 }, (_, i) => task(i + 1)), pageSize: 100, failPage: true };
+    const { slot, calls } = renderList(fixture);
+    await slot.findByText('TSK-1');
+    fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+    await waitFor(() => expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(2));
+    await slot.findByRole('alert');
+    expect(slot.getByText('TSK-1')).toBeTruthy();
+    fixture.failPage = false;
+    fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+    await slot.findByText('TSK-110');
+    expect(slot.queryByRole('button', { name: 'Load more tasks' })).toBeNull();
+  });
+
+  it('recovers failed summary batches and handles unscoped invalidation', async () => {
+    const item = task(1);
+    const fixture: ListFixture = { tasks: [item], failSummaries: true, threadsByTask: { [item.id]: [thread(item.id, 'starting', 'retry')] } };
+    const { slot, calls } = renderList(fixture);
+    await slot.findByText('TSK-1');
+    await waitFor(() => expect(calls.summaries).toHaveLength(1));
+    fixture.failSummaries = false;
+    await slot.emitRealtime('threads:changed');
+    await slot.findByTitle('Agent starting');
+    expect(calls.summaries.at(-1)).toEqual([item.id]);
+  });
+});
+
+
+it('keeps board loading bounded and updates its summary without relisting', async () => {
+  const first = task(1);
+  const fixture: ListFixture = { tasks: Array.from({ length: 110 }, (_, i) => task(i + 1)), pageSize: 100, threadsByTask: { [first.id]: [thread(first.id, 'working', 'board')] } };
+  const { slot, calls } = renderList(fixture, 'board');
+  await slot.findByText('Task 1');
+  await slot.findByText('Sonnet · high');
+  expect(calls.summaries).toHaveLength(1);
+  expect(calls.listAttachments).toBe(0);
+  expect(calls.threads).toBe(0);
+  fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+  await slot.findByText('Task 110');
+  await waitFor(() => expect(calls.summaries).toHaveLength(2));
+  fixture.threadsByTask![first.id]!.push(thread(first.id, 'starting', 'board2'));
+  await slot.emitRealtime('threads:changed', { taskId: first.id });
+  await slot.findByText('2 agents');
+  expect(calls.summaries.at(-1)).toEqual([first.id]);
+  expect(calls.listTasks.filter(input => 'parentTaskId' in input)).toHaveLength(2);
+});
+
+
+it('keeps board cards usable when summary loading fails and recovers on invalidation', async () => {
+  const item = task(1);
+  const fixture: ListFixture = { tasks: [item], failSummaries: true, threadsByTask: { [item.id]: [thread(item.id, 'working', 'summary-retry')] } };
+  const { slot, calls } = renderList(fixture, 'board');
+  await slot.findByText('Task 1');
+  await waitFor(() => expect(calls.summaries).toHaveLength(1));
+  expect(slot.queryByText('Sonnet · high')).toBeNull();
+  expect(slot.queryByLabelText(/attachments/)).toBeNull();
+  fixture.failSummaries = false;
+  await slot.emitRealtime('threads:changed', { taskId: item.id });
+  await slot.findByText('Sonnet · high');
+  expect(calls.summaries.at(-1)).toEqual([item.id]);
+});
+
+it('shows a next-page failure on the board and retries without removing its loaded cards', async () => {
+  const fixture: ListFixture = { tasks: Array.from({ length: 110 }, (_, i) => task(i + 1)), pageSize: 100, failPage: true };
+  const { slot } = renderList(fixture, 'board');
+  await slot.findByText('Task 1');
+  fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+  expect((await slot.findByRole('alert')).textContent).toContain('Page temporarily unavailable');
+  expect(slot.getByText('Task 1')).toBeTruthy();
+  expect(slot.queryByText('Task 110')).toBeNull();
+  fixture.failPage = false;
+  fireEvent.click(slot.getByRole('button', { name: 'Load more tasks' }));
+  await slot.findByText('Task 110');
+  expect(slot.queryByRole('alert')).toBeNull();
 });

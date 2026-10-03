@@ -67,7 +67,9 @@ async function packAndInstallLocal(id: string, workingDir: string) {
   }
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, what: string, timeoutMs = 4000) {
+// Native watch delivery + packaging compete with subprocess builds in the full
+// coverage run. Keep the observable reinstall assertion, with a bounded wait.
+async function waitFor(predicate: () => boolean | Promise<boolean>, what: string, timeoutMs = 10000) {
   const start = Date.now();
   for (;;) {
     // A reinstall replaces the install dir atomically (rm old + rename new), so
@@ -161,7 +163,7 @@ describe('local-extension hot-reload (real fs, real fs.watch, dummy extension)',
         watcher.shutdown();
       }
     },
-    15000
+    20000
   );
 
   it(
@@ -211,6 +213,6 @@ describe('local-extension hot-reload (real fs, real fs.watch, dummy extension)',
         watcher.shutdown();
       }
     },
-    15000
+    20000
   );
 });

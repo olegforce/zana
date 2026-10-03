@@ -21,6 +21,9 @@ test('plain planning replies can be reviewed, revised, and implemented in built 
   await expect.poll(async () => (await request(`threads/${id}`)).data.thread.status).toBe('idle');
   const firstPlan = (await request(`threads/${id}/plan`)).data.plan;
   expect(firstPlan?.revision, JSON.stringify((await request(`threads/${id}/events`)).data)).toBe(1);
+  // The plain reply only becomes a document on its successful turn boundary.
+  // Batched host ingestion must reconcile that boundary exactly once.
+  expect((await request(`threads/${id}/events`)).data.events.filter((event: { type: string }) => event.type === 'plan/document/captured')).toHaveLength(1);
   await win.evaluate(id => { history.pushState({}, '', `/threads/${id}`); dispatchEvent(new PopStateEvent('popstate')); }, id);
   const openPanel = win.getByRole('button', { name: 'Show right panel', exact: true });
   await expect(openPanel.or(win.getByTestId('thread-plan-pin')).first()).toBeVisible();
@@ -48,6 +51,7 @@ test('plain planning replies can be reviewed, revised, and implemented in built 
   await win.reload();
   await expect(win.getByTestId('thread-timeline')).toContainText('Implemented reviewed document');
   expect((await request(`threads/${id}/plan`)).data.plan.revision).toBe(2);
+  expect((await request(`threads/${id}/events`)).data.events.filter((event: { type: string }) => event.type === 'plan/document/captured')).toHaveLength(2);
 });
 
 

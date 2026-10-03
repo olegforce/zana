@@ -116,6 +116,7 @@ export async function resolvePluginSessionTools(
     if (configured.selected === 'none') continue;
 
     for (const registration of source.tools) {
+      if (ctx.desktopPresentation === false && registration.desktopOnly === true) continue;
       if (configured.selected !== 'all' && !configured.selected.has(registration.name)) continue;
       if (seen.has(registration.name)) continue;
       seen.add(registration.name);
@@ -158,6 +159,14 @@ export async function invokePluginAgentTool(
           text: `Invalid arguments for tool "${name}": ${parsed.error}`
         }]
       };
+    }
+    // Check the effective action after schema defaults/transforms, using only
+    // host-stamped context. Tool arguments cannot grant presentation access.
+    const action = parsed.value && typeof parsed.value === 'object' ? (parsed.value as { action?: unknown }).action : undefined;
+    if (ctx.desktopPresentation === false && (registration.desktopOnly === true
+      || (Array.isArray(registration.desktopOnly) && registration.desktopOnly.includes(action)))) {
+      return pluginToolResultToResponse(name, { ok: false, code: 'presentation_unavailable',
+        error: 'Desktop UI is unavailable to the user controlling this remote conversation. Return data or a supported remote preview instead.' });
     }
     try {
       const value = await registration.execute(parsed.value, ctx);

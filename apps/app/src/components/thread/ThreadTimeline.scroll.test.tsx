@@ -57,6 +57,34 @@ it('keeps the newest message visible when keyboard/options resize the timeline',
   expect(observer.disconnect).toHaveBeenCalled();
 });
 
+it('keeps following when keyboard layout delivers a shifted scroll before its resize notification', () => {
+  const { pane, size, observers } = fixture();
+  const observer = observers.at(-1)!;
+  size.height = 300;
+  pane.scrollTop = 1150; // WebKit focus pan before ResizeObserver delivery.
+  fireEvent.scroll(pane);
+  expect(pane.scrollTop).toBe(1500);
+  expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).toBeNull();
+  expect(observer.disconnect).not.toHaveBeenCalled();
+  act(() => observer.resize());
+  expect(pane.scrollTop).toBe(1500);
+  size.height = 900;
+  pane.scrollTop = 850;
+  fireEvent.scroll(pane);
+  expect(pane.scrollTop).toBe(900);
+  expect(observer.disconnect).not.toHaveBeenCalled();
+});
+
+it('preserves intentional scrollback when a keyboard resize also emits a scroll event', () => {
+  const { pane, size } = fixture();
+  pane.scrollTop = 100;
+  fireEvent.scroll(pane);
+  size.height = 300;
+  fireEvent.scroll(pane);
+  expect(pane.scrollTop).toBe(100);
+  expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+});
+
 it('releases automatic following while the user reads an expanded prompt', () => {
   const { pane, observers, rerender } = fixture();
   // Give the timeline a row so it renders its conversation instead of the empty state.

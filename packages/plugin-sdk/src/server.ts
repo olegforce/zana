@@ -473,6 +473,8 @@ export interface PluginSdkInbox {
 
 export interface PluginSdkProject {
   icon?: ProjectIcon;
+  /** Host-owned marker for the built-in Default Project; independent of its name. */
+  quickAgent?: boolean;
   id: string;
   name: string;
   path?: string;
@@ -587,12 +589,16 @@ export interface PluginHostApi {
 }
 
 export interface PluginAgentToolContext {
+  /** Host-resolved; false when the controlling user cannot see desktop UI. */
+  desktopPresentation?: boolean;
   threadId: string;
   projectId: string;
   signal: AbortSignal;
 }
 
 export interface PluginAgentToolRegistration {
+  /** Hide/gate desktop-only tools, or gate the listed top-level action values. */
+  desktopOnly?: boolean | readonly string[];
   name: string;
   description: string;
   /**
@@ -610,6 +616,8 @@ export interface PluginAgentToolRegistration {
 
 /** Stored record after `registerTool` — JSON schema plus parse/execute. */
 export interface PluginAgentToolRecord {
+  /** Hide/gate desktop-only tools, or gate the listed top-level action values. */
+  desktopOnly?: boolean | readonly string[];
   name: string;
   description: string;
   presentation: PluginAgentToolPresentation | null;
@@ -738,6 +746,7 @@ export interface PluginPtyHarnessDeclaration {
 }
 
 export interface PluginAgentConfigureContext {
+  desktopPresentation?: boolean;
   threadId?: string;
   projectId?: string;
   origin?: { kind?: 'fork' | null; pluginId?: string | null };

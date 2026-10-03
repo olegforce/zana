@@ -15,6 +15,7 @@ import type {
   PluginAgentCardActionRegistration,
   PluginThreadCardActionRegistration,
   PluginAgentsBoardActionRegistration,
+  PluginAgentsViewRegistration,
   PluginCommandPaletteActionRegistration,
   PluginMessageDirectiveRegistration,
   PluginNavPanelRegistration,
@@ -72,6 +73,7 @@ function emptySnapshot() {
     agentCardActions: [] as PluginAgentCardActionRegistration[],
     threadCardActions: [] as PluginThreadCardActionRegistration[],
     agentsBoardActions: [] as PluginAgentsBoardActionRegistration[],
+    agentsViews: [] as PluginAgentsViewRegistration[],
     timelineRenderers: [] as PluginTimelineRendererRegistration[],
     commandPaletteActions: [] as PluginCommandPaletteActionRegistration[],
     providerIcons: [] as PluginProviderIconRegistration[],
@@ -106,6 +108,7 @@ function rebuildSnapshot(): void {
     agentCardActions: orderedSets.flatMap((set) => set.agentCardActions),
     threadCardActions: orderedSets.flatMap((set) => set.threadCardActions),
     agentsBoardActions: orderedSets.flatMap((set) => set.agentsBoardActions),
+    agentsViews: orderedSets.flatMap((set) => set.agentsViews),
     timelineRenderers: orderedSets.flatMap((set) => set.timelineRenderers),
     commandPaletteActions: orderedSets.flatMap((set) => set.commandPaletteActions),
     providerIcons: orderedSets.flatMap((set) => set.providerIcons),
@@ -300,4 +303,8 @@ export function arrangePluginNavPanels(
     else visible.push(panel);
   }
   return { visible, hidden, normalizedOrder };
+}
+
+export function listAgentsViews(): PluginAgentsViewRegistration[] {
+  return snapshot.agentsViews;
 }

@@ -208,6 +208,9 @@
 :where(.bb-tasks, [data-bb-plugin="tasks"], .bb-tasks *, [data-bb-plugin="tasks"] *).m-0 {
   margin: 0px;
 }
+:where(.bb-tasks, [data-bb-plugin="tasks"], .bb-tasks *, [data-bb-plugin="tasks"] *).m-3 {
+  margin: calc(var(--spacing) * 3);
+}
 :where(.bb-tasks, [data-bb-plugin="tasks"], .bb-tasks *, [data-bb-plugin="tasks"] *).-mx-1 {
   margin-inline: calc(var(--spacing) * -1);
 }

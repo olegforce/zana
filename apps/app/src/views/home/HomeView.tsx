@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { AuroraGrid } from '@/components/AuroraGrid';
 import { HomeAgentComposer } from '@/components/HomeAgentComposer';
+import { HomeLauncherTips } from '@/components/HomeLauncherTips';
 import { PluginNewThreadActions } from '@/plugins/PluginNewThreadActions';
 import { listHomepageSections, subscribePluginSlots } from '@/plugins/plugin-slots';
 import { PluginSlotBoundary } from '@/plugins/PluginSlotBoundary';
@@ -27,12 +28,14 @@ export function HomeView() {
     <div className="settings-panel home-panel aurora-host">
       <AuroraGrid />
       <div className="settings-inner">
-        <HomeAgentComposer
-          allowLegacyAgent
-          initialText={seed.initialText}
-          autoFocus={seed.focusPrompt}
-        />
-        <PluginNewThreadActions projectId={null} />
+        <HomeLauncherTips>
+          <HomeAgentComposer
+            allowLegacyAgent
+            initialText={seed.initialText}
+            autoFocus={seed.focusPrompt}
+          />
+          <PluginNewThreadActions projectId={null} />
+        </HomeLauncherTips>
         {pluginHomepage.length > 0 && (
           <div className="home-plugin-sections">
             {pluginHomepage.map((section) => {

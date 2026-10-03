@@ -94,6 +94,17 @@ describe('server runtime contract', () => {
     expect(ServerRuntimeInboundSchema.safeParse({ ...request, protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION + 1, operation: 'projects-list' }).success).toBe(false);
     expect(RuntimeOutboundSchema.safeParse({ type: 'stopped', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION + 1 }).success).toBe(false);
   });
+  it('accepts local plugin classification without allowing installation paths across IPC', () => {
+    const snapshot = { id: 'local-panel', name: 'Local panel', description: '', icon: 'Cloud', enabled: true, provenance: 'direct', sourceKind: 'path', status: 'running', appUrl: '/plugins/local-panel/assets/app.js' };
+    const message = { type: 'plugin-apps-changed', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, apps: [snapshot] };
+    expect(RuntimeOutboundSchema.safeParse(message).success).toBe(true);
+    for (const sourceKind of ['git', 'npm', 'builtin']) {
+      expect(RuntimeOutboundSchema.safeParse({ ...message, apps: [{ ...snapshot, sourceKind }] }).success).toBe(true);
+    }
+    for (const extra of [{ sourceKind: 'unknown' }, { source: 'path:/private/plugin' }, { rootDir: '/private/plugin' }]) {
+      expect(RuntimeOutboundSchema.safeParse({ ...message, apps: [{ ...snapshot, ...extra }] }).success).toBe(false);
+    }
+  });
   it('accepts bounded server-owned terminal replay requests', () => {
     expect(ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'terminal-events-since', sessionId: '00000000-0000-4000-8000-000000000002', afterSequence: -1 }).success).toBe(true);
     expect(ServerRuntimeInboundSchema.safeParse({ ...request, operation: 'terminal-events-since', sessionId: '00000000-0000-4000-8000-000000000002', afterSequence: -2 }).success).toBe(false);

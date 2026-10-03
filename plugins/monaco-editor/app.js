@@ -85,7 +85,8 @@ function MonacoFileOpener(props) {
           });
           return;
         }
-        const monaco = hostMonaco();
+        const monaco = hostMonaco() ?? await globalThis.__ZCC_LOAD_MONACO__?.();
+        if (disposed) return;
         const container = containerRef.current;
         if (!monaco || !container) {
           setStatus({ kind: 'delegate', reason: 'Monaco is not loaded in this window' });

@@ -1,8 +1,8 @@
 # Using Zana in Slack
 
-Practical guide · Zana for Slack 0.14.2 · Updated 1 October 2026
+Practical guide · Zana for Slack 0.14.2 · Updated 2 October 2026
 
-Zana lets you start work on your connected computer from Slack, follow its progress, and continue the conversation where the task began. Use **Slackbot** for natural-language requests, **@Zana** inside a Project channel, **/zana** for shortcuts, or **Zana Home** for buttons and a dashboard.
+Zana lets you start work on your connected computer from Slack, follow its progress, and continue the conversation where the task began. Use **Slackbot** for natural-language requests, **@Zana** in an internal channel where the app is invited, **/zana** for shortcuts, or **Zana Home** for buttons and a dashboard.
 
 The Slack app is called **Zana**. Its settings in the Zana desktop app are under **Plugins → Zana for Slack → Configuration**.
 
@@ -18,7 +18,7 @@ For the shared Zana app, you do **not** enter a Zana API token, Slack app ID, ap
 | You want an overview of your tasks | Open Zana → Home | Choose **New agent** or **Open conversation**. |
 | Continuing existing work | Reply in its Slack thread | `@Zana Now add a test for the edge case.` |
 
-**A new task creates a Zana agent conversation. A follow-up in its Slack thread continues that same conversation.** The Project/channel connection determines the execution machine, agent provider, and model.
+**A new task creates a Zana agent conversation. A follow-up in its Slack thread continues that same conversation.** The Project connection determines the execution machine and sharing policy. The launch form prefills its harness and model, and lets you choose another available harness/model for that task. Follow-ups keep the same Project, machine, harness, model, and Slack thread.
 
 ## Use Zana without opening a Project channel
 
@@ -27,12 +27,15 @@ You can start from another place in Slack today:
 | Starting point | What to do | Where the job conversation goes |
 | --- | --- | --- |
 | **Slackbot** | Ask “Use Zana to review the tests in My Website.” Ask Slackbot for the job's status afterward. | The Project's selected connected channel; Slackbot can retrieve progress and the confirmed shared answer. |
-| **Another channel's main composer** | Use `/zana` and select a Project, or `/zana run "My Website" Review the tests`. Confirm the destination in the form. | The connected channel selected in the form, even if you invoked the command elsewhere. |
-| **Zana → Home** | Choose **New agent**, then a Project and channel. | The selected connected channel. |
+| **Another internal channel** | Invite Zana, then use `/zana` or mention `@Zana <task>`. A task mention starts immediately using your mention default, including inside an ordinary existing Slack thread. Use `/zana` to select another Project, harness or model. | **Here — the conversation you called Zana from** is selected by default; you can choose a connected Project channel instead. |
+| **Zana → Home** | Choose **New agent**, then a Project, destination, harness and model. | The selected connected channel. |
+| **A DM with the Zana app** | After the app has DM permissions, use `/zana` or send a task and choose **Start with Zana**. | The owner’s verified DM; follow-ups can be plain replies in its task thread. |
 
-The Project selects the code/context Zana works with. The Slack channel selects where the task and updates are shared. Currently the bridge requires an approved Project/channel connection even when you start elsewhere.
+The Project selects the code/context and execution machine. The destination selects where the task and enabled answers are shared. A connected Project still supplies authority and sharing consent; the caller channel itself does not need a saved Project mapping. You and Zana must both be members of an internal destination channel. If Zana is absent, accept Slack’s invitation prompt when mentioning it; Slack does not deliver the mention until the app is invited. Shared/external channels and group DMs are excluded.
 
-Direct messages to the Zana app and ordinary `@Zana` task mentions in unconnected channels are **not supported**. To continue an existing job, use `@Zana` in its linked Slack thread. Starting another job from Slackbot or `/zana` creates a separate conversation.
+In a connected channel, a direct mention uses its saved defaults immediately. Use `/zana` when you want to choose the harness or model. In an unconnected channel, a task uses **Default Project for mentions** from the plugin settings, or the connected built-in Default Project. If no default is connected, it offers the Project/profile picker. A bare `@Zana` offers the task form; a bare mention in an existing Zana task shows status. Status messages are plain text; Stop, Mute and Open in Zana controls stay in Home. Starting another job creates a separate conversation. Slackbot can also honor a requested harness/model: it discovers available IDs with `zana_launch_options`, then includes them in `zana_launch_job`. Its destination remains an approved Project channel.
+
+**DM activation:** the implementation and gateway are ready; the live Slack app still needs the minimal DM manifest and a reinstall granting `im:read` and `im:history`. These permissions allow messages to the bot; they do not enable the separate native agent view or Canvas feature. See [the configuration guide](slack-configuration/README.md).
 
 ### Use @Zana in an existing channel with Default Project
 
@@ -43,11 +46,11 @@ An existing internal channel can keep its normal name and purpose and use **Defa
 3. Choose that Slack channel and **Default Project**, then select the execution machine, provider, and model. Enable agent answers if you want replies shared in Slack, and save the connection.
 4. In the channel, send `@Zana <your task>`. Zana uses Default Project and replies in the same Slack thread. Mention it in that thread for follow-ups.
 
-This does not create or rename a channel. You can connect more than one existing channel to Default Project. Channel members can see its posted answers, while only your linked identity controls your jobs. Shared/external channels and DMs remain unsupported. An automatic Default Project fallback for channels you have never connected is not implemented yet.
+This does not create or rename a channel. You can connect more than one existing channel to Default Project. Channel members can see its posted answers, while only your linked identity controls your jobs. Shared/external channels remain excluded. Unconnected internal channels offer a Project picker instead of silently selecting Default Project.
 
 **Live verified on 30 September 2026:** [#test-channel-by-gui](https://internal-sbx.slack.com/archives/C0C6M1UARDW/p1790800521518869?thread_ts=1790800521.518869&cid=C0C6M1UARDW) was connected to Default Project through this settings form. A mention returned `DEFAULT-PROJECT-OK-27`; a follow-up asking to add 15 to the remembered number returned `42`. Both used the same Zana session and replied in the original channel thread. The mapping remains configured for the linked owner.
 
-A proposed next experience is **private chat with Zana**: choose the Project for each new task, receive replies in the same DM thread, and optionally share the task in a Project channel. This is a product direction, not an available feature yet.
+**Harness/model choices were live-verified on 2 October 2026:** a task selected Cursor → grok-4.6 and returned “Harness selection works” in Slack, while the Project default remained Codex → gpt-6-astra.
 
 ## 1. Connect your own Zana account and computer
 
@@ -132,20 +135,22 @@ Open a connected channel, type `@Zana`, and select the actual app from Slack's m
 Zana creates a session and replies in a Slack thread. Continue inside that thread:
 
 ```text
-@Zana Focus on expired sessions and suggest two test cases.
+Focus on expired sessions and suggest two test cases.
 ```
 
 Use these controls in the same thread:
 
 | Message | What happens |
 | --- | --- |
-| `@Zana status` | Show the conversation's current status. |
-| `@Zana stop` | Stop the agent and cancel queued follow-ups for that conversation. |
-| `@Zana mute` | Silence updates while the agent continues working. |
-| `@Zana unmute` | Restore new updates. |
-| `@Zana help` | Show usage guidance. |
+| `status` | Show the conversation's current status. |
+| `stop` | Stop the agent and cancel queued follow-ups for that conversation. |
+| `mute` | Silence updates while the agent continues working. |
+| `unmute` | Restore new updates. |
+| `help` | Show usage guidance. |
 
-A new top-level task starts a separate conversation. Plain replies without a Zana mention do not instruct the agent. If a turn is still running, a follow-up waits for it to finish.
+A new top-level task with `@Zana` starts a separate conversation. Once the agent is linked, its original launcher can reply in that Slack thread without another mention; other people's messages are ignored. If a turn is still running, a follow-up waits for it to finish. `@Zana` also works for follow-ups and controls.
+
+Plain replies require Slack's `message.channels` / `message.groups` events and `channels:history` / `groups:history` scopes. These were activated and verified in Internal-Sandbox on 3 October 2026. Other installations must activate them and reinstall the app. A deleted or archived agent cannot continue through a plain reply: launch again with `@Zana`. Replies missed before activation must be sent again.
 
 ## 5. Use /zana shortcuts
 
@@ -153,7 +158,7 @@ Type slash commands in the channel's **main message composer**, not inside a Sla
 
 | Command | What it does |
 | --- | --- |
-| `/zana` | Open the Project/channel/task form. |
+| `/zana` | Open the Project/destination/harness/model/task form. |
 | `/zana run . Review the tests` | Prefill a task for the current channel's Project. |
 | `/zana run "My Website" Review the tests` | Prefill a task for a named connected Project. |
 | `/zana projects` | List imported/connected Projects and their channels. |
@@ -173,7 +178,7 @@ Command replies are visible only to you. Once you submit a task, its prompt and 
 
 In Slack, open the **Zana** app and select **Home**.
 
-- Choose **New agent**, select a connected Project and channel, enter the task, and choose **Start agent**.
+- Choose **New agent**, select a connected Project, destination, harness and model, enter the task, and choose **Start agent**.
 - Review running tasks, tasks needing attention, and recent conversations.
 - Choose **Open conversation** to return to a task's Slack thread.
 - Use **Stop**, **Mute updates**, or **Unmute** for a particular task.
@@ -220,6 +225,8 @@ For app maintainers: enable Work Object Previews with the `slack#/entities/file`
 
 **Answers:** Slack receives a status card and, when enabled and supplied by the agent, a concise answer. It is not a live copy of the entire terminal or conversation transcript. Published agent answers currently have a 2,000-character limit. Ask for a short summary and open Zana for longer results or files.
 
+**Desktop panels:** Slack-controlled agents are told that you cannot see Zana's side panels. Builds with [remote presentation support](remote-conversation-presentation.md) also block agent calls that open file previews, presentation terminals or browser panels. Background browsing and execution remain available. The current Slack task panel shows shared answers; it does not display arbitrary project files. Requested web previews may use an authenticated, reachable preview link. Simply viewing the conversation in Zana does not transfer control away from Slack.
+
 **Code:** You can ask for a short code example and have it shared in the thread:
 
 ```text
@@ -236,7 +243,8 @@ A live test in BT Internal Sandbox confirmed a code block with a Copy button, pr
 
 | Symptom | What to check |
 | --- | --- |
-| No response to a mention | Select the actual Zana app mention; use a connected channel; confirm you are the linked owner and the computer is awake. |
+| No response to a mention | Select the actual Zana app mention; invite it to the internal channel; confirm you are the linked owner and the computer is awake. |
+| The model picker is empty | Wait for the selected harness’s model list to load and search again. Maintainers must configure Options Load URL to the same Slack events endpoint. |
 | A Project is missing from the launch picker | Import/connect it first and check **Browse Projects** and **Start new jobs**. |
 | Import is disabled | Save import defaults, enable **Browse Projects**, and enable **Allow imports from Slack** / **Import Projects**. |
 | A functionality is disabled | Check its switch under **What Slack can do**. |

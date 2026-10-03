@@ -1,3 +1,4 @@
+import { remoteInteractionSurface } from './interaction-surface.js';
 import { safePackPluginSession } from '../../plugins/plugin-agent-tools.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { mergeHostSessionTooling, type PackedSessionTooling } from './host-session-tools.js';
@@ -21,6 +22,7 @@ export async function packConversationSessionTooling(
       : undefined
   );
   return mergeHostSessionTooling(packed, {
+    remoteSurface: ctx.db ? remoteInteractionSurface(ctx.db, args.threadId) : null,
     inAppAgentTerminalsEnabled: ctx.config?.getConfig?.().inAppAgentTerminalsEnabled === true
   });
 }
@@ -41,6 +43,7 @@ export function conversationConfigureContext(
   return {
     threadId: args.threadId,
     projectId: args.projectId,
+    ...(thread && remoteInteractionSurface(ctx.db, args.threadId) ? { desktopPresentation: false } : {}),
     origin: {
       kind: thread?.originKind ?? null,
       pluginId: thread?.originPluginId ?? null

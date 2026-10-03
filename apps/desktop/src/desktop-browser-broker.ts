@@ -41,6 +41,7 @@ interface InstanceEntry {
 }
 
 interface ControlLease {
+  allowPresentation: boolean;
   instance: InstanceEntry;
   threadId: string;
   metadata: DesktopBrowserLease;
@@ -251,11 +252,9 @@ export function createDesktopBrowserBroker(args: {
         const firstId = lease.tabs.keys().next().value;
         if (firstId === undefined)
           throw new Error("Browser lease has no pages");
-        const profile = requireTab(
-          lease.instance,
-          lease.threadId,
-          firstId,
-        ).profile;
+        const sourceTab = requireTab(lease.instance, lease.threadId, firstId);
+        const profile = sourceTab.profile;
+        const shouldReveal = lease.allowPresentation && sourceTab.presentation === "reveal";
         if (profile.kind !== "automation")
           throw new Error("Create automation pages in a dedicated profile");
         if (lease.tabs.size >= 100)
@@ -264,7 +263,7 @@ export function createDesktopBrowserBroker(args: {
         if (open) {
           lease.tabs.set(open.tabId, open.generation);
           publish(lease.instance, lease.threadId);
-          reveal(lease.instance, lease.threadId, open.tabId);
+          if (shouldReveal) reveal(lease.instance, lease.threadId, open.tabId);
           return open.tabId;
         }
         const tab = args.manager.createTab({
@@ -277,7 +276,7 @@ export function createDesktopBrowserBroker(args: {
         });
         lease.tabs.set(tab.tabId, tab.generation);
         publish(lease.instance, lease.threadId);
-        reveal(lease.instance, lease.threadId, tab.tabId);
+        if (shouldReveal) reveal(lease.instance, lease.threadId, tab.tabId);
         return tab.tabId;
       },
       async activateTab(_scope, tabId, signal) {
@@ -285,7 +284,11 @@ export function createDesktopBrowserBroker(args: {
         ensureLease();
         if (!lease.tabs.has(tabId))
           throw new Error("Tab is outside this lease");
-        reveal(lease.instance, lease.threadId, tabId);
+        // CDP activation is an automation operation, not permission to expose
+        // a background conversation's UI. Explicit broker reveal remains separate.
+        if (lease.allowPresentation && tabsFor(lease.instance, lease.threadId).some(tab => lease.tabs.has(tab.tabId) && tab.presentation === "reveal")) {
+          reveal(lease.instance, lease.threadId, tabId);
+        }
       },
       async closeTab(_scope, tabId, signal) {
         signal.throwIfAborted();
@@ -524,6 +527,7 @@ export function createDesktopBrowserBroker(args: {
           }, command.expiresAt - Date.now());
           timer.unref();
           leases.set(command.leaseId, {
+            allowPresentation: command.allowPresentation !== false,
             instance,
             threadId: command.threadId,
             metadata,

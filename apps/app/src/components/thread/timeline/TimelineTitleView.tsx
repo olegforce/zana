@@ -1,6 +1,6 @@
-import { Fragment } from 'react';
-import type { TimelineTitle, TimelineTitleAction, TimelineTitleLink } from '@zana-ai/zcc-thread-view';
+import type { TimelineTitle, TimelineTitleAction, TimelineTitleDecoration, TimelineTitleLink } from '@zana-ai/zcc-thread-view';
 import { decorationClass, decorationText, titleSegmentClass } from './timeline-title.js';
+import { useTimelineClock } from './timeline-clock.js';
 
 export type TimelineTitleActionHandler = (action: TimelineTitleAction) => void;
 export type TimelineTitleLinkHandler = (link: TimelineTitleLink) => void;
@@ -33,11 +33,13 @@ export function ThreadOpenFilePreviewButton({
 export function TimelineTitleView({
   title,
   now,
+  live = true,
   onAction,
   onLink
 }: {
   title: TimelineTitle;
-  now: number;
+  now?: number;
+  live?: boolean;
   onAction?: TimelineTitleActionHandler;
   onLink?: TimelineTitleLinkHandler;
 }) {
@@ -84,15 +86,15 @@ export function TimelineTitleView({
       {title.action?.kind === 'open-file-preview' && onAction ? (
         <ThreadOpenFilePreviewButton onClick={() => onAction(title.action!)} />
       ) : null}
-      {title.decorations.map((decoration, index) => {
-        const text = decorationText(decoration, now);
-        if (!text) return <Fragment key={`${decoration.kind}-${index}`} />;
-        return (
-          <span key={`${decoration.kind}-${index}`} className={decorationClass(decoration)}>
-            {text}
-          </span>
-        );
-      })}
+      {title.decorations.map((decoration, index) => (
+        <TitleDecoration key={`${decoration.kind}-${index}`} decoration={decoration} now={now} live={live} />
+      ))}
     </span>
   );
+}
+
+function TitleDecoration({ decoration, now, live }: { decoration: TimelineTitleDecoration; now?: number; live: boolean }) {
+  const current = useTimelineClock(live && now === undefined && decoration.kind === 'duration' && decoration.completedAt === null);
+  const text = decorationText(decoration, now ?? current);
+  return text ? <span className={decorationClass(decoration)}>{text}</span> : null;
 }

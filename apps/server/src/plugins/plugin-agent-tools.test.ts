@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { jsonSchemaAgentToolRecord, normalizeRegisteredAgentTool } from '@zana-ai/zcc-plugin-sdk/internal/host-policy';
 import {
@@ -429,4 +429,27 @@ describe('safePackPluginSession', () => {
       instructions: 'Use sf_soql.'
     });
   });
+});
+
+
+it('hides desktop-only tools and rejects stale calls while retaining non-UI actions', async () => {
+  const execute = vi.fn(async () => ({ ok: true }));
+  const desktop = normalizeRegisteredAgentTool({ pluginId: 'fixture', tool: { name: 'show_panel', description: 'Panel', parameters: {}, desktopOnly: true, execute } });
+  const mixed = normalizeRegisteredAgentTool({ pluginId: 'fixture', tool: { name: 'workbench', description: 'Workbench', parameters: {}, desktopOnly: ['ui.command'], execute } });
+  const sources = [{ pluginId: 'fixture', tools: [desktop, mixed] }];
+  const ctx = { threadId: 't1', projectId: 'p1', desktopPresentation: false, signal: new AbortController().signal };
+  const packed = await resolvePluginSessionTools(sources, ctx);
+  expect(packed.tools.map(t => t.name)).toEqual(['workbench']);
+  for (const [name, input] of [['show_panel', {}], ['workbench', { action: 'ui.command' }]] as const) {
+    expect(await invokePluginAgentTool(sources, name, input, ctx)).toMatchObject({ success: false });
+  }
+  expect(execute).not.toHaveBeenCalled();
+  const defaultAction = { ...mixed, parse: () => ({ ok: true as const, value: { action: 'ui.command' } }) };
+  expect(await invokePluginAgentTool([{ pluginId: 'fixture', tools: [defaultAction] }], 'workbench', {}, ctx)).toMatchObject({ success: false });
+  expect(execute).not.toHaveBeenCalled();
+  expect(await invokePluginAgentTool(sources, 'workbench', { action: 'query' }, ctx)).toMatchObject({ success: true });
+  expect(await invokePluginAgentTool(sources, 'show_panel', {}, { ...ctx, desktopPresentation: true })).toMatchObject({ success: true });
+  for (const desktopOnly of [42, {}, [''], Array(65).fill('action')]) {
+    expect(() => normalizeRegisteredAgentTool({ pluginId: 'fixture', tool: { name: 'invalid', description: 'test', desktopOnly, execute } })).toThrow('desktopOnly');
+  }
 });

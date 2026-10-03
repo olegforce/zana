@@ -72,10 +72,19 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
   async function ingest(payload, id) {
     const event = payload.type === 'event_callback';
     const team = event ? payload.team_id : payload.team?.id ?? payload.team_id;
-    const user = event ? payload.event?.user : payload.user?.id ?? payload.user_id;
+    const user = event ? payload.event?.user ?? payload.event?.assistant_thread?.user_id : payload.user?.id ?? payload.user_id;
     if (team !== identity.team || payload.api_app_id !== identity.app || !/^[UW][A-Z0-9]{5,30}$/.test(user ?? '')) throw new SlackError('wrong_identity', 403);
-    if (event && !['app_mention', 'app_home_opened', 'entity_details_requested'].includes(payload.event?.type)) return {};
+    if (event && !['app_mention', 'app_home_opened', 'entity_details_requested', 'message', 'assistant_thread_started', 'assistant_thread_context_changed', 'app_context_changed', 'agent_session_stopped', 'agent_session_title_changed'].includes(payload.event?.type)) return {};
     if (payload.event?.bot_id || payload.event?.subtype) return {};
+    const channelReply = event && payload.event.type === 'message' && /^[CG][A-Z0-9]{5,30}$/.test(payload.event.channel ?? '');
+    let conversation;
+    if (channelReply) {
+      const e = payload.event;
+      if (e.hidden || !/^\d{10,16}\.\d{6}$/.test(e.ts ?? '') || !/^\d{10,16}\.\d{6}$/.test(e.thread_ts ?? '') || e.ts === e.thread_ts || Math.abs(now() / 1000 - Number(e.ts)) > 300 || typeof e.text !== 'string' || !e.text.trim() || e.text.length > 12000 || e.text.includes(`<@${identity.bot}>`)) return {};
+      // Receiving channel messages must not create conversations or capture ambient chat.
+      conversation = (await db.query('SELECT link_id FROM slack_conversations WHERE team_id=$1 AND channel=$2 AND root=$3', [identity.team, e.channel, e.thread_ts]))[0];
+      if (!conversation) return {};
+    }
     rate(`actor:${user}`, 90);
     if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'connect_account') return {};
     // Account setup is handled by the gateway even before a local link exists.
@@ -94,10 +103,19 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     }
     const link = await registry.owner(user);
     if (!link) {
+      if (channelReply) return {};
       if (jobs.size >= 20) throw new SlackError('busy', 503);
       run(publishHome(user, `Link your Slack identity to your Zana account, choose your domain or computer, then approve access in its Zana for Slack plugin. You can also use /zana connect my-domain.${connect.browserDomain}.`, true));
       if (event && payload.event.type !== 'app_home_opened') run(explain(payload, user, 'Open Zana → Home in Slack and choose Connect my computer.'));
       return notice('Open Zana → Home in Slack and choose Connect my computer.');
+    }
+    // Slash commands can start in the owner's Zana DM before a message event
+    // registered it. Other users' DMs and group DMs are never destinations.
+    if (payload.command === '/zana' && /^D[A-Z0-9]{5,30}$/.test(payload.channel_id ?? '')) {
+      const info = await call('conversations.info', { channel: payload.channel_id });
+      const dm = info.channel;
+      if (!info.ok || dm?.id !== payload.channel_id || dm.user !== user || dm.is_im !== true || dm.is_mpim || dm.is_archived) throw new SlackError('channel_not_owned', 403);
+      await registry.remember(link, `${link.id}:${payload.channel_id}`, 'agent-dm', 90 * 86400_000);
     }
     if (event && payload.event.type === 'entity_details_requested') {
       const e = payload.event;
@@ -109,8 +127,29 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     if (event && payload.event.type === 'app_mention') {
       const e = payload.event;
       if (!/^[CG][A-Z0-9]{5,30}$/.test(e.channel ?? '') || !/^\d{10,16}\.\d{6}$/.test(e.ts ?? '') || typeof e.text !== 'string' || !e.text.includes(`<@${identity.bot}>`) || Math.abs(now() / 1000 - Number(e.ts)) > 300) return {};
-      if (e.thread_ts) await registry.conversation(link, e.channel, e.thread_ts);
-      else await registry.bind(link, e.channel, e.ts);
+      if (e.thread_ts !== undefined && !/^\d{10,16}\.\d{6}$/.test(e.thread_ts)) return {};
+      // A fresh mention can start in an ordinary existing thread. bind preserves
+      // an existing owner's claim and rejects attempts to take over their job.
+      await registry.bind(link, e.channel, e.thread_ts || e.ts);
+    }
+    if (channelReply) {
+      if (conversation.link_id !== link.id) return {};
+      const info = await call('conversations.info', { channel: payload.event.channel });
+      const c = info.channel;
+      if (!info.ok || c?.id !== payload.event.channel || c.is_member !== true || c.is_archived !== false || c.is_shared !== false || c.is_ext_shared !== false || c.is_org_shared !== false || c.is_im || c.is_mpim) return {};
+      await registry.conversation(link, payload.event.channel, payload.event.thread_ts);
+    }
+    if (!channelReply && event && ['message', 'assistant_thread_started', 'assistant_thread_context_changed', 'agent_session_stopped', 'agent_session_title_changed'].includes(payload.event.type)) {
+      const e = payload.event, thread = e.assistant_thread;
+      const channel = e.channel ?? thread?.channel_id, root = e.thread_ts ?? thread?.thread_ts ?? e.ts;
+      const ts = e.ts ?? e.event_ts ?? root;
+      if (!/^D[A-Z0-9]{5,30}$/.test(channel ?? '') || !/^\d{10,16}\.\d{6}$/.test(root ?? '') || !/^\d{10,16}\.\d{6}$/.test(ts ?? '') || Math.abs(now() / 1000 - Number(ts)) > 300 || (e.type === 'message' && (typeof e.text !== 'string' || !e.text.trim() || e.text.length > 12000))) return {};
+      const info = await call('conversations.info', { channel });
+      const dm = info.channel;
+      if (!info.ok || dm?.id !== channel || dm.user !== user || dm.is_im !== true || dm.is_mpim || dm.is_archived) throw new SlackError('channel_not_owned', 403);
+      if (['agent_session_stopped', 'agent_session_title_changed', 'assistant_thread_context_changed'].includes(e.type)) await registry.conversation(link, channel, root);
+      else await registry.bind(link, channel, root);
+      await registry.remember(link, `${link.id}:${channel}`, 'agent-dm', 90 * 86400_000);
     }
     if (payload.view?.id) await registry.object(link, payload.view.id, 'view');
     if (payload.container?.message_ts) {

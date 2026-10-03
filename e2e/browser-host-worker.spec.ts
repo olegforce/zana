@@ -22,7 +22,11 @@ test('packaged Browser Automation controls headless and desktop browsers through
     return { threadId: (thread.thread ?? thread.value).id as string, hostId: hosts.find((h: any) => h.isPrimary).id as string };
   }, root);
   expect(await window.evaluate(() => window.cc.extensions.install({ kind: 'bundled', id: 'browser-automation' }))).toMatchObject({ ok: true });
-  await expect.poll(() => window.evaluate(async () => (await window.cc.pluginApps.list()).find(p => p.id === 'browser-automation')?.status)).toBe('running');
+  const installed = await window.evaluate(async () => {
+    const snapshot = await fetch('/api/v1/plugin-apps').then((response) => response.json());
+    return snapshot.apps.find((plugin: { id: string }) => plugin.id === 'browser-automation');
+  });
+  expect(installed?.status, JSON.stringify(installed)).toBe('running');
   const call = async (method: string, args: Record<string, unknown>) => {
     const result = await window.evaluate(async ({ method, args }) => {
       const response = await fetch('/api/v1/plugin-apps/browser-automation/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method, args }) });

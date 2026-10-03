@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRealtime, useRpc } from "../compat/app";
 import type { z } from "zod";
 import { tasksRpcContract, type TasksRpcContract } from "../shared/contract.js";
 import type { Task, TaskPriority, TaskStatus } from "../shared/contract.js";
 import { errorMessage } from "../shared/errors.js";
-import { TASKS_PAGE_MAX_LIMIT, type TaskSort } from "../shared/pagination.js";
+import { TASKS_PAGE_DEFAULT_LIMIT, TASKS_PAGE_MAX_LIMIT, type TaskSort } from "../shared/pagination.js";
 import type { MentionItem } from "../editor/extensions.js";
 import {
   claimQuerySnapshotRevision,
@@ -60,16 +60,17 @@ type InvalidationChannel = (typeof INVALIDATION_CHANNELS)[number];
 function useInvalidation(
   channels: readonly InvalidationChannel[],
   onInvalidate: () => void,
+  filter?: (channel: InvalidationChannel, payload: unknown) => boolean,
 ): void {
-  const ref = useRef({ channels, onInvalidate });
-  ref.current = { channels, onInvalidate };
-  const fire = useCallback((channel: InvalidationChannel) => {
-    if (ref.current.channels.includes(channel)) ref.current.onInvalidate();
+  const ref = useRef({ channels, onInvalidate, filter });
+  ref.current = { channels, onInvalidate, filter };
+  const fire = useCallback((channel: InvalidationChannel, payload: unknown) => {
+    if (ref.current.channels.includes(channel) && ref.current.filter?.(channel, payload) !== false) ref.current.onInvalidate();
   }, []);
-  useRealtime("tasks:changed", () => fire("tasks:changed"));
-  useRealtime("projects:changed", () => fire("projects:changed"));
-  useRealtime("comments:changed", () => fire("comments:changed"));
-  useRealtime("threads:changed", () => fire("threads:changed"));
+  useRealtime("tasks:changed", payload => fire("tasks:changed", payload));
+  useRealtime("projects:changed", payload => fire("projects:changed", payload));
+  useRealtime("comments:changed", payload => fire("comments:changed", payload));
+  useRealtime("threads:changed", payload => fire("threads:changed", payload));
 }
 
 interface TasksQuery<T> {
@@ -90,6 +91,7 @@ export function useTasksQuery<T>(
   deps: readonly unknown[] = [],
   options: {
     snapshot?: TasksQuerySnapshot<T>;
+    invalidationFilter?: (channel: InvalidationChannel, payload: unknown) => boolean;
   } = {},
 ): TasksQuery<T> {
   const rpc = useTasksRpc();
@@ -156,8 +158,70 @@ export function useTasksQuery<T>(
       finish();
     };
   }, [refresh, generation, beginGenerationWork, endGenerationWork]);
-  useInvalidation(channels, refresh);
+  useInvalidation(channels, refresh, options.invalidationFilter);
   return { ...state, refresh };
+}
+
+/** One visible page initially; following pages are requested only on demand. */
+export function useTaskPages(
+  input: TaskListQuery,
+  deps: readonly unknown[],
+  channels: readonly InvalidationChannel[] = ["tasks:changed"],
+) {
+  const rpc = useTasksRpc();
+  const first = useTasksQuery(
+    query => query.call("listTasks", { ...input, limit: TASKS_PAGE_DEFAULT_LIMIT }),
+    channels,
+    deps,
+  );
+  const current = useRef(first.data);
+  current.current = first.data;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [tail, setTail] = useState<{
+    first: typeof first.data;
+    tasks: Task[];
+    nextCursor: string | null;
+    loading: boolean;
+    error: string | null;
+  }>();
+  // Refreshing the first page invalidates the old cursor and any appended pages.
+  const matching = tail?.first === first.data ? tail : undefined;
+  const nextCursor = matching ? matching.nextCursor : first.data?.nextCursor ?? null;
+  const busy = useRef(false);
+  const inputKey = JSON.stringify(input);
+  const loadMore = useCallback(async () => {
+    const anchor = first.data;
+    if (!anchor || !nextCursor || busy.current) return;
+    busy.current = true;
+    const tasks = matching?.tasks ?? [];
+    setTail({ first: anchor, tasks, nextCursor, loading: true, error: null });
+    try {
+      const page = await rpc.call("listTasks", {
+        ...input, limit: TASKS_PAGE_DEFAULT_LIMIT, cursor: nextCursor,
+      });
+      if (mounted.current && current.current === anchor) {
+        setTail({ first: anchor, tasks: [...tasks, ...page.tasks],
+          nextCursor: page.nextCursor ?? null, loading: false, error: null });
+      }
+    } catch (error) {
+      if (mounted.current && current.current === anchor) {
+        setTail({ first: anchor, tasks, nextCursor, loading: false, error: errorMessage(error) });
+      }
+    } finally {
+      busy.current = false;
+    }
+  }, [rpc, first.data, nextCursor, matching, inputKey]);
+  const data = useMemo(
+    () => first.data ? [...first.data.tasks, ...(matching?.tasks ?? [])] : undefined,
+    [first.data, matching?.tasks],
+  );
+  return { ...first, data, hasMore: nextCursor !== null,
+    isLoadingMore: matching?.loading ?? false,
+    error: matching?.error ?? first.error, loadMore };
 }
 
 const foldersSnapshot = {
@@ -242,8 +306,5 @@ export function useMentionItems() {
 }
 
 export function useActiveTasks() {
-  return useTasksQuery(
-    async (rpc) => listAllTasks(rpc, { activeOnly: true }),
-    ["tasks:changed", "threads:changed"],
-  );
+  return useTaskPages({ activeOnly: true }, [], ["tasks:changed", "threads:changed"]);
 }

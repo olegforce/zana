@@ -5,6 +5,7 @@
  */
 
 declare module '@zana-ai/zcc-plugin-sdk' {
+  export type { PluginAgentsViewProps, PluginFleetMember, PluginFleetSchedule, PluginFleetExecution } from '@zana-ai/zcc-plugin-sdk/app';
   export const PROJECT_ICONS: readonly ['Circle', 'Cloud', 'Folder', 'Code', 'Database', 'Globe', 'Package', 'Rocket', 'Briefcase', 'Terminal', 'Layers', 'Wrench'];
   export type ProjectIcon = (typeof PROJECT_ICONS)[number];
   export const PLUGIN_SDK_VERSION: string;
@@ -329,6 +330,47 @@ declare module '@zana-ai/zcc-plugin-sdk/server' {
 }
 
 declare module '@zana-ai/zcc-plugin-sdk/app' {
+  /** Read-only fleet projection shared with the built-in Agents views. */
+  export interface PluginFleetMember {
+    /** Opaque, kind-qualified key. Pass this to onInspect. */
+    key: string;
+    kind: 'agent' | 'thread';
+    title: string;
+    projectId: string;
+    status: 'working' | 'needs-you' | 'idle' | 'done' | 'error' | 'unknown';
+    /** Done means the process exited, not that its task succeeded. */
+    detail: string;
+    live: boolean;
+    scheduled: boolean;
+    teamId?: string;
+  }
+  export interface PluginFleetSchedule {
+    key: string;
+    title: string;
+    projectId: string;
+    enabled: boolean;
+    nextRunAt: string | null;
+    running: boolean;
+  }
+  export interface PluginFleetExecution {
+    key: string;
+    projectId: string;
+    title: string;
+    state: string;
+    needsAttention: boolean;
+  }
+  export interface PluginAgentsViewProps {
+    projectId: string | null;
+    projects: readonly { id: string; name: string; color?: string }[];
+    members: readonly PluginFleetMember[];
+    schedules: readonly PluginFleetSchedule[];
+    executions: readonly PluginFleetExecution[];
+    includeScheduled: boolean;
+    searchQuery: string;
+    /** Host resolves only keys in the current, scoped projection. */
+    onInspect(key: string): void;
+  }
+
   export function definePluginApp(
     setup: (app: { slots: Record<string, (registration: Record<string, unknown>) => void> }) => void
   ): unknown;

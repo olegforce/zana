@@ -32,11 +32,12 @@ export function TurnArchiveRow({
   onFork,
   messageActions,
   includePluginMessageActions,
-  filePathHints
+  filePathHints,
+  targetRowId
 }: {
   row: Extract<ThreadTimelineViewRow, { kind: 'turn' }>;
   title: TimelineTitle;
-  now: number;
+  now?: number;
   dim?: boolean;
   expansion: ReturnType<typeof collectTimelineAutoExpansionRowIds>;
   unreadRowId?: string | null;
@@ -55,6 +56,7 @@ export function TurnArchiveRow({
   messageActions?: readonly ThreadChatMessageAction[];
   includePluginMessageActions?: boolean;
   filePathHints?: readonly string[];
+  targetRowId?: string | null;
 }) {
   const [open, setOpen] = useState(row.status === 'interrupted');
   const [children, setChildren] = useState<ThreadTimelineViewRow[] | null>(row.children);
@@ -117,6 +119,7 @@ export function TurnArchiveRow({
         <TimelineTitleView
           title={title}
           now={now}
+          live={false}
           onAction={onTitleAction}
           onLink={onTitleLink}
         />
@@ -153,6 +156,7 @@ export function TurnArchiveRow({
         messageActions={messageActions}
         includePluginMessageActions={includePluginMessageActions}
         filePathHints={filePathHints}
+        targetRowId={targetRowId}
       />
       ) : open ? (
         <p className="thread-timeline-system">No details</p>

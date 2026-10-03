@@ -7,11 +7,12 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
-import { experimental_recordProviderChildIo } from "@zana-ai/zcc-plugin-sdk/provider-bridge";
+import { experimental_readBoundedLines, experimental_recordProviderChildIo } from "@zana-ai/zcc-plugin-sdk/provider-bridge";
 import type { z } from "zod";
 
-const STDERR_TAIL_MAX_CHUNKS = 40;
+const STDERR_TAIL_MAX_BYTES = 64 * 1024;
+const CLOSE_AFTER_EXIT_GRACE_MS = 1_000;
+const KILL_ESCALATION_MS = 4_000;
 
 export interface AcpAgentRequestResponder {
   result(value: unknown): void;
@@ -52,7 +53,7 @@ export interface AcpAgentRequestArgs<TResult> {
 export interface AcpAgentConnection {
   request<TResult>(args: AcpAgentRequestArgs<TResult>): Promise<TResult>;
   notify(method: string, params: unknown): void;
-  kill(): void;
+  kill(): Promise<void>;
   readonly exited: boolean;
 }
 
@@ -122,9 +123,44 @@ export function createAcpAgentConnection(
   });
 
   const pending = new Map<number, PendingAgentRequest>();
-  const stderrChunks: string[] = [];
+  let stderrTail = Buffer.alloc(0);
   let nextRequestId = 1;
   let exited = false;
+  let protocolFailed = false;
+  let exitStatus: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let closeGraceTimer: NodeJS.Timeout | null = null;
+  let killEscalation: NodeJS.Timeout | null = null;
+  let resolveExit!: () => void;
+  const exitPromise = new Promise<void>((resolve) => { resolveExit = resolve; });
+
+  function appendStderr(chunk: Buffer | string): void {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    if (bytes.length >= STDERR_TAIL_MAX_BYTES) {
+      stderrTail = Buffer.from(bytes.subarray(bytes.length - STDERR_TAIL_MAX_BYTES));
+    } else {
+      stderrTail = Buffer.concat([
+        stderrTail.subarray(Math.max(0, stderrTail.length + bytes.length - STDERR_TAIL_MAX_BYTES)), bytes,
+      ]);
+    }
+  }
+
+  function finalizeExit(status: { code: number | null; signal: NodeJS.Signals | null }): void {
+    if (exited) return;
+    exited = true;
+    if (closeGraceTimer !== null) clearTimeout(closeGraceTimer);
+    if (killEscalation !== null) clearTimeout(killEscalation);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    const tail = stderrTail.toString("utf8");
+    rejectAllPending(new AcpAgentExitedError(
+      `ACP agent "${options.command}" exited (code ${status.code ?? "null"}, signal ${status.signal ?? "null"})${tail ? `: ${tail}` : ""}`,
+    ));
+    try {
+      options.onExit({ ...status, stderrTail: tail });
+    } finally {
+      resolveExit();
+    }
+  }
 
   function writeLine(message: object): void {
     const stdin = child.stdin;
@@ -142,80 +178,76 @@ export function createAcpAgentConnection(
   }
 
   if (child.stdout) {
-    const stdoutLines = createInterface({
+    experimental_readBoundedLines({
       input: child.stdout,
-      terminal: false,
-    });
-    stdoutLines.on("line", (line) => {
-      const message = parseAgentLine(line);
-      if (!message) {
-        return;
-      }
-
-      const id = message.id;
-      if (
-        (typeof id === "string" || typeof id === "number") &&
-        message.method === undefined
-      ) {
-        const numericId = typeof id === "number" ? id : Number(id);
-        const request = pending.get(numericId);
-        if (!request) {
+      onOverflow: (bytes) => {
+        protocolFailed = true;
+        appendStderr(`\nACP agent stdout frame exceeded its byte cap (${bytes} bytes)\n`);
+        child.kill("SIGKILL");
+      },
+      onLine: (line) => {
+        if (exited || protocolFailed) return;
+        const message = parseAgentLine(line);
+        if (!message) {
           return;
         }
-        pending.delete(numericId);
-        if (message.error) {
-          request.reject(
-            new Error(
-              message.error.message ??
-                `ACP agent returned error code ${message.error.code ?? "unknown"}`,
-            ),
-          );
-        } else {
-          request.resolve(message.result);
+
+        const id = message.id;
+        if (
+          (typeof id === "string" || typeof id === "number") &&
+          message.method === undefined
+        ) {
+          const numericId = typeof id === "number" ? id : Number(id);
+          const request = pending.get(numericId);
+          if (!request) {
+            return;
+          }
+          pending.delete(numericId);
+          if (message.error) {
+            request.reject(
+              new Error(
+                message.error.message ??
+                  `ACP agent returned error code ${message.error.code ?? "unknown"}`,
+              ),
+            );
+          } else {
+            request.resolve(message.result);
+          }
+          return;
         }
-        return;
-      }
 
-      if (typeof message.method !== "string") {
-        return;
-      }
+        if (typeof message.method !== "string") {
+          return;
+        }
 
-      if (typeof id === "string" || typeof id === "number") {
-        let settled = false;
-        options.onRequest(message.method, message.params, {
-          result(value) {
-            if (settled) return;
-            settled = true;
-            writeLine({ jsonrpc: "2.0", id, result: value ?? null });
-          },
-          error(code, errorMessage) {
-            if (settled) return;
-            settled = true;
-            writeLine({
-              jsonrpc: "2.0",
-              id,
-              error: { code, message: errorMessage },
-            });
-          },
-        });
-        return;
-      }
+        if (typeof id === "string" || typeof id === "number") {
+          let settled = false;
+          options.onRequest(message.method, message.params, {
+            result(value) {
+              if (settled || exited || protocolFailed) return;
+              settled = true;
+              writeLine({ jsonrpc: "2.0", id, result: value ?? null });
+            },
+            error(code, errorMessage) {
+              if (settled || exited || protocolFailed) return;
+              settled = true;
+              writeLine({
+                jsonrpc: "2.0",
+                id,
+                error: { code, message: errorMessage },
+              });
+            },
+          });
+          return;
+        }
 
-      options.onNotification(message.method, message.params);
+        options.onNotification(message.method, message.params);
+      },
     });
   }
 
   if (child.stderr) {
-    const stderrLines = createInterface({
-      input: child.stderr,
-      terminal: false,
-    });
-    stderrLines.on("line", (line) => {
-      stderrChunks.push(line);
-      if (stderrChunks.length > STDERR_TAIL_MAX_CHUNKS) {
-        stderrChunks.shift();
-      }
-    });
+    child.stderr.on("data", appendStderr);
   }
 
   child.on("error", (error) => {
@@ -223,28 +255,30 @@ export function createAcpAgentConnection(
       return;
     }
     exited = true;
+    if (closeGraceTimer !== null) clearTimeout(closeGraceTimer);
+    if (killEscalation !== null) clearTimeout(killEscalation);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
     rejectAllPending(
       new AcpAgentExitedError(
         formatAcpLaunchFailure(options.command, error),
       ),
     );
-    options.onExit({ code: null, signal: null, stderrTail: error.message });
+    try {
+      options.onExit({ code: null, signal: null, stderrTail: error.message });
+    } finally {
+      resolveExit();
+    }
   });
 
   child.on("exit", (code, signal) => {
-    if (exited) {
-      return;
-    }
-    exited = true;
-    const stderrTail = stderrChunks.join("\n");
-    rejectAllPending(
-      new AcpAgentExitedError(
-        `ACP agent "${options.command}" exited (code ${code ?? "null"}, signal ${signal ?? "null"})${
-          stderrTail ? `: ${stderrTail}` : ""
-        }`,
-      ),
-    );
-    options.onExit({ code, signal, stderrTail });
+    if (exited) return;
+    exitStatus = { code, signal };
+    closeGraceTimer = setTimeout(() => finalizeExit(exitStatus!), CLOSE_AFTER_EXIT_GRACE_MS);
+    closeGraceTimer.unref?.();
+  });
+  child.on("close", (code, signal) => {
+    finalizeExit(exitStatus ?? { code: code ?? null, signal: signal ?? null });
   });
 
   return {
@@ -253,7 +287,7 @@ export function createAcpAgentConnection(
     },
 
     request({ method, params, resultSchema }) {
-      if (exited) {
+      if (exited || protocolFailed) {
         return Promise.reject(
           new AcpAgentExitedError(
             `ACP agent "${options.command}" is not running`,
@@ -283,17 +317,22 @@ export function createAcpAgentConnection(
     },
 
     notify(method, params) {
-      if (exited) {
+      if (exited || protocolFailed) {
         return;
       }
       writeLine({ jsonrpc: "2.0", method, params });
     },
 
     kill() {
-      if (exited) {
-        return;
+      if (exited) return exitPromise;
+      if (killEscalation === null) {
+        killEscalation = setTimeout(() => {
+          if (!exited) child.kill("SIGKILL");
+        }, KILL_ESCALATION_MS);
+        killEscalation.unref?.();
+        child.kill("SIGTERM");
       }
-      child.kill("SIGTERM");
+      return exitPromise;
     },
   };
 }

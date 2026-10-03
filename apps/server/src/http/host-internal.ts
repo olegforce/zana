@@ -1,3 +1,4 @@
+import { remoteInteractionSurface } from '../services/threads/interaction-surface.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CliCallbackRequestSchema, CLI_CALLBACK_MAX_BODY_BYTES } from '@zana-ai/zcc-contracts/cli-callbacks';
 import { CliCallbackError } from '../services/launch/cli-callback-authority.js';
@@ -366,6 +367,7 @@ async function handleHostToolCall(
       ctx: {
         threadId: thread.id,
         projectId: thread.projectId,
+        ...(remoteInteractionSurface(ctx.db, thread.id) ? { desktopPresentation: false } : {}),
         signal: ac.signal
       }
     });

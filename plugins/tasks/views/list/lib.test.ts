@@ -107,3 +107,8 @@ describe("partitionLabels", () => {
     });
   });
 });
+
+
+it('uses the exact active count when previews are capped', () => {
+  expect(activeWorkLabel([{ liveStatus: 'working' }], 25)).toBe('25 agents working');
+});

@@ -53,6 +53,7 @@
     "clean:dist": "node scripts/clean-dist.mjs",
     "dist": "pnpm --filter @zana-ai/zcc-desktop package",
     "dist:mac": "pnpm --filter @zana-ai/zcc-desktop package:mac",
+    "dist:win": "pnpm --filter @zana-ai/zcc-desktop package:win",
     "release:mac": "pnpm --filter @zana-ai/zcc-desktop release:mac",
     "release:static": "pnpm run dist:mac && node scripts/upload-release.mjs",
     "build:prepare": "node scripts/ensure-node-pty-helper.mjs && node scripts/ensure-better-sqlite3.mjs && node scripts/ensure-better-sqlite3.mjs --electron && node scripts/build-scheduled-supervisor.mjs && pnpm run build:cli && pnpm --filter @zana-ai/zcc-plugin-sdk build && node scripts/seed-extensions.mjs && node --import tsx scripts/build-plugin-hosts.mjs && node apps/host-daemon/scripts/build-join.mjs",

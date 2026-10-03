@@ -14,6 +14,25 @@ test.use({ e2e: true });
 
 const THREAD_ID = 'thr_abcdefghij';
 
+function createAndActivateTarget(wsEndpoint: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(wsEndpoint);
+    const timer = setTimeout(() => { ws.terminate(); reject(Error('hidden CDP page timed out')); }, 10_000);
+    let targetId = '';
+    ws.once('error', error => { clearTimeout(timer); reject(error); });
+    ws.on('message', data => {
+      const response = JSON.parse(String(data));
+      if (response.error) { clearTimeout(timer); ws.close(); reject(Error(JSON.stringify(response.error))); return; }
+      if (response.id === 1) {
+        targetId = response.result.targetId;
+        ws.send(JSON.stringify({ id: 2, method: 'Target.activateTarget', params: { targetId } }));
+      } else if (response.id === 2) { clearTimeout(timer); ws.close(); resolve(targetId); }
+    });
+    ws.once('open', () => ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url: 'about:blank' } })));
+  });
+}
+
+
 test('desktop browser broker leases loopback CDP and reveals a focused thread', async ({ app }) => {
   const { window, electron } = app;
   await expect(window.getByRole('navigation', { name: 'Main navigation' })).toBeVisible({ timeout: 20_000 });
@@ -80,8 +99,10 @@ test('desktop browser broker leases loopback CDP and reveals a focused thread', 
     });
     ws.once('message', (data) => {
       clearTimeout(timer);
+      // The capability permits one socket at a time. Wait for the close
+      // handshake before reconnecting to exercise Target.createTarget.
+      ws.once('close', () => resolve(JSON.parse(String(data)) as Record<string, unknown>));
       ws.close();
-      resolve(JSON.parse(String(data)) as Record<string, unknown>);
     });
     ws.once('open', () => {
       ws.send(JSON.stringify({ id: 1, method: 'Browser.getVersion' }));
@@ -93,6 +114,17 @@ test('desktop browser broker leases loopback CDP and reveals a focused thread', 
       product: expect.stringMatching(/Chrome/i)
     })
   });
+
+  const createdTarget = await createAndActivateTarget(created.wsEndpoint);
+  expect(createdTarget).toBeTruthy();
+  await expect(window.getByTestId('thread-browser-tab')).toHaveCount(0);
+  const hiddenTabs = await electron.evaluate(async (_electron, scope) => {
+    const broker = (globalThis as any).__zccDesktopBrowserBroker;
+    return (await broker.execute({ type: 'desktop.browser.list_tabs', instanceId: scope.instanceId, generation: scope.generation, threadId: scope.threadId })).tabs;
+  }, { ...created, threadId: THREAD_ID });
+  expect(hiddenTabs).toHaveLength(2);
+  expect(hiddenTabs.every((tab: { presentation: string }) => tab.presentation === 'hidden')).toBe(true);
+
 
   await window.evaluate((threadId) => {
     window.history.pushState({}, '', `/threads/${threadId}`);
@@ -115,6 +147,31 @@ test('desktop browser broker leases loopback CDP and reveals a focused thread', 
   }, { ...created, threadId: THREAD_ID });
 
   await expect(window.getByTestId('thread-browser-tab')).toBeVisible({ timeout: 10_000 });
+
+  // A remote lease cannot derive presentation permission from a page that a
+  // desktop user had already revealed before this conversation was upgraded.
+  const remoteEndpoint = await electron.evaluate(async (_electron, scope) => {
+    const broker = (globalThis as any).__zccDesktopBrowserBroker;
+    const target = { instanceId: scope.instanceId, generation: scope.generation, threadId: scope.threadId };
+    await broker.execute({ type: 'desktop.browser.release_control', ...target, leaseId: scope.leaseId });
+    const leaseId = scope.leaseId + '-remote';
+    await broker.execute({ type: 'desktop.browser.acquire_control', ...target, leaseId,
+      tabIds: [scope.tabId], controllerLabel: 'Remote E2E', expiresAt: Date.now() + 60_000, allowPresentation: false });
+    return (await broker.execute({ type: 'desktop.browser.open_connection', ...target, leaseId, tabIds: [scope.tabId] })).wsEndpoint as string;
+  }, { ...created, threadId: THREAD_ID });
+  const remoteTarget = await createAndActivateTarget(remoteEndpoint);
+  expect(remoteTarget).toBeTruthy();
+  const remoteTabs = await electron.evaluate(async (_electron, scope) => {
+    const broker = (globalThis as any).__zccDesktopBrowserBroker;
+    return (await broker.execute({ type: 'desktop.browser.list_tabs', instanceId: scope.instanceId,
+      generation: scope.generation, threadId: scope.threadId })).tabs;
+  }, { ...created, threadId: THREAD_ID });
+  expect(remoteTabs).toHaveLength(3);
+  // about:blank may have no attached native view even though its desktop tab
+  // is open. New pages must remain hidden regardless of that source state.
+  expect(remoteTabs.filter((tab: { tabId: string }) => tab.tabId !== created.tabId)
+    .every((tab: { presentation: string }) => tab.presentation === 'hidden')).toBe(true);
+  await expect(window.getByTestId('thread-browser-tab')).toHaveCount(1);
 
   const sources = await electron.evaluate(async () => {
     const broker = (globalThis as { __zccDesktopBrowserBroker?: {
@@ -182,6 +239,27 @@ test('equivalent previews reuse their page without crossing browser profiles', a
       expect.objectContaining({ loading: false }), expect.objectContaining({ loading: false }), expect.objectContaining({ loading: false })
     ]);
     const before = await pages();
+    // Hidden page popups must not escape automation through renderer IPC.
+    await app.window.evaluate(() => {
+      const probe = { events: [] as string[], dispose: () => {} };
+      const off = window.cc.browser.onOpenTab(event => probe.events.push(event.url));
+      const offScoped = window.cc.browser.onScopedOpenTab?.(event => probe.events.push(event.url));
+      probe.dispose = () => { off(); offScoped?.(); };
+      (window as any).__hiddenPopupProbe = probe;
+    });
+    try {
+      await app.electron.evaluate(async ({ webContents }, url) => {
+        const source = webContents.getAllWebContents().find(contents => contents.getURL() === url);
+        if (!source) throw Error('Missing hidden popup source');
+        await source.executeJavaScript("window.open('http://127.0.0.1:1/hidden-popup'); void 0");
+      }, url);
+      expect(await app.window.evaluate(() => (window as any).__hiddenPopupProbe.events)).toEqual([]);
+    } finally {
+      await app.window.evaluate(() => {
+        (window as any).__hiddenPopupProbe.dispose();
+        delete (window as any).__hiddenPopupProbe;
+      });
+    }
     const requestsBefore = requests;
     await execute({ type: 'desktop.browser.acquire_control', leaseId: 'preview-lease', tabIds: ['automation-a'], controllerLabel: 'Preview regression', expiresAt: Date.now() + 60_000 });
     const connection = await execute({ type: 'desktop.browser.open_connection', leaseId: 'preview-lease', tabIds: ['automation-a'] });

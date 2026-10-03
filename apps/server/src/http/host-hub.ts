@@ -54,7 +54,7 @@ import {
   conversationLifecycleEventForHostEvent,
   isNestedConversationTurnCompletion
 } from '../services/threads/conversation-host-event-status.js';
-import { syncPlanFromLatestEvents } from '../services/threads/conversation-plan.js';
+import { shouldSyncPlanForConversationEvent, syncPlanFromLatestEvents } from '../services/threads/conversation-plan.js';
 import type { ProductHub } from './product-hub.js';
 import { isBackgroundTaskLifecyclePayload } from '@zana-ai/zcc-thread-view';
 import type { ThreadLifecycleEvent } from '@zana-ai/zcc-domain/thread-runtime';
@@ -341,6 +341,7 @@ export function createHostHub(
     const afterCommit: Array<() => void> = [];
     const committedHub: ProductHub = { ...hub, emit: (type, payload) => { afterCommit.push(() => hub.emit(type, payload)); } };
     commitHostEventBatch(db, terminalSessions, () => {
+      const planThreads = new Set<string>();
       batch.events.forEach((event, index) => {
         if (event.kind === 'plugin.host.signal' || event.kind === 'plugin.host.worker-exited') {
           const payload = event.payload as Record<string, unknown> | null;
@@ -483,11 +484,7 @@ export function createHostHub(
             type: eventType,
             payload: stored.payload
           });
-          try {
-            syncPlanFromLatestEvents(db, event.threadId);
-          } catch {
-            /* plan import is advisory */
-          }
+          if (shouldSyncPlanForConversationEvent(eventType)) planThreads.add(event.threadId);
           if (isBackgroundTaskLifecyclePayload(eventType, event.payload)) {
             const threadId = event.threadId;
             afterCommit.push(() => options?.onConversationEvent?.({
@@ -518,6 +515,12 @@ export function createHostHub(
           payload: event.payload
         });
       });
+      // Reconcile the committed batch once per affected thread, including its
+      // terminal boundary. Avoid reparsing the same history for every delta.
+      for (const threadId of planThreads) {
+        try { syncPlanFromLatestEvents(db, threadId); }
+        catch { /* plan import is advisory */ }
+      }
       writeHostEventReceipt(db, batch, {
         type: 'host.event-ack', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
         ...(batch.batchId ? { batchId: batch.batchId } : {}), accepted, rejected

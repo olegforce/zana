@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isMachinePath, machineIdentity } from './machine-routes.mjs';
-import { TUNNEL_PATH, LIMITS, headers, validPath, parseFrame, send, dataFrames, bytes, heartbeat, remoteOrigin, validToken } from './protocol.mjs';
+import { TUNNEL_PATH, LIMITS, headers, validPath, parseFrame, send, createDataFrameQueue, bytes, heartbeat, remoteOrigin, validToken } from './protocol.mjs';
 
 /** One authenticated computer per relay process. Pairing remains on that computer. */
 export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs = 20_000, requestTimeoutMs = 25_000, queueTimeoutMs = 5000, onVisitor = () => {}, preview = false }) {
@@ -13,6 +13,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
   const streams = new Map();
   const pendingReads = new Map();
   let desktop = null;
+  let uploads = null;
   let targets = [];
   const allowedTarget = port => targets.some(item => item.port === port && item.expiresAt > Date.now());
   let nextId = 0;
@@ -30,24 +31,30 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
     const stream = streams.get(key);
     if (!stream) return;
     clearTimeout(stream.timer);
+    uploads?.cancel(key);
+    stream.req?.resume();
     streams.delete(key);
     if (desktop) send(desktop, { type: 'cancel', id: key });
     drainReads();
   };
   const disconnect = () => {
+    uploads?.close(); uploads = null;
     for (const pending of pendingReads.values()) {
       pending.remove();
       fail(pending.res, 503, 'Computer disconnected. Retry when it reconnects.');
     }
     for (const [key, stream] of streams) {
       clearTimeout(stream.timer);
+      stream.req?.resume();
       if (stream.res) fail(stream.res, 503, 'Computer disconnected. Reconnect and check whether your last action completed.');
       else if (stream.ws) stream.ws.terminate();
       else stream.socket?.destroy();
       streams.delete(key);
     }
   };
-  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.frame, perMessageDeflate: false, handleProtocols: (protocols, req) => preview ? req[PREVIEW_PROTOCOL] || false : protocols.values().next().value });
+  // Yield between tunnel messages so a coalesced socket read cannot starve
+  // HTTP drains and trip the bounded slow-reader guard for a healthy visitor.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.frame, perMessageDeflate: false, allowSynchronousEvents: false, handleProtocols: (protocols, req) => preview ? req[PREVIEW_PROTOCOL] || false : protocols.values().next().value });
   const drainReads = () => {
     while (available() && pendingReads.size) {
       const pending = pendingReads.values().next().value;
@@ -79,7 +86,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
   };
   const forwardHttp = (req, res, incoming) => {
     const key = id();
-    const stream = { res, bytes: 0, timer: null, target: req[PREVIEW_TARGET] };
+    const stream = { req, res, bytes: 0, timer: null, target: req[PREVIEW_TARGET], upload: Promise.resolve(true) };
     const arm = () => {
       clearTimeout(stream.timer);
       stream.timer = setTimeout(() => { cancel(key); fail(res, 504, 'Computer response timed out'); }, requestTimeoutMs);
@@ -94,9 +101,18 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
       if (!streams.has(key)) return;
       size += chunk.length;
       if (size > LIMITS.request) { cancel(key); fail(res, 413, 'Body too large'); req.resume(); }
-      else dataFrames(desktop, 'request-data', key, chunk);
+      else {
+        req.pause();
+        const queue = uploads;
+        stream.upload = queue.write('request-data', key, chunk, () => streams.get(key) === stream);
+        stream.upload.then(ok => {
+          if (streams.get(key) !== stream) return;
+          if (!ok) { cancel(key); fail(res, 503, 'Computer upload is busy. Retry shortly.'); }
+          else { arm(); req.resume(); }
+        });
+      }
     });
-    req.on('end', () => { if (streams.has(key)) send(desktop, { type: 'request-end', id: key }); });
+    req.on('end', () => { stream.upload.then(ok => { if (ok && streams.get(key) === stream) send(desktop, { type: 'request-end', id: key }); }); });
     req.on('error', () => cancel(key));
     res.on('close', () => cancel(key));
   };
@@ -124,6 +140,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
       if (desktop) return reject(409);
       wss.handleUpgrade(req, socket, head, ws => {
         desktop = ws;
+        uploads = createDataFrameQueue(ws);
         heartbeat(ws, heartbeatMs);
         send(ws, { type: 'hello', id: 0, ...(preview ? { previewVersion: 1 } : {}) });
         ws.on('error', () => ws.terminate());
@@ -160,7 +177,7 @@ export function createRelay({ token, publicUrl, allowLocal = false, heartbeatMs 
                 else stream.res.write(chunk);
               } else if (frame.type === 'response-end') {
                 if (!stream.res.headersSent) throw new Error('Missing response');
-                clearTimeout(stream.timer); streams.delete(frame.id); stream.res.end(); drainReads();
+                clearTimeout(stream.timer); uploads?.cancel(frame.id); stream.req.resume(); streams.delete(frame.id); stream.res.end(); drainReads();
               } else if (frame.type === 'error') { cancel(frame.id); fail(stream.res, 502, 'Computer request failed'); }
               else throw new Error('Unexpected response');
             } else if (frame.type === 'ws-data') {

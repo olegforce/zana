@@ -39,13 +39,13 @@ for (const name of dirs) {
 
   const cwd = join(extsRoot, name);
   process.stdout.write(`[seed-extensions] ${name}: build+package… `);
-  const build = spawnSync('npm', ['run', 'build', '--silent'], { cwd, stdio: 'inherit' });
+  const build = spawnSync('npm', ['run', 'build', '--silent'], { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
   if (build.status !== 0) {
     failures++;
     console.error(`\n[seed-extensions] ${name}: build failed — skipping`);
     continue;
   }
-  const pkg = spawnSync('npm', ['run', 'package', '--silent'], { cwd, stdio: 'inherit' });
+  const pkg = spawnSync('npm', ['run', 'package', '--silent'], { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
   if (pkg.status !== 0) {
     failures++;
     console.error(`\n[seed-extensions] ${name}: package failed`);

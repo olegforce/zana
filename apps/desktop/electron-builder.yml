@@ -40,8 +40,6 @@ files:
   - "!node_modules/@aws-sdk/**"
 
 extraResources:
-  - from: resources/scheduled-supervisor
-    to: scheduled-supervisor
   # NOTE: don't copy icon.icns here — `mac.icon` already places it at
   # Contents/Resources/icon.icns (== process.resourcesPath/icon.icns), so a
   # second copy collides (EEXIST hard-link during packaging). The runtime
@@ -73,8 +71,8 @@ extraResources:
   # The embedded `opencode serve` binary the `opencode` chat harness backend
   # spawns (see src/main/zcc-harness/backends/opencode/process-pool.ts).
   # `npm run fetch:opencode` (chained ahead of electron-builder in the
-  # dist/dist:mac/release:mac scripts) downloads the per-arch mac binaries
-  # from registry.npmjs.org into vendor/opencode/<arch>/opencode; this copies
+  # packaging scripts) downloads binaries for the build host's platform
+  # from registry.npmjs.org into vendor/opencode/<arch>/; this copies
   # that tree to resourcesPath/opencode, where src/main/env.ts
   # `resolveOpencodeBinDir` finds resourcesPath/opencode/<arch>/opencode.
   # afterPack then deletes the unused arch so an arm64 artifact does not also
@@ -158,6 +156,9 @@ asarUnpack:
   - "node_modules/better-sqlite3/**/*"
 
 mac:
+  extraResources:
+    - from: resources/scheduled-supervisor
+      to: scheduled-supervisor
   category: public.app-category.developer-tools
   icon: resources/icon.icns
   # Apple Developer ID code signing + notarization. The signing certificate is
@@ -209,11 +210,15 @@ dmg:
 
 win:
   icon: resources/icon-1024.png
+  artifactName: "Zana-Command-Center-${version}-win-${arch}-Setup.${ext}"
   target:
     - target: nsis
       arch: [x64]
 
 linux:
+  extraResources:
+    - from: resources/scheduled-supervisor
+      to: scheduled-supervisor
   icon: resources/icon-1024.png
   category: Development
   target:

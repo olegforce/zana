@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProductMap } from './product-map.js';
 import { SURFACE_NUMBERS } from './annotation.js';
 import { PaletteWireframe, SurfaceMapContext } from './wireframes.js';
+import { ProjectShellWireframe, SurfaceMapContext as WebsiteSurfaceMap } from '../../../website/lib/plugin-guide/wireframes.js';
 
 function mount(node: ReturnType<typeof createElement>): HTMLElement {
   const host = document.createElement('div');
@@ -56,6 +57,32 @@ describe('palette demo', () => {
 });
 
 describe('ProductMap click-away', () => {
+  it('shows the contributed Agents selector only in the Agents workspace on both guides', async () => {
+    const { ProjectShellWireframe: PluginProjectShell } = await import('./wireframes.js');
+    for (const [Component, Context] of [[ProjectShellWireframe, WebsiteSurfaceMap], [PluginProjectShell, SurfaceMapContext]] as const) {
+      const host = mount(createElement(Context.Provider, { value: { activeId: null, expandedId: null, setActiveId: () => {}, numberOf: () => null } }, createElement(Component)));
+      expect(host.querySelector('[aria-label="Agents view selector"]')).toBeTruthy();
+      const library = host.querySelector<HTMLAnchorElement>('a[data-guide-region="projectTab"]');
+      expect(library).toBeTruthy();
+      act(() => { library?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
+      expect(host.querySelector('[aria-label="Agents view selector"]')).toBeNull();
+      (host as HTMLElement & { unmount(): void }).unmount();
+    }
+  });
+  it('opens the Agents view documentation from the extra view beside the built-in layouts', () => {
+    const host = mount(createElement(ProductMap, { initialSlideId: 'project-shell' }));
+    const selector = host.querySelector('[aria-label="Agents view selector"]');
+    expect(selector?.textContent).toContain('BoardListFlow');
+    const marker = selector?.querySelector('a[href="#surface-experimental_agentsView"]');
+    expect(marker).toBeTruthy();
+    act(() => { marker?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
+    const dialog = host.querySelector('[role="dialog"][aria-label="Agents view"]');
+    expect(dialog?.textContent).toContain('onInspect(item.key)');
+    expect(dialog?.textContent).toContain('Copy for agent');
+    expect(dialog?.textContent).toContain('Installed plugins');
+    (host as HTMLElement & { unmount(): void }).unmount();
+  });
+
   it('opens a card from a marker and dismisses it on pointerdown outside the dialog', () => {
     const host = mount(createElement(ProductMap));
     const marker = host.querySelector('a[href="#surface-navPanel"]');

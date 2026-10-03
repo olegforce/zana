@@ -396,7 +396,7 @@ export function createDesktopBrowserViewManager(options?: {
           maxInWindow: POPUP_RATE_MAX_IN_WINDOW
         });
         entry.popupTimestamps = decision.timestamps;
-        if (decision.allowed) {
+        if (decision.allowed && entry.visible) {
           send(hostWindow, IPC.browser.openTab, { url: openTabUrl });
           send(hostWindow, IPC.browser.scopedOpenTab, { tabId, url: openTabUrl });
         }

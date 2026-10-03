@@ -22,10 +22,10 @@ import {
 const RAIL_CHIP_CLASS =
   "flex items-center gap-1 rounded-md border border-border px-1.5 py-px text-xs text-muted-foreground";
 
-function ActiveChip({ threads }: { threads: readonly TaskThread[] }) {
+function ActiveChip({ threads, count }: { threads: readonly TaskThread[]; count?: number }) {
   if (threads.length === 0) return null;
   return (
-    <span title={activeWorkLabel(threads)} className={RAIL_CHIP_CLASS}>
+    <span title={activeWorkLabel(threads, count)} className={RAIL_CHIP_CLASS}>
       <span
         aria-hidden
         className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
@@ -171,7 +171,7 @@ export function TaskRow({
           {task.title}
         </span>
         <span className="col-start-3 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
-          {meta ? <ActiveChip threads={meta.activeThreads} /> : null}
+          {meta ? <ActiveChip threads={meta.activeThreads} count={meta.activeThreadCount} /> : null}
           <LabelChips task={task} labelsById={labelsById} />
           {task.dueDate !== null ? (
             <span className={`${RAIL_CHIP_CLASS} shrink-0 tabular-nums`}>

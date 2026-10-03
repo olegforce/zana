@@ -1,3 +1,7 @@
+import { useSyncExternalStore } from 'react';
+import { listAgentsViews, subscribePluginSlots } from '../plugins/plugin-slots.js';
+import { agentsViewKey, resolveAgentsView } from '../plugins/agents-view-model.js';
+import { resolveIcon } from '../lib/resolveIcon.js';
 import { Calendar, LayoutGrid, List, Workflow } from 'lucide-react';
 import { useData, useUi, useRunningSchedulerCount } from '../store.js';
 import type { AgentsBoardView } from '../store.js';
@@ -19,19 +23,23 @@ export function useAgentsBoardView() {
   const mobileView = useUi((s) => s.mobileAgentsBoardView);
   const setDesktopView = useUi((s) => s.setAgentsBoardView);
   const setMobileView = useUi((s) => s.setMobileAgentsBoardView);
+  const pluginViews = useSyncExternalStore(subscribePluginSlots, listAgentsViews, listAgentsViews);
+  const requested = compact ? mobileView ?? (preferred === 'flow' || preferred.startsWith('plugin:') ? 'board' : preferred) : preferred;
   return {
-    view: compact ? mobileView ?? (preferred === 'flow' ? 'board' : preferred) : preferred,
+    view: resolveAgentsView(requested, pluginViews),
+    pluginViews,
     compact,
     setView: compact ? setMobileView : setDesktopView
   };
 }
 
 export function AgentViewToggle() {
-  const { view, compact, setView } = useAgentsBoardView();
+  const { view, compact, setView, pluginViews } = useAgentsBoardView();
+  const options = [...OPTIONS, ...pluginViews.map((slot) => ({ view: agentsViewKey(slot), icon: resolveIcon(slot.icon ?? 'Puzzle'), label: slot.title }))];
 
   return (
     <div className="agents-view-toggle" role="group" aria-label="Agents view">
-      {OPTIONS.map(({ view: v, icon: Icon, label }) => (
+      {options.map(({ view: v, icon: Icon, label }) => (
         <button
           key={v}
           type="button"

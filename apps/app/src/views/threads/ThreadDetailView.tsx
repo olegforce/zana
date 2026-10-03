@@ -2,6 +2,7 @@ import { subscribeProductReconnect } from '../../lib/product-ws.js';
 import { ArchivedThreadBanner } from '../../components/history/ArchivedThreadBanner.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { Maximize2, Minimize2, PanelRight, X } from 'lucide-react';
 import type { ActiveThinking, ThreadTimelineGoal, ThreadTimelineModelFallback, ThreadTimelinePendingTodos } from '@zana-ai/zcc-domain/thread-runtime';
 import { mergeTimelinePages, type ThreadContextWindowUsage, type TimelineRow } from '@zana-ai/zcc-server-contract';
@@ -27,6 +28,7 @@ import {
 import { ThreadDetailOverflow } from '../../components/thread/ThreadDetailOverflow.js';
 import { ThreadDetailSearch } from '../../components/thread/ThreadDetailSearch.js';
 import { createCoalescedRunner } from '../../lib/coalesced-runner.js';
+import { createThreadRefreshScheduler } from './thread-detail-refresh.js';
 import { getThreadRoutePath } from '../../lib/route-paths.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
 import { useCompactLayout } from '../../hooks/useCompactLayout.js';
@@ -93,7 +95,6 @@ import {
 } from './thread-detail-load.js';
 
 const TIMELINE_SEGMENT_LIMIT = 20;
-const TIMELINE_DELTA_DEBOUNCE_MS = 100;
 
 export function ThreadDetailView() {
   const { threadId } = useParams<{ threadId: string }>();
@@ -123,11 +124,7 @@ export function ThreadDetail({
   const navigate = useNavigate();
   const route = useRouteState();
   const upsertThread = useThreads((s) => s.upsert);
-  const threads = useThreads((s) => s.threads);
-  const childThreads = useMemo(
-    () => pendingChildThreads(threads, threadId),
-    [threadId, threads]
-  );
+  const childThreads = useThreads(useShallow(({ threads }) => pendingChildThreads(threads, threadId)));
   const pendingInteractions = useOpenPendingInteractions(threadId);
   const pane = useOptionalPaneContext();
   const mobileHeaderInShell = !modal && pane?.isFocused !== false
@@ -290,7 +287,6 @@ export function ThreadDetail({
     if (!threadId) return;
     let cancelled = false;
     let activeLoad: AbortController | null = null;
-    let debounceTimer: number | null = null;
     rowsRef.current = [];
     maxSeqRef.current = 0;
     loadedRef.current = false;
@@ -481,13 +477,8 @@ export function ThreadDetail({
       activeLoad?.abort();
       runner.run();
     };
-    const scheduleDelta = () => {
-      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout(() => {
-        debounceTimer = null;
-        runner.run();
-      }, TIMELINE_DELTA_DEBOUNCE_MS);
-    };
+    const refreshScheduler = createThreadRefreshScheduler(runner.run);
+    const scheduleDelta = refreshScheduler.schedule;
     runner.run();
     const stopReconnect = subscribeProductReconnect(scheduleDelta);
     const stopUpdated = product.threads.onUpdated((payload) => {
@@ -506,7 +497,7 @@ export function ThreadDetail({
       activeLoad?.abort();
       runLoadRef.current = () => {};
       runner.dispose();
-      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      refreshScheduler.dispose();
       stopUpdated();
       stopEvents();
       stopReconnect();

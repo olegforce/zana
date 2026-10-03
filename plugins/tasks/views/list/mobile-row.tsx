@@ -11,7 +11,7 @@ export function MobileTaskRow({ task, project, showProject, meta, onOpen, pendin
     <span className="tasks-mobile-row-meta">
       <span><StatusIcon status={task.status} />{STATUS_LABELS[task.status]}</span>
       {task.priority !== "none" && <span data-priority={task.priority}>{PRIORITY_LABELS[task.priority]}</span>}
-      {working && <span className="tasks-working" title={activeWorkLabel(meta!.activeThreads)}><i aria-hidden />Working</span>}
+      {working && <span className="tasks-working" title={activeWorkLabel(meta!.activeThreads, meta!.activeThreadCount)}><i aria-hidden />Working</span>}
       {task.dueDate && <span><Icon name="Clock" className="size-3.5" />{formatDueDate(task.dueDate)}</span>}
     </span>
   </button>;

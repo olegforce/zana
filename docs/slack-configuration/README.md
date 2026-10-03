@@ -1,12 +1,13 @@
 # Reproduce the Zana Slack configuration
 
-This directory records the working Zana Slack settings observed on **1 October 2026**, including the Zana fairy avatar. It contains a reproducible app manifest and a portable installation template; the plugin's sample manifest has different defaults. Exact user, computer, Project, and channel identifiers are retained in the original operator's local project Library and are excluded from these public files.
+This directory records the working Zana Slack settings exported on **1 October 2026**, including the Zana fairy avatar, with the channel-thread reply permissions activated on **3 October 2026**. It contains a reproducible app manifest and a portable installation template; the plugin's sample manifest has different defaults. Exact user, computer, Project, and channel identifiers are retained in the original operator's local project Library and are excluded from these public files.
 
 ## Saved configuration
 
 | File | Purpose |
 | --- | --- |
-| [app-manifest.json](app-manifest.json) | Exact JSON downloaded from the live Slack app's **App Manifest** page. Includes Home, bot presence, `/zana`, scopes, signed HTTP events, interactivity, task previews, and the custom MCP server. |
+| [app-manifest.json](app-manifest.json) | Downloaded baseline with the four channel-thread reply additions verified and activated on 3 October. Includes Home, bot presence, `/zana`, scopes, signed HTTP events, interactivity, task previews, and the custom MCP server. |
+| [app-manifest-2026-10-01.json](app-manifest-2026-10-01.json) | Preserved exact original export before channel-thread replies were enabled. |
 | [installation-template.json](installation-template.json) | Placeholders for installation IDs, separately configured display/iframe settings, logo checksum, plugin version, and an example Project/channel route. |
 | [zana-icon-512.png](../../website/public/zana-icon-512.png) | The actual uploaded 512 × 512 Zana fairy artwork, already stored in this repository. |
 
@@ -28,8 +29,8 @@ Confirm these settings after applying the manifest:
 | Bot always online | Enabled |
 | Socket Mode | Disabled — this installation uses hosted HTTP delivery |
 | Events, interactivity, `/zana` Request URL | `https://zana-ide.com/api/slack/events/` |
-| Bot events | `app_home_opened`, `app_mention`, `entity_details_requested` |
-| Bot scopes | `groups:write`, `app_mentions:read`, `channels:read`, `chat:write`, `commands`, `groups:read`, `mcp:connect`, `users:read` |
+| Bot events | `app_home_opened`, `app_mention`, `entity_details_requested`, `message.channels`, `message.groups` |
+| Bot scopes | `groups:write`, `app_mentions:read`, `channels:read`, `chat:write`, `commands`, `groups:read`, `mcp:connect`, `users:read`, `channels:history`, `groups:history` |
 | Work Object Previews | Enabled; entity type `slack#/entities/file` |
 | Preview domain allowlist | Exactly `zana-ide.com` |
 | MCP server | `Zana jobs` → `https://zana-ide.com/api/slack/mcp/`, auth `slack_identity_auth` |
@@ -82,4 +83,20 @@ Recorded verification: the exported manifest and iframe switch were read directl
 
 ## Keep the record current
 
+`app-manifest-full-ui.json` is the prepared expansion for private agent chat and Canvas. It preserves the recorded app name, bot presence, `Zana jobs` MCP server, and preview domain settings while adding DM events, agent view, and `im:read`, `im:history`, `assistant:write`, and `canvases:write`. It has not been applied to the live app. Review those access changes and reinstall after scope approval; deploy the updated hosted gateway before enabling these surfaces.
+
 After changing the Slack app, download **App Manifest → Download** again and replace `app-manifest.json`. Update the separate display/iframe settings, logo hash, and portable template when they change. Keep exact installation IDs and routes in the local Library backup. Read the plugin's public CLI status to refresh that backup; do not copy private settings, tokens, activation codes, or preview access links into these public files.
+
+## Launch from another channel or a DM
+
+The launch form offers Project, destination, harness, model and task. Slash commands and unconnected mentions can reply in the calling internal channel when both the linked owner and bot are members. The Project connection supplies the machine and sharing policy; per-task choices do not rewrite its defaults. Shared/external channels, group DMs and other people’s DMs are excluded.
+
+Set **Interactivity → Options Load URL** to `https://zana-ide.com/api/slack/events/`, matching the request URL. External model selects use this callback; without it Slack can display an empty model menu. This callback was configured and verified live on 2 October 2026.
+
+[app-manifest-dm-launch.json](app-manifest-dm-launch.json) is the minimal prepared DM expansion. It adds only `im:read`, `im:history`, `message.im` and the Messages tab, preserving current app settings and the model callback. Review the permissions, save the manifest and reinstall before testing a synthetic owner DM. It does not activate native agent view or Canvas. The live DM scope expansion is awaiting approval.
+
+## Replies without another mention
+
+[app-manifest-thread-replies.json](app-manifest-thread-replies.json) is the minimal expansion for plain replies in established Zana channel threads and matches the updated recorded manifest. It adds only bot events `message.channels` / `message.groups` and scopes `channels:history` / `groups:history`. The user approved this expansion, Slack approved its workspace request, and Zana was reinstalled in Internal-Sandbox on **3 October 2026**. Real plain replies in both a public and a private channel continued their original agents, retained remembered numbers, delivered one answer each, and removed temporary status messages. Screenshots confirmed the clean chat presentation.
+
+Slack grants message access in channels the bot has joined; gateway and plugin accept only the original launcher’s replies in an existing, authorized conversation. Other messages are dropped without storing their content. This is separate from the unactivated DM, agent-view and Canvas expansions. Resend a reply missed before activation; Slack did not deliver it. If its agent has since been deleted or archived, launch again with `@Zana` first.

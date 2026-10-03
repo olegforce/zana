@@ -111,10 +111,10 @@ function WorkingDot() {
   );
 }
 
-function RowCount({ value }: { value: number }) {
+function RowCount({ value, hasMore = false }: { value: number; hasMore?: boolean }) {
   return (
     <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-      {value}
+      {value}{hasMore ? "+" : ""}
     </span>
   );
 }
@@ -162,6 +162,7 @@ interface TasksSidebarProps {
   summaries: SidebarProjectSummary[] | undefined;
   presets: Preset[] | undefined;
   activeTasks: Task[] | undefined;
+  hasMoreActiveTasks?: boolean;
   isLoading: boolean;
   onNavigate: (route: TasksRoute) => void;
   onNewProject: () => void;
@@ -174,6 +175,7 @@ export function TasksSidebar({
   summaries,
   presets,
   activeTasks,
+  hasMoreActiveTasks = false,
   isLoading,
   onNavigate,
   onNewProject,
@@ -264,7 +266,7 @@ export function TasksSidebar({
             <Icon name="Zap" className="size-3.5 shrink-0" />
             <span className="flex-1">Active</span>
             {activeTasks && activeTasks.length > 0 ? <WorkingDot /> : null}
-            {activeTasks ? <RowCount value={activeTasks.length} /> : null}
+            {activeTasks ? <RowCount value={activeTasks.length} hasMore={hasMoreActiveTasks} /> : null}
           </SidebarRow>
         </div>
         {isLoading ? (

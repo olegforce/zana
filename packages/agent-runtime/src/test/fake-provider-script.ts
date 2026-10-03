@@ -323,6 +323,32 @@ function scheduleTurnCompletion(
   }, delayMs);
 }
 
+/** Completed nested work forces immediate host delivery during the refresh regression. */
+function scheduleRefreshStream(threadId: string, durationMs: number): void {
+  const thread = getThreadState(threadId)!;
+  const turn = thread.activeTurn!;
+  const ticks = Math.max(1, Math.min(400, Math.ceil(durationMs / 25)));
+  let tick = 0;
+  const progress = () => {
+    const childTurnId = `${turn.turnId}-refresh-${++tick}`;
+    sendDeltas(threadId, [
+      { kind: 'turn.open', providerTurnId: childTurnId, parentRef: 'refresh-work' },
+      { kind: 'turn.boundary', providerTurnId: childTurnId, status: 'completed' },
+      {
+        kind: 'item.close', key: { providerItemId: `refresh-${tick}` },
+        item: { type: 'agentMessage', text: `Refresh progress ${tick}` },
+        status: 'completed', providerTurnId: turn.turnId,
+      },
+    ]);
+    if (tick === ticks) {
+      completeTurn(threadId, 'completed', 'Refresh stream complete');
+    } else {
+      turn.timer = setTimeout(progress, 25);
+    }
+  };
+  turn.timer = setTimeout(progress, 25);
+}
+
 function requestUserQuestion(
   threadId: string,
   turnId: string,
@@ -469,6 +495,12 @@ function beginTurn(threadId: string, input: unknown, clientRequestId?: string, o
       method: "item/tool/call",
       params,
     });
+    return;
+  }
+
+  const refreshStream = /(?:^|\s)stream_refresh:(\d+)(?:\s|$)/.exec(inputText);
+  if (refreshStream) {
+    scheduleRefreshStream(threadId, Number(refreshStream[1]));
     return;
   }
 

@@ -14,6 +14,14 @@
 
 export const TERMINAL_RESIZE_SETTLE_MS = 100;
 
+/** A selected terminal can still be parked beneath a display:none ancestor. */
+export function isTerminalHostVisible(
+  host: Pick<HTMLElement, 'isConnected' | 'offsetParent' | 'clientWidth' | 'clientHeight'> | null
+): boolean {
+  return !!host && host.isConnected && host.offsetParent !== null
+    && host.clientWidth > 0 && host.clientHeight > 0;
+}
+
 export interface ResyncTerminal {
   cols: number;
   rows: number;

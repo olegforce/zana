@@ -47,6 +47,7 @@ function TasksNavigationPanelContent({ subPath, onNavigate, searchable = false }
         summaries={summaries.data}
         presets={search ? undefined : presets.data}
         activeTasks={activeTasks.data}
+        hasMoreActiveTasks={activeTasks.hasMore}
         isLoading={
           isAwaitingFirstResult(folders) ||
           isAwaitingFirstResult(projects) ||

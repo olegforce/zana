@@ -364,6 +364,13 @@ type CompletedPlanItem = {
   index: number;
 };
 
+/** Completed items change the document/checklist; terminal events make a plain
+ * planning reply eligible for capture. Streaming deltas change neither. */
+export function shouldSyncPlanForConversationEvent(type: string): boolean {
+  return type === 'item/completed' || type === 'turn/completed'
+    || type === 'turn.completed' || type === 'client/turn/requested';
+}
+
 export function syncPlanFromLatestEvents(db: ZccDatabase, threadId: string): void {
   // Bound completed items separately so streamed deltas cannot evict the final reply.
   const rows = listConversationThreadEventsWindow(db, threadId, { limit: 400, type: 'item/completed' });

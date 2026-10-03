@@ -155,6 +155,18 @@ describe('listen.ts', () => {
 });
 
 describe('product plugin sdk confinement', () => {
+  it('projects the host-owned Default Project marker only when true, independently of its display name', () => {
+    const projects = { list: () => [
+      {id:'default', name:'Renamed scratch', path:'/tmp/default', quickAgent:true},
+      {id:'named', name:'Default Project', path:'/tmp/named'},
+      {id:'ordinary', name:'Other', path:'/tmp/ordinary', quickAgent:false}
+    ] } as any;
+    expect(productListProjects({projects})).toEqual([
+      {id:'default', name:'Renamed scratch', path:'/tmp/default', quickAgent:true},
+      {id:'named', name:'Default Project', path:'/tmp/named'},
+      {id:'ordinary', name:'Other', path:'/tmp/ordinary'}
+    ]);
+  });
   it('lists projects and rejects inbox pushes for unknown project ids', async () => {
     const dir = tempDir();
     mkdirSync(join(dir, '.zcc'), { recursive: true });

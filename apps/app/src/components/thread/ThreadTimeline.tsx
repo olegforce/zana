@@ -116,14 +116,12 @@ export function ThreadTimeline({
   loadingOlder = false,
   onLoadOlder
 }: ThreadTimelineProps) {
-  const [now, setNow] = useState(() => Date.now());
   const [retainedTerminalIds, setRetainedTerminalIds] = useState<string[]>([]);
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [latestPageRequest, setLatestPageRequest] = useState(0);
   const paneRef = useRef<HTMLDivElement>(null);
   const lastPinnedTopRef = useRef<number | null>(null);
+  const lastPinnedHeightRef = useRef<number | null>(null);
   const scrollbarIdleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pinnedAway, setPinnedAway] = useState(false);
   const [initialOpen, setInitialOpen] = useState(true);
@@ -169,9 +167,11 @@ export function ThreadTimeline({
     if (!pane) return;
     pinScrollToBottom(pane);
     lastPinnedTopRef.current = pane.scrollTop;
+    lastPinnedHeightRef.current = pane.clientHeight;
   }, []);
 
   useLayoutEffect(() => {
+    setLatestPageRequest(request => request + 1);
     setInitialOpen(true);
     setPinnedAway(false);
   }, [threadId]);
@@ -198,6 +198,7 @@ export function ThreadTimeline({
     const onSend = (event: Event) => {
       const detail = (event as CustomEvent<{ threadId: string }>).detail;
       if (detail?.threadId !== threadId) return;
+      setLatestPageRequest(request => request + 1);
       setPinnedAway(false);
       setInitialOpen(true);
       pin();
@@ -228,6 +229,13 @@ export function ThreadTimeline({
     const pane = paneRef.current;
     if (!pane) return;
     markTransientScrollbarScrolling(pane, scrollbarIdleRef);
+    // WebKit may clamp/pan the scroll position as the keyboard changes the
+    // scrollport, before ResizeObserver can pin it. That is not scrollback.
+    // Once the user has released following, resizing must preserve their place.
+    if (stick && lastPinnedHeightRef.current !== pane.clientHeight) {
+      pin();
+      return;
+    }
     const near = isNearBottom(pane);
     // Android may deliver our own scroll event after new rows have increased
     // scrollHeight. The unchanged position is not a user scrollback gesture.
@@ -236,12 +244,13 @@ export function ThreadTimeline({
     setPinnedAway(!near);
     if (!near) setInitialOpen(false);
     if (near) onReachedBottom?.();
-  }, [onReachedBottom]);
+  }, [onReachedBottom, pin, stick]);
 
   const scrollToBottom = () => {
     const pane = paneRef.current;
     if (!pane) return;
     pin();
+    setLatestPageRequest(request => request + 1);
     setPinnedAway(false);
     setInitialOpen(true);
     onReachedBottom?.();
@@ -274,9 +283,12 @@ export function ThreadTimeline({
             const top = pane?.scrollTop ?? 0;
             setPinnedAway(true);
             setInitialOpen(false);
-            void onLoadOlder?.().then(() => requestAnimationFrame(() => {
-              if (pane && pane === paneRef.current) pane.scrollTop = top + pane.scrollHeight - height;
-            }));
+            void onLoadOlder?.().then(() => {
+              setHistoryPage(page => page + 1);
+              requestAnimationFrame(() => {
+                if (pane && pane === paneRef.current) pane.scrollTop = top + pane.scrollHeight - height;
+              });
+            });
           }}>{loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>}
         {showLoading ? (
           <PaneEmptyState
@@ -290,7 +302,9 @@ export function ThreadTimeline({
         ) : (
           <TimelineRows
             rows={viewRows}
-            now={now}
+            historyPage={historyPage}
+            latestPageRequest={latestPageRequest}
+            targetRowId={searchHitRowId}
             expansion={expansionWithRetention}
             unreadRowId={unreadRowId}
             onCopy={onCopy}

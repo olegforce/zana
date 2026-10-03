@@ -142,7 +142,7 @@ export function rowDescription(row: HubRow): string {
 }
 
 export function installedPublisher(row: HubRow): InstalledPublisher {
-  if (row.entry?.source === 'local') return 'local';
+  if (row.entry?.source === 'local' || row.plugin?.sourceKind === 'path') return 'local';
   if (row.plugin?.provenance === 'builtin') return 'official';
   if (row.plugin?.provenance === 'catalog') return 'community';
   if (row.plugin?.provenance === 'direct') return 'user';
@@ -183,12 +183,6 @@ export function filterInstalledRows(
   return filtered.sort((left, right) => {
     const enabledResult = Number(!rowEnabled(left)) - Number(!rowEnabled(right));
     if (enabledResult !== 0) return enabledResult;
-    if (rowEnabled(left)) {
-      const publisherResult =
-        Number(publisherLabel(installedPublisher(left)) === null) -
-        Number(publisherLabel(installedPublisher(right)) === null);
-      if (publisherResult !== 0) return publisherResult;
-    }
     const nameCmp =
       left.module.title.localeCompare(right.module.title) ||
       left.module.id.localeCompare(right.module.id);

@@ -1,5 +1,3 @@
-import { StringDecoder } from "node:string_decoder";
-
 /**
  * The largest single JSON-RPC line either side of the bridge wire will
  * assemble. Real traffic is far below this: the biggest messages are tool
@@ -24,58 +22,120 @@ export interface BoundedLineReaderArgs {
   maxLineBytes?: number;
 }
 
+export interface BoundedLineFramer {
+  push(chunk: string | Uint8Array): void;
+  /** Emit a valid unterminated tail, then release the pending frame. */
+  end(): void;
+  /** Release a partial frame without emitting it (e.g. a destroyed pipe). */
+  clear(): void;
+}
+
+/**
+ * Incremental byte framing shared by the protocol reader and recording tees.
+ * Decode only complete lines so UTF-8 boundaries and per-line byte limits do
+ * not depend on how the pipe chunks its writes.
+ */
+export function createBoundedLineFramer(
+  args: Pick<BoundedLineReaderArgs, "onLine" | "onOverflow" | "maxLineBytes">,
+): BoundedLineFramer {
+  const maxLineBytes = args.maxLineBytes ?? MAX_JSON_RPC_LINE_BYTES;
+  if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 0) {
+    throw new RangeError("maxLineBytes must be a non-negative safe integer");
+  }
+  // Coalesce even one-byte input chunks into bounded blocks. Keeping each
+  // incoming chunk would otherwise need up to maxLineBytes array entries.
+  const blockBytes = Math.max(1, Math.min(maxLineBytes, 64 * 1024));
+  let blocks: Buffer[] = [];
+  let block: Buffer | null = null;
+  let blockUsed = 0;
+  let lineBytes = 0;
+  let discarding = false;
+
+  function clearLine(): void {
+    blocks = [];
+    block = null;
+    blockUsed = 0;
+    lineBytes = 0;
+    discarding = false;
+  }
+
+  function append(chunk: Buffer, start: number, end: number): void {
+    lineBytes += end - start;
+    if (discarding) return;
+    if (lineBytes > maxLineBytes) {
+      discarding = true;
+      blocks = [];
+      block = null;
+      blockUsed = 0;
+      return;
+    }
+    while (start < end) {
+      block ??= Buffer.allocUnsafe(blockBytes);
+      const copied = Math.min(end - start, blockBytes - blockUsed);
+      chunk.copy(block, blockUsed, start, start + copied);
+      blockUsed += copied;
+      start += copied;
+      if (blockUsed === blockBytes) {
+        blocks.push(block);
+        block = null;
+        blockUsed = 0;
+      }
+    }
+  }
+
+  function emit(): void {
+    if (block !== null) blocks.push(block.subarray(0, blockUsed));
+    // Decode once per complete line, preserving UTF-8 split across chunks and
+    // avoiding a rescan of the entire pending line on every data event.
+    const line = Buffer.concat(blocks, lineBytes).toString("utf8");
+    clearLine();
+    args.onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+  }
+
+  function push(chunk: string | Uint8Array): void {
+    const bytes = typeof chunk === "string"
+      ? Buffer.from(chunk)
+      : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    let start = 0;
+    for (;;) {
+      const newlineIndex = bytes.indexOf(10, start);
+      if (newlineIndex === -1) {
+        break;
+      }
+      append(bytes, start, newlineIndex);
+      if (discarding) {
+        const discardedBytes = lineBytes;
+        clearLine();
+        args.onOverflow(discardedBytes);
+      } else {
+        emit();
+      }
+      start = newlineIndex + 1;
+    }
+    append(bytes, start, bytes.length);
+  }
+
+  function end(): void {
+    if (!discarding && lineBytes > 0) {
+      emit();
+    }
+    clearLine();
+  }
+
+  return { push, end, clear: clearLine };
+}
+
 /**
  * Newline-delimited reader with a hard per-line cap — `readline` with the
  * bound it lacks. CR is stripped so a CRLF producer parses as JSON.
  */
 export function readBoundedLines(args: BoundedLineReaderArgs): void {
-  const maxLineBytes = args.maxLineBytes ?? MAX_JSON_RPC_LINE_BYTES;
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  let discarding = false;
-  let discardedBytes = 0;
-
-  args.input.on("data", (chunk: Buffer | string) => {
-    const text =
-      typeof chunk === "string" ? chunk : decoder.write(chunk);
-    let start = 0;
-    for (;;) {
-      const newlineIndex = text.indexOf("\n", start);
-      if (newlineIndex === -1) {
-        break;
-      }
-      if (discarding) {
-        discarding = false;
-        args.onOverflow(discardedBytes);
-        discardedBytes = 0;
-      } else {
-        emit(pending + text.slice(start, newlineIndex));
-      }
-      pending = "";
-      start = newlineIndex + 1;
-    }
-    const tail = text.slice(start);
-    if (discarding) {
-      discardedBytes += Buffer.byteLength(tail);
-      return;
-    }
-    pending += tail;
-    if (Buffer.byteLength(pending) > maxLineBytes) {
-      discarding = true;
-      discardedBytes = Buffer.byteLength(pending);
-      pending = "";
-    }
-  });
-
+  const framer = createBoundedLineFramer(args);
+  args.input.on("data", framer.push);
   args.input.on("end", () => {
-    if (!discarding && pending.length > 0) {
-      emit(pending);
-    }
-    pending = "";
+    framer.end();
     args.onClose?.();
   });
-
-  function emit(line: string): void {
-    args.onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
-  }
+  // A destroyed child pipe can close without end; release its partial frame.
+  args.input.once("close", framer.clear);
 }

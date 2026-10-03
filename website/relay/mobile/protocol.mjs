@@ -55,6 +55,70 @@ export async function dataFramesFlushed(socket, type, id, data, active) {
   }
   return true;
 }
+/** A bounded, round-robin upload queue. Producers pause until their chunk drains. */
+export function createDataFrameQueue(socket) {
+  const jobs = new Set();
+  const ready = [];
+  let retained = 0, sending = false, closed = false, retry = null;
+  const finish = (job, ok) => {
+    if (!jobs.delete(job)) return;
+    retained -= job.data.length;
+    job.data = Buffer.alloc(0);
+    job.resolve(ok);
+  };
+  const drain = () => {
+    if (closed || sending) return;
+    clearTimeout(retry); retry = null;
+    while (ready.length && !jobs.has(ready[0])) ready.shift();
+    const job = ready[0];
+    if (!job) return;
+    if (!job.active() || socket.readyState !== WebSocket.OPEN) {
+      ready.shift(); finish(job, false); drain(); return;
+    }
+    // Leave room for cancellation/response/control frames on the same socket.
+    if (socket.bufferedAmount > LIMITS.buffer - 2 * LIMITS.chunk) {
+      retry = setTimeout(drain, 10); retry.unref(); return;
+    }
+    ready.shift();
+    sending = true;
+    const end = Math.min(job.offset + LIMITS.chunk, job.data.length);
+    const done = error => {
+      sending = false;
+      if (error || !job.active()) finish(job, false);
+      else if (jobs.has(job)) {
+        job.offset = end;
+        if (end === job.data.length) finish(job, true);
+        else ready.push(job);
+      }
+      drain();
+    };
+    if (!send(socket, { type: job.type, id: job.id, data: job.data.subarray(job.offset, end).toString('base64') }, done)) done(new Error('Upload send failed'));
+  };
+  const close = () => {
+    closed = true; clearTimeout(retry); retry = null;
+    for (const job of jobs) finish(job, false);
+    ready.length = 0;
+    socket.off('close', close);
+  };
+  socket.once('close', close);
+  return {
+    write(type, id, data, active) {
+      if (closed || !active() || jobs.size >= LIMITS.streams || data.length > LIMITS.buffer - retained) return Promise.resolve(false);
+      if (!data.length) return Promise.resolve(true);
+      return new Promise(resolve => {
+        const job = { type, id, data, active, resolve, offset: 0 };
+        retained += data.length; jobs.add(job); ready.push(job); drain();
+      });
+    },
+    cancel(id) {
+      for (const job of jobs) if (job.id === id) finish(job, false);
+      for (let n = ready.length - 1; n >= 0; n--) if (!jobs.has(ready[n])) ready.splice(n, 1);
+      drain();
+    },
+    close,
+    retainedBytes: () => retained
+  };
+}
 export function bytes(frame, max = LIMITS.chunk) {
   // A flat character scan avoids regex stack growth for megabyte socket frames.
   if (typeof frame.data !== 'string' || frame.data.length > Math.ceil(max / 3) * 4 || /[^A-Za-z0-9+/=]/.test(frame.data)) throw new Error('Invalid data');

@@ -1,0 +1,46 @@
+import { EventEmitter } from 'node:events';
+import { expect, it, vi } from 'vitest';
+import { IPC } from '@zana-ai/zcc-desktop-contract';
+const views = vi.hoisted(() => [] as any[]);
+vi.mock('electron', () => ({
+  Menu: { buildFromTemplate: vi.fn() },
+  session: { fromPartition: () => ({ on: vi.fn(), setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() }) },
+  WebContentsView: class {
+    webContents = Object.assign(new EventEmitter(), {
+      isDestroyed: () => false, getURL: () => 'about:blank', getTitle: () => '',
+      isLoadingMainFrame: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      setWindowOpenHandler: (handler: unknown) => { this.open = handler; }, loadURL: vi.fn().mockResolvedValue(undefined),
+      debugger: { isAttached: () => false }, close: vi.fn()
+    });
+    open: any;
+    setBounds = vi.fn(); setVisible = vi.fn();
+    constructor() { views.push(this); }
+  }
+}));
+import { createDesktopBrowserViewManager } from './desktop-browser-view.js';
+
+it('only forwards allowed popups from visible pages and retains the rate limit', () => {
+  const hostWindow = {
+    isDestroyed: () => false, getContentBounds: () => ({ width: 800, height: 600 }),
+    contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    webContents: { id: 1, isDestroyed: () => false, send: vi.fn() }
+  };
+  const manager = createDesktopBrowserViewManager();
+  try {
+    manager.createTab({ hostWindow, tabId: 'tab', threadId: 'thread', url: 'about:blank', profile: { kind: 'automation', id: 'run' }, viewport: { width: 800, height: 600 } });
+    const view = views.at(-1);
+    expect(view.open({ url: 'https://example.test/hidden' })).toEqual({ action: 'deny' });
+    expect(hostWindow.webContents.send).not.toHaveBeenCalled();
+    manager.setVisibleWithoutFocus({ hostWindow, request: { tabId: 'tab', visible: true } });
+    view.open({ url: 'https://example.test/visible' });
+    expect(hostWindow.webContents.send).toHaveBeenCalledWith(IPC.browser.scopedOpenTab, { tabId: 'tab', url: 'https://example.test/visible' });
+    expect(hostWindow.webContents.send).toHaveBeenCalledWith(IPC.browser.openTab, { url: 'https://example.test/visible' });
+    hostWindow.webContents.send.mockClear();
+    view.open({ url: 'file:///etc/passwd' });
+    expect(hostWindow.webContents.send).not.toHaveBeenCalled();
+    view.open({ url: 'https://example.test/third' });
+    hostWindow.webContents.send.mockClear();
+    view.open({ url: 'https://example.test/limited' });
+    expect(hostWindow.webContents.send).not.toHaveBeenCalled();
+  } finally { manager.destroyAll(); views.length = 0; }
+});
