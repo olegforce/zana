@@ -1,61 +1,9 @@
-import {
-  filterLibraryMentionDocs,
-  formatLibraryMentionContext,
-  parseLibraryMentionId
-} from './src/library-mentions.js';
+import { createRequire as __createRequire } from "node:module";
+import { dirname as __pathDirname } from "node:path";
+import { fileURLToPath as __fileURLToPath } from "node:url";
+const require = __createRequire(import.meta.url);
+var __filename = __fileURLToPath(import.meta.url);
+var __dirname = __pathDirname(__filename);
+import{createRequire as m}from"node:module";import{dirname as c}from"node:path";import{fileURLToPath as s}from"node:url";import{createRequire as d}from"node:module";import{dirname as f}from"node:path";import{fileURLToPath as h}from"node:url";import{createRequire as g}from"node:module";import{dirname as y}from"node:path";import{fileURLToPath as j}from"node:url";import{createRequire as w}from"node:module";import{dirname as P}from"node:path";import{fileURLToPath as I}from"node:url";import{createRequire as b}from"node:module";import{dirname as q}from"node:path";import{fileURLToPath as L}from"node:url";var A=m(import.meta.url),u=s(import.meta.url),D=c(u),W=d(import.meta.url),R=h(import.meta.url),X=f(R),Y=g(import.meta.url),S=j(import.meta.url),Z=y(S),ee=w(import.meta.url),_=I(import.meta.url),re=P(_),te=b(import.meta.url),v=L(import.meta.url),oe=q(v);function T(o){return`${o.scope}:${o.projectId??"global"}:${o.relPath}`}function U(o){let l=String(o??"").trim(),i=l.indexOf(":"),e=i===-1?-1:l.indexOf(":",i+1);if(i<=0||e<=i)return null;let t=l.slice(0,i),r=l.slice(i+1,e),a=l.slice(e+1);return!a||a.split("/").includes("..")?null:t==="global"?{scope:"global",relPath:a}:t==="project"&&r?{scope:"project",projectId:r,relPath:a}:null}function $(o,{query:l,projectId:i}){let e=String(l??"").trim().toLowerCase(),t=typeof i=="string"?i.trim():"";return(Array.isArray(o)?o:[]).filter(r=>r?.scope==="global"?!0:!!t&&r?.projectId===t).filter(r=>{if(!e)return!0;let a=String(r.title??"").toLowerCase(),n=String(r.relPath??"").toLowerCase(),p=String(r.summary??"").toLowerCase();return a.includes(e)||n.includes(e)||p.includes(e)}).slice(0,25).map(r=>({id:T(r),label:String(r.title||r.relPath||"Untitled")}))}function x(o,l){let i=String(o||"Library document").trim()||"Library document",e=String(l??"");return`# ${i}
 
-export default function plugin(zcc, deps = {}) {
-  zcc.log.info('docs plugin loaded');
-  const library = deps.library ?? zcc.sdk.library;
-
-  zcc.rpc.method('read', async (args) => {
-    const scope = args?.scope === 'global' ? 'global' : 'project';
-    const relPath = typeof args?.path === 'string' ? args.path.trim() : '';
-    const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : undefined;
-    if (!relPath) throw new Error('path is required');
-    return library.read({
-      scope,
-      relPath,
-      ...(projectId ? { projectId } : {})
-    });
-  });
-
-  zcc.rpc.method('write', async (args) => {
-    const scope = args?.scope === 'global' ? 'global' : 'project';
-    const relPath = typeof args?.path === 'string' ? args.path.trim() : '';
-    const content = typeof args?.content === 'string' ? args.content : null;
-    const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : undefined;
-    if (!relPath) throw new Error('path is required');
-    if (content === null) throw new Error('content is required');
-    return library.write({
-      scope,
-      relPath,
-      content,
-      expectedSha256: args?.expectedSha256,
-      ...(projectId ? { projectId } : {})
-    });
-  });
-
-  zcc.ui.registerMentionProvider({
-    id: 'note',
-    label: 'Docs',
-    async search(ctx) {
-      const query = typeof ctx === 'string' ? ctx : ctx?.query;
-      const projectId = typeof ctx === 'object' && ctx ? ctx.projectId : undefined;
-      const docs = await library.list(projectId ? { projectId } : {});
-      return filterLibraryMentionDocs(docs, { query, projectId });
-    },
-    async resolve(itemId) {
-      const parsed = parseLibraryMentionId(itemId);
-      if (!parsed) throw new Error(`unknown note: ${itemId}`);
-      const result = await library.read({
-        scope: parsed.scope,
-        relPath: parsed.relPath,
-        ...(parsed.projectId ? { projectId: parsed.projectId } : {})
-      });
-      if (!result?.ok) throw new Error(`unknown note: ${itemId}`);
-      const title = parsed.relPath.split('/').pop() || parsed.relPath;
-      return { context: formatLibraryMentionContext(title, result.content) };
-    }
-  });
-}
+${e}`}function ie(o,l={}){o.log.info("docs plugin loaded");let i=l.library??o.sdk.library;o.rpc.method("read",async e=>{let t=e?.scope==="global"?"global":"project",r=typeof e?.path=="string"?e.path.trim():"",a=typeof e?.projectId=="string"?e.projectId.trim():void 0;if(!r)throw new Error("path is required");return i.read({scope:t,relPath:r,...a?{projectId:a}:{}})}),o.rpc.method("write",async e=>{let t=e?.scope==="global"?"global":"project",r=typeof e?.path=="string"?e.path.trim():"",a=typeof e?.content=="string"?e.content:null,n=typeof e?.projectId=="string"?e.projectId.trim():void 0;if(!r)throw new Error("path is required");if(a===null)throw new Error("content is required");return i.write({scope:t,relPath:r,content:a,expectedSha256:e?.expectedSha256,...n?{projectId:n}:{}})}),o.ui.registerMentionProvider({id:"note",label:"Docs",async search(e){let t=typeof e=="string"?e:e?.query,r=typeof e=="object"&&e?e.projectId:void 0,a=await i.list(r?{projectId:r}:{});return $(a,{query:t,projectId:r})},async resolve(e){let t=U(e);if(!t)throw new Error(`unknown note: ${e}`);let r=await i.read({scope:t.scope,relPath:t.relPath,...t.projectId?{projectId:t.projectId}:{}});if(!r?.ok)throw new Error(`unknown note: ${e}`);let a=t.relPath.split("/").pop()||t.relPath;return{context:x(a,r.content)}}})}export{ie as default};
