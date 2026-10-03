@@ -60,6 +60,39 @@ afterEach(() => {
 });
 
 describe('agent board drag/drop', () => {
+  it('keeps project groups in project order across closes, status updates, and board remounts', () => {
+    useData.setState({ projects: [
+      { id: 'q', name: 'Other', path: '/tmp/q', createdAt: 1, lastActiveAt: 100, sortIndex: 1 },
+      { id: 'p', name: 'Project', path: '/tmp/p', createdAt: 1, lastActiveAt: 1, sortIndex: 0 }
+    ] });
+    const items = [
+      threadFleetItem({ ...thread, id: 'p-new', status: 'idle', createdAt: 3 }, { name: 'Project' }),
+      threadFleetItem({ ...thread, id: 'q', projectId: 'q', title: 'Other thread', status: 'idle', createdAt: 2 }, { name: 'Other' }),
+      threadFleetItem({ ...thread, id: 'p-old', title: 'Older thread', status: 'idle', createdAt: 1 }, { name: 'Project' }),
+      agentFleetItem({ ...agent, state: 'idle', stateSince: 0 })
+    ];
+    const board = (cards: FleetItem[]) => <MemoryRouter><AgentBoardLanes cards={cards} showProject onInspect={vi.fn()} /></MemoryRouter>;
+    const names = (key = 'idle') => [...lane(key).querySelectorAll('.agents-lane-group-name')].map((element) => element.textContent);
+    const view = render(board(items));
+    expect(names()).toEqual(['Project', 'Other']);
+    // Closing the newest card leaves older cards, whose recency used to move
+    // the entire project below Other.
+    const remaining = items.filter((item) => item.id !== 'p-new');
+    view.rerender(board(remaining));
+    expect(names()).toEqual(['Project', 'Other']);
+    expect([...lane('idle').querySelectorAll('.agents-lane-group-count')].map((element) => element.textContent)).toEqual(['2', '1']);
+    const busy = remaining.map((item) => item.kind === 'thread'
+      ? threadFleetItem({ ...item.thread, status: 'active' }, { name: item.projectName })
+      : item.kind === 'agent' ? agentFleetItem({ ...item.card, state: 'working' }) : item);
+    view.rerender(board(busy));
+    expect(names('working')).toEqual(['Project', 'Other']);
+    view.unmount();
+    const reopened = render(board(remaining));
+    expect(names()).toEqual(['Project', 'Other']);
+    reopened.rerender(board(remaining.filter((item) => item.projectId !== 'p')));
+    expect(names()).toEqual(['Other']);
+  });
+
   it('uses a single readable phone lane and opens cards without allowing touch drag moves', () => {
     layout.compact = true;
     const inspect = vi.fn();

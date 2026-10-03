@@ -311,7 +311,8 @@ export function fleetMatchesLane(
   return matchAgent(item.card);
 }
 
-export function groupFleetByProject(items: FleetItem[]): Array<{
+/** Keep project positions independent of card recency/count, preserving card order within each group. */
+export function groupFleetByProject(items: FleetItem[], projectOrder: readonly string[]): Array<{
   projectId: string;
   projectName: string;
   projectColor?: string;
@@ -338,7 +339,12 @@ export function groupFleetByProject(items: FleetItem[]): Array<{
     }
     group.cards.push(item);
   }
-  return groups;
+  const ranks = new Map(projectOrder.map((id, index) => [id, index]));
+  return groups.sort((a, b) =>
+    (ranks.get(a.projectId) ?? Infinity) - (ranks.get(b.projectId) ?? Infinity)
+    // Missing projects still have a stable order while the project list loads.
+    || a.projectId.localeCompare(b.projectId)
+  );
 }
 
 export function resolveMonitorSelection(
