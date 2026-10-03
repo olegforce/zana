@@ -22,8 +22,9 @@
  * process, so the four files of a scope merge back into their exact order
  * even when several bridge processes served the thread.
  *
- * Off by default. Nothing here buffers: every line is appended as it crosses,
- * so a crash loses nothing and a long session costs no memory. The recorder is
+ * Off by default. Complete lines are appended as they cross; partial lines
+ * use the protocol's bounded byte framer, without retaining session history.
+ * The recorder is
  * a process-wide singleton keyed in `globalThis` rather than a module-level
  * variable because a plugin's host artifact bundles its own copy of this
  * module — the bootstrap and the bridge must still share one counter.
@@ -35,9 +36,11 @@ import {
   writeSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import type { Readable, Writable } from "node:stream";
-import { MAX_JSON_RPC_LINE_BYTES } from "./bounded-line-reader.js";
+import {
+  createBoundedLineFramer,
+  MAX_JSON_RPC_LINE_BYTES,
+} from "./bounded-line-reader.js";
 
 export const PROVIDER_BRIDGE_RECORD_DIR_ENV = "ZCC_PROVIDER_BRIDGE_RECORD_DIR";
 
@@ -148,38 +151,16 @@ export interface BridgeRecorder {
 export function createRecordingLineSplitter(
   onLine: (line: string) => void,
   maxLineBytes: number = MAX_JSON_RPC_LINE_BYTES,
-): { push: (chunk: string | Uint8Array) => void } {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  let discarding = false;
-  return {
-    push(chunk) {
-      const text =
-        typeof chunk === "string" ? chunk : decoder.write(Buffer.from(chunk));
-      let start = 0;
-      for (;;) {
-        const newlineIndex = text.indexOf("\n", start);
-        if (newlineIndex === -1) {
-          break;
-        }
-        if (!discarding) {
-          const line = pending + text.slice(start, newlineIndex);
-          onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
-        }
-        discarding = false;
-        pending = "";
-        start = newlineIndex + 1;
-      }
-      if (discarding) {
-        return;
-      }
-      pending += text.slice(start);
-      if (Buffer.byteLength(pending) > maxLineBytes) {
-        discarding = true;
-        pending = "";
-      }
-    },
-  };
+): { push: (chunk: string | Uint8Array) => void; clear: () => void } {
+  const framer = createBoundedLineFramer({
+    onLine,
+    // Recording is a tee: discard oversized diagnostics without interrupting
+    // the provider's pipe. The protocol reader reports its own overflows.
+    onOverflow: () => {},
+    maxLineBytes,
+  });
+  // Tees record complete lines only; do not flush an unterminated tail.
+  return { push: framer.push, clear: framer.clear };
 }
 
 function safeScopeSegment(threadId: string | null): string {
@@ -231,6 +212,7 @@ function pendingKey(id: string | number): string {
 export function createBridgeRecorder(args: { dir: string }): BridgeRecorder {
   const dir = resolve(args.dir);
   const fds = new Map<string, number>();
+  const childIoCleanups = new Set<() => void>();
   // Requests the runtime sent, awaiting the bridge's response; and requests
   // the bridge sent (tool calls, interactions), awaiting the runtime's.
   const runtimeRequestThreads = new Map<string, string | null>();
@@ -238,6 +220,15 @@ export function createBridgeRecorder(args: { dir: string }): BridgeRecorder {
   const run = Date.now();
   let seq = 0;
   let closed = false;
+
+  function trackCleanup(release: () => void): () => void {
+    const cleanup = () => {
+      if (!childIoCleanups.delete(cleanup)) return;
+      release();
+    };
+    childIoCleanups.add(cleanup);
+    return cleanup;
+  }
 
   function fdFor(scope: string, direction: BridgeRecordingDirection): number {
     const key = `${scope} ${direction}`;
@@ -313,28 +304,51 @@ export function createBridgeRecorder(args: { dir: string }): BridgeRecorder {
     child: BridgeRecorderChildStreams,
     scope: { threadId: string | null },
   ): void {
+    if (closed) return;
     const { stdin, stdout } = child;
     if (stdout) {
       const splitter = createRecordingLineSplitter((line) =>
         record({ direction: "provider→bridge", line, threadId: scope.threadId }),
       );
-      stdout.on("data", (chunk: Buffer | string) => splitter.push(chunk));
+      const cleanup = trackCleanup(() => {
+        splitter.clear();
+        stdout.removeListener("data", splitter.push);
+        stdout.removeListener("end", cleanup);
+        stdout.removeListener("close", cleanup);
+      });
+      stdout.on("data", splitter.push);
+      stdout.once("end", cleanup);
+      stdout.once("close", cleanup);
     }
     if (stdin) {
       const splitter = createRecordingLineSplitter((line) =>
         record({ direction: "bridge→provider", line, threadId: scope.threadId }),
       );
-      const originalWrite = stdin.write.bind(stdin);
-      stdin.write = ((
+      let active = true;
+      const originalWrite = stdin.write;
+      const wrappedWrite = ((
         chunk: string | Uint8Array,
         ...rest: unknown[]
       ): boolean => {
-        splitter.push(chunk);
-        return (originalWrite as (...args: unknown[]) => boolean)(
+        if (active) splitter.push(chunk);
+        return (originalWrite as (...args: unknown[]) => boolean).call(
+          stdin,
           chunk,
           ...rest,
         );
       }) as typeof stdin.write;
+      const cleanup = trackCleanup(() => {
+        active = false;
+        splitter.clear();
+        // Another consumer may have installed a later wrapper; never remove
+        // it while disposing our tee.
+        if (stdin.write === wrappedWrite) stdin.write = originalWrite;
+        stdin.removeListener("finish", cleanup);
+        stdin.removeListener("close", cleanup);
+      });
+      stdin.write = wrappedWrite;
+      stdin.once("finish", cleanup);
+      stdin.once("close", cleanup);
     }
   }
 
@@ -345,6 +359,7 @@ export function createBridgeRecorder(args: { dir: string }): BridgeRecorder {
     recordChildIo,
     close() {
       closed = true;
+      for (const cleanup of childIoCleanups) cleanup();
       for (const fd of fds.values()) {
         try {
           closeSync(fd);

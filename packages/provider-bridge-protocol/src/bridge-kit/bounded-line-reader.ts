@@ -22,11 +22,22 @@ export interface BoundedLineReaderArgs {
   maxLineBytes?: number;
 }
 
+export interface BoundedLineFramer {
+  push(chunk: string | Uint8Array): void;
+  /** Emit a valid unterminated tail, then release the pending frame. */
+  end(): void;
+  /** Release a partial frame without emitting it (e.g. a destroyed pipe). */
+  clear(): void;
+}
+
 /**
- * Newline-delimited reader with a hard per-line cap — `readline` with the
- * bound it lacks. CR is stripped so a CRLF producer parses as JSON.
+ * Incremental byte framing shared by the protocol reader and recording tees.
+ * Decode only complete lines so UTF-8 boundaries and per-line byte limits do
+ * not depend on how the pipe chunks its writes.
  */
-export function readBoundedLines(args: BoundedLineReaderArgs): void {
+export function createBoundedLineFramer(
+  args: Pick<BoundedLineReaderArgs, "onLine" | "onOverflow" | "maxLineBytes">,
+): BoundedLineFramer {
   const maxLineBytes = args.maxLineBytes ?? MAX_JSON_RPC_LINE_BYTES;
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 0) {
     throw new RangeError("maxLineBytes must be a non-negative safe integer");
@@ -81,8 +92,10 @@ export function readBoundedLines(args: BoundedLineReaderArgs): void {
     args.onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
   }
 
-  args.input.on("data", (chunk: Buffer | string) => {
-    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+  function push(chunk: string | Uint8Array): void {
+    const bytes = typeof chunk === "string"
+      ? Buffer.from(chunk)
+      : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
     let start = 0;
     for (;;) {
       const newlineIndex = bytes.indexOf(10, start);
@@ -100,15 +113,29 @@ export function readBoundedLines(args: BoundedLineReaderArgs): void {
       start = newlineIndex + 1;
     }
     append(bytes, start, bytes.length);
-  });
+  }
 
-  args.input.on("end", () => {
+  function end(): void {
     if (!discarding && lineBytes > 0) {
       emit();
     }
     clearLine();
+  }
+
+  return { push, end, clear: clearLine };
+}
+
+/**
+ * Newline-delimited reader with a hard per-line cap — `readline` with the
+ * bound it lacks. CR is stripped so a CRLF producer parses as JSON.
+ */
+export function readBoundedLines(args: BoundedLineReaderArgs): void {
+  const framer = createBoundedLineFramer(args);
+  args.input.on("data", framer.push);
+  args.input.on("end", () => {
+    framer.end();
     args.onClose?.();
   });
   // A destroyed child pipe can close without end; release its partial frame.
-  args.input.once("close", clearLine);
+  args.input.once("close", framer.clear);
 }

@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { readBoundedLines } from "./bounded-line-reader.js";
+import { createBoundedLineFramer, readBoundedLines } from "./bounded-line-reader.js";
 
 function readAll(
   chunks: (string | Buffer)[],
@@ -128,5 +128,34 @@ describe("readBoundedLines", () => {
     input.emit("close");
     input.emit("end");
     expect(lines).toEqual([]);
+  });
+});
+
+describe("bounded byte framer", () => {
+  it("reads only a Uint8Array view rather than its backing allocation", () => {
+    const lines: string[] = [];
+    const framer = createBoundedLineFramer({
+      onLine: line => lines.push(line), onOverflow: () => {}, maxLineBytes: 4,
+    });
+    const allocation = Uint8Array.from(Buffer.from("ignoredok\nignored"));
+    framer.push(allocation.subarray(7, 10));
+    expect(lines).toEqual(["ok"]);
+  });
+
+  it("clears partial and discarded frames without poisoning later input", () => {
+    const lines: string[] = [];
+    const overflows: number[] = [];
+    const framer = createBoundedLineFramer({
+      onLine: line => lines.push(line), onOverflow: bytes => overflows.push(bytes), maxLineBytes: 4,
+    });
+    framer.push("part");
+    framer.clear();
+    framer.push("oversized");
+    framer.clear();
+    framer.push("ok\ntail");
+    framer.end();
+    framer.end();
+    expect(lines).toEqual(["ok", "tail"]);
+    expect(overflows).toEqual([]);
   });
 });

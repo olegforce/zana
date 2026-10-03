@@ -438,7 +438,10 @@ export class RuntimeProviderProcessManager {
     };
     // Record mode: each bridge records under its provider subdirectory so the
     // layout is `<root>/<providerId>/<threadId>/<direction>.ndjson`.
-    const recordRoot = env[PROVIDER_BRIDGE_RECORD_DIR_ENV];
+    // Restore only this trusted host setting after inherited ZCC_* vars are
+    // scrubbed. Explicit runtime/adapter values, including an empty opt-out, win.
+    const recordRoot = env[PROVIDER_BRIDGE_RECORD_DIR_ENV]
+      ?? process.env[PROVIDER_BRIDGE_RECORD_DIR_ENV];
     if (recordRoot !== undefined && recordRoot !== "") {
       env[PROVIDER_BRIDGE_RECORD_DIR_ENV] = join(recordRoot, args.providerId);
     }

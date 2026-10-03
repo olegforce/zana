@@ -26,7 +26,10 @@ import type {
   AgentRuntimeBridgeLaunch,
   AgentRuntimeOptions,
 } from "./types.js";
-import type { ProviderRuntimeEvent } from "@zana-ai/zcc-provider-bridge-protocol/bridge-kit";
+import {
+  PROVIDER_BRIDGE_RECORD_DIR_ENV,
+  type ProviderRuntimeEvent,
+} from "@zana-ai/zcc-provider-bridge-protocol/bridge-kit";
 
 interface CreateProviderProcessManagerArgs {
   adapterProcessEnv?: Record<string, string>;
@@ -1877,6 +1880,70 @@ rl.on("line", (line) => {
       expect(stderrLines[0]).toBe(
         "missing|missing|missing|external-secret|thr_explicit",
       );
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it.each([
+    ["inherited host setting", "host-recordings", undefined, undefined, "host-recordings"],
+    ["no recording setting", undefined, undefined, undefined, undefined],
+    ["explicit runtime override", "host-recordings", "runtime-recordings", undefined, "runtime-recordings"],
+    ["adapter override after runtime override", "host-recordings", "runtime-recordings", "adapter-recordings", "adapter-recordings"],
+    ["explicit runtime opt-out", "host-recordings", "", undefined, ""],
+    ["adapter opt-out after runtime override", "host-recordings", "runtime-recordings", "", ""],
+    ["adapter override after runtime opt-out", "host-recordings", "", "adapter-recordings", "adapter-recordings"],
+  ])("passes the recording env with %s while scrubbing other inherited ZCC vars", async (
+    _label, inheritedRoot, runtimeRoot, adapterRoot, expectedRoot,
+  ) => {
+    const recordingPath = (root: string | undefined) =>
+      root === undefined || root === "" ? root : join(tmpDir, root);
+    vi.stubEnv(PROVIDER_BRIDGE_RECORD_DIR_ENV, recordingPath(inheritedRoot));
+    vi.stubEnv("ZCC_SESSION_ID", "inherited-session");
+    vi.stubEnv("ZCC_AUTH_TOKEN", "inherited-credential");
+    vi.stubEnv("ZCC_ARBITRARY_VALUE", "inherited-private-setting");
+    const envScript = join(tmpDir, "recording-env-provider.cjs");
+    writeFileSync(envScript, `
+      process.stderr.write(JSON.stringify({
+        recordingDir: process.env.${PROVIDER_BRIDGE_RECORD_DIR_ENV} ?? null,
+        zccKeys: Object.keys(process.env).filter(key => key.startsWith("ZCC_")).sort(),
+      }) + "\\n");
+      setInterval(() => {}, 1000);
+    `);
+    const stderrLines: string[] = [];
+    const runtimeEnv = runtimeRoot === undefined
+      ? undefined : { [PROVIDER_BRIDGE_RECORD_DIR_ENV]: recordingPath(runtimeRoot)! };
+    const adapterEnv = adapterRoot === undefined
+      ? undefined : { [PROVIDER_BRIDGE_RECORD_DIR_ENV]: recordingPath(adapterRoot)! };
+    const manager = createProviderProcessManager({
+      env: runtimeEnv,
+      adapterProcessEnv: adapterEnv,
+      onProcessExit: vi.fn(),
+      onStderr: line => stderrLines.push(line),
+      scriptPath: envScript,
+      workspacePath: tmpDir,
+    });
+    const expectedDir = expectedRoot === undefined ? null
+      : expectedRoot === "" ? "" : join(tmpDir, expectedRoot, "fake");
+
+    try {
+      // Restart the same provider to prove neither input env is mutated and the
+      // provider subdirectory is appended exactly once on each fresh spawn.
+      for (let spawn = 0; spawn < 2; spawn++) {
+        await manager.ensureProvider({ processKey: "fake", providerId: "fake" });
+        await waitForRuntimeState({
+          label: "provider recording env stderr",
+          predicate: () => stderrLines.length > spawn,
+        });
+        expect(JSON.parse(stderrLines[spawn]!)).toEqual({
+          recordingDir: expectedDir,
+          zccKeys: expectedRoot === undefined ? [] : [PROVIDER_BRIDGE_RECORD_DIR_ENV],
+        });
+        await manager.shutdownProvider({ processKey: "fake", providerId: "fake" });
+      }
+      expect(runtimeEnv?.[PROVIDER_BRIDGE_RECORD_DIR_ENV]).toBe(recordingPath(runtimeRoot));
+      expect(adapterEnv?.[PROVIDER_BRIDGE_RECORD_DIR_ENV]).toBe(recordingPath(adapterRoot));
+      expect(process.env[PROVIDER_BRIDGE_RECORD_DIR_ENV]).toBe(recordingPath(inheritedRoot));
     } finally {
       await manager.shutdown();
     }
