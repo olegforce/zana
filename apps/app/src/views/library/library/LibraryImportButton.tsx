@@ -29,7 +29,7 @@ export function LibraryImportButton({ projectId }: { projectId?: string }) {
     <input ref={input} type="file" hidden disabled={busy} aria-label={`Import file into ${target}`} onChange={event => {
       const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void importFile(file);
     }} />
-    <button type="button" className="opener-btn" disabled={busy} title={`Import file into ${target} (up to 10 MB)`} aria-label={`Import file into ${target}`} onClick={() => input.current?.click()}>
+    <button type="button" className="opener-btn library-import-btn" disabled={busy} title={`Import file into ${target} (up to 10 MB)`} aria-label={`Import file into ${target}`} onClick={() => input.current?.click()}>
       <Upload size={13} aria-hidden="true" /><span>{busy ? 'Importing…' : 'Import'}</span>
     </button>
   </>;

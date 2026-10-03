@@ -26,12 +26,34 @@ async function navigate(page: Page, path: string) {
   await page.evaluate(path => { history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')); }, path);
 }
 
+async function expectImportAlignment(page: Page, project = false) {
+  const header = page.locator('.library-view .explorer-tree-header');
+  const button = header.getByRole('button', { name: `Import file into ${project ? 'project' : 'Global'} Library`, exact: true });
+  await expect(button).toBeVisible();
+  const icon = (await button.locator('svg').boundingBox())!;
+  const label = (await button.locator('span').boundingBox())!;
+  const box = (await button.boundingBox())!;
+  const next = (await header.locator('button').last().boundingBox())!;
+  // Both children fit in the clickable box, on one row, clear of the next action.
+  expect(icon.x + icon.width).toBeLessThanOrEqual(label.x);
+  expect(Math.abs(icon.y + icon.height / 2 - label.y - label.height / 2)).toBeLessThanOrEqual(1);
+  expect(label.x + label.width).toBeLessThanOrEqual(box.x + box.width);
+  expect(label.y).toBeGreaterThanOrEqual(box.y);
+  expect(label.y + label.height).toBeLessThanOrEqual(box.y + box.height);
+  expect(box.x + box.width).toBeLessThanOrEqual(next.x);
+}
+
 test('Library opens full-width mobile documents and restores the tree on Back', async ({ app }, testInfo) => {
   test.setTimeout(180_000);
   expect(await app.window.evaluate(() => window.cc.extensions.install({ kind: 'bundled', id: 'docs' }))).toMatchObject({ ok: true });
   await expect.poll(() => app.window.evaluate(async () => (await window.cc.pluginApps.list()).some(p => p.id === 'docs' && p.status === 'running'))).toBe(true);
   await app.window.getByTestId('nav-docs').click();
   await expect(app.window.locator('.library-panel .explorer-tree')).toBeVisible();
+  await expectImportAlignment(app.window);
+  await navigate(app.window, '/projects/library-project/docs');
+  await expectImportAlignment(app.window, true);
+  await navigate(app.window, '/plugins/docs/panel');
+  await expectImportAlignment(app.window);
   await app.window.locator('.tree-row.dir').filter({ hasText: 'notes' }).click();
   await app.window.getByRole('button', { name: 'mobile-note-00.md', exact: true }).click();
   await expect(app.window.locator('.library-md-pane')).toBeVisible();
@@ -63,6 +85,7 @@ test('Library opens full-width mobile documents and restores the tree on Back', 
         await navigate(page, path);
         const root = page.locator('.library-view');
         await expect(root).toHaveAttribute('data-mobile-pane', 'documents');
+        await expectImportAlignment(page, scope === 'project');
         const input = root.locator('.library-search input');
         await input.fill('mobile-note');
         await root.locator('.tree-row.dir').filter({ hasText: 'notes' }).click();
