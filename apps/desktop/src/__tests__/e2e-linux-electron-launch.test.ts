@@ -28,8 +28,9 @@ describe('linux CI Electron launch', () => {
     expect(linuxCiElectronEnv('darwin')).toEqual({});
   });
 
-  it('launchApp uses the repo Electron binary and linux CI flags', () => {
-    expect(fixture).toContain('executablePath: projectElectronBinary()');
+  it('launchApp uses the packaged override or repo Electron binary and linux CI flags', () => {
+    expect(fixture).toContain('const packagedExecutable = process.env.ZCC_E2E_EXECUTABLE_PATH');
+    expect(fixture).toContain('executablePath: packagedExecutable || projectElectronBinary()');
     expect(fixture).toContain('linuxCiElectronArgs()');
     expect(fixture).toContain('linuxCiElectronEnv()');
     expect(fixture).toMatch(/createRequire\(import\.meta\.url\)\('electron'\)/);
