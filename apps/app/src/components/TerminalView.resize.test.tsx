@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   nextFrame: 0,
   observer: null as ResizeObserverCallback | null,
   fit: vi.fn(), resize: vi.fn(), resizePty: vi.fn().mockResolvedValue(undefined),
+  gpuCreated: vi.fn(), gpuDisposed: vi.fn(), constructed: vi.fn(), options: {} as Record<string,unknown>,
   data: { fontSize: 14, theme: 'dark', terminalTheme: 'auto', terminalWheelArrowsEnabled: true, projects: [] },
   ui: { agentModal: null as { sessionId: string } | null, pushToast: vi.fn() }
 }));
@@ -28,7 +29,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: Record<string, unknown>;
   buffer = { active: { viewportY: 0, baseY: 0 } };
   parser = {};
-  constructor(options: Record<string, unknown>) { this.options = options; }
+  constructor(options: Record<string, unknown>) { this.options = options; h.options = options; h.constructed(); }
   resize(cols: number, rows: number) { h.resize(cols, rows); this.cols = cols; this.rows = rows; }
   open() {} loadAddon() {} refresh() {} scrollToBottom() {} focus() {} dispose() {}
   onScroll() { return { dispose() {} }; } onData() { return { dispose() {} }; }
@@ -37,7 +38,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit = h.fit; } }));
 vi.mock('@xterm/addon-search', () => ({ SearchAddon: class {} }));
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }));
-vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class { onContextLoss() {} dispose() {} } }));
+vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class { constructor() { h.gpuCreated(); } onContextLoss() { return { dispose() {} }; } dispose() { h.gpuDisposed(); } } }));
 
 import { TerminalView } from './TerminalView.js';
 
@@ -77,9 +78,25 @@ afterEach(() => {
 });
 
 describe('terminal resize visibility', () => {
+  it('releases hidden GPU surfaces and changes history allocation without recreating the terminal', async () => {
+    const slot = render(<TerminalView session={session} area={undefined} scrollbackLimit={50000} />);
+    await frames(); expect(h.gpuCreated).not.toHaveBeenCalled();
+    h.shown = true;
+    slot.rerender(<TerminalView session={session} area="a" scrollbackLimit={12500} />);
+    await frames(); expect(h.gpuCreated).toHaveBeenCalledTimes(1); expect(h.options.scrollback).toBe(12500);
+    slot.rerender(<TerminalView session={session} area={undefined} scrollbackLimit={3125} />);
+    expect(h.gpuDisposed).toHaveBeenCalledTimes(1); expect(h.options.scrollback).toBe(3125);
+    expect(h.constructed).toHaveBeenCalledTimes(1);
+    slot.rerender(<TerminalView session={session} area="a" scrollbackLimit={3125} />);
+    await frames(); expect(h.gpuCreated).toHaveBeenCalledTimes(2);
+    h.shown = false; observe(0,0); expect(h.gpuDisposed).toHaveBeenCalledTimes(2);
+    slot.unmount(); expect(h.gpuDisposed).toHaveBeenCalledTimes(2);
+  });
   it('does not fit or nudge a selected terminal parked under a hidden ancestor', async () => {
     render(<TerminalView session={session} area="a" />);
+    observe(800,600);
     await frames(); await frames();
+    expect(h.gpuCreated).not.toHaveBeenCalled();
     expect(h.fit).not.toHaveBeenCalled();
     expect(h.resize).not.toHaveBeenCalled();
     expect(h.resizePty).not.toHaveBeenCalled();

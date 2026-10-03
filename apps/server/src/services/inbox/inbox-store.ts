@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile, appendFile, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, appendFile, mkdir, writeFile, rename, open, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { InboxDoc, InboxEntry, InboxNotifyLevel, InboxQuestion } from '@zana-ai/zcc-domain/product';
@@ -184,6 +184,41 @@ export const DEFAULT_MAX_INBOX_ENTRIES = 5000;
  * into one row (so this bounds *distinct* quiet rows, not raw run count).
  */
 export const DEFAULT_MAX_QUIET_INBOX_ENTRIES = 500;
+export const MAX_INBOX_ENTRY_BYTES = 256 * 1024;
+export const DEFAULT_MAX_INBOX_BYTES = 16 * 1024 * 1024;
+export const DEFAULT_MAX_QUIET_INBOX_BYTES = 2 * 1024 * 1024;
+const INBOX_READ_BLOCK_BYTES = 64 * 1024;
+
+function oversizedInboxEntry(): Error {
+  return Object.assign(new Error('Inbox entry exceeds 256 KiB. Put long content in a project document and link it with docs.'), { status: 413, code: 'inbox-entry-too-large' });
+}
+
+/** Scan from the tail and stop when the requested page is full. Decode only
+ * complete lines, preserving UTF-8 split across disk blocks. */
+async function* newestInboxLines(filePath: string): AsyncGenerator<string> {
+  const file = await open(filePath, 'r');
+  try {
+    let position = (await file.stat()).size;
+    let pending = Buffer.alloc(0);
+    while (position > 0) {
+      const size = Math.min(INBOX_READ_BLOCK_BYTES, position);
+      position -= size;
+      const block = Buffer.allocUnsafe(size);
+      const { bytesRead } = await file.read(block, 0, size, position);
+      const bytes = Buffer.concat([block.subarray(0, bytesRead), pending]);
+      let end = bytes.length;
+      for (let index = bytes.length - 1; index >= 0; index--) {
+        if (bytes[index] !== 10) continue;
+        if (end - index - 1 > MAX_INBOX_ENTRY_BYTES) throw oversizedInboxEntry();
+        yield bytes.toString('utf8', index + 1, end);
+        end = index;
+      }
+      pending = Buffer.from(bytes.subarray(0, end));
+      if (pending.length > MAX_INBOX_ENTRY_BYTES) throw oversizedInboxEntry();
+    }
+    if (pending.length) yield pending.toString('utf8');
+  } finally { await file.close(); }
+}
 
 /**
  * Classify an entry as QUIET (the evictable tier). Mirrors the renderer's badge
@@ -278,6 +313,9 @@ function validateInput(input: InboxInput): void {
   // check — an intent is context, not content, so an intent-only push is still
   // rejected. Empty/whitespace collapses to undefined and stays off the entry.
   input.intent = normalizeIntent(input.intent);
+  // Apply the same admission bound to every producer, including brokered
+  // plugins and the memory implementation. Reserve space for id/timestamp.
+  if (Buffer.byteLength(JSON.stringify(input)) + 256 > MAX_INBOX_ENTRY_BYTES) throw oversizedInboxEntry();
   if (input.docs) {
     for (const d of input.docs) {
       if (!d.path || typeof d.path !== 'string') {
@@ -317,12 +355,17 @@ export interface InboxStoreOptions {
    * {@link DEFAULT_MAX_QUIET_INBOX_ENTRIES}.
    */
   quietMaxEntries?: number;
+  /** Separate retained-byte budgets keep quiet producers from evicting reports. */
+  maxBytes?: number;
+  quietMaxBytes?: number;
 }
 
 export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
   const filePath = opts.filePath ?? defaultInboxFile();
   const maxEntries = opts.maxEntries ?? DEFAULT_MAX_INBOX_ENTRIES;
   const quietMaxEntries = opts.quietMaxEntries ?? DEFAULT_MAX_QUIET_INBOX_ENTRIES;
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_INBOX_BYTES;
+  const quietMaxBytes = opts.quietMaxBytes ?? DEFAULT_MAX_QUIET_INBOX_BYTES;
   const emitter = new EventEmitter();
   emitter.setMaxListeners(50);
 
@@ -343,6 +386,7 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
   // source of truth — so a stale hint can at worst delay or trigger an extra
   // (correct) compaction, never corrupt data.
   let lineCountHint: number | null = null;
+  let byteCountHint: number | null = null;
   let liveIds: Set<string> | null = null;
 
   // In-process mutex. Every file-mutating critical section (append+compaction,
@@ -406,8 +450,10 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
     const keepIdx = new Set<number>();
     const evictedIds: string[] = [];
     let protectedBudget = maxEntries;
+    let protectedByteBudget = maxBytes;
     const quietCapped = quietMaxEntries > 0;
     let quietBudget = quietCapped ? quietMaxEntries : Infinity;
+    let quietByteBudget = quietMaxBytes;
     for (let i = lines.length - 1; i >= 0; i--) {
       let entry: InboxEntry | null = null;
       try {
@@ -416,15 +462,18 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
         keepIdx.add(i);
         continue;
       }
-      if (isQuiet(entry)) {
-        if (quietBudget > 0) {
+      const size = Buffer.byteLength(lines[i]!) + 1;
+      if (isQuiet(entry) && quietCapped) {
+        if (quietBudget > 0 && (quietMaxBytes <= 0 || quietByteBudget >= size)) {
           quietBudget -= 1;
+          quietByteBudget -= size;
           keepIdx.add(i);
         } else {
           evictedIds.push(entry.id);
         }
-      } else if (protectedBudget > 0) {
+      } else if (protectedBudget > 0 && (maxBytes <= 0 || protectedByteBudget >= size)) {
         protectedBudget -= 1;
+        protectedByteBudget -= size;
         keepIdx.add(i);
       } else {
         evictedIds.push(entry.id);
@@ -437,6 +486,7 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
     const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
     await writeFile(tmp, kept.join('\n') + '\n', 'utf-8');
     await rename(tmp, filePath);
+    byteCountHint = Buffer.byteLength(kept.join('\n')) + 1;
     // Tell subscribers which ids rolled off so they can drop the rows and prune
     // persisted markers. Emitted after the rename so the file already reflects it.
     if (evictedIds.length > 0) {
@@ -515,12 +565,14 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
       ts: next.ts,
       occurrences: (prior.occurrences ?? 1) + 1
     };
+    if (Buffer.byteLength(JSON.stringify(merged)) > MAX_INBOX_ENTRY_BYTES) throw oversizedInboxEntry();
     // Remove the old line and re-append the merged entry as the newest.
     const kept = lines.filter((_, i) => i !== matchIdx);
     kept.push(JSON.stringify(merged));
     const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
     await writeFile(tmp, kept.join('\n') + '\n', 'utf-8');
     await rename(tmp, filePath);
+    byteCountHint = Buffer.byteLength(kept.join('\n')) + 1;
     // Line count is unchanged (swap, not grow) — refresh the hint to be exact.
     if (lineCountHint !== null) lineCountHint = kept.length;
     emitter.emit('updated', merged);
@@ -544,7 +596,13 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
       // Falls through to a plain append when no prior entry shares the key.
       if (input.dedupeKey) {
         const merged = await coalesce(entry);
-        if (merged) return merged;
+        if (merged) {
+          if (maxEntries > 0 && maxBytes > 0 && byteCountHint! > maxBytes + (quietMaxEntries > 0 ? quietMaxBytes : 0)) {
+            try { lineCountHint = await compact(); }
+            catch { lineCountHint = null; byteCountHint = null; }
+          }
+          return merged;
+        }
       }
 
       await appendFile(filePath, JSON.stringify(entry) + '\n');
@@ -556,15 +614,18 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
       emitter.emit('appended', entry);
 
       if (maxEntries > 0) {
+        if (byteCountHint === null) byteCountHint = (await stat(filePath)).size;
+        else byteCountHint += Buffer.byteLength(JSON.stringify(entry)) + 1;
         if (lineCountHint === null) lineCountHint = await countLines();
         else lineCountHint += 1;
-        if (lineCountHint > compactThreshold) {
+        if (lineCountHint > compactThreshold || (maxBytes > 0 && byteCountHint > maxBytes + (quietMaxEntries > 0 ? quietMaxBytes : 0))) {
           try {
             lineCountHint = await compact();
           } catch {
             // Compaction is best-effort housekeeping — a failed trim must never
             // fail the append. Reset the hint so the next append re-measures.
             lineCountHint = null;
+            byteCountHint = null;
           }
         }
       }
@@ -573,41 +634,27 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
   }
 
   async function read(opts: InboxReadOpts = {}): Promise<{ entries: InboxEntry[]; hasMore: boolean }> {
-    let raw: string;
+    const limit = Math.max(1, Math.min(10_000, Math.floor(opts.limit ?? 100)));
+    const entries: InboxEntry[] = [];
+    let foundCursor = !opts.before;
     try {
-      raw = await readFile(filePath, 'utf-8');
+      for await (const line of newestInboxLines(filePath)) {
+        if (!line.trim()) continue;
+        let entry: InboxEntry;
+        try { entry = JSON.parse(line) as InboxEntry; }
+        catch (err) { console.warn('[inbox] skipped torn JSONL line', { line, err }); continue; }
+        if (opts.projectId && entry.projectId !== opts.projectId) continue;
+        if (!foundCursor) { if (entry.id === opts.before) foundCursor = true; continue; }
+        if (entries.length === limit) return { entries, hasMore: true };
+        entries.push(entry);
+      }
     } catch (err: unknown) {
       if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { entries: [], hasMore: false };
       }
       throw err;
     }
-
-    let all: InboxEntry[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        all.push(JSON.parse(line) as InboxEntry);
-      } catch (err) {
-        console.warn('[inbox] skipped torn JSONL line', { line, err });
-      }
-    }
-
-    if (opts.projectId) {
-      all = all.filter((e) => e.projectId === opts.projectId);
-    }
-
-    let scoped = all;
-    if (opts.before) {
-      const idx = all.findIndex((e) => e.id === opts.before);
-      scoped = idx >= 0 ? all.slice(0, idx) : [];
-    }
-
-    const limit = opts.limit ?? 100;
-    const window = scoped.slice(-limit);
-    const entries = [...window].reverse();
-    const hasMore = window.length < scoped.length;
-    return { entries, hasMore };
+    return { entries, hasMore: false };
   }
 
   async function loadLiveIds(): Promise<Set<string>> {

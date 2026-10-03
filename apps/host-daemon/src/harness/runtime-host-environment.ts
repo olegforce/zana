@@ -35,8 +35,13 @@ export function createRuntimeHostExecutionEnvironment(
     status: (): IsolationStatus => ({ isolated: false }),
     createSession: async (inner, ctx) => {
       const session = new RuntimeHostExecutionSession(options.runtime, ctx.sessionId, commandId, now);
-      await session.start(inner, ctx);
-      return session;
+      try {
+        await session.start(inner, ctx);
+        return session;
+      } catch (error) {
+        session.destroy();
+        throw error;
+      }
     }
   };
 }
@@ -90,7 +95,6 @@ class RuntimeHostExecutionSession implements ExecutionSession {
     for (const event of events) this.handleEvent(event);
     if (!this.started) {
       const error = this.startError ?? 'runtime host did not start terminal session';
-      this.destroy();
       throw new Error(error);
     }
   }

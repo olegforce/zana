@@ -97,6 +97,6 @@ describe('timeline window', () => {
     const rows = Array.from({ length: 5 }, (_, index) => ({ id: `r${index}` }));
     expect(windowTimelineRows(rows, 3).hiddenCount).toBe(2);
     expect(windowTimelineRows(rows, 3, { keepId: 'r0' }).visible[0]?.id).toBe('r0');
-    expect(windowTimelineRows(rows, 3, { keepId: 'missing' }).hiddenCount).toBe(0);
+    expect(windowTimelineRows(rows, 3, { keepId: 'missing' }).hiddenCount).toBe(2);
   });
 });

@@ -57,6 +57,7 @@ test('project navigation keeps hidden terminal renderers idle and preserves the 
     await page.getByRole('button', { name: 'Back to all projects', exact: true }).click();
     await page.getByRole('link', { name: 'New Chat', exact: true }).click();
     await expect(terminal).toBeHidden();
+    await expect(terminal.locator('canvas')).toHaveCount(0);
     await row.click();
     await expect(page.locator('.agents-board')).toBeVisible();
     await page.getByTestId('project-nav-scheduler').click();
@@ -66,6 +67,7 @@ test('project navigation keeps hidden terminal renderers idle and preserves the 
     expect(await page.evaluate(() => (window as unknown as { hiddenTerminalResizes: number }).hiddenTerminalResizes)).toBe(0);
     await page.getByTestId('project-nav-terminals').click();
     await expect(terminal).toBeVisible();
+    await expect(terminal.locator('canvas').first()).toBeAttached();
     expect(await terminal.evaluate((element) => element === (window as unknown as { navigationTerminal: Element }).navigationTerminal)).toBe(true);
     await terminal.locator('.xterm-helper-textarea').fill('echo TERMINAL_STILL_LIVE');
     await page.keyboard.press('Enter');

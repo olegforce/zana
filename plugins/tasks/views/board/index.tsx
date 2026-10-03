@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -12,10 +13,8 @@ import {
   type TaskThread,
 } from "../../shared/contract.js";
 import {
-  listAllTasks,
-  useTasksQuery,
+  useTaskPages,
   useTasksRpc,
-  type TasksRpc,
 } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/new-task-dialog.js";
@@ -27,7 +26,7 @@ import {
   visibleBoardStatuses,
 } from "./drop-position.js";
 import { PriorityIcon, StatusIcon } from "./icons.js";
-import { isActiveThread } from "../detail/meta.js";
+import { useLabels, useTaskListMeta } from "../list/data.js";
 import { STATUS_LABELS } from "../list/lib.js";
 import { Button } from "../../vendor/shared-ui/components/ui/button";
 import { DelayedLoading } from "../../vendor/shared-ui/components/ui/delayed-loading";
@@ -39,6 +38,7 @@ const DRAG_THRESHOLD_PX = 5;
 
 interface BoardCardMeta {
   workingThreads: TaskThread[];
+  activeThreadCount: number;
   attachmentCount: number;
   subDone: number;
   subTotal: number;
@@ -52,78 +52,11 @@ interface BoardData {
 
 const EMPTY_META: BoardCardMeta = {
   workingThreads: [],
+  activeThreadCount: 0,
   attachmentCount: 0,
   subDone: 0,
   subTotal: 0,
 };
-
-async function fetchBoard(
-  rpc: TasksRpc,
-  projectId: string,
-): Promise<BoardData> {
-  const tasks = await listAllTasks(rpc, { projectId });
-  const topLevel = tasks.filter((task) => task.parentTaskId === null);
-
-  const labels = await rpc.call("listLabels", { projectId }).then(
-    (result) => result.labels,
-    () => [],
-  );
-  const subProgress = new Map<string, { done: number; total: number }>();
-  for (const task of tasks) {
-    if (task.parentTaskId === null) continue;
-    const entry = subProgress.get(task.parentTaskId) ?? { done: 0, total: 0 };
-    entry.total += 1;
-    if (task.status === "done") entry.done += 1;
-    subProgress.set(task.parentTaskId, entry);
-  }
-  const activeTaskIds = await listAllTasks(rpc, {
-    projectId,
-    activeOnly: true,
-  }).then(
-    (result) => new Set(result.map((task) => task.id)),
-    () => new Set<string>(),
-  );
-  const workingByTaskId = new Map<string, TaskThread[]>();
-  await Promise.all(
-    topLevel
-      .filter((task) => activeTaskIds.has(task.id))
-      .map(async (task) => {
-        const threads = await rpc
-          .call("listTaskThreads", { taskId: task.id })
-          .then(
-            (result) => result.taskThreads,
-            () => [],
-          );
-        workingByTaskId.set(task.id, threads.filter(isActiveThread));
-      }),
-  );
-  const attachmentCounts = new Map<string, number>();
-  await Promise.all(
-    topLevel.map(async (task) => {
-      const count = await rpc.call("listAttachments", { taskId: task.id }).then(
-        (result) => result.attachments.length,
-        () => 0,
-      );
-      attachmentCounts.set(task.id, count);
-    }),
-  );
-
-  return {
-    tasks: topLevel,
-    labelsById: new Map(labels.map((label) => [label.id, label])),
-    metaByTaskId: new Map(
-      topLevel.map((task) => [
-        task.id,
-        {
-          workingThreads: workingByTaskId.get(task.id) ?? [],
-          attachmentCount: attachmentCounts.get(task.id) ?? 0,
-          subDone: subProgress.get(task.id)?.done ?? 0,
-          subTotal: subProgress.get(task.id)?.total ?? 0,
-        },
-      ]),
-    ),
-  };
-}
 
 type ColumnMap = Record<TaskStatus, Task[]>;
 
@@ -151,8 +84,8 @@ interface DragState {
   dropIndex: number;
 }
 
-function WorkingAgentsChip({ threads }: { threads: TaskThread[] }) {
-  if (threads.length === 0) return null;
+function WorkingAgentsChip({ threads, count }: { threads: TaskThread[]; count: number }) {
+  if (count === 0) return null;
   return (
     <span className="flex min-w-0 items-center gap-1 font-medium text-success">
       <span
@@ -160,9 +93,9 @@ function WorkingAgentsChip({ threads }: { threads: TaskThread[] }) {
         className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
       />
       <span className="truncate">
-        {threads.length === 1
-          ? threads[0]!.presetName
-          : `${threads.length} agents`}
+        {count === 1
+          ? threads[0]?.presetName ?? "Agent"
+          : `${count} agents`}
       </span>
     </span>
   );
@@ -208,7 +141,7 @@ function TaskCard({
     >
       <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <span className="tabular-nums">{task.key}</span>
-        <WorkingAgentsChip threads={meta.workingThreads} />
+        <WorkingAgentsChip threads={meta.workingThreads} count={meta.activeThreadCount} />
       </div>
       <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
         {task.title}
@@ -273,11 +206,18 @@ interface BoardViewProps {
 export function BoardView({ projectId }: BoardViewProps) {
   const rpc = useTasksRpc();
   const navigation = useTasksNavigation();
-  const board = useTasksQuery(
-    (queryRpc) => fetchBoard(queryRpc, projectId),
-    ["tasks:changed", "projects:changed", "threads:changed"],
-    [projectId],
-  );
+  const pages = useTaskPages({ projectId, parentTaskId: null }, [projectId]);
+  const labels = useLabels([projectId]);
+  const metadata = useTaskListMeta(pages.data);
+  const data = useMemo<BoardData | undefined>(() => pages.data ? {
+    tasks: pages.data,
+    labelsById: new Map((labels.data ?? []).map(label => [label.id, label])),
+    metaByTaskId: new Map([...(metadata.data ?? [])].map(([id, value]) => [id, {
+      workingThreads: value.activeThreads, activeThreadCount: value.activeThreadCount ?? value.activeThreads.length,
+      attachmentCount: value.attachmentCount ?? 0, subDone: value.subDone ?? 0, subTotal: value.subTotal ?? 0,
+    }])),
+  } : undefined, [pages.data, labels.data, metadata.data]);
+  const board = { ...pages, data };
 
   const [columns, setColumns] = useState<ColumnMap | undefined>(undefined);
   useEffect(() => {
@@ -285,7 +225,7 @@ export function BoardView({ projectId }: BoardViewProps) {
   }, [projectId]);
   useEffect(() => {
     if (board.data) setColumns(groupColumns(board.data.tasks));
-  }, [board.data]);
+  }, [pages.data]);
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
 
@@ -547,6 +487,10 @@ export function BoardView({ projectId }: BoardViewProps) {
       )}
     >
       {visibleBoardStatuses(columns).map(renderColumn)}
+      {pages.hasMore ? <Button variant="outline" className="shrink-0" disabled={pages.isLoadingMore} onClick={() => void pages.loadMore()}>
+        {pages.isLoadingMore ? 'Loading tasks…' : 'Load more tasks'}
+      </Button> : null}
+      {pages.error ? <p role="alert">{pages.error}</p> : null}
       {drag && ghostTask ? (
         <div
           className="pointer-events-none fixed z-50"

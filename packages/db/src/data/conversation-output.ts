@@ -87,8 +87,10 @@ export function conversationPreviewPayloadSql(maxChars: number): string {
 }
 
 /** Small, resumable maintenance; no history payload enters JavaScript. */
-export function maintainConversationHistory(db: ZccDatabase, now = Date.now()): { snapshots: number; outputs: number } {
-  return db.transaction(() => {
+export function maintainConversationHistory(db: ZccDatabase, now = Date.now()): { snapshots: number; outputs: number; scannedSnapshots: number } {
+  const timeout = db.sqlite.pragma('busy_timeout', { simple: true }) as number;
+  db.sqlite.pragma('busy_timeout = 0');
+  try { return db.transaction(() => {
     const outputs = db.sqlite.prepare(`DELETE FROM conversation_event_outputs WHERE event_id IN (
       SELECT event_id FROM conversation_event_outputs WHERE expires_at <= ? ORDER BY expires_at LIMIT 32
     )`).run(now).changes;
@@ -108,6 +110,6 @@ export function maintainConversationHistory(db: ZccDatabase, now = Date.now()): 
     db.sqlite.prepare(`INSERT INTO conversation_history_maintenance (key, thread_id, sequence) VALUES ('diffs', ?, ?)
       ON CONFLICT(key) DO UPDATE SET thread_id = excluded.thread_id, sequence = excluded.sequence`)
       .run(last?.thread_id ?? '', last?.sequence ?? 0);
-    return { snapshots, outputs };
-  });
+    return { snapshots, outputs, scannedSnapshots: candidates.length };
+  }); } finally { db.sqlite.pragma(`busy_timeout = ${timeout}`); }
 }

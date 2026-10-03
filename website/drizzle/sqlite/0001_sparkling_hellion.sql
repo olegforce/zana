@@ -1,0 +1,1 @@
+CREATE INDEX `releases_archive_filename` ON `releases` ("extension_id" || '-' || "version" || '.json');

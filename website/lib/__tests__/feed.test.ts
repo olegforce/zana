@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,8 +41,8 @@ describe('feed', () => {
 
     // Set env BEFORE the first getDb() call in this process — getDb() reads
     // DATABASE_URL lazily (buildDb()), not at module-import time.
-    process.env.DATABASE_URL = `file:${dbFile}`;
-    process.env.PUBLIC_BASE_URL = PUBLIC_BASE_URL;
+    vi.stubEnv('DATABASE_URL', `file:${dbFile}`);
+    vi.stubEnv('PUBLIC_BASE_URL', PUBLIC_BASE_URL);
 
     const Database = (await import('better-sqlite3')).default;
     const sqlite = new Database(dbFile);
@@ -122,7 +122,9 @@ describe('feed', () => {
     }
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await (await import('../db/index.ts')).resetDbForTests();
+    vi.unstubAllEnvs();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -210,4 +212,73 @@ describe('feed', () => {
     const missing = await findArchiveByFilename('nope-9.9.9.json');
     expect(missing).toBeNull();
   });
+  it('uses metadata-only SQL and an indexed single-archive lookup including ambiguous hyphens', async () => {
+    const { getDb } = await import('../db/index.ts');
+    const { buildIndex, findArchiveByFilename } = await import('../feed.ts');
+    const conn = await getDb();
+    if (conn.dialect !== 'sqlite') throw new Error('Expected sqlite fixture');
+    const client = conn.db.$client;
+    const blob = Buffer.alloc(256 * 1024, 42);
+    const insert = client.prepare(`INSERT INTO releases (extension_id,version,zcc_api,sha256,signature,archive_bytes,archive_size,published_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`);
+    client.transaction(() => {
+      for (let n = 0; n < 200; n++) insert.run(`large-${n}`, '1.0.0-beta-1', '^1', 'hash', 'sig', blob, blob.length, 'user-1', now);
+    })();
+    const prepare = vi.spyOn(client, 'prepare');
+    try {
+      expect((await buildIndex()).releases).toHaveLength(203);
+      const metadataSql = prepare.mock.calls.at(-1)![0];
+      expect(metadataSql).not.toMatch(/archive_bytes|archive_size|published_by|created_at/);
+      expect(await findArchiveByFilename('large-199-1.0.0-beta-1.json')).toEqual(blob);
+      const archiveSql = prepare.mock.calls.at(-1)![0];
+      expect(archiveSql).toMatch(/where .*extension_id.*version/);
+      expect(archiveSql).toMatch(/limit/);
+      const plan = client.prepare(`EXPLAIN QUERY PLAN ${archiveSql}`).all('large-199-1.0.0-beta-1.json', 1) as { detail: string }[];
+      expect(plan.some(row => row.detail.includes('releases_archive_filename'))).toBe(true);
+      expect(await findArchiveByFilename('not-found-1.json')).toBeNull();
+    } finally {
+      prepare.mockRestore();
+      client.prepare("DELETE FROM releases WHERE extension_id LIKE 'large-%'").run();
+    }
+  });
+
+  it('omits malformed permissions without changing stored signatures or hashes', async () => {
+    const { getDb } = await import('../db/index.ts');
+    const { buildIndex } = await import('../feed.ts');
+    const conn = await getDb();
+    if (conn.dialect !== 'sqlite') throw new Error('Expected sqlite fixture');
+    conn.db.$client.prepare("UPDATE releases SET permissions = 'invalid' WHERE extension_id = 'gus' AND version = '0.1.0'").run();
+    try {
+      const row = (await buildIndex()).releases.find(row => row.id === 'gus' && row.version === '0.1.0')!;
+      expect(row).not.toHaveProperty('permissions');
+      expect(row.signature).toBe('c2ln1');
+      expect(row.sha256).toBe(sha256Hex(archiveGusA));
+    } finally {
+      conn.db.$client.prepare("UPDATE releases SET permissions = ? WHERE extension_id = 'gus' AND version = '0.1.0'").run(JSON.stringify(['storage', 'projects:read']));
+    }
+  });
+
+  it('uses the same bounded projections for PostgreSQL hits and misses', async () => {
+    const { getDb, resetDbForTests } = await import('../db/index.ts');
+    const { buildIndex, findArchiveByFilename } = await import('../feed.ts');
+    await resetDbForTests();
+    vi.stubEnv('DATABASE_URL', 'postgres://localhost/never_connect');
+    const conn = await getDb();
+    if (conn.dialect !== 'pg') throw new Error('Expected PostgreSQL');
+    const query = vi.spyOn(conn.db.$client, 'query');
+    query.mockResolvedValueOnce({ rows: [['hyphen-id', '1.0.0-beta-2', '^1', 'hash', 'signature', null, null, null, null, null]] } as never);
+    query.mockResolvedValueOnce({ rows: [[new Uint8Array(archiveGusA)]] } as never);
+    query.mockResolvedValueOnce({ rows: [] } as never);
+    try {
+      expect((await buildIndex()).releases[0]).toMatchObject({ id: 'hyphen-id', version: '1.0.0-beta-2', sha256: 'hash', signature: 'signature' });
+      expect(query.mock.calls[0][0].text).not.toContain('archive_bytes');
+      expect(await findArchiveByFilename('hyphen-id-1.0.0-beta-2.json')).toEqual(archiveGusA);
+      expect(query.mock.calls[1][0].text).toContain('limit');
+      expect(await findArchiveByFilename('missing.json')).toBeNull();
+    } finally {
+      query.mockRestore();
+      await resetDbForTests();
+      vi.stubEnv('DATABASE_URL', `file:${dbFile}`);
+    }
+  });
+
 });

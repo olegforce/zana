@@ -21,6 +21,8 @@ import {
   type SidebarProjectSummary,
   type Task,
   type TaskPullRequest,
+  type TaskSummary,
+  type TaskThread,
   type TasksChangedEvent,
   type TasksDomainError,
   type CommentsChangedEvent,
@@ -56,6 +58,7 @@ export interface TasksApiStore {
   projectPrefixExists(prefix: string, excludingProjectId: string): boolean;
   openTaskCount(): number;
   sidebarSummary(): SidebarProjectSummary[];
+  taskSummaries(taskIds: readonly string[]): TaskSummary[];
 }
 
 export function createStore(bb: BbPluginApi): TasksApiStore {
@@ -64,6 +67,30 @@ export function createStore(bb: BbPluginApi): TasksApiStore {
 
   return {
     tasks,
+    taskSummaries(taskIds) {
+      const ids = [...new Set(taskIds)];
+      if (ids.length === 0) return [];
+      if (ids.length > 100) throw new Error('At most 100 task summaries can be requested');
+      const placeholders = ids.map(() => '?').join(',');
+      const summaries = database.prepare<string[], Omit<TaskSummary, 'activeThreads'>>(`SELECT t.id AS taskId,
+        (SELECT COUNT(*) FROM task_threads WHERE task_id=t.id AND live_status IN ('starting','working')) AS activeThreadCount,
+        (SELECT COUNT(*) FROM attachments WHERE task_id=t.id) AS attachmentCount,
+        (SELECT COUNT(*) FROM tasks WHERE parent_task_id=t.id AND status='done') AS subDone,
+        (SELECT COUNT(*) FROM tasks WHERE parent_task_id=t.id) AS subTotal
+        FROM tasks t WHERE t.id IN (${placeholders})`).all(...ids);
+      const threads = database.prepare<string[], TaskThread>(`SELECT id, task_id AS taskId, thread_id AS threadId,
+        substr(preset_name,1,256) AS presetName, substr(title,1,1024) AS title,
+        live_status AS liveStatus, attached_at AS attachedAt, updated_at AS updatedAt FROM (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY attached_at DESC,id DESC) AS rank
+          FROM task_threads WHERE task_id IN (${placeholders}) AND live_status IN ('starting','working')
+        ) WHERE rank <= 20 ORDER BY task_id,rank`).all(...ids);
+      const byTask = new Map<string, TaskThread[]>();
+      for (const thread of threads) {
+        const list = byTask.get(thread.taskId) ?? [];
+        list.push(thread); byTask.set(thread.taskId, list);
+      }
+      return summaries.map(summary => ({ ...summary, activeThreads: byTask.get(summary.taskId) ?? [] }));
+    },
     transaction<T>(operation: () => T): T {
       return database.transaction(operation)();
     },
@@ -905,6 +932,9 @@ export function registerHandlers(
     },
     listTaskThreads(input) {
       return { taskThreads: store.tasks.listTaskThreads(input.taskId) };
+    },
+    listTaskSummaries(input) {
+      return { summaries: store.taskSummaries(input.taskIds) };
     },
     async listTaskPullRequests(input) {
       return listTaskPullRequests(bb, store, input.taskId);

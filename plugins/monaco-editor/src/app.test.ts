@@ -3,7 +3,7 @@
  */
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import React, { createElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectTestPluginApp } from '@zana-ai/zcc-plugin-sdk/testing/app';
 import app from '../app.js';
 
@@ -12,6 +12,7 @@ afterEach(() => {
   delete (globalThis as { __ZCC_HOST_REACT__?: typeof React }).__ZCC_HOST_REACT__;
   delete (globalThis as { __ZCC_PLUGIN_RUNTIME__?: unknown }).__ZCC_PLUGIN_RUNTIME__;
   delete (globalThis as { __ZCC_MONACO__?: unknown }).__ZCC_MONACO__;
+  delete (globalThis as { __ZCC_LOAD_MONACO__?: unknown }).__ZCC_LOAD_MONACO__;
 });
 
 describe('monaco-editor file opener', () => {
@@ -47,6 +48,35 @@ describe('monaco-editor file opener', () => {
     } });
     return { edit(next: string) { act(() => { value = next; changed(); }); }, save() { act(() => command()); }, reads: () => reads };
   }
+
+  it('loads host Monaco on demand and ignores loading completion after unmount', async () => {
+    editorHarness(() => {});
+    const monaco = (globalThis as any).__ZCC_MONACO__;
+    const create = vi.spyOn(monaco.editor, 'create');
+    delete (globalThis as any).__ZCC_MONACO__;
+    let resolve!: (value: unknown) => void;
+    const load = vi.fn(() => new Promise(done => { resolve = done; }));
+    (globalThis as any).__ZCC_LOAD_MONACO__ = load;
+    const props = { path: 'a.ts', source, experimental_Original: Original };
+    const first = render(createElement(opener().component, props));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    expect(create).not.toHaveBeenCalled();
+    first.unmount();
+    await act(async () => resolve(monaco));
+    expect(create).not.toHaveBeenCalled();
+    (globalThis as any).__ZCC_LOAD_MONACO__ = () => Promise.resolve(monaco);
+    const second = render(createElement(opener().component, props));
+    await second.findByRole('button', { name: 'Saved' });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces lazy Monaco load failures', async () => {
+    editorHarness(() => {});
+    delete (globalThis as any).__ZCC_MONACO__;
+    (globalThis as any).__ZCC_LOAD_MONACO__ = () => Promise.reject(new Error('Editor load failed'));
+    const slot = render(createElement(opener().component, { path: 'a.ts', source, experimental_Original: Original }));
+    expect((await slot.findByRole('alert')).textContent).toContain('Editor load failed');
+  });
 
   it('retries a conflict against the returned revision and never bypasses it', async () => {
     const revisions: unknown[] = [];

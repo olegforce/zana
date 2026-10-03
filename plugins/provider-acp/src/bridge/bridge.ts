@@ -2286,7 +2286,7 @@ async function stopSession(session: AcpThreadSession): Promise<void> {
     }
   }
 
-  session.connection.kill();
+  await session.connection.kill();
   removeSession(session);
   await releaseCursorMcpApproval(session);
 }

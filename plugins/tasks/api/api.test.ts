@@ -11,6 +11,35 @@ import { tasksRpcContract } from "../shared/contract";
 import { createComment, createStore, registerTasksApi } from ".";
 
 describe("Tasks RPC domain API", () => {
+  it("batches bounded summaries in the plugin database with exact counts and capped previews", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const store = createStore(bb); registerTasksApi(bb, store);
+    try {
+      const project = store.tasks.createProject({ name: 'Summary', prefix: 'SUM', color: 'blue' });
+      const task = store.tasks.createTask({ projectId: project.id, title: 'Summary parent' });
+      const other = store.tasks.createTask({ projectId: project.id, title: 'Other' });
+      for (const status of ['done', 'todo', 'done'] as const) store.tasks.createTask({ projectId: project.id, title: status, parentTaskId: task.id, status });
+      store.tasks.createAttachment({ taskId: task.id, fileName: 'proof.txt', mime: 'text/plain', sizeBytes: 1, blobPath: 'proof.txt', isImage: false });
+      for (let index = 0; index < 25; index++) store.tasks.upsertTaskThread({ taskId: task.id, threadId: `thr_${index}`, presetName: 'P'.repeat(300), title: 'T'.repeat(1200), liveStatus: index < 21 ? 'working' : 'idle' });
+      store.tasks.upsertTaskThread({ taskId: other.id, threadId: 'thr_other', presetName: 'Other', title: 'Other', liveStatus: 'starting' });
+      const db = bb.storage.database(); const prepare = vi.spyOn(db, 'prepare');
+      const result = tasksRpcContract.listTaskSummaries.output.parse(await harness.callRpc('listTaskSummaries', { taskIds: [task.id, task.id, other.id, '01HZZZZZZZZZZZZZZZZZZZZZZZ'] }));
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(result.summaries).toHaveLength(2);
+      expect(result.summaries.find(value => value.taskId === task.id)).toMatchObject({ activeThreadCount: 21, attachmentCount: 1, subDone: 2, subTotal: 3 });
+      const previews = result.summaries.find(value => value.taskId === task.id)!.activeThreads;
+      expect(previews).toHaveLength(20);
+      expect(previews.every(thread => thread.title.length === 1024 && thread.presetName.length === 256 && thread.liveStatus === 'working')).toBe(true);
+      expect(result.summaries.find(value => value.taskId === other.id)).toMatchObject({ activeThreadCount: 1, attachmentCount: 0, subTotal: 0 });
+      expect(await harness.callRpc('listTaskSummaries', { taskIds: [] })).toEqual({ summaries: [] });
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(() => store.taskSummaries(Array.from({ length: 101 }, (_, index) => String(index)))).toThrow('At most 100');
+      await expect(harness.callRpc('listTaskSummaries', { taskIds: Array.from({ length: 101 }, () => task.id) })).rejects.toThrow();
+      expect(harness.sdk.callsTo("threads.get")).toEqual([]);
+      prepare.mockRestore();
+    } finally { await harness.dispose(); }
+  });
+
   it("deletes through the typed RPC policy and rejects saved-description references", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     const store = createStore(bb);

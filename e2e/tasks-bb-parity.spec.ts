@@ -4,9 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { test as base, expect } from './fixtures/app.js';
 
 const test = base.extend({
-  home: async ({ home }, use) => {
+  home: async ({ home }, use, testInfo) => {
     const root = join(home, '.zcc', 'plugins', 'tasks'); mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, 'kv.json'), JSON.stringify({ store: { version: 2, nextSeq: 8, items: [{
+    writeFileSync(join(root, 'kv.json'), JSON.stringify({ store: { version: 2, nextSeq: 8, items: testInfo.title.includes('bounded Tasks pages') ? Array.from({ length: 1000 }, (_, index) => ({
+      id: `large-${index}`, key: `TSK-${index + 1}`, title: `Paged task ${index + 1}`, description: '',
+      status: 'todo', priority: 'none', dueDate: null, order: index, createdAt: 1000, updatedAt: 2000,
+    })) : [{
       id: 'legacy', key: 'TSK-4', title: 'Preserved before upgrade', description: 'Keep these notes',
       status: 'in_review', priority: 'high', dueDate: null, order: 1, createdAt: 1000, updatedAt: 2000,
     }] } }));
@@ -258,4 +261,25 @@ test('provider plan snapshots replace stale steps while Zana keeps its Plan docu
   expect(resumed.payload.execution.acpMode).toBeUndefined();
   expect((await request(`threads/${thread.id}/plan`)).plan.requestedExecutionMode).toBe('agent');
 
+});
+
+
+test('bounded Tasks pages cross the packaged plugin RPC and UI seam', async ({ app }) => {
+  const win = app.window;
+  expect(await win.evaluate(() => window.cc.extensions.install({ kind: 'bundled', id: 'tasks' }))).toMatchObject({ ok: true });
+  await expect.poll(() => win.evaluate(async () => (await window.cc.pluginApps.list()).find(plugin => plugin.id === 'tasks'))).toMatchObject({ status: 'running' });
+  const page = await win.evaluate(async () => window.cc.pluginApps.callRpc('tasks', 'listTasks', { parentTaskId: null, limit: 100 }), {}) as { tasks: { id: string; title: string }[]; nextCursor: string };
+  expect(page.tasks).toHaveLength(100);
+  expect(page.nextCursor).toBeTruthy();
+  const summary = await win.evaluate(async ids => window.cc.pluginApps.callRpc('tasks', 'listTaskSummaries', { taskIds: ids }), page.tasks.map(task => task.id)) as { summaries: { taskId: string; activeThreadCount: number }[] };
+  expect(summary.summaries).toHaveLength(100);
+  expect(summary.summaries.every(value => value.activeThreadCount === 0)).toBe(true);
+  await win.locator('.nav-item', { hasText: 'Tasks' }).first().click();
+  const rows = win.locator('.tasks-list-view [data-task-key]');
+  await expect(rows).toHaveCount(100);
+  await win.getByRole('button', { name: 'Load more tasks', exact: true }).click();
+  await expect(rows).toHaveCount(200);
+  await expect(win.getByRole('button', { name: 'Load more tasks', exact: true })).toBeEnabled();
+  await win.getByRole('button', { name: /Open TSK-/ }).first().click();
+  await expect(win.getByRole('button', { name: 'Back (Esc)', exact: true })).toBeVisible();
 });

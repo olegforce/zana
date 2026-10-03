@@ -21,16 +21,29 @@ export function retainTerminalExpansionIds(
 export function windowTimelineRows<T extends { id: string }>(
   rows: readonly T[],
   windowSize = TIMELINE_WINDOW_SIZE,
-  options: { showAll?: boolean; keepId?: string | null } = {}
-): { visible: readonly T[]; hiddenCount: number } {
-  if (options.showAll || rows.length <= windowSize) {
-    return { visible: rows, hiddenCount: 0 };
+  options: { startId?: string | null; keepId?: string | null; isContextRow?: (row: T) => boolean } = {}
+): { visible: readonly T[]; hiddenCount: number; hiddenAfterCount: number } {
+  let start = Math.max(0, rows.length - windowSize);
+  if (options.startId) {
+    const index = rows.findIndex(row => row.id === options.startId);
+    if (index >= 0) start = Math.min(index, start);
   }
-  let start = rows.length - windowSize;
   if (options.keepId) {
     const index = rows.findIndex((row) => row.id === options.keepId);
-    if (index < 0) return { visible: rows, hiddenCount: 0 };
-    if (index < start) start = index;
+    if (index >= 0 && (index < start || index >= start + windowSize)) {
+      start = Math.min(index, Math.max(0, rows.length - windowSize));
+    }
   }
-  return { visible: rows.slice(start), hiddenCount: start };
+  let context: T | undefined;
+  if (start > 0 && options.isContextRow && !options.isContextRow(rows[start]!)) {
+    for (let index = start - 1; index >= 0; index--) {
+      if (options.isContextRow(rows[index]!)) { context = rows[index]; break; }
+    }
+  }
+  // Reserve one slot for the prompt whose reply crosses this page boundary.
+  // The contiguous content tail remains pageable; search targets never disappear.
+  if (context && start + windowSize >= rows.length && rows[start]?.id !== options.keepId) start++;
+  const content = rows.slice(start, start + windowSize - (context ? 1 : 0));
+  const visible = context ? [context, ...content] : content;
+  return { visible, hiddenCount: start, hiddenAfterCount: rows.length - start - content.length };
 }

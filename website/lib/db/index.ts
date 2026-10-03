@@ -19,19 +19,19 @@ export type Dialect = 'sqlite' | 'pg';
 
 export interface SqliteDb {
   dialect: 'sqlite';
-  db: import('drizzle-orm/better-sqlite3').BetterSQLite3Database<typeof sqliteSchema>;
+  db: import('drizzle-orm/better-sqlite3').BetterSQLite3Database<typeof sqliteSchema> & { $client: import('better-sqlite3').Database };
   schema: typeof sqliteSchema;
 }
 
 export interface PgDb {
   dialect: 'pg';
-  db: import('drizzle-orm/node-postgres').NodePgDatabase<typeof pgSchema>;
+  db: import('drizzle-orm/node-postgres').NodePgDatabase<typeof pgSchema> & { $client: import('pg').Pool };
   schema: typeof pgSchema;
 }
 
 export type AnyDb = SqliteDb | PgDb;
 
-let singleton: AnyDb | undefined;
+let singleton: Promise<AnyDb> | undefined;
 
 /** Default local SQLite file, mirroring `DATABASE_URL=file:./dev.db`. */
 const DEFAULT_SQLITE_PATH = './dev.db';
@@ -78,9 +78,14 @@ async function buildDb(): Promise<AnyDb> {
   const { default: Database } = await import('better-sqlite3');
   const { drizzle } = await import('drizzle-orm/better-sqlite3');
   const sqlite = new Database(path);
-  sqlite.pragma('journal_mode = WAL');
-  const db = drizzle(sqlite, { schema: sqliteSchema });
-  return { dialect: 'sqlite', db, schema: sqliteSchema };
+  try {
+    sqlite.pragma('journal_mode = WAL');
+    const db = drizzle(sqlite, { schema: sqliteSchema });
+    return { dialect: 'sqlite', db, schema: sqliteSchema };
+  } catch (error) {
+    sqlite.close();
+    throw error;
+  }
 }
 
 /**
@@ -89,11 +94,25 @@ async function buildDb(): Promise<AnyDb> {
  * repeatedly/concurrently — subsequent calls reuse the same instance.
  */
 export async function getDb(): Promise<AnyDb> {
-  if (!singleton) singleton = await buildDb();
+  if (!singleton) {
+    const pending = buildDb().catch(error => {
+      // A failed initialization is retryable. A stale failure after a test
+      // reset must not discard a newer client.
+      if (singleton === pending) singleton = undefined;
+      throw error;
+    });
+    singleton = pending;
+  }
   return singleton;
 }
 
-/** Test-only seam: force a fresh client next `getDb()` call (e.g. between test files with different DATABASE_URLs). */
-export function resetDbForTests(): void {
+/** Close the owned client before changing database configuration in tests. */
+export async function resetDbForTests(): Promise<void> {
+  const previous = singleton;
   singleton = undefined;
+  if (!previous) return;
+  const conn = await previous.catch(() => undefined);
+  if (!conn) return;
+  if (conn.dialect === 'pg') await conn.db.$client.end();
+  else conn.db.$client.close();
 }

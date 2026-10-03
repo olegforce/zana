@@ -1,5 +1,6 @@
 import { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
+export { monaco };
 // Package exports map `monaco-editor/*.js` onto the editor's ESM tree. Do not
 // import the `esm/vs` subtree by package path — that needs a filesystem alias,
 // which then bypasses optimizeDeps.exclude and Vite 8 prebundles workers with

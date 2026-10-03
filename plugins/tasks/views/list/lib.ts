@@ -92,13 +92,14 @@ export function formatDueDate(dueDate: string, today = new Date()): string {
 
 export function activeWorkLabel(
   threads: readonly { liveStatus: string }[],
+  count = threads.length,
 ): string {
-  if (threads.length === 1) {
+  if (count === 1) {
     return threads[0]?.liveStatus === "starting"
       ? "Agent starting"
       : "Agent working";
   }
-  return `${threads.length} agents working`;
+  return `${count} agents working`;
 }
 
 interface LabelOverflow {

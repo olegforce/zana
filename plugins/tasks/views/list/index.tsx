@@ -121,7 +121,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     statuses: filters.statuses,
     priorities: filters.priorities,
     labelIds,
-  });
+  }, sort, query);
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) => push(message));
 
@@ -298,6 +298,10 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         className="tasks-list-scroll min-h-0 flex-1 overflow-y-auto @container"
       >
         {body}
+        {tasksQuery.data && tasksQuery.error ? <p role="alert" className="px-3 text-sm text-destructive">{tasksQuery.error}</p> : null}
+        {tasksQuery.hasMore && <Button className="m-3" variant="outline" onClick={() => void tasksQuery.loadMore()} disabled={tasksQuery.isLoadingMore}>
+          {tasksQuery.isLoadingMore ? 'Loading…' : 'Load more tasks'}
+        </Button>}
       </div>
       <NewTaskDialog
         open={newTaskOpen}

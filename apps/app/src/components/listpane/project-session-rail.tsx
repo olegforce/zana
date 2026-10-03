@@ -1,5 +1,6 @@
 import { useMemo, type HTMLAttributes, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { ChevronRight, MessageCirclePlus, Network } from 'lucide-react';
 import type { Project, TerminalSession } from '@zana-ai/zcc-domain/product';
 import {
@@ -37,12 +38,12 @@ export function useProjectRailSessions(projectId: string): {
 } {
   const terminals = useData((s) => s.terminals);
   const organization = useData((s) => s.projectNavigationOrganization);
-  const threads = useThreads((s) => s.threads);
+  const threads = useThreads(useShallow((s) => s.threads.filter(thread => thread.projectId === projectId)));
   useEnsureThreads();
   return useMemo(() => {
     const liveList = projectNavigationSessions(projectRailTerminals(terminals[projectId]), organization);
     const railThreads = railThreadsForProject(
-      threads.filter((thread) => thread.projectId === projectId)
+      threads
     );
     return {
       liveList,

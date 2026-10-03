@@ -3,7 +3,7 @@ import {
   refreshThreadProviderModelsFromPush
 } from './components/thread/pickers/thread-model-catalog.js';
 import { ConversationHistoryDialog } from './components/history/ConversationHistoryDialog.js';
-import '@/lib/monacoSetup';
+import '@/lib/monaco-loader';
 import { useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, Star } from 'lucide-react';

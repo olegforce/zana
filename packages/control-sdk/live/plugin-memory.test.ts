@@ -94,11 +94,11 @@ function dumpText(value: unknown): string {
 }
 
 describe.skipIf(!enabled)('live memory plugin CLI', () => {
-  it('adds, searches, isolates, and forgets memories through product HTTP', async () => {
+  it('adds, searches, isolates, and forgets memories through product HTTP', async context => {
     const zcc = await Zcc.connect();
     const created: MemoryRow[] = [];
     try {
-      if (!(await requireRunningMemory(zcc, 'memory CLI'))) return;
+      if (!(await requireRunningMemory(zcc, 'memory CLI'))) { context.skip(); return; }
 
       const project = await zcc.projects.ensureLiveSandbox();
       const stamp = `live-mem-${zcc.runId}`;
@@ -218,14 +218,15 @@ describe.skipIf(!enabled)('live memory plugin CLI', () => {
     }
   });
 
-  it('lets a live model retrieve memory details with zcc memory', async () => {
+  it('lets a live model retrieve memory details with zcc memory', async context => {
     const zcc = await Zcc.connect();
     const created: MemoryRow[] = [];
     try {
-      if (!(await requireRunningMemory(zcc, 'memory model'))) return;
+      if (!(await requireRunningMemory(zcc, 'memory model'))) { context.skip(); return; }
       const pre = await preflightOrSkip(zcc, { surface: 'thread', providerId: 'codex' });
       if (isSkip(pre)) {
         console.warn(`[live] skip memory model: ${pre.reason}`);
+        context.skip();
         return;
       }
 
@@ -287,13 +288,13 @@ describe.skipIf(!enabled)('live memory plugin CLI', () => {
               grantedPermissions: null
             }).catch(() => undefined);
           }
-          const [timeline, events] = await Promise.all([
-            thread.timeline().catch(() => null),
-            zcc.http
-              .request('GET', `/api/v1/threads/${encodeURIComponent(thread.id)}/events`)
-              .catch(() => null)
-          ]);
-          dump = dumpText({ timeline, events });
+          const timeline = await thread.timeline().catch(() => null);
+          const rows = timeline && typeof timeline === 'object' && Array.isArray((timeline as { rows?: unknown }).rows)
+            ? (timeline as { rows: Array<{ kind?: string; role?: string; text?: string }> }).rows
+            : [];
+          // Catalog injection can appear in session metadata before a model
+          // replies. Only an assistant conversation row proves retrieval.
+          dump = dumpText(rows.filter(row => row.kind === 'conversation' && row.role === 'assistant').map(row => row.text));
           if (dump.includes(marker)) break;
           await zcc.http.sleep(1_000);
         }

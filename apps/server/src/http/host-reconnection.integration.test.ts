@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { createConversationThread, createEnvironment, getConversationThread, openHostSession, upsertHost } from '@zana-ai/zcc-db';
-import { HOST_RPC_PROTOCOL_VERSION, type HostRuntimeSnapshot } from '@zana-ai/zcc-contracts/host-rpc';
+import { appendConversationThreadEvent, createConversationThread, createEnvironment, getConversationThread, openHostSession, upsertHost } from '@zana-ai/zcc-db';
+import { HOST_RPC_PROTOCOL_VERSION, type HostEventEnvelope, type HostRuntimeSnapshot } from '@zana-ai/zcc-contracts/host-rpc';
 import { startProductServer } from './product-server.js';
 import { hashHostKey } from './host-hub.js';
 import { createHostServerSocket } from '../../../host-daemon/src/server-socket.js';
 import { healDisconnectedConversationThreadsForHost } from '../services/threads/conversation-host-recovery.js';
+import * as plans from '../services/threads/conversation-plan.js';
 
 const key = 'fixture-key-with-enough-characters';
 let dir: string, server: Awaited<ReturnType<typeof startProductServer>>;
@@ -24,7 +25,7 @@ beforeEach(async () => {
   openHostSession(server.ctx.db, { hostId, instanceId, hostName: host.name });
   environmentId = createEnvironment(server.ctx.db, { projectId: 'fixture', hostId, path: dir }).id;
 });
-afterEach(async () => { connections.forEach(c => c.close()); await server.close(); rmSync(dir, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); connections.forEach(c => c.close()); await server.close(); rmSync(dir, { recursive: true, force: true }); });
 function connect(overrides: Partial<Parameters<typeof createHostServerSocket>[0]> = {}) {
   const c = createHostServerSocket({ serverUrl: server.url, hostId, hostKey: key, instanceId,
     onHello: async () => {}, onMessage: () => {}, onConnectionChange: () => {}, ...overrides });
@@ -33,6 +34,90 @@ function connect(overrides: Partial<Parameters<typeof createHostServerSocket>[0]
 function thread(status: 'active' | 'stopping' | 'error' | 'idle') {
   return createConversationThread(server.ctx.db, { projectId: 'fixture', hostId, environmentId, providerId: 'fake', status });
 }
+
+async function eventHost() {
+  const acks: Array<{ type: string; batchId?: string; accepted?: number }> = [];
+  const connection = connect({ onMessage: raw => { acks.push(raw as typeof acks[number]); } });
+  await connection.ready;
+  return async (events: HostEventEnvelope[], batchId = randomUUID()) => {
+    expect(connection.send(JSON.stringify({ type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+      hostId, instanceId, batchId, events }))).toBe(true);
+    await vi.waitFor(() => expect(acks.find(ack => ack.type === 'host.event-ack' && ack.batchId === batchId)?.accepted).toBe(events.length));
+    return batchId;
+  };
+}
+
+it('rejects completed-item events outside the authenticated host without reconciling their plans', async () => {
+  const other = upsertHost(server.ctx.db, { name: 'other-event-host', hostKeyHash: hashHostKey('other-event-key') });
+  const foreign = createConversationThread(server.ctx.db, { projectId: 'fixture', hostId: other.id, providerId: 'fake', status: 'active' });
+  const sync = vi.spyOn(plans, 'syncPlanFromLatestEvents');
+  const batchId = randomUUID();
+  let acknowledgement: unknown;
+  // The public host protocol must reject this even though the thread exists.
+  const sender = connect({ onMessage: raw => {
+    if ((raw as { batchId?: string }).batchId === batchId) acknowledgement = raw;
+  } });
+  await sender.ready;
+  sender.send(JSON.stringify({ type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+    hostId, instanceId, batchId, events: [{ threadId: foreign.id, kind: 'thread.event',
+      payload: { type: 'item/completed', item: { type: 'plan', text: '# Foreign draft' } } }] }));
+  await vi.waitFor(() => expect(acknowledgement).toMatchObject({ accepted: 0, rejected: [{ index: 0, reason: 'unknown_thread' }] }));
+  expect(sync).not.toHaveBeenCalled();
+  expect(server.ctx.db.sqlite.prepare('SELECT COUNT(*) AS count FROM thread_events WHERE thread_id = ?').get(foreign.id)).toEqual({ count: 0 });
+});
+
+it('256 unrelated deltas never scan completed history or update plan tasks', async () => {
+  const post = await eventHost(), live = thread('active');
+  for (let index = 0; index < 400; index++) appendConversationThreadEvent(server.ctx.db, {
+    threadId: live.id, type: 'item/completed', payload: { type: 'item/completed', scope: { turnId: 'old' },
+      item: { id: `command-${index}`, type: 'commandExecution', aggregatedOutput: 'x'.repeat(16_384) } }
+  });
+  plans.importProviderPlanSteps(server.ctx.db, { threadId: live.id, steps: [{ step: 'Keep progress', status: 'in_progress' }] });
+  const prepare = vi.spyOn(server.ctx.db.sqlite, 'prepare');
+  const sync = vi.spyOn(plans, 'syncPlanFromLatestEvents');
+  await post(Array.from({ length: 256 }, (_, index) => ({ threadId: live.id, kind: 'thread.event', payload: {
+    type: 'item/agentMessage/delta', itemId: 'reply', delta: String(index), scope: { kind: 'turn', turnId: 'next' }
+  } })));
+  expect(sync).not.toHaveBeenCalled();
+  expect(prepare.mock.calls.some(([sql]) => sql.includes('payload_bytes'))).toBe(false);
+  expect(prepare.mock.calls.some(([sql]) => /(?:UPDATE|INSERT INTO|DELETE FROM) thread_plan_tasks/.test(sql))).toBe(false);
+});
+
+it('reconciles each affected thread once per batch and captures at the terminal boundary', async () => {
+  const post = await eventHost(), first = thread('active'), second = thread('active');
+  const sync = vi.spyOn(plans, 'syncPlanFromLatestEvents');
+  const events: HostEventEnvelope[] = [first, second].flatMap(live => [
+    { kind: 'thread.event', threadId: live.id, payload: { type: 'client/turn/requested', execution: { acpMode: 'plan' }, input: [{ type: 'text', text: 'Write a plan' }] } },
+    { kind: 'thread.event', threadId: live.id, payload: { type: 'turn/started', scope: { kind: 'turn', turnId: live.id } } },
+    { kind: 'thread.event', threadId: live.id, payload: { type: 'item/completed', scope: { kind: 'turn', turnId: live.id }, item: { id: 'reply', type: 'agentMessage', text: '# Captured plan\n\nImplement the requested converter.' } } },
+    { kind: 'turn.completed', threadId: live.id, payload: { type: 'turn/completed', scope: { kind: 'turn', turnId: live.id }, status: 'completed' } }
+  ]);
+  const batchId = await post(events);
+  expect(sync.mock.calls.map(([, id]) => id)).toEqual([first.id, second.id]);
+  for (const live of [first, second]) expect(plans.getDurableThreadPlanView(server.ctx.db, live.id)).toMatchObject({ revision: 1, markdown: '# Captured plan\n\nImplement the requested converter.' });
+  await post(events, batchId);
+  expect(sync).toHaveBeenCalledTimes(2);
+});
+
+it('captures a planning reply when completion arrives in a later batch and protects a user revision', async () => {
+  const post = await eventHost(), live = thread('active');
+  plans.recordThreadExecutionMode(server.ctx.db, { threadId: live.id, requestedMode: 'plan' });
+  await post([{ kind: 'thread.event', threadId: live.id, payload: { type: 'turn/started', scope: { turnId: 'planning' } } },
+    { kind: 'thread.event', threadId: live.id, payload: { type: 'item/completed', scope: { turnId: 'planning' }, item: { type: 'agentMessage', text: '# Late-boundary plan' } } }]);
+  expect(plans.getDurableThreadPlanView(server.ctx.db, live.id)?.markdown).toBeNull();
+  await post([{ kind: 'thread.event', threadId: live.id, payload: { type: 'turn/completed', scope: { turnId: 'planning' }, status: 'completed' } }]);
+  expect(plans.getDurableThreadPlanView(server.ctx.db, live.id)).toMatchObject({ revision: 1, markdown: '# Late-boundary plan' });
+  plans.snapshotApprovedPlan(server.ctx.db, { threadId: live.id, markdown: '# User correction', source: 'user' });
+  await post([{ kind: 'thread.event', threadId: live.id, payload: { type: 'item/completed', scope: { turnId: 'ordinary' }, item: { type: 'plan', text: '# Stale native draft' } } }]);
+  expect(plans.getDurableThreadPlanView(server.ctx.db, live.id)).toMatchObject({ revision: 2, markdown: '# User correction' });
+});
+
+it('acknowledges authoritative events when advisory plan reconciliation fails', async () => {
+  const post = await eventHost(), live = thread('active');
+  vi.spyOn(plans, 'syncPlanFromLatestEvents').mockImplementation(() => { throw new Error('advisory import failed'); });
+  await post([{ kind: 'thread.event', threadId: live.id, payload: { type: 'item/completed', item: { type: 'plan', text: '# Plan' } } }]);
+  expect(server.ctx.db.sqlite.prepare('SELECT COUNT(*) AS count FROM thread_events WHERE thread_id = ?').get(live.id)).toMatchObject({ count: 1 });
+});
 
 it('delivers pending Stop only after reconciliation and readiness, including beyond disconnect grace', async () => {
   const stopping = thread('stopping');

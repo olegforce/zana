@@ -1,12 +1,14 @@
-import { listAllTasks, useTasksQuery } from "../../shell/data.js";
+import { useRef } from "react";
+import { useTaskPages, useTasksQuery } from "../../shell/data.js";
+import { useTasksRefresh } from "../../shell/refresh.js";
+import type { TaskSort } from "../../shared/pagination.js";
 import type {
   Label,
   Task,
   TaskPriority,
   TaskStatus,
-  TaskThread,
+  TaskSummary,
 } from "../../shared/contract.js";
-import { isActiveThread } from "../detail/meta.js";
 
 interface ListTaskFilters {
   statuses: readonly TaskStatus[];
@@ -18,10 +20,11 @@ export function useListTasks(
   projectId: string | null,
   activeOnly: boolean,
   filters: ListTaskFilters,
+  sort: TaskSort = "manual",
+  search = "",
 ) {
-  return useTasksQuery(
-    async (rpc) =>
-      listAllTasks(rpc, {
+  return useTaskPages(
+      {
         ...(projectId === null ? {} : { projectId }),
         ...(filters.statuses.length > 0
           ? { statuses: [...filters.statuses] }
@@ -34,15 +37,18 @@ export function useListTasks(
           : {}),
         activeOnly,
         parentTaskId: null,
-      }),
-    ["tasks:changed", "threads:changed"],
+        sort,
+        ...(search.trim() ? { search: search.trim() } : {}),
+      },
     [
       projectId,
       activeOnly,
       filters.statuses.join(),
       filters.priorities.join(),
       filters.labelIds === null ? "" : `active:${filters.labelIds.join()}`,
+      sort, search,
     ],
+    activeOnly ? ["tasks:changed", "threads:changed"] : ["tasks:changed"],
   );
 }
 
@@ -60,25 +66,67 @@ export function useLabels(projectIds: readonly string[]) {
 }
 
 export interface TaskRowMeta {
-  activeThreads: TaskThread[];
+  activeThreads: TaskSummary["activeThreads"];
+  activeThreadCount?: number;
+  attachmentCount?: number;
+  subDone?: number;
+  subTotal?: number;
 }
 
 export function useTaskListMeta(tasks: readonly Task[] | undefined) {
   const taskIds = (tasks ?? []).map((task) => task.id);
+  const cache = useRef(new Map<string, TaskRowMeta>());
+  const dirty = useRef<Set<string> | null>(null);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const { generation } = useTasksRefresh();
+  const cachedGeneration = useRef(generation);
+  if (cachedGeneration.current !== generation) {
+    cachedGeneration.current = generation;
+    dirty.current = null;
+  }
   return useTasksQuery<Map<string, TaskRowMeta>>(
-    async (rpc) => {
-      const entries = await Promise.all(
-        taskIds.map(async (taskId) => {
-          const threads = await rpc.call("listTaskThreads", { taskId });
-          const meta: TaskRowMeta = {
-            activeThreads: threads.taskThreads.filter(isActiveThread),
-          };
-          return [taskId, meta] as const;
-        }),
-      );
-      return new Map(entries);
+    rpc => {
+      const run = queue.current.then(async () => {
+        const wanted = taskIds.filter(id =>
+          dirty.current === null || dirty.current.has(id) || !cache.current.has(id),
+        );
+        dirty.current = new Set();
+        try {
+          for (let offset = 0; offset < wanted.length; offset += 100) {
+            const { summaries } = await rpc.call("listTaskSummaries", {
+              taskIds: wanted.slice(offset, offset + 100),
+            });
+            for (const summary of summaries) cache.current.set(summary.taskId, summary);
+          }
+        } catch (error) {
+          dirty.current = null;
+          throw error;
+        }
+        cache.current = new Map(taskIds.flatMap(id => {
+          const value = cache.current.get(id);
+          return value ? [[id, value] as const] : [];
+        }));
+        return new Map(cache.current);
+      });
+      queue.current = run.then(() => undefined, () => undefined);
+      return run;
     },
     ["threads:changed", "tasks:changed"],
     [taskIds.join()],
+    { invalidationFilter: (channel, payload) => {
+      // A child-task mutation can change a visible parent's subtask counts.
+      if (channel === "tasks:changed") {
+        dirty.current = null;
+        return true;
+      }
+      const id = payload && typeof payload === 'object' && 'taskId' in payload ? String(payload.taskId) : null;
+      if (id === null) {
+        dirty.current = null;
+        return true;
+      }
+      if (!taskIds.includes(id)) return false;
+      dirty.current?.add(id);
+      return true;
+    } },
   );
 }

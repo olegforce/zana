@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { useData, useUi } from '../store.js';
 import type { SplitLayout } from '../store.js';
 import { TerminalView } from './TerminalView.js';
+import { terminalScrollbackBudget } from '../lib/terminal-resource-budget.js';
 import { agentSessionAnchorId, pickAgentSessionPortalTarget, pickProjectTerminalsPortalTarget, projectTerminalsAnchorId } from '../lib/split-layout/agentSessionPortal.js';
 import { paneContentForPathname } from '../lib/split-layout/splitThreadNavigation.js';
 import { useSplitWorkspace } from '../lib/split-layout/store.js';
@@ -72,6 +73,7 @@ export { agentSessionAnchorId, projectTerminalsAnchorId };
 
 export function TerminalSurface() {
   const terminals = useData((s) => s.terminals);
+  const scrollbackLimit = terminalScrollbackBudget(Object.values(terminals).reduce((count, sessions) => count + sessions.length, 0));
   const nav = useUi((s) => s.nav);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectedTabId = useUi((s) => s.selectedTabId);
@@ -241,7 +243,7 @@ export function TerminalSurface() {
             : projectId === selectedProjectId
               ? areaByTabId.get(s.id)
               : undefined;
-          return <TerminalView key={s.id} session={s} area={area} />;
+          return <TerminalView key={s.id} session={s} area={area} scrollbackLimit={scrollbackLimit} />;
         })
       )}
     </div>

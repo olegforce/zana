@@ -29,12 +29,14 @@ export function threadIsQuiet(row: ThreadRecord, until: ThreadWaitUntil): boolea
 
 export async function listInteractions(
   http: ProductHttpClient,
-  threadId: string
+  threadId: string,
+  signal?: AbortSignal
 ): Promise<PendingInteraction[]> {
   try {
     const data = await http.request<unknown>(
       'GET',
-      `/api/v1/threads/${encodeURIComponent(threadId)}/interactions`
+      `/api/v1/threads/${encodeURIComponent(threadId)}/interactions`,
+      { signal }
     );
     if (Array.isArray(data)) return data as PendingInteraction[];
     if (data && typeof data === 'object' && Array.isArray((data as { interactions?: unknown }).interactions)) {
@@ -51,7 +53,8 @@ async function resolvePending(
   http: ProductHttpClient,
   threadId: string,
   interactions: PendingInteraction[],
-  policy: InteractionPolicy
+  policy: InteractionPolicy,
+  signal?: AbortSignal
 ): Promise<void> {
   const body = policy === 'deny'
     ? { decision: 'deny' as const }
@@ -62,7 +65,7 @@ async function resolvePending(
       await http.request(
         'POST',
         `/api/v1/threads/${encodeURIComponent(threadId)}/interactions/${encodeURIComponent(item.id)}/resolve`,
-        { body }
+        { body, signal }
       );
     } catch (error) {
       const prompt = item.prompt ?? item.title ?? item.id;
@@ -75,13 +78,13 @@ async function resolvePending(
   }
 }
 
-async function dumpThread(http: ProductHttpClient, threadId: string, thread?: ThreadRecord): Promise<WaitDump> {
+async function dumpThread(http: ProductHttpClient, threadId: string, thread?: ThreadRecord, signal?: AbortSignal): Promise<WaitDump> {
   let events: unknown[] = [];
   try {
     const listed = await http.request<{ events?: unknown[] } | unknown[]>(
       'GET',
       `/api/v1/threads/${encodeURIComponent(threadId)}/events`,
-      { query: { limit: '20' } }
+      { query: { limit: '20' }, signal }
     );
     events = Array.isArray(listed)
       ? listed
@@ -93,13 +96,13 @@ async function dumpThread(http: ProductHttpClient, threadId: string, thread?: Th
   }
   let health: unknown;
   try {
-    health = await http.request('GET', '/api/v1/health');
+    health = await http.request('GET', '/api/v1/health', { signal });
   } catch {
     health = undefined;
   }
   return {
     thread,
-    interactions: await listInteractions(http, threadId).catch(() => []),
+    interactions: await listInteractions(http, threadId, signal).catch(() => []),
     events: events.slice(-20),
     health
   };
@@ -116,14 +119,26 @@ export async function waitForThreadStatus(
 ): Promise<ThreadRecord> {
   const deadline = http.nowMs() + opts.timeoutMs;
   const policy = opts.onInteraction ?? 'fail';
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let lastRow: ThreadRecord | undefined;
+  let lastInteractions: PendingInteraction[] = [];
+  const timeout = () => new ControlError('TIMEOUT', `timed out waiting for thread ${threadId}`, { details: { thread: lastRow, interactions: lastInteractions, events: [] } });
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { reject(timeout()); controller.abort(); }, Math.max(0, opts.timeoutMs));
+  });
+  const poll = async (): Promise<ThreadRecord> => {
   while (http.nowMs() < deadline) {
     let row: ThreadRecord | undefined;
     try {
       const shown = await http.request<{ thread: ThreadRecord }>(
         'GET',
-        `/api/v1/threads/${encodeURIComponent(threadId)}`
+        `/api/v1/threads/${encodeURIComponent(threadId)}`,
+        { signal }
       );
       row = shown.thread;
+      lastRow = row;
     } catch (error) {
       if (error instanceof ControlError && (error.status ?? 0) >= 500) {
         row = undefined;
@@ -135,10 +150,11 @@ export async function waitForThreadStatus(
       throw new ControlError(
         'UNHEALTHY',
         `thread ${threadId} entered error state`,
-        { details: await dumpThread(http, threadId, row) }
+        { details: await dumpThread(http, threadId, row, signal) }
       );
     }
-    const interactions = await listInteractions(http, threadId);
+    const interactions = await listInteractions(http, threadId, signal);
+    lastInteractions = interactions;
     if (opts.until === 'needs_you' && interactions.length > 0) {
       return row ?? { id: threadId, status: 'waiting' };
     }
@@ -148,29 +164,30 @@ export async function waitForThreadStatus(
         throw new ControlError(
           'INTERACTION',
           `thread ${threadId} is waiting for an interaction: ${prompt}`,
-          { details: await dumpThread(http, threadId, row) }
+          { details: await dumpThread(http, threadId, row, signal) }
         );
       }
-      await resolvePending(http, threadId, interactions, policy);
+      await resolvePending(http, threadId, interactions, policy, signal);
     }
     if (row && threadIsQuiet(row, opts.until === 'needs_you' ? 'idle' : opts.until)) {
       if (opts.until === 'needs_you') {
-        await http.sleep(200);
+        await http.sleep(Math.min(200, Math.max(0, deadline - http.nowMs())));
         continue;
       }
       return row;
     }
-    await http.sleep(250);
+    await http.sleep(Math.min(250, Math.max(0, deadline - http.nowMs())));
   }
-  const last = await http.request<{ thread: ThreadRecord }>(
-    'GET',
-    `/api/v1/threads/${encodeURIComponent(threadId)}`
-  ).catch(() => null);
-  throw new ControlError(
-    'TIMEOUT',
-    `timed out waiting for thread ${threadId}`,
-    { details: await dumpThread(http, threadId, last?.thread) }
-  );
+  // The deadline includes diagnostics. Keep the last known state instead of
+  // starting more HTTP requests after the budget has expired.
+  throw timeout();
+  };
+  try {
+    return await Promise.race([poll(), expired]);
+  } finally {
+    clearTimeout(timer!);
+    controller.abort();
+  }
 }
 
 export async function waitForThreadEvent(

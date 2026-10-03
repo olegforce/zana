@@ -8,6 +8,13 @@
       "when": 1784156711242,
       "tag": "0000_chief_war_machine",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790961262289,
+      "tag": "0001_sparkling_hellion",
+      "breakpoints": true
     }
   ]
 }

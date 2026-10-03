@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +20,17 @@ afterEach(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
 const output = 'head😀' + 'Ā'.repeat(40_000) + 'tail😀';
 const payload = (text = output) => ({ type: 'item/completed', item: { type: 'commandExecution', aggregatedOutput: text } });
 const add = (type: string, value: unknown) => appendConversationThreadEvent(db, { threadId, type, payload: value });
+
+it('does not wait on a busy database and restores the caller timeout on failure', () => {
+  db.sqlite.pragma('busy_timeout = 4321');
+  const transaction = vi.spyOn(db, 'transaction').mockImplementation(() => {
+    expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(0);
+    throw new Error('database busy');
+  });
+  try { expect(() => maintainConversationHistory(db)).toThrow('database busy'); }
+  finally { transaction.mockRestore(); }
+  expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(4321);
+});
 
 it.each([false, true])('stores previews atomically and restores full outputs within a byte budget (wrapped=%s)', wrapped => {
   const original = wrapped ? { event: payload() } : payload();
@@ -65,14 +76,14 @@ it('prunes in small batches, keeps messages and the sequence high-water mark, an
   const message = add('item/completed', { item: { type: 'agentMessage', text: 'keep' } });
   for (let i = 0; i < 40; i++) add('turn/diff/updated', { diff: 'old snapshot' });
   const next = nextConversationEventSequence(db, threadId);
-  expect(maintainConversationHistory(db)).toEqual({ snapshots: 32, outputs: 0 });
+  expect(maintainConversationHistory(db)).toEqual({ snapshots: 32, outputs: 0, scannedSnapshots: 32 });
   db.close(); db = openDatabase(join(dir, 'db.sqlite'));
-  expect(maintainConversationHistory(db)).toEqual({ snapshots: 7, outputs: 0 });
+  expect(maintainConversationHistory(db)).toEqual({ snapshots: 7, outputs: 0, scannedSnapshots: 8 });
   expect(nextConversationEventSequence(db, threadId)).toBe(next);
   expect(listConversationThreadEvents(db, threadId)[0]).toEqual(message);
   const retained = add('item/completed', payload());
-  expect(maintainConversationHistory(db, Date.now() + CONVERSATION_OUTPUT_RETENTION_MS + 1)).toEqual({ snapshots: 0, outputs: 1 });
-  expect(maintainConversationHistory(db)).toEqual({ snapshots: 1, outputs: 0 });
+  expect(maintainConversationHistory(db, Date.now() + CONVERSATION_OUTPUT_RETENTION_MS + 1)).toEqual({ snapshots: 0, outputs: 1, scannedSnapshots: 0 });
+  expect(maintainConversationHistory(db)).toEqual({ snapshots: 1, outputs: 0, scannedSnapshots: 1 });
   expect(listConversationThreadEvents(db, threadId)).toEqual([message, retained]);
 });
 

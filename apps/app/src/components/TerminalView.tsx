@@ -20,44 +20,18 @@ import { openXtermHttpLink } from '../lib/xterm-http-link.js';
 import { registerOsc52Clipboard } from '../lib/osc52-clipboard.js';
 import { copyText } from '../lib/copy-text.js';
 import { useData, useUi } from '../store.js';
+import { createVisibleTerminalRenderer, TERMINAL_SCROLLBACK_MAX } from '../lib/terminal-resource-budget.js';
 
 type Area = 'a' | 'b' | 'c' | 'd';
 
 // Attach WebGL to a freshly-opened terminal when the platform supports it.
 // xterm 6 has no compatible canvas renderer addon, so its DOM renderer is the
 // fallback for headless, blocklisted, or lost GPU contexts.
-function attachRenderer(term: Terminal): () => void {
-  let webgl: WebglAddon | null = null;
-
-  try {
-    webgl = new WebglAddon();
-    // A lost GPU context cannot host a renderer; xterm falls back to DOM.
-    webgl.onContextLoss(() => {
-      try {
-        webgl?.dispose();
-      } catch {
-        /* already gone */
-      }
-      webgl = null;
-    });
-    term.loadAddon(webgl);
-  } catch {
-    webgl = null;
-  }
-
-  return () => {
-    try {
-      webgl?.dispose();
-    } catch {
-      /* ignore */
-    }
-  };
-}
-
 interface Props {
   session: TerminalSession;
   /** Grid area assigned by TerminalSurface; `undefined` = hidden. */
   area: Area | undefined;
+  scrollbackLimit?: number;
 }
 
 // Memoized: TerminalSurface subscribes to nav/modal/monitor/split state and
@@ -67,11 +41,14 @@ interface Props {
 // whose placement didn't actually change, instead of re-running N instances on
 // the exact frame we want to stay cheap. `session` objects are stable by id
 // from the store, so default shallow-equal is correct here.
-function TerminalViewImpl({ session, area }: Props) {
+function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK_MAX }: Props) {
   const visible = area !== undefined;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const rendererRef = useRef<ReturnType<typeof createVisibleTerminalRenderer> | null>(null);
   const offsRef = useRef<Array<() => void>>([]);
   const fontSize = useData((s) => s.fontSize);
   const wheelArrowsEnabled = useData((s) => s.terminalWheelArrowsEnabled);
@@ -146,13 +123,10 @@ function TerminalViewImpl({ session, area }: Props) {
       // OSC 8 (gh, etc.): without this, xterm confirm()s then window.open()
       // with no URL and Electron denies about:blank — OK does nothing.
       linkHandler: { activate: activateHttpLink },
-      // Keep a deep scrollback: a long-running agent easily emits more than a
-      // few thousand lines, and the old 5k cap silently dropped the oldest — so
-      // peeking the agent in the modal (or scrolling back in the tab) lost early
-      // output for good. 50k lines is still cheap in memory but covers a full
-      // session. xterm reflow on resize trims at this cap, so a higher cap also
-      // shrinks the window where re-parenting into the modal could drop lines.
-      scrollback: 50000
+      // TerminalSurface divides a 200k-row history budget among mounted sessions.
+      // Keep the terminal alive across navigation; xterm trims oldest history
+      // only when output or a reduced allocation exceeds this retained tail.
+      scrollback: scrollbackLimit
     });
     const fit = new FitAddon();
     const search = new SearchAddon();
@@ -162,7 +136,8 @@ function TerminalViewImpl({ session, area }: Props) {
     term.open(ref.current);
     // Upgrade off the DOM renderer to WebGL now that the terminal has a DOM
     // element to attach the rendering surface to. MUST come after open().
-    const disposeRenderer = attachRenderer(term);
+    const renderer = createVisibleTerminalRenderer((addon: WebglAddon) => term.loadAddon(addon), () => new WebglAddon());
+    rendererRef.current = renderer;
 
     termRef.current = term;
     fitRef.current = fit;
@@ -240,6 +215,7 @@ function TerminalViewImpl({ session, area }: Props) {
       if (disposedRef.current) return;
       const el = ref.current;
       const sized = !!el && el.clientHeight > 0 && el.clientWidth > 0;
+      renderer.setVisible(visibleRef.current && sized);
       if (!sized) {
         // Not laid out. Keep retrying only if this terminal is currently shown
         // (offsetParent is null for a display:none element); otherwise stop —
@@ -472,6 +448,7 @@ function TerminalViewImpl({ session, area }: Props) {
       const box = entries[entries.length - 1]?.contentRect;
       const w = box ? Math.round(box.width) : ref.current?.clientWidth ?? 0;
       const h = box ? Math.round(box.height) : ref.current?.clientHeight ?? 0;
+      renderer.setVisible(visibleRef.current && w > 0 && h > 0 && isTerminalHostVisible(ref.current));
       // Hidden / not-yet-laid-out, or unchanged from the last fit — nothing to do.
       if (w === 0 || h === 0) {
         settle.cancel();
@@ -522,12 +499,17 @@ function TerminalViewImpl({ session, area }: Props) {
       offHandle();
       // Dispose the WebGL/canvas addon before the terminal so its GPU context /
       // canvas surface is released deterministically (not left to GC).
-      disposeRenderer();
+      renderer.dispose();
+      rendererRef.current = null;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
     };
   }, [session.id]);
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.scrollback = scrollbackLimit;
+  }, [scrollbackLimit]);
 
   // Live font size updates
   useEffect(() => {
@@ -571,6 +553,7 @@ function TerminalViewImpl({ session, area }: Props) {
   // mismatch when the layout class changes without a size change yet.
   useEffect(() => {
     if (!visible) {
+      rendererRef.current?.setVisible(false);
       settleRef.current?.cancel();
       return;
     }
@@ -579,6 +562,7 @@ function TerminalViewImpl({ session, area }: Props) {
     const raf = requestAnimationFrame(() => {
       try {
         if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
+        rendererRef.current?.setVisible(true);
         // Split open/close can change layout without a lasting pixel delta
         // (ResizeObserver then skips). The settled-style nudge still has to
         // run so a Claude TUI redraws and xterm busts a stale cell cache.
@@ -703,6 +687,7 @@ function TerminalViewImpl({ session, area }: Props) {
     <div
       ref={ref}
       className={`term ${dropOver ? 'drop-over' : ''} ${area ? `area-${area}` : ''}`}
+      data-scrollback-limit={scrollbackLimit}
       style={{ display: visible ? 'block' : 'none', gridArea: area }}
       {...dropHandlers}
     />

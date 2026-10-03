@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { shallow } from 'zustand/vanilla/shallow';
 import { subscribeProductReconnect } from './lib/product-ws.js';
 import { product } from './lib/product-client.js';
 import type { ThreadActivityState } from '@zana-ai/zcc-domain/thread-runtime';
@@ -40,6 +41,8 @@ function isThreadListItem(value: unknown): value is ThreadListItem {
 }
 
 let subscribed = false;
+const pendingSequences = new Map<string, number>();
+let sequenceTimer: ReturnType<typeof setTimeout> | undefined;
 
 function ensureThreadUpdates(): void {
   if (subscribed) return;
@@ -60,10 +63,15 @@ function ensureThreadUpdates(): void {
     const sequence = 'sequence' in payload && typeof payload.sequence === 'number'
       ? payload.sequence
       : null;
-    if (!threadId || sequence == null) return;
-    const current = useThreads.getState().threads.find((row) => row.id === threadId);
-    if (!current || (current.maxSeq ?? 0) >= sequence) return;
-    useThreads.getState().upsert({ ...current, maxSeq: sequence, updatedAt: Date.now() });
+    if (!threadId || sequence == null || !Number.isSafeInteger(sequence) || sequence <= 0) return;
+    pendingSequences.set(threadId, Math.max(sequence, pendingSequences.get(threadId) ?? 0));
+    sequenceTimer ??= setTimeout(() => {
+      sequenceTimer = undefined;
+      const state = useThreads.getState();
+      const threads = applyThreadEventSequences(state.threads, pendingSequences);
+      pendingSequences.clear();
+      if (threads !== state.threads) useThreads.setState({ threads });
+    }, 100);
   });
 }
 
@@ -87,13 +95,31 @@ export function mergeThreadRoster(
   thread: ThreadListItem
 ): ThreadListItem[] {
   if (thread.archivedAt) {
-    return threads.filter((row) => row.id !== thread.id);
+    return threads.some(row => row.id === thread.id) ? threads.filter((row) => row.id !== thread.id) : threads;
   }
   const index = threads.findIndex((row) => row.id === thread.id);
   if (index < 0) return [withUnreadFields(thread), ...threads];
+  const previous = threads[index]!;
+  const merged = withUnreadFields(thread, previous);
+  if (shallow({ ...previous, activity: undefined, runtime: undefined }, { ...merged, activity: undefined, runtime: undefined })
+    && shallow(previous.activity, merged.activity) && shallow(previous.runtime, merged.runtime)) return threads;
   const next = threads.slice();
-  next[index] = withUnreadFields(thread, threads[index]);
+  next[index] = merged;
   return next;
+}
+
+/** Apply one event burst against the latest metadata with one roster scan/write. */
+export function applyThreadEventSequences(
+  threads: ThreadListItem[], sequences: ReadonlyMap<string, number>, now = Date.now()
+): ThreadListItem[] {
+  let changed = false;
+  const next = threads.map(row => {
+    const sequence = sequences.get(row.id);
+    if (sequence === undefined || (row.maxSeq ?? 0) >= sequence) return row;
+    changed = true;
+    return { ...row, maxSeq: sequence, updatedAt: now };
+  });
+  return changed ? next : threads;
 }
 
 export function applyThreadEventSequence(
@@ -129,7 +155,9 @@ export const useThreads = create<ThreadStore>((set, get) => ({
   },
   upsert(thread) {
     ensureThreadUpdates();
-    set({ threads: mergeThreadRoster(get().threads, thread) });
+    const current = get().threads;
+    const threads = mergeThreadRoster(current, thread);
+    if (threads !== current) set({ threads });
   },
   remove(id) {
     set({ threads: get().threads.filter((row) => row.id !== id) });
