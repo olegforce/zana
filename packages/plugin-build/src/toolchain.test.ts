@@ -1,174 +1,132 @@
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, delimiter, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPluginApp } from "./build-plugin-app.js";
-import {
-  PLUGIN_TOOLCHAIN_PINS,
-  resolvePluginBuildToolchain,
-  toolchainCacheDir,
-} from "./toolchain.js";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PLUGIN_TOOLCHAIN_PINS, resolvePluginBuildToolchain, toolchainCacheDir } from './toolchain.js';
+import { resolveBundledNpmCli } from './npm-cli.js';
 
-describe("plugin build toolchain", () => {
-  let baseDir: string;
+let baseDir: string;
+beforeEach(async () => { baseDir = await mkdtemp(join(tmpdir(), 'zcc-toolchain-test-')); });
+afterEach(async () => { vi.unstubAllEnvs(); await rm(baseDir, { recursive: true, force: true }); });
 
-  beforeEach(async () => {
-    baseDir = await mkdtemp(join(tmpdir(), "bb-toolchain-"));
+async function fakeNpm(extra = '', pins: Record<string, string> = PLUGIN_TOOLCHAIN_PINS) {
+  const file = join(baseDir, 'npm.cjs');
+  await writeFile(file, `
+const fs = require('node:fs');
+const path = require('node:path');
+const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
+fs.appendFileSync(${JSON.stringify(join(baseDir, 'calls'))}, 'install\\n');
+${extra}
+for (const [name, version] of Object.entries(${JSON.stringify(pins)})) {
+  const dir = path.join(prefix, 'node_modules', name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name, version, main:'index.cjs'}));
+  fs.writeFileSync(path.join(dir, 'index.cjs'), 'module.exports = {};');
+}
+`);
+  return { ignoreLocal: true, npmCliPath: file };
+}
+
+async function leftovers() {
+  return (await readdir(baseDir)).filter((name) => name.includes('.staging-') || name.endsWith('.lock'));
+}
+
+describe('plugin build toolchain', () => {
+  it('keys durable caches on versions and native runtime architecture', () => {
+    const name = basename(toolchainCacheDir(baseDir));
+    for (const version of Object.values(PLUGIN_TOOLCHAIN_PINS)) expect(name).toContain(version);
+    expect(name).toContain(`${process.platform}-${process.arch}`);
   });
 
-  afterEach(async () => {
-    await rm(baseDir, { recursive: true, force: true });
+  it('uses importable pinned local tools without downloading', async () => {
+    const fetch = vi.fn();
+    const tools = await resolvePluginBuildToolchain(baseDir, { onFetchStart: fetch });
+    expect(fetch).not.toHaveBeenCalled();
+    const esbuild = await import(tools.esbuild) as typeof import('esbuild');
+    expect((await esbuild.transform('const x: number = 1', { loader: 'ts' })).code.trim()).toBe('const x = 1;');
+    expect(tools.tailwindNode).toContain('@tailwindcss/node');
+    expect(resolveBundledNpmCli()).toMatch(/npm-cli\.js$/);
   });
 
-  it("keys the cache directory on the pinned versions", () => {
-    const dir = toolchainCacheDir("/data");
-    for (const version of Object.values(PLUGIN_TOOLCHAIN_PINS)) {
-      expect(basename(dir)).toContain(version);
+  it('fetches once for concurrent callers and reuses the cache offline', async () => {
+    const options = await fakeNpm();
+    const start = vi.fn(), done = vi.fn();
+    const tools = await Promise.all(Array.from({ length: 6 }, () => resolvePluginBuildToolchain(baseDir, { ...options, onFetchStart: start, onFetchDone: done })));
+    expect(start).toHaveBeenCalledOnce();
+    expect(done).toHaveBeenCalledOnce();
+    expect(new Set(tools.map((tool) => tool.esbuild)).size).toBe(1);
+    expect(tools[0].esbuild).toContain('toolchain-');
+    const cached = await resolvePluginBuildToolchain(baseDir, { ignoreLocal: true, npmCliPath: '/no/npm' });
+    expect(cached).toEqual(tools[0]);
+    expect((await readFile(join(baseDir, 'calls'), 'utf8')).trim()).toBe('install');
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it.each(['missing-marker', 'primitive-marker', 'invalid-json', 'wrong-pins', 'broken-package'])('repairs a %s cache after validating its replacement', async (kind) => {
+    const dir = toolchainCacheDir(baseDir);
+    await mkdir(dir);
+    if (kind === 'primitive-marker') await writeFile(join(dir, '.zcc-toolchain.json'), 'null');
+    if (kind === 'invalid-json') await writeFile(join(dir, '.zcc-toolchain.json'), 'oops');
+    if (kind === 'wrong-pins') await writeFile(join(dir, '.zcc-toolchain.json'), JSON.stringify({ pins: 'old' }));
+    if (kind === 'broken-package') {
+      const options = await fakeNpm();
+      await resolvePluginBuildToolchain(baseDir, options);
+      await rm(join(dir, 'node_modules/esbuild'), { recursive: true });
     }
-    expect(dir.startsWith("/data/")).toBe(true);
+    const tools = await resolvePluginBuildToolchain(baseDir, await fakeNpm());
+    expect(tools.esbuild).toContain('toolchain-');
+    expect(await leftovers()).toEqual([]);
   });
 
-  it("prefers a locally resolvable toolchain over fetching", async () => {
-    const toolchain = await resolvePluginBuildToolchain(baseDir, {
-      onFetchStart: () => {
-        throw new Error("fetched despite a locally resolvable toolchain");
-      },
-    });
-
-    expect(toolchain.esbuild).toMatch(/^file:\/\//);
-    expect(toolchain.esbuild).toContain("esbuild");
-    expect(toolchain.tailwindNode).toContain("@tailwindcss/node");
-    expect(toolchain.tailwindOxide).toContain("@tailwindcss/oxide");
-    expect(
-      await rm(toolchainCacheDir(baseDir), { recursive: true }).then(
-        () => true,
-        () => false,
-      ),
-    ).toBe(false);
+  it('rejects incomplete and wrong-version downloads, cleans up and permits retry', async () => {
+    await expect(resolvePluginBuildToolchain(baseDir, await fakeNpm('', { esbuild: '0.0.0' }))).rejects.toThrow('incomplete or misversioned');
+    expect(await leftovers()).toEqual([]);
+    await expect(resolvePluginBuildToolchain(baseDir, await fakeNpm())).resolves.toHaveProperty('esbuild');
   });
 
-  it("returns importable module specifiers", async () => {
-    const toolchain = await resolvePluginBuildToolchain(baseDir);
-    const esbuild = (await import(
-      toolchain.esbuild
-    )) as typeof import("esbuild");
-    const result = await esbuild.transform("const x: number = 1", {
-      loader: "ts",
-    });
-
-    expect(result.code.trim()).toBe("const x = 1;");
+  it('bounds a hung bootstrap and recovers', async () => {
+    const options = await fakeNpm('setInterval(() => {}, 1000);');
+    await expect(resolvePluginBuildToolchain(baseDir, { ...options, timeoutMs: 100 })).rejects.toThrow();
+    expect(await leftovers()).toEqual([]);
+    await expect(resolvePluginBuildToolchain(baseDir, await fakeNpm())).resolves.toHaveProperty('esbuild');
   });
 
-  describe("fetched toolchain", () => {
-    it.runIf(process.env.BB_TEST_TOOLCHAIN_FETCH === "1")(
-      "builds a plugin frontend with nothing resolvable locally",
-      async () => {
-        const fetchEvents: string[] = [];
-        const toolchain = await resolvePluginBuildToolchain(baseDir, {
-          ignoreLocal: true,
-          onFetchStart: () => fetchEvents.push("start"),
-          onFetchDone: (ms) => fetchEvents.push(`done:${ms > 0}`),
-        });
+  it('reports npm errors without caching success', async () => {
+    const options = await fakeNpm('process.stderr.write("registry unavailable"); process.exit(17);');
+    await expect(resolvePluginBuildToolchain(baseDir, options)).rejects.toThrow('registry unavailable');
+    expect(await leftovers()).toEqual([]);
+  });
 
-        expect(fetchEvents).toEqual(["start", "done:true"]);
+  it('uses a cache completed by another process while waiting for its lock', async () => {
+    const other = join(baseDir, 'other');
+    await resolvePluginBuildToolchain(other, await fakeNpm());
+    const target = toolchainCacheDir(baseDir);
+    await mkdir(`${target}.lock`);
+    const waiting = resolvePluginBuildToolchain(baseDir, { ignoreLocal: true, npmCliPath: '/must-not-fetch', lockWaitMs: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await cp(toolchainCacheDir(other), target, { recursive: true });
+    await rm(`${target}.lock`, { recursive: true });
+    expect((await waiting).esbuild).toContain(target);
+    expect((await readFile(join(baseDir, 'calls'), 'utf8')).trim()).toBe('install');
+    expect(await leftovers()).toEqual([]);
+  });
 
-        expect(toolchain.esbuild).toContain("toolchain-");
-        expect(toolchain.tailwindCssDir).toContain("toolchain-");
+  it('recovers expired process locks and bounds a live lock wait', async () => {
+    const lock = `${toolchainCacheDir(baseDir)}.lock`;
+    await mkdir(lock);
+    await expect(resolvePluginBuildToolchain(baseDir, { ...await fakeNpm(), lockWaitMs: 0 })).rejects.toThrow('timed out waiting');
+    const old = new Date(Date.now() - 10 * 60_000);
+    await utimes(lock, old, old);
+    await expect(resolvePluginBuildToolchain(baseDir, await fakeNpm())).resolves.toHaveProperty('esbuild');
+    expect(await leftovers()).toEqual([]);
+  });
 
-        const pluginDir = join(baseDir, "plugin");
-        await mkdir(pluginDir, { recursive: true });
-        await writeFile(
-          join(pluginDir, "package.json"),
-          JSON.stringify({
-            name: "bb-plugin-fetched",
-            version: "0.1.0",
-            bb: {
-              name: "Fetched",
-              description: "Fetched toolchain fixture.",
-              branding: { icon: "Zap" },
-              server: "./server.ts",
-              app: "./app.tsx",
-            },
-          }),
-        );
-        await writeFile(
-          join(pluginDir, "server.ts"),
-          "export default function plugin() {}",
-        );
-        await writeFile(
-          join(pluginDir, "app.tsx"),
-          `import { definePluginApp } from "@zana-ai/zcc-plugin-sdk/app";\n` +
-            `export default definePluginApp({});\n`,
-        );
-
-        const result = await buildPluginApp(pluginDir, "0.9.0-test", toolchain);
-        const css = await readFile(result.cssPath, "utf8");
-
-        expect(css.length).toBeGreaterThan(0);
-        expect(css).toContain("--");
-      },
-      600_000,
-    );
-
-    it.skipIf(process.platform === "win32")(
-      "keeps script-policy npm config out of the fetch",
-      async () => {
-        const binDir = join(baseDir, "bin");
-        const envDump = join(baseDir, "npm-env.txt");
-        await mkdir(binDir, { recursive: true });
-        const fakeNpm = join(binDir, "npm");
-        await writeFile(fakeNpm, `#!/bin/sh\nenv > "${envDump}"\nexit 0\n`);
-        await chmod(fakeNpm, 0o755);
-
-        const overrides: Record<string, string> = {
-          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-          npm_config_allow_scripts: "@github/keytar,node-pty",
-          NPM_CONFIG_IGNORE_SCRIPTS: "false",
-          npm_config_registry: "https://registry.example.invalid/",
-        };
-        const previous = new Map<string, string | undefined>();
-        for (const [key, value] of Object.entries(overrides)) {
-          previous.set(key, process.env[key]);
-          process.env[key] = value;
-        }
-        try {
-          await expect(
-            resolvePluginBuildToolchain(baseDir, { ignoreLocal: true }),
-          ).rejects.toThrow(/incomplete or misversioned/);
-        } finally {
-          for (const [key, value] of previous) {
-            if (value === undefined) delete process.env[key];
-            else process.env[key] = value;
-          }
-        }
-
-        const seen = new Map(
-          (await readFile(envDump, "utf8"))
-            .split("\n")
-            .filter((line) => line.includes("="))
-            .map((line) => {
-              const at = line.indexOf("=");
-              return [line.slice(0, at), line.slice(at + 1)] as const;
-            }),
-        );
-        expect(seen.has("npm_config_allow_scripts")).toBe(false);
-        expect(seen.has("NPM_CONFIG_IGNORE_SCRIPTS")).toBe(false);
-        expect(seen.get("npm_config_registry")).toBe(
-          "https://registry.example.invalid/",
-        );
-      },
-    );
-
-    it("reuses an already-fetched toolchain without reinstalling", async () => {
-      const local = await resolvePluginBuildToolchain(baseDir);
-      expect(local.tailwindCssDir.length).toBeGreaterThan(0);
-    });
+  it('keeps script-policy configuration out of npm while preserving its registry', async () => {
+    vi.stubEnv('npm_config_allow_scripts', 'private-bin');
+    vi.stubEnv('NPM_CONFIG_IGNORE_SCRIPTS', 'false');
+    vi.stubEnv('npm_config_registry', 'https://registry.example.invalid/');
+    const file = join(baseDir, 'env.json');
+    await resolvePluginBuildToolchain(baseDir, await fakeNpm(`fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify({allow:process.env.npm_config_allow_scripts,ignore:process.env.NPM_CONFIG_IGNORE_SCRIPTS,registry:process.env.npm_config_registry}));`));
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ registry: 'https://registry.example.invalid/' });
   });
 });

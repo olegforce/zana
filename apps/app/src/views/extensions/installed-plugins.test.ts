@@ -161,6 +161,18 @@ describe('filterInstalledRows', () => {
     ]);
   });
 
+  it('identifies path plugins as Local without exposing a path, and honors name sorting', () => {
+    const local: HubRow = { module: mod('force2you', 'Force2You'), entry: null,
+      plugin: plugin('force2you', { name: 'Force2You', provenance: 'direct', sourceKind: 'path' }) };
+    const official: HubRow = { module: mod('z-tools', 'Z Tools'), entry: null,
+      plugin: plugin('z-tools', { name: 'Z Tools', provenance: 'builtin' }) };
+    expect(installedPublisher(local)).toBe('local');
+    expect(filterInstalledRows([official, local], '', 'local', 'asc')).toEqual([local]);
+    expect(filterInstalledRows([official, local], '', 'all', 'asc')).toEqual([local, official]);
+    expect(filterInstalledRows([local, official], '', 'all', 'desc')).toEqual([official, local]);
+    expect(installedPublisher({ ...local, plugin: { ...local.plugin!, sourceKind: 'git' } })).toBe('user');
+  });
+
   it('reverses name order among enabled plugins, then disabled', () => {
     const desc = filterInstalledRows(rows, '', 'all', 'desc');
     expect(desc.map((row) => row.module.id)).toEqual(['docs', 'acme', 'pi']);

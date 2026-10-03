@@ -235,6 +235,12 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Verify packaged plugin authoring
+        run: |
+          APP_PATH=$(node --input-type=module -e 'import { readdirSync } from "node:fs"; import { join, resolve } from "node:path"; for (const dir of readdirSync("dist")) { const path = join("dist", dir, "Zana.app", "Contents", "MacOS", "Zana"); try { const { existsSync } = await import("node:fs"); if (existsSync(path)) { console.log(resolve(path)); break; } } catch {} }')
+          test -n "$APP_PATH"
+          ZCC_E2E_EXECUTABLE_PATH="$APP_PATH" pnpm test:e2e:only -- e2e/plugin-authoring-live.spec.ts
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -302,6 +308,11 @@ jobs:
       # This exercises app.asar, bundled resources, SQLite and ConPTY together.
       - name: Smoke test packaged Windows app
         run: pnpm run test:smoke:only
+        env:
+          ZCC_E2E_EXECUTABLE_PATH: ${{ github.workspace }}\dist\win-unpacked\Zana.exe
+
+      - name: Verify packaged Windows plugin authoring
+        run: pnpm test:e2e:only -- e2e/plugin-authoring-live.spec.ts
         env:
           ZCC_E2E_EXECUTABLE_PATH: ${{ github.workspace }}\dist\win-unpacked\Zana.exe
 

@@ -111,7 +111,7 @@ import {
   type PluginSessionTools
 } from './plugin-agent-tools.js';
 import { startPluginUpdateSweep } from './plugin-updates.js';
-import { buildPluginApp, buildPluginServer, createPluginDevLoop } from '@zana-ai/zcc-plugin-build';
+import { buildPluginApp, buildPluginServer, buildPluginHost, getPluginBuildToolchain, createPluginDevLoop } from '@zana-ai/zcc-plugin-build';
 import { createPluginServicesRegistry } from '@zana-ai/zcc-plugin-sdk/server';
 import { createSerializedTransactionQueue } from '../durable-store.js';
 
@@ -195,6 +195,7 @@ export interface PluginUiSnapshot {
   icon: string;
   enabled: boolean;
   provenance: InstalledPluginRow['provenance'];
+  sourceKind: InstalledPluginRow['sourceKind'];
   status: InstalledPluginRow['status'];
   appEntry: string | null;
   appUrl: string | null;
@@ -228,6 +229,7 @@ export function toPluginAppSnapshot(row: PluginUiSnapshot) {
     icon: row.icon,
     enabled: row.enabled,
     provenance: row.provenance,
+    sourceKind: row.sourceKind,
     status: row.status,
     statusDetail: row.statusDetail,
     appUrl: row.appUrl,
@@ -794,9 +796,9 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     const declared = row.appEntry;
     if (!declared) return;
     const compiledRel = declared.replace(/\.tsx?$/, '.js');
-    if (/\.tsx?$/.test(declared) && !existsSync(join(row.rootDir, compiledRel))) {
+    if (/\.tsx?$/.test(declared) && (row.sourceKind === 'path' || !existsSync(join(row.rootDir, compiledRel)))) {
       try {
-        await buildPluginApp(row.rootDir, hostVersion, { minify: false, sourcemap: true });
+        await buildPluginApp(row.rootDir, hostVersion, { minify: false, sourcemap: true, toolchain: await getPluginBuildToolchain(opts.dataDir) });
       } catch (error) {
         const detail = (error instanceof Error ? error.message : String(error))
           .replaceAll(row.rootDir, '<plugin>')
@@ -862,6 +864,12 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       return;
     }
     try {
+      if (row.sourceKind === 'path') {
+        const manifest = loadManifestFromDir(row.rootDir);
+        if (manifest.id !== row.id) throw new Error('plugin identity changed; reinstall with the new identity');
+        assertEngines(manifest, hostVersion, sdkVersion);
+        row = { ...row, version: manifest.version, appEntry: manifest.appEntry, serverEntry: manifest.serverEntry };
+      }
       await ensureCompiledApp(row);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -899,7 +907,8 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
         rootDir: row.rootDir,
         hostEntry,
         sourceKind: row.sourceKind,
-        zccVersion: hostVersion
+        zccVersion: hostVersion,
+        dataDir: opts.dataDir
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1294,6 +1303,7 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
         icon,
         enabled: row.enabled,
         provenance: row.provenance,
+        sourceKind: row.sourceKind,
         status: row.status,
         appEntry: row.appEntry,
         appUrl: appUrlFor(row),
@@ -1462,12 +1472,21 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
         pluginId,
         hasApp,
         hasServer,
+        targets: async () => {
+          const manifest = loadManifestFromDir(rootDir);
+          return {
+            hasApp: Boolean(manifest.appEntry),
+            hasServer: Boolean(manifest.serverEntry) && !/\.tsx?$/.test(manifest.serverEntry ?? ''),
+            hasHost: Boolean(manifest.hostEntry)
+          };
+        },
         buildApp: async () => {
-          await buildPluginApp(rootDir, hostVersion, { minify: false, sourcemap: true });
+          await buildPluginApp(rootDir, hostVersion, { minify: false, sourcemap: true, toolchain: await getPluginBuildToolchain(opts.dataDir) });
         },
         buildServer: async () => {
-          await buildPluginServer(rootDir, hostVersion, { minify: false, sourcemap: true });
+          await buildPluginServer(rootDir, hostVersion, { minify: false, sourcemap: true, toolchain: await getPluginBuildToolchain(opts.dataDir) });
         },
+        buildHost: async () => { await buildPluginHost(rootDir, hostVersion, await getPluginBuildToolchain(opts.dataDir)); },
         reloadPlugin: async () => {
           await service.reload(pluginId);
         },

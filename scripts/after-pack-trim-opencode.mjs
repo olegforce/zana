@@ -16,6 +16,7 @@
 import { copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureBetterSqlite3ForElectron } from './ensure-better-sqlite3.mjs';
+import { verifyPackagedPluginBuild } from './verify-packaged-plugin-build.mjs';
 
 /** electron-builder `Arch` enum (app-builder-lib). */
 const ARCH_BY_CODE = {
@@ -117,6 +118,10 @@ export function installPackagedSqliteBinding(addonPath, cachePath) {
 
 /** @param {import('app-builder-lib').AfterPackContext} context */
 export default async function afterPack(context) {
+  const opencodeResource = resolveOpencodeResourceDir(context.appOutDir, context.electronPlatformName);
+  if (!opencodeResource) throw new Error('cannot locate packaged app resources');
+  await verifyPackagedPluginBuild(join(opencodeResource, '..', 'zcc-cli', 'bin', 'zcc'));
+  console.log('[after-pack] verified packaged plugin bootstrap and offline cache');
   const removed = trimOtherOpencodeArches(
     context.appOutDir,
     context.electronPlatformName,

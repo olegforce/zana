@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildPluginApp, buildPluginServer } from './build-plugin.js';
+import { buildPlugin, buildPluginApp, buildPluginServer, syncPluginTypes } from './build-plugin.js';
+import { getPluginBuildToolchain } from './toolchain.js';
 
 const dirs: string[] = [];
 
@@ -12,6 +13,55 @@ afterEach(() => {
 });
 
 describe('buildPluginApp', () => {
+  it('rebuilds source siblings of published app and server entries with supplied tools', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-source-siblings-')); dirs.push(dir);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'zcc-plugin-siblings', version: '0.1.0', zcc: { app: './app.js', server: './server.mjs' } }));
+    writeFileSync(join(dir, 'app.js'), 'stale');
+    writeFileSync(join(dir, 'app.tsx'), 'export default { freshPanel: true };');
+    writeFileSync(join(dir, 'server.mjs'), 'stale');
+    writeFileSync(join(dir, 'server.ts'), 'export default { freshBackend: true };');
+    const tools = await getPluginBuildToolchain();
+    const built = await buildPlugin(dir, '2.3.0', { toolchain: tools });
+    expect(built.host).toBeNull();
+    expect(readFileSync(built.app!.jsPath, 'utf8')).toContain('freshPanel');
+    expect(readFileSync(built.server!.jsPath, 'utf8')).toContain('freshBackend');
+  });
+
+  it('skips absent legacy sources and reports stale or unchanged SDK declarations', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-empty-plugin-')); dirs.push(dir);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'zcc-plugin-empty', version: '0.1.0' }));
+    expect(await buildPluginApp(dir, '2.3.0')).toBeNull();
+    expect(await buildPluginServer(dir, '2.3.0')).toBeNull();
+    expect(await syncPluginTypes(dir, { check: true })).toMatchObject([{ outcome: 'stale' }]);
+    expect(await syncPluginTypes(dir)).toMatchObject([{ outcome: 'written' }]);
+    expect(await syncPluginTypes(dir)).toMatchObject([{ outcome: 'unchanged' }]);
+    expect(await syncPluginTypes(dir, { check: true })).toMatchObject([{ outcome: 'unchanged' }]);
+  });
+  it('builds the declared nested frontend and optional host, and skips a removed panel', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-declared-plugin-')); dirs.push(dir);
+    mkdirSync(join(dir, 'src'));
+    const pkg = { name: 'zcc-plugin-declared', version: '0.2.0', zcc: { app: './src/panel.tsx' as string | undefined, host: './host.ts' } };
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
+    writeFileSync(join(dir, 'src/panel.tsx'), 'export default { declared: true };');
+    writeFileSync(join(dir, 'host.ts'), 'export default {};');
+    const built = await buildPlugin(dir, '2.3.0');
+    expect(built.server).toBeNull();
+    expect(built.app?.jsPath).toBe(join(dir, 'src/panel.js'));
+    expect(built.host?.jsPath).toBe(join(dir, 'dist/host.js'));
+    delete pkg.zcc.app;
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
+    expect(await buildPluginApp(dir, '2.3.0')).toBeNull();
+  });
+
+  it.each(['absolute', 'escape', 'symlink', 'missing'])('rejects a %s declared entry', async (kind) => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-entry-plugin-')); dirs.push(dir);
+    const outside = mkdtempSync(join(tmpdir(), 'zcc-entry-outside-')); dirs.push(outside);
+    writeFileSync(join(outside, 'panel.tsx'), 'export default {};');
+    symlinkSync(join(outside, 'panel.tsx'), join(dir, 'linked.tsx'));
+    const app = { absolute: join(outside, 'panel.tsx'), escape: '../escape.tsx', symlink: './linked.tsx', missing: './missing.tsx' }[kind]!;
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'zcc-plugin-path', version: '0.1.0', zcc: { app } }));
+    await expect(buildPluginApp(dir, '2.3.0')).rejects.toThrow();
+  });
   it('inlines CSS imports as text in the browser bundle', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-css-'));
     dirs.push(dir);
@@ -139,6 +189,15 @@ export default definePluginApp((app) => {
 });
 
 describe('buildPluginServer', () => {
+  it('preserves an already compiled backend without an editable source sibling', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-prebuilt-backend-')); dirs.push(dir);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'zcc-plugin-prebuilt', version: '0.1.0', zcc: { server: './server.mjs' } }));
+    const backend = 'export default () => "prebuilt";\n';
+    writeFileSync(join(dir, 'server.mjs'), backend);
+    expect(await buildPluginServer(dir, '2.3.0')).toBeNull();
+    expect(await buildPluginServer(dir, '2.3.0')).toBeNull();
+    expect(readFileSync(join(dir, 'server.mjs'), 'utf8')).toBe(backend);
+  });
   it('shims CJS require so bundled Ajv-style deps can load in ESM', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-server-cjs-'));
     dirs.push(dir);

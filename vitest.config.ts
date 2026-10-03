@@ -88,7 +88,6 @@ export default defineConfig({
       'packages/agent-runtime/src/runtime.recovery.test.ts',
       'packages/agent-runtime/src/runtime.skill-roots-capability.test.ts',
       'packages/host-workspace/test/**',
-      'packages/plugin-build/src/toolchain.test.ts',
       'packages/plugin-build/src/build-plugin-app.test.ts',
       'packages/plugin-build/src/runtime-export-manifest.test.ts',
       'packages/plugin-build/src/builtin-server-artifacts.test.ts',

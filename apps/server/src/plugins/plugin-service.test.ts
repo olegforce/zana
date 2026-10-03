@@ -120,6 +120,42 @@ function writeLegacyExtension(dir: string, id: string): string {
 }
 
 describe('PluginService', () => {
+  it('adds and removes a panel on reload without reinstalling, preserving the backend', async () => {
+    const dataDir = root();
+    const pluginDir = writePlugin(join(root(), 'evolving'), 'evolving', undefined, { app: undefined });
+    const service = createPluginService({ dataDir, bundledRoot: root() });
+    await service.install(pluginDir);
+    expect(service.snapshot()[0].appUrl).toBeNull();
+    const pkg = JSON.parse(readFileSync(join(pluginDir, 'package.json'), 'utf8'));
+    pkg.version = '0.2.0'; pkg.zcc.app = './app.tsx';
+    writeFileSync(join(pluginDir, 'app.tsx'), 'export default { __zccPluginApp: true, setup() {} };');
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify(pkg));
+    await service.reload('evolving');
+    expect(service.get('evolving')).toMatchObject({ version: '0.2.0', appEntry: './app.tsx', status: 'running' });
+    expect(service.snapshot()[0].appUrl).toMatch(/assets\/app\.js/);
+    expect(toPluginAppSnapshot(service.snapshot()[0])).toMatchObject({ sourceKind: 'path' });
+    expect(toPluginAppSnapshot(service.snapshot()[0])).not.toHaveProperty('source');
+    delete pkg.zcc.app;
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify(pkg));
+    await service.reload('evolving');
+    expect(service.snapshot()[0].appUrl).toBeNull();
+    await expect(service.callRpc('evolving', 'ping', {})).resolves.toMatchObject({ ok: true });
+  });
+
+  it('rebuilds a stale frontend on direct reload and keeps the generation on failure', async () => {
+    const pluginDir = writePlugin(join(root(), 'freshness'), 'freshness', undefined, { app: './app.tsx' });
+    const service = createPluginService({ dataDir: root(), bundledRoot: root() });
+    writeFileSync(join(pluginDir, 'app.tsx'), 'export default { firstVersion: true };');
+    await service.install(pluginDir);
+    writeFileSync(join(pluginDir, 'app.tsx'), 'export default { secondVersion: true };');
+    await service.reload('freshness');
+    const good = readFileSync(join(pluginDir, 'app.js'), 'utf8');
+    expect(good).toContain('secondVersion');
+    writeFileSync(join(pluginDir, 'app.tsx'), 'export default <broken');
+    await expect(service.reload('freshness')).rejects.toThrow('renderer build failed');
+    expect(readFileSync(join(pluginDir, 'app.js'), 'utf8')).toBe(good);
+    await expect(service.callRpc('freshness', 'ping', {})).resolves.toMatchObject({ ok: true });
+  });
   it('installs a path plugin from server.ts and reloads after an edit', async () => {
     const dataDir = root();
     const pluginDir = join(root(), 'typed');

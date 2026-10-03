@@ -30,7 +30,7 @@ Commands:
 - `zcc plugin new <name> [--app] [--dir]` — TypeScript scaffold (`package.json` `zcc` block). Default dest is `./zcc-plugin-<id>`. `--app` adds a frontend; default is server-only.
 - `zcc plugin types [dir]` — sync bundled SDK `.d.ts` (`--check` for CI). Look up the API here.
 - `zcc plugin install <source>` — `path:` | `git:` | `npm:` | `builtin:<name>`. Path installs load `server.ts` from source.
-- `zcc plugin reload <id>` — one-shot HTTP reload. Rebuild is not implied. Needs a running app.
+- `zcc plugin reload <id>` — one-shot HTTP reload. Path installs rebuild a declared TypeScript panel before activation. Needs a running app.
 - `zcc plugin dev [dir]` — optional watch loop **after** a path install. On save, rebuilds the declared **app** (unminified), then reloads. Needs a running app. A failed build keeps the last good generation. `zcc plugin dev --once` performs one cycle, checks backend health, and returns nonzero on failure; prefer it for agent-driven iteration.
 - `zcc plugin build [dir]` — one-shot `dist/` compile. No running app. CI / publish. Minified.
 - `zcc plugin list` / `zcc plugin logs <id> [-n] [-f]` — inspect status and persisted JSONL logs.
@@ -50,6 +50,14 @@ declare their JS entry (often under `dist`). `zcc plugin reload <id>` is a
 one-shot reload. `zcc plugin dev` is an optional watch loop for UI iteration
 after a path install; it is not required to create or run a plugin. `zcc plugin
 build` writes `dist/` for CI / publish and needs no running app.
+
+Build, install, and dev use pinned build tools. A packaged Zana installation
+downloads them on first use with its bundled npm runtime, then reuses them under
+`<ZCC_DATA_DIR>/plugins/toolchain-<platform>-<arch>-<versions>` (default
+`~/.zcc/plugins`). The first build needs registry access; later builds can run
+offline. No temporary CLI copy or global esbuild installation is needed.
+Development rereads `package.json` on each cycle, so adding or removing `zcc.app`
+updates the sidebar on reload. Path installs appear under **Plugins → Local**.
 
 ## Server factory
 

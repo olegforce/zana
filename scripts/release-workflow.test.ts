@@ -7,6 +7,21 @@ const workflow = load(readFileSync(new URL('../.github/workflows/release.yml', i
 const builder = load(readFileSync(new URL('../apps/desktop/electron-builder.yml', import.meta.url), 'utf8'));
 
 describe('Windows release pipeline', () => {
+  it('gates Mac and Windows artifact uploads on packaged plugin authoring', () => {
+    for (const [job, gate] of [['build', 'Verify packaged plugin authoring'], ['build-windows', 'Verify packaged Windows plugin authoring']]) {
+      const steps = workflow.jobs[job].steps;
+      const gateIndex = steps.findIndex((step: any) => step.name === gate);
+      const uploadIndex = steps.findIndex((step: any) => step.uses?.startsWith('actions/upload-artifact@'));
+      expect(gateIndex).toBeGreaterThan(0);
+      expect(gateIndex).toBeLessThan(uploadIndex);
+      expect(steps[gateIndex].run).toContain('e2e/plugin-authoring-live.spec.ts');
+      expect(steps[gateIndex]['continue-on-error']).toBeUndefined();
+    }
+    const mac = workflow.jobs.build.steps.find((step: any) => step.name === 'Verify packaged plugin authoring');
+    expect(mac.run).toContain('ZCC_E2E_EXECUTABLE_PATH="$APP_PATH"');
+    const windows = workflow.jobs['build-windows'].steps.find((step: any) => step.name === 'Verify packaged Windows plugin authoring');
+    expect(windows.env.ZCC_E2E_EXECUTABLE_PATH).toContain('win-unpacked');
+  });
   it('gates draft publication on both Mac and Windows builds', () => {
     expect(workflow.jobs.release.needs).toEqual(['build', 'build-windows']);
     expect(workflow.jobs.release.if).toBe("startsWith(github.ref, 'refs/tags/v')");

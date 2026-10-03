@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HOST_ARTIFACT_MAX_BYTES } from '@zana-ai/zcc-host-daemon-contract';
-import { buildPluginHost } from '@zana-ai/zcc-plugin-build';
+import { buildPluginHost, getPluginBuildToolchain } from '@zana-ai/zcc-plugin-build';
 import type { PluginHostArtifactSnapshot } from './plugin-host-artifact-registry.js';
 import type { InstalledPluginRow } from './plugin-store.js';
 
@@ -51,16 +51,11 @@ export async function loadPluginHostArtifactSnapshot(args: {
   hostEntry: string | null;
   sourceKind: InstalledPluginRow['sourceKind'];
   zccVersion: string;
+  dataDir?: string;
 }): Promise<PluginHostArtifactSnapshot | null> {
   if (args.hostEntry === null) return null;
   if (shouldRebuildHostArtifact(args.sourceKind, args.rootDir, args.hostEntry)) {
-    try {
-      await buildPluginHost(args.rootDir, args.zccVersion);
-    } catch (error) {
-      // Packaged Electron bundles esbuild's JS API without its native binary.
-      // Keep a previously built dist/host.js instead of degrading the plugin.
-      if (!existsSync(join(args.rootDir, 'dist', 'host.js'))) throw error;
-    }
+    await buildPluginHost(args.rootDir, args.zccVersion, await getPluginBuildToolchain(args.dataDir));
   }
   const jsPath = join(args.rootDir, 'dist', 'host.js');
   const metaPath = join(args.rootDir, 'dist', 'host.meta.json');

@@ -15,11 +15,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@zana-ai/zcc-domain": "workspace:*",
+    "@tailwindcss/node": "4.3.0",
+    "@tailwindcss/oxide": "4.3.0",
     "@zana-ai/zcc-agent-process-utils": "workspace:*",
+    "@zana-ai/zcc-domain": "workspace:*",
     "@zana-ai/zcc-plugin-sdk": "workspace:*",
-    "esbuild": "^0.25.0",
-    "saxes": "^6.0.0"
+    "esbuild": "0.28.1",
+    "npm": "11.16.0",
+    "saxes": "^6.0.0",
+    "tailwindcss": "4.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

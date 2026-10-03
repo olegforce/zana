@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, basename } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname, join, basename, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PLUGIN_SDK_API_MAJOR, PLUGIN_SDK_VERSION, derivePluginId } from '@zana-ai/zcc-plugin-sdk';
+import { getPluginBuildToolchain, type PluginBuildToolchain } from './toolchain.js';
 
 const NODE_ESM_REQUIRE_BANNER = [
   'import { createRequire as __createRequire } from "node:module";',
@@ -38,12 +40,12 @@ export function createPluginArtifactMeta(args: {
 
 export function writePluginArtifactMeta(path: string, meta: PluginArtifactMeta): void {
   mkdirSync(dirname(path), { recursive: true });
-  const staging = `${path}.tmp`;
+  const staging = `${path}.tmp-${randomUUID()}`;
   writeFileSync(staging, `${JSON.stringify(meta, null, 2)}\n`);
   renameSync(staging, path);
 }
 
-function readPkg(rootDir: string): { name: string; version: string; zcc?: { server?: string; app?: string } } {
+function readPkg(rootDir: string): { name: string; version: string; zcc?: { server?: string; app?: string; host?: string } } {
   return JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8')) as {
     name: string;
     version: string;
@@ -141,6 +143,13 @@ function resolvePluginSdkAppEntry(): string {
   if (existsSync(src)) return src;
   const packaged = join(here, '../runtime/plugin-sdk-app.js');
   if (existsSync(packaged)) return packaged;
+  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const desktop = resources && join(resources, 'zcc-cli/runtime/plugin-sdk-app.js');
+  if (desktop && existsSync(desktop)) return desktop;
+  for (const depth of ['../..', '../../..']) {
+    const built = join(here, depth, 'packages/cli/dist/runtime/plugin-sdk-app.js');
+    if (existsSync(built)) return built;
+  }
   return fileURLToPath(import.meta.resolve('@zana-ai/zcc-plugin-sdk/app'));
 }
 
@@ -171,6 +180,7 @@ function hostPluginSdkPlugin(): {
 export interface PluginBundleOptions {
   minify?: boolean;
   sourcemap?: boolean;
+  toolchain?: PluginBuildToolchain;
 }
 
 async function bundle(opts: {
@@ -179,9 +189,11 @@ async function bundle(opts: {
   platform: 'node' | 'browser';
   minify?: boolean;
   sourcemap?: boolean;
+  toolchain?: PluginBuildToolchain;
 }): Promise<void> {
-  const esbuild = await import('esbuild');
-  const stagingDir = join(dirname(opts.outfile), `.stage-${process.pid}`);
+  const toolchain = opts.toolchain ?? await getPluginBuildToolchain();
+  const esbuild = await import(toolchain.esbuild) as typeof import('esbuild');
+  const stagingDir = join(dirname(opts.outfile), `.stage-${randomUUID()}`);
   mkdirSync(stagingDir, { recursive: true });
   const staged = join(stagingDir, 'out.js');
   try {
@@ -220,7 +232,16 @@ async function bundle(opts: {
   }
 }
 
-function resolveSource(rootDir: string, candidates: string[]): string | null {
+function resolveSource(rootDir: string, declared: string | undefined, candidates: string[]): string | null {
+  if (declared !== undefined) {
+    if (!declared || isAbsolute(declared)) throw new Error('plugin entry must be a relative file path');
+    const root = realpathSync(rootDir);
+    const source = resolve(rootDir, declared);
+    if (source !== rootDir && !source.startsWith(resolve(rootDir) + sep)) throw new Error('plugin entry escapes the plugin directory');
+    const canonical = realpathSync(source);
+    if (canonical !== root && !canonical.startsWith(root + sep)) throw new Error('plugin entry escapes the plugin directory through a symlink');
+    return canonical;
+  }
   for (const rel of candidates) {
     const abs = join(rootDir, rel);
     if (existsSync(abs)) return abs;
@@ -234,13 +255,22 @@ export async function buildPluginServer(
   options: PluginBundleOptions = {}
 ): Promise<{ jsPath: string; metaPath: string } | null> {
   const pkg = readPkg(rootDir);
-  const entry = resolveSource(rootDir, ['server.ts', 'server.mts', 'src/server.ts']);
+  if (pkg.zcc && !pkg.zcc.server) return null;
+  // A precompiled declaration may still have an editable TypeScript source.
+  const declared = pkg.zcc?.server;
+  const source = declared && /\.m?js$/.test(declared)
+    ? declared.replace(/\.m?js$/, '.ts') : undefined;
+  const entry = resolveSource(rootDir, source && existsSync(join(rootDir, source)) ? source : declared, ['server.ts', 'server.mts', 'src/server.ts']);
   if (!entry) return null;
   const jsPath = join(rootDir, 'server.mjs');
+  // Published backends without editable siblings are already the output.
+  // Rebundling them into themselves accumulates banners on every build.
+  if (entry === join(realpathSync(rootDir), 'server.mjs')) return null;
   await bundle({
     entry,
     outfile: jsPath,
     platform: 'node',
+    toolchain: options.toolchain,
     minify: options.minify ?? true,
     sourcemap: options.sourcemap ?? false
   });
@@ -259,13 +289,19 @@ export async function buildPluginApp(
   options: PluginBundleOptions = {}
 ): Promise<{ jsPath: string; metaPath: string } | null> {
   const pkg = readPkg(rootDir);
-  const entry = resolveSource(rootDir, ['app.tsx', 'app.jsx', 'app.ts', 'src/app.tsx']);
+  if (pkg.zcc && !pkg.zcc.app) return null;
+  const declared = pkg.zcc?.app;
+  const source = declared && /\.js$/.test(declared)
+    ? ['.tsx', '.ts', '.jsx'].map((ext) => declared.replace(/\.js$/, ext)).find((candidate) => existsSync(join(rootDir, candidate)))
+    : undefined;
+  const entry = resolveSource(rootDir, source ?? declared, ['app.tsx', 'app.jsx', 'app.ts', 'src/app.tsx']);
   if (!entry) return null;
-  const jsPath = join(rootDir, 'app.js');
+  const jsPath = pkg.zcc?.app ? join(rootDir, pkg.zcc.app.replace(/\.[cm]?[jt]sx?$/, '.js')) : join(rootDir, 'app.js');
   await bundle({
     entry,
     outfile: jsPath,
     platform: 'browser',
+    toolchain: options.toolchain,
     minify: options.minify ?? true,
     sourcemap: options.sourcemap ?? false
   });
@@ -323,10 +359,15 @@ export async function buildPlugin(
 ): Promise<{
   server: Awaited<ReturnType<typeof buildPluginServer>>;
   app: Awaited<ReturnType<typeof buildPluginApp>>;
+  host: import('./build-plugin-host.js').PluginHostBuildResult | null;
 }> {
   await syncPluginTypes(rootDir);
+  const pkg = readPkg(rootDir);
+  const toolchain = options.toolchain ?? await getPluginBuildToolchain();
+  const buildOptions = { ...options, toolchain };
   return {
-    server: await buildPluginServer(rootDir, zccVersion, options),
-    app: await buildPluginApp(rootDir, zccVersion, options)
+    server: await buildPluginServer(rootDir, zccVersion, buildOptions),
+    app: await buildPluginApp(rootDir, zccVersion, buildOptions),
+    host: pkg.zcc?.host ? await (await import('./build-plugin-host.js')).buildPluginHost(rootDir, zccVersion, toolchain) : null
   };
 }

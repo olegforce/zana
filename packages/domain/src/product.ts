@@ -5061,6 +5061,8 @@ export interface PluginAppEntry {
   icon: string;
   enabled: boolean;
   provenance: 'builtin' | 'direct' | 'catalog';
+  /** Safe source classification; install paths stay server-side. */
+  sourceKind?: 'path' | 'git' | 'npm' | 'builtin';
   status: 'running' | 'disabled' | 'degraded' | 'needs-configuration';
   statusDetail?: string | null;
   appUrl: string | null;

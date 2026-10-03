@@ -7,6 +7,8 @@ import {
   buildPlugin,
   buildPluginApp,
   buildPluginServer,
+  buildPluginHost,
+  getPluginBuildToolchain,
   createPluginDevLoop,
   syncPluginTypes
 } from '@zana-ai/zcc-plugin-build';
@@ -63,6 +65,13 @@ async function readLogTail(dataDir: string, pluginId: string, tail: number): Pro
 
 function err(message: string, exitCode: number): CliResult {
   return { exitCode, stdout: '', stderr: `Error: ${message}\n` };
+}
+
+function cliBuildToolchain(dataDir: string) {
+  return getPluginBuildToolchain(dataDir, {
+    onFetchStart: () => process.stderr.write('Downloading the plugin build toolchain (one time)…\n'),
+    onFetchDone: () => process.stderr.write('Plugin build toolchain ready.\n')
+  });
 }
 
 function installScaffoldDeps(dest: string): string {
@@ -158,7 +167,11 @@ export async function runPluginCommand(
         // Resolve in the caller's cwd, not the desktop's. Compile before install
         // so a new UI plugin cannot silently appear as a background-only plugin.
         const pkg = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
-        if (pkg.zcc?.app) await buildPluginApp(rootDir, '1.0.0');
+        if (pkg.zcc?.app || pkg.zcc?.host) {
+          const toolchain = await cliBuildToolchain(dataDir);
+          if (pkg.zcc?.app) await buildPluginApp(rootDir, '1.0.0', { toolchain });
+          if (pkg.zcc?.host) await buildPluginHost(rootDir, '1.0.0', toolchain);
+        }
       } catch (error) {
         return err(`Plugin preparation failed: ${error instanceof Error ? error.message : String(error)}`, 1);
       }
@@ -227,10 +240,10 @@ export async function runPluginCommand(
     if (!existsSync(join(dir, 'package.json'))) {
       return err('plugin build requires a package.json in the directory', 2);
     }
-    const built = await buildPlugin(dir, '1.0.0');
+    const built = await buildPlugin(dir, '1.0.0', { toolchain: await cliBuildToolchain(dataDir) });
     return {
       exitCode: 0,
-      stdout: `Built ${[built.server?.jsPath, built.app?.jsPath].filter(Boolean).join(' ') || dir}\n`
+      stdout: `Built ${[built.server?.jsPath, built.app?.jsPath, built.host?.jsPath].filter(Boolean).join(' ') || dir}\n`
     };
   }
   if (subcommand === 'dev') {
@@ -244,7 +257,7 @@ export async function runPluginCommand(
     }
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
       name?: string;
-      zcc?: { server?: string; app?: string };
+      zcc?: { server?: string; app?: string; host?: string };
     };
     const id = findInstalledPathPluginId(dataDir, dir) ?? derivePluginId(pkg.name ?? `zcc-plugin-${dir}`);
     if (!findInstalledPathPluginId(dataDir, dir)) {
@@ -260,12 +273,21 @@ export async function runPluginCommand(
       pluginId: id,
       hasApp,
       hasServer,
+      targets: async () => {
+        const current = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+        return {
+          hasApp: Boolean(current.zcc?.app),
+          hasServer: Boolean(current.zcc?.server) && !/\.tsx?$/.test(current.zcc?.server ?? ''),
+          hasHost: Boolean(current.zcc?.host)
+        };
+      },
       buildApp: async () => {
-        await buildPluginApp(dir, '1.0.0', { minify: false, sourcemap: true });
+        await buildPluginApp(dir, '1.0.0', { minify: false, sourcemap: true, toolchain: await cliBuildToolchain(dataDir) });
       },
       buildServer: async () => {
-        await buildPluginServer(dir, '1.0.0', { minify: false, sourcemap: true });
+        await buildPluginServer(dir, '1.0.0', { minify: false, sourcemap: true, toolchain: await cliBuildToolchain(dataDir) });
       },
+      buildHost: async () => { await buildPluginHost(dir, '1.0.0', await cliBuildToolchain(dataDir)); },
       reloadPlugin: async () => {
         const reloaded = await reloadPluginViaHttp(id, false, httpDeps);
         if (reloaded.exitCode !== 0) {

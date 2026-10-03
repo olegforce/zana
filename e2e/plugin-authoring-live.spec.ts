@@ -1,28 +1,34 @@
 import { execFile } from 'node:child_process';
-import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { test, expect } from './fixtures/app.js';
 
 const exec = promisify(execFile);
-test.use({ initialConfig: { sponsorPromptDismissed: true } });
+test.use({ initialConfig: { sponsorPromptDismissed: true }, launchEnv: { npm_config_registry: 'https://registry.npmjs.org/' } });
 
 test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built Electron', async ({ app, home }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const id = 'live-authoring-e2e';
   const copiedCli = join(home, 'cli');
-  cpSync(resolve('packages/cli/dist'), copiedCli, { recursive: true, dereference: true });
-  const cli = join(copiedCli, 'bin/zcc');
+  const shippedCli = await app.electron.evaluate(({ app }) => {
+    return app.isPackaged ? `${process.resourcesPath}/zcc-cli/bin/zcc` : null;
+  });
+  if (!shippedCli) cpSync(resolve('packages/cli/dist'), copiedCli, { recursive: true, dereference: true });
+  const cli = shippedCli ?? join(copiedCli, 'bin/zcc');
+  expect(existsSync(cli)).toBe(true);
   const source = join(home, `zcc-plugin-${id}`);
   const env = {
     ...process.env, HOME: home, ZCC_DATA_DIR: join(home, '.zcc'),
     ZCC_SERVER_URL: new URL(app.window.url()).origin,
     ZCC_SESSION_ID: undefined, ZCC_SESSION_TOKEN: undefined,
-    ZCC_SKIP_PLUGIN_NPM: '1', NODE_PATH: '', ESBUILD_BINARY_PATH: ''
+    ZCC_SKIP_PLUGIN_NPM: '1', NODE_PATH: '', ESBUILD_BINARY_PATH: '',
+    npm_config_registry: 'https://registry.npmjs.org/'
   };
   async function run(args: string[], cwd = source) {
     try {
-      const result = await exec(process.execPath, [cli, ...args], { cwd, env, timeout: 45_000, maxBuffer: 1024 * 1024 });
+      const result = await exec(process.execPath, [cli, ...args], { cwd, env, timeout: 150_000, maxBuffer: 2 * 1024 * 1024 });
       return { ...result, code: 0 };
     } catch (error) {
       const failure = error as { stdout?: string; stderr?: string; code?: number };
@@ -31,9 +37,20 @@ test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built 
   }
   const scaffold = await run(['plugin', 'new', id, '--app'], home);
   expect(scaffold.code, scaffold.stderr).toBe(0);
+  const packagePath = join(source, 'package.json');
+  const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+  const panelEntry = manifest.zcc.app;
+  delete manifest.zcc.app;
+  writeFileSync(packagePath, JSON.stringify(manifest));
   const installed = await run(['plugin', 'install', '.']);
   expect(installed.code, installed.stderr).toBe(0);
   try {
+    await expect(app.window.locator('.nav-item', { hasText: id })).toHaveCount(0);
+    // A backend-only install grows a panel through ordinary development reload.
+    manifest.zcc.app = panelEntry; manifest.version = '0.2.0';
+    writeFileSync(packagePath, JSON.stringify(manifest));
+    const addedPanel = await run(['plugin', 'dev', '--once']);
+    expect(addedPanel.code, addedPanel.stderr).toBe(0);
     await app.window.locator('.nav-item', { hasText: id }).first().click();
     await expect(app.window.getByRole('heading', { name: id, exact: true })).toBeVisible();
     await expect(app.window.getByText('No todos yet', { exact: true })).toBeVisible();
@@ -73,6 +90,32 @@ test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built 
     const recovered = await run(['plugin', 'dev', '--once']);
     expect(recovered.code, recovered.stderr).toBe(0);
     await expect(todo).toBeChecked();
+    // Direct UI-style reload rebuilds stale sources using the server's cache.
+    // Force the Electron utility process to bootstrap its own cold toolchain.
+    const cacheRoot = join(home, '.zcc/plugins');
+    for (const cache of readdirSync(cacheRoot).filter((name) => name.startsWith('toolchain-'))) {
+      rmSync(join(cacheRoot, cache), { recursive: true, force: true });
+    }
+    writeFileSync(appPath, updated.replace('Reload verified', 'Server build verified'));
+    const serverRebuild = await run(['plugin', 'reload', id]);
+    expect(serverRebuild.code, serverRebuild.stderr).toBe(0);
+    if (shippedCli) expect(readdirSync(cacheRoot).filter((name) => name.startsWith('toolchain-'))).not.toEqual([]);
+    await expect(app.window.getByRole('heading', { name: 'Server build verified' })).toBeVisible();
+    await expect(todo).toBeChecked();
+    const snapshot = await app.window.evaluate(async () => (await fetch('/api/v1/plugin-apps')).json());
+    const row = snapshot.apps.find((entry: { id: string }) => entry.id === id);
+    expect(row.sourceKind).toBe('path');
+    expect(row).not.toHaveProperty('source');
+    expect(row).not.toHaveProperty('rootDir');
+    await app.window.locator('.nav-item').filter({ hasText: /^Plugins$/ }).click();
+    await app.window.getByTestId('extensions-nav-installed').click();
+    await app.window.getByRole('button', { name: 'Local', exact: true }).click();
+    await expect(app.window.getByTestId(`plugin-row-${id}`)).toBeVisible();
+    delete manifest.zcc.app;
+    writeFileSync(packagePath, JSON.stringify(manifest));
+    const removedPanel = await run(['plugin', 'dev', '--once']);
+    expect(removedPanel.code, removedPanel.stderr).toBe(0);
+    await expect(app.window.locator('.nav-item', { hasText: id })).toHaveCount(0);
   } finally {
     await run(['plugin', 'remove', id]);
   }

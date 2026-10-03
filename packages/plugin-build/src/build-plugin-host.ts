@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { createPluginArtifactMeta } from './build-plugin.js';
+import { getPluginBuildToolchain, type PluginBuildToolchain } from './toolchain.js';
 
 const PLUGIN_SDK_PACKAGE = '@zana-ai/zcc-plugin-sdk';
 const PLUGIN_SDK_HOST = '@zana-ai/zcc-plugin-sdk/host';
@@ -280,7 +281,8 @@ function importerIsInsidePlugin(importer: string, rootDir: string): boolean {
 /** Build the optional Node host entry into a self-contained remote artifact. */
 export async function buildPluginHost(
   rootDir: string,
-  zccVersion: string
+  zccVersion: string,
+  toolchain?: PluginBuildToolchain
 ): Promise<PluginHostBuildResult> {
   const { hostEntry, packageName, pluginVersion } = await readPluginHostConfig(rootDir);
   const pluginRoot = await realpath(rootDir);
@@ -293,7 +295,7 @@ export async function buildPluginHost(
   const stageDir = await mkdtemp(join(distDir, HOST_STAGE_DIRECTORY_PREFIX));
   try {
     const stagedJsPath = join(stageDir, 'host.js');
-    const esbuild = await import('esbuild');
+    const esbuild = await import((toolchain ?? await getPluginBuildToolchain()).esbuild) as typeof import('esbuild');
     const packageNameByDirectory = new Map<string, string | null>();
     await esbuild.build({
       entryPoints: [hostEntry],

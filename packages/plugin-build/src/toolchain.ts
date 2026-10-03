@@ -1,14 +1,34 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { homedir } from 'node:os';
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { setTimeout as delay } from 'node:timers/promises';
 import { omitNpmScriptPolicyEnv } from "@zana-ai/zcc-agent-process-utils";
+import { resolveBundledNpmCli } from './npm-cli.js';
 
 const run = promisify(execFile);
+const FETCH_TIMEOUT_MS = 120_000;
+const LOCK_STALE_MS = 5 * 60_000;
+const pending = new Map<string, Promise<PluginBuildToolchain>>();
+
+export interface ToolchainOptions {
+  onFetchStart?: () => void;
+  onFetchDone?: (elapsedMs: number) => void;
+  ignoreLocal?: boolean;
+  /** Internal bootstrap/test seam; never supplied by the renderer. */
+  npmCliPath?: string;
+  timeoutMs?: number;
+  lockWaitMs?: number;
+}
+
+export function getPluginBuildToolchain(dataDir = process.env.ZCC_DATA_DIR || join(homedir(), '.zcc'), options?: ToolchainOptions): Promise<PluginBuildToolchain> {
+  return resolvePluginBuildToolchain(join(dataDir, 'plugins'), options);
+}
 
 export const NODE_ESM_REQUIRE_BANNER = [
   'import { createRequire as __createRequire } from "node:module";',
@@ -42,7 +62,7 @@ function pinKey(): string {
 
 export function toolchainCacheDir(baseDir: string): string {
   const key = Object.values(PLUGIN_TOOLCHAIN_PINS).join("-");
-  return join(baseDir, `toolchain-${key}`);
+  return join(baseDir, `toolchain-${process.platform}-${process.arch}-${key}`);
 }
 
 function packageDir(require: NodeRequire, name: string): string | null {
@@ -116,7 +136,7 @@ function resolveLocalToolchain(): PluginBuildToolchain | null {
 
 async function isInstalled(dir: string): Promise<boolean> {
   try {
-    const raw = await readFile(join(dir, ".bb-toolchain.json"), "utf8");
+    const raw = await readFile(join(dir, ".zcc-toolchain.json"), "utf8");
     const parsed: unknown = JSON.parse(raw);
     if (
       typeof parsed !== "object" ||
@@ -133,11 +153,7 @@ async function isInstalled(dir: string): Promise<boolean> {
 
 export async function resolvePluginBuildToolchain(
   baseDir: string,
-  options?: {
-    onFetchStart?: () => void;
-    onFetchDone?: (elapsedMs: number) => void;
-    ignoreLocal?: boolean;
-  },
+  options?: ToolchainOptions,
 ): Promise<PluginBuildToolchain> {
   if (options?.ignoreLocal !== true) {
     const local = resolveLocalToolchain();
@@ -145,23 +161,63 @@ export async function resolvePluginBuildToolchain(
   }
 
   const dir = toolchainCacheDir(baseDir);
+  const existing = pending.get(dir);
+  if (existing) return existing;
+  const download = resolveCachedToolchain(dir, options);
+  pending.set(dir, download);
+  try {
+    return await download;
+  } finally {
+    if (pending.get(dir) === download) pending.delete(dir);
+  }
+}
+
+/** Serialize separate CLI/server processes as well as concurrent in-process calls. */
+async function acquireCacheLock(dir: string, waitMs: number): Promise<() => Promise<void>> {
+  const lockDir = `${dir}.lock`;
+  const started = Date.now();
+  await mkdir(dirname(dir), { recursive: true });
+  for (;;) {
+    try {
+      await mkdir(lockDir);
+      return async () => { await rm(lockDir, { recursive: true, force: true }); };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const info = await stat(lockDir).catch(() => null);
+      if (info && Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+        // A killed bootstrap leaves a lock; live installs have a shorter deadline.
+        const retired = `${lockDir}.expired-${randomUUID()}`;
+        try { await rename(lockDir, retired); } catch { continue; }
+        await rm(retired, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() - started >= waitMs) throw new Error('timed out waiting for the plugin build toolchain');
+      await delay(100);
+    }
+  }
+}
+
+async function resolveCachedToolchain(dir: string, options?: ToolchainOptions): Promise<PluginBuildToolchain> {
   if (await isInstalled(dir)) {
     const cached = toolchainFrom(createRequire(join(dir, "noop.js")));
     if (cached !== null) return cached;
   }
-
-  options?.onFetchStart?.();
-  const startedAt = Date.now();
+  const unlock = await acquireCacheLock(dir, options?.lockWaitMs ?? LOCK_STALE_MS + FETCH_TIMEOUT_MS);
   const staging = `${dir}.staging-${randomUUID()}`;
   try {
+    // A different process may have finished while this caller waited.
+    if (await isInstalled(dir)) return toolchainFrom(createRequire(join(dir, 'noop.js')))!;
+    options?.onFetchStart?.();
+    const startedAt = Date.now();
     await mkdir(staging, { recursive: true });
     await writeFile(
       join(staging, "package.json"),
-      `${JSON.stringify({ name: "bb-plugin-toolchain", private: true, version: "0.0.0" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "zcc-plugin-toolchain", private: true, version: "0.0.0" }, null, 2)}\n`,
     );
     await run(
-      "npm",
+      process.execPath,
       [
+        options?.npmCliPath ?? resolveBundledNpmCli(),
         "install",
         "--prefix",
         staging,
@@ -174,8 +230,12 @@ export async function resolvePluginBuildToolchain(
         ),
       ],
       {
-        maxBuffer: 1024 * 1024 * 16,
-        env: omitNpmScriptPolicyEnv(process.env),
+        maxBuffer: 2 * 1024 * 1024,
+        timeout: options?.timeoutMs ?? FETCH_TIMEOUT_MS,
+        env: {
+          ...omitNpmScriptPolicyEnv(process.env),
+          ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {})
+        },
       },
     );
     const staged = toolchainFrom(createRequire(join(staging, "noop.js")));
@@ -185,23 +245,20 @@ export async function resolvePluginBuildToolchain(
       );
     }
     await writeFile(
-      join(staging, ".bb-toolchain.json"),
+      join(staging, ".zcc-toolchain.json"),
       `${JSON.stringify({ pins: pinKey() }, null, 2)}\n`,
     );
-    await mkdir(dirname(dir), { recursive: true });
-    try {
-      await rename(staging, dir);
-    } catch {
-      if (!(await isInstalled(dir))) throw new Error(errorPromoting(dir));
-    }
+    // Only replace a broken cache after its replacement has been validated.
+    await rm(dir, { recursive: true, force: true });
+    await rename(staging, dir);
+    const promoted = toolchainFrom(createRequire(join(dir, "noop.js")));
+    if (promoted === null) throw new Error(errorPromoting(dir));
+    options?.onFetchDone?.(Date.now() - startedAt);
+    return promoted;
   } finally {
-    await rm(staging, { recursive: true, force: true });
+    try { await rm(staging, { recursive: true, force: true }); }
+    finally { await unlock(); }
   }
-
-  const promoted = toolchainFrom(createRequire(join(dir, "noop.js")));
-  if (promoted === null) throw new Error(errorPromoting(dir));
-  options?.onFetchDone?.(Date.now() - startedAt);
-  return promoted;
 }
 
 function errorPromoting(dir: string): string {

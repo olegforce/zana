@@ -88,9 +88,9 @@ describe('loadPluginHostArtifactSnapshot', () => {
     expect(snapshot?.byteLength).toBe(bytes.byteLength);
   });
 
-  it('keeps a prebuilt dist when rebuilding from source fails', async () => {
+  it('reports a failed source rebuild and leaves the previous artifact intact', async () => {
     const dir = await writePlugin('export default { rebuilt: true };\n');
-    const first = await loadPluginHostArtifactSnapshot({
+    await loadPluginHostArtifactSnapshot({
       pluginId: 'host-fixture',
       rootDir: dir,
       hostEntry: './host.ts',
@@ -99,14 +99,13 @@ describe('loadPluginHostArtifactSnapshot', () => {
     });
     const prebuilt = await readFile(join(dir, 'dist', 'host.js'), 'utf8');
     await writeFile(join(dir, 'host.ts'), 'import { x } from "@zana-ai/zcc-server";\nexport default x;\n');
-    const snapshot = await loadPluginHostArtifactSnapshot({
+    await expect(loadPluginHostArtifactSnapshot({
       pluginId: 'host-fixture',
       rootDir: dir,
       hostEntry: './host.ts',
       sourceKind: 'path',
       zccVersion: '1.0.0'
-    });
-    expect(snapshot?.digest).toBe(first?.digest);
+    })).rejects.toThrow('private ZCC workspace package');
     expect(await readFile(join(dir, 'dist', 'host.js'), 'utf8')).toBe(prebuilt);
   });
 

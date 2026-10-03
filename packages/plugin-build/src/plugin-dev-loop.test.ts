@@ -3,6 +3,43 @@ import { createPluginDevLoop, isIgnoredPluginDevPath } from './plugin-dev-loop.j
 import { createPluginArtifactMeta } from './build-plugin.js';
 
 describe('plugin dev loop', () => {
+  it('re-reads targets as a panel/host is added and removed, and recovers from manifest errors', async () => {
+    let targets = { hasApp: false, hasServer: false, hasHost: false };
+    let broken = false;
+    const calls: string[] = [];
+    const loop = createPluginDevLoop({
+      pluginId: 'changing', targets: async () => { if (broken) throw new Error('invalid manifest'); return targets; },
+      buildServer: async () => { calls.push('server'); },
+      buildApp: async () => { calls.push('app'); },
+      buildHost: async () => { calls.push('host'); },
+      reloadPlugin: async () => { calls.push('reload'); }, log: vi.fn()
+    });
+    loop.handleChange('package.json'); await loop.flushNow();
+    targets = { hasApp: true, hasServer: true, hasHost: true };
+    loop.handleChange('package.json'); await loop.flushNow();
+    targets = { hasApp: false, hasServer: false, hasHost: false };
+    loop.handleChange('package.json'); await loop.flushNow();
+    expect(calls).toEqual(['reload', 'server', 'app', 'host', 'reload', 'reload']);
+    broken = true;
+    loop.handleChange('package.json');
+    expect(await loop.flushNow()).toEqual({ ok: false, stage: 'manifest', message: 'invalid manifest' });
+    broken = false;
+    loop.handleChange('package.json'); expect(await loop.flushNow()).toEqual({ ok: true });
+    loop.dispose();
+  });
+
+  it.each([false, true])('skips reload on a host build failure (builder present: %s)', async (present) => {
+    const reload = vi.fn();
+    const loop = createPluginDevLoop({
+      pluginId: 'host', targets: async () => ({ hasApp: false, hasServer: false, hasHost: true }),
+      buildServer: vi.fn(), buildApp: vi.fn(),
+      buildHost: present ? async () => { throw new Error('invalid host'); } : undefined,
+      reloadPlugin: reload, log: vi.fn()
+    });
+    loop.handleChange('host.ts');
+    expect(await loop.flushNow()).toMatchObject({ ok: false, stage: 'host' });
+    expect(reload).not.toHaveBeenCalled(); loop.dispose();
+  });
   it('ignores dist, node_modules, types, and generated artifact basenames', () => {
     expect(isIgnoredPluginDevPath('dist/app.js')).toBe(true);
     expect(isIgnoredPluginDevPath('node_modules/x')).toBe(true);

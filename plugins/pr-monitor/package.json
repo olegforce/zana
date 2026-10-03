@@ -9,8 +9,8 @@
     "zccPluginSdk": ">=0.1.0"
   },
   "scripts": {
-    "build": "node scripts/build-app.mjs",
-    "package": "node scripts/build-app.mjs"
+    "build": "node --import tsx scripts/build-app.mjs",
+    "package": "node --import tsx scripts/build-app.mjs"
   },
   "zcc": {
     "name": "PR Monitor",

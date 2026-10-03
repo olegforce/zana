@@ -13,9 +13,11 @@ export { buildPluginHost } from './build-plugin-host.js';
 export type { PluginHostBuildResult } from './build-plugin-host.js';
 export {
   PLUGIN_TOOLCHAIN_PINS,
+  getPluginBuildToolchain,
   resolvePluginBuildToolchain
 } from './toolchain.js';
 export type { PluginBuildToolchain } from './toolchain.js';
+export { resolveBundledNpmCli } from './npm-cli.js';
 export {
   assertValidPluginCompactIconSvg,
   assertValidPluginIconSvg,

@@ -4,7 +4,6 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     exclude: [
-      'src/toolchain.test.ts',
       'src/build-plugin-app.test.ts',
       'src/runtime-export-manifest.test.ts',
       'src/builtin-server-artifacts.test.ts',
