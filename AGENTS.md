@@ -31,6 +31,7 @@ Core rules. Rationale: `docs/review-consensus-2026-06.md`.
 
 ## Product Design Rules
 
+- **A project has a fixed local or remote target.** Local projects browse their local checkout; remote projects browse their registered remote checkout. Explorer must not expose a Machine selector or a separate machine/path header, even when backend source mappings exist. Thread explorers retain their recorded environment scope internally.
 - **Choose a layout per feature; do not expose the choice as a user preference.** A new panel is either a centered reading/configuration surface or a full-width workbench. Make that decision from the feature's task and information density, encode it in the panel's layout classes, and do not add a global "Centered / Full width" control to Settings.
 - **Keep catalogues distinct by ownership.** ZCC-installed extensions are presented as **Plugins** in the ZCC Plugins hub. Codex's `~/.Codex/plugins` catalogue is an implementation-specific compatibility surface and must not appear as a competing Settings destination unless a user explicitly asks for it.
 - **Sidebar folders are Projects, not Workspaces.** User-facing copy (website, docs, Plugin Guide, in-app guides) says **Project**. Keep API identifiers (`placement: "workspace"`, `--source workspace`, `personal-workspaces/` on disk) — do not rename those tokens in product prose.

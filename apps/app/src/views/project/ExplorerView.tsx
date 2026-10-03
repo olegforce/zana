@@ -61,37 +61,23 @@ function loadExplorerTreeWidth(preset: TreeWidthPreset): number {
 }
 
 export function ExplorerView(props: Props) {
-  return props.project.remote ? <CheckoutExplorerView {...props} /> : <MachineExplorerView {...props} />;
+  return props.project.remote ? <CheckoutExplorerView {...props} /> : <ProjectCheckoutExplorerView {...props} />;
 }
-function MachineExplorerView({ project, embedded = false, scope, checkoutPath }: Props) {
+function ProjectCheckoutExplorerView({ project, embedded = false, scope, checkoutPath }: Props) {
   const hosts = useHosts();
-  const sources = projectSources(project, hosts.find(host => host.isPrimary)?.id);
-  const [chosen, setChosen] = useState<string>();
-  const [dirty, setDirty] = useState(false);
-  const hostId = scope?.hostId ?? chosen ?? project.hostId ?? hosts.find(host => host.isPrimary)?.id;
+  const primaryHostId = hosts.find(host => host.isPrimary)?.id;
+  const sources = projectSources(project, primaryHostId);
+  // The project owns its local/remote target. A thread may pin a historical
+  // environment, but Explorer never offers a separate machine selection.
+  const hostId = scope?.hostId ?? project.hostId ?? primaryHostId;
   const source = sources.find(source => source.hostId === hostId);
   const selected = hosts.find(host => host.id === hostId);
   const fileScope = useMemo(() => hostId ? { projectId: project.id, hostId, ...(scope?.environmentId ? { environmentId: scope.environmentId } : {}) } : undefined, [project.id, hostId, scope?.environmentId]);
   const path = scope?.environmentId ? checkoutPath : source?.path;
-  if (!hostId || !path || !fileScope) return <p className="tree-pane-empty">Choose a machine with a registered checkout for this project.</p>;
-  return <div className="explorer-machine-surface" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', gridColumn: '2 / -1' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Machine
-        <select aria-label="Explorer machine" value={hostId} disabled={Boolean(scope)} onChange={event => {
-          if (dirty && !window.confirm('Discard unsaved edits and switch machines?')) return;
-          setDirty(false); setChosen(event.target.value);
-        }}>
-          {sources.map(source => <option key={source.hostId} value={source.hostId}>{hosts.find(host => host.id === source.hostId)?.name ?? source.hostId}</option>)}
-          {!source && <option value={hostId}>{selected?.name ?? hostId}</option>}
-        </select>
-      </label>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={path}>{path}</span>
-      {selected?.status !== 'connected' && <span role="status">Offline</span>}
-    </div>
-    <CheckoutExplorerView key={`${project.id}:${hostId}:${scope?.environmentId ?? ''}:${path}`} project={{ ...project, path }} embedded={embedded} scope={fileScope} onDirtyChange={setDirty} nativeFiles={selected?.isPrimary === true && hasDesktopBridge()} originalSource={source?.id === `original:${project.id}`} primaryHostId={hosts.find(host => host.isPrimary)?.id} />
-  </div>;
+  if (!hostId || !path || !fileScope) return <p className="tree-pane-empty" role="alert">Project checkout is unavailable.</p>;
+  return <CheckoutExplorerView key={`${project.id}:${hostId}:${scope?.environmentId ?? ''}:${path}`} project={{ ...project, path }} embedded={embedded} scope={fileScope} nativeFiles={selected?.isPrimary === true && hasDesktopBridge()} originalSource={source?.id === `original:${project.id}`} primaryHostId={primaryHostId} />;
 }
-function CheckoutExplorerView({ project, embedded = false, scope: baseScope, onDirtyChange, nativeFiles = true, originalSource = true, primaryHostId }: Props & { onDirtyChange?: (dirty: boolean) => void; nativeFiles?: boolean; originalSource?: boolean; primaryHostId?: string }) {
+function CheckoutExplorerView({ project, embedded = false, scope: baseScope, nativeFiles = true, originalSource = true, primaryHostId }: Props & { nativeFiles?: boolean; originalSource?: boolean; primaryHostId?: string }) {
   const pushToast = useUi((s) => s.pushToast);
   const viewKey = baseScope && (!originalSource || baseScope.environmentId) ? `${project.id}:${baseScope.hostId}:${baseScope.environmentId ?? ''}` : project.id;
   const explorerFile = useUi((s) => s.explorerFile[viewKey]);
@@ -253,7 +239,6 @@ function CheckoutExplorerView({ project, embedded = false, scope: baseScope, onD
   // can refresh the on-disk view without clobbering unsaved keystrokes. When
   // null, the editor mirrors fileResult.content exactly.
   const [editedContent, setEditedContent] = useState<string | null>(null);
-  useEffect(() => { onDirtyChange?.(editedContent !== null); }, [editedContent, onDirtyChange]);
   const [saving, setSaving] = useState(false);
   // Markdown files open as a rendered preview by default; the user can flip to
   // the Monaco editor to make edits. Resets per file (see effect below).
