@@ -13,6 +13,7 @@ import type {
   PluginHomepageSectionRegistration,
   PluginMessageActionRegistration,
   PluginAgentCardActionRegistration,
+  PluginThreadCardActionRegistration,
   PluginAgentsBoardActionRegistration,
   PluginAgentsViewRegistration,
   PluginCommandPaletteActionRegistration,
@@ -70,6 +71,7 @@ function emptySnapshot() {
     messageDirectives: [] as PluginMessageDirectiveRegistration[],
     messageActions: [] as PluginMessageActionRegistration[],
     agentCardActions: [] as PluginAgentCardActionRegistration[],
+    threadCardActions: [] as PluginThreadCardActionRegistration[],
     agentsBoardActions: [] as PluginAgentsBoardActionRegistration[],
     agentsViews: [] as PluginAgentsViewRegistration[],
     timelineRenderers: [] as PluginTimelineRendererRegistration[],
@@ -104,6 +106,7 @@ function rebuildSnapshot(): void {
     messageDirectives: orderedSets.flatMap((set) => set.messageDirectives),
     messageActions: orderedSets.flatMap((set) => set.messageActions),
     agentCardActions: orderedSets.flatMap((set) => set.agentCardActions),
+    threadCardActions: orderedSets.flatMap((set) => set.threadCardActions),
     agentsBoardActions: orderedSets.flatMap((set) => set.agentsBoardActions),
     agentsViews: orderedSets.flatMap((set) => set.agentsViews),
     timelineRenderers: orderedSets.flatMap((set) => set.timelineRenderers),
@@ -244,6 +247,10 @@ export function listMessageActions(): PluginMessageActionRegistration[] {
 
 export function listAgentCardActions(): PluginAgentCardActionRegistration[] {
   return snapshot.agentCardActions;
+}
+
+export function listThreadCardActions(): PluginThreadCardActionRegistration[] {
+  return snapshot.threadCardActions;
 }
 
 export function listAgentsBoardActions(): PluginAgentsBoardActionRegistration[] {

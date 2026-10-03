@@ -76,6 +76,7 @@ into `website/lib/plugin-guide/`; do not hand-edit that folder).
 - `experimental_agentsView` — add a layout after Board, List and Flow in the global and project Agents view selectors. See [Adding an Agents view](#adding-an-agents-view).
 - `experimental_agentsBoardAction` — toolbar control on the Agents board (`projectId` is `null` on the cross-project Agents nav)
 - `experimental_agentCardAction` — right-click item on an Agents board card
+- `experimental_threadCardAction` — right-click item on a Modern conversation card. `isAvailable` and `run` receive host-derived `threadId` and `projectId`
 - `projectStatusbarItem` — project statusbar chip (`align` left/right; `run` may `toProject` / `toPluginPanel` / `openDialog` / `openMenu`)
 
 ### Home

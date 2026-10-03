@@ -19,7 +19,7 @@ import {
 import { SidebarTriggerOverlay } from './components/SidebarTriggerOverlay.js';
 import { MobileSettingsBack } from './components/MobileSettingsBack.js';
 import { MOBILE_THREAD_ACTIONS_ID, MOBILE_THREAD_CONTROLS_ID, MOBILE_THREAD_TITLE_ID } from './components/useMobileThreadTitleTarget.js';
-import { AgentLauncher } from './components/AgentLauncher.js';
+import { GlobalAgentLauncher } from './components/GlobalAgentLauncher.js';
 import { SettingsPane } from './components/listpane/SettingsPane.js';
 import { ExtensionsPane } from './components/listpane/ExtensionsPane.js';
 import { ProjectView } from '@/views/project/ProjectView';
@@ -136,6 +136,7 @@ import {
   getThreadRoutePath
 } from './lib/route-paths.js';
 import { inspectAgentSession, inspectRouteProjectId } from './lib/inspect-session.js';
+import { resolveFocusedProject } from './lib/focusedProject.js';
 
 function stayOnAgentsBoard(
   session: { id: string },
@@ -717,9 +718,7 @@ function AppShell() {
   // The shell is always nav + one full content track. Settings/Extensions
   // swap the left rail; a focused project keeps ProjectScopedNav so workspace
   // modes live in the side panel instead of a horizontal tab strip.
-  const focusedProject = focusedProjectId
-    ? projects.find((project) => project.id === focusedProjectId) ?? null
-    : null;
+  const focusedProject = resolveFocusedProject(focusedProjectId, projects);
   const projectRailLocked =
     !!scopedProject || keepsProjectFocusRail(nav, focusedProjectId);
   const shellLayout = resolveShellLayout(nav, projectRailLocked);
@@ -845,7 +844,9 @@ function AppShell() {
           that slot is shown, so a CSS-hidden workspace cannot portal a second
           dialog on top of this one. */}
       {launcherOpen && (nav !== 'projects' || !focusedProjectId || splitWorkspaceShowing) && (
-        <AgentLauncher
+        <GlobalAgentLauncher
+          open
+          project={focusedProject}
           onClose={() => useUi.getState().setLauncherOpen(false)}
           onLaunched={(session, projectId) => stayOnAgentsBoard(session, projectId, navigate)}
         />

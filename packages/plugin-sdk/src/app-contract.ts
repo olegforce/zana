@@ -367,6 +367,20 @@ export interface PluginAgentCardActionRegistration extends PluginSlotBase {
   run(context: PluginAgentCardActionContext): void | Promise<void>;
 }
 
+/** Context for a right-click item on a Modern conversation card. */
+export interface PluginThreadCardActionContext {
+  threadId: string;
+  /** `null` when the thread is not associated with a registered project. */
+  projectId: string | null;
+}
+
+export interface PluginThreadCardActionRegistration extends PluginSlotBase {
+  title: string;
+  icon?: string;
+  isAvailable?(context: PluginThreadCardActionContext): boolean;
+  run(context: PluginThreadCardActionContext): void | Promise<void>;
+}
+
 /** Context for a toolbar control on the global or project Agents board. */
 export interface PluginAgentsBoardActionContext {
   /** `null` on the cross-project Agents nav. */
@@ -674,6 +688,9 @@ export interface PluginAppSlots {
     registration: Omit<PluginAgentCardActionRegistration, 'generation' | 'pluginId'>
   ): void;
   experimental_agentsView(registration: Omit<PluginAgentsViewRegistration, 'generation' | 'pluginId'>): void;
+  experimental_threadCardAction(
+    registration: Omit<PluginThreadCardActionRegistration, 'generation' | 'pluginId'>
+  ): void;
   experimental_agentsBoardAction(
     registration: Omit<PluginAgentsBoardActionRegistration, 'generation' | 'pluginId'>
   ): void;
@@ -719,6 +736,7 @@ export interface PluginRegistrationSet {
   messageDirectives: PluginMessageDirectiveRegistration[];
   messageActions: PluginMessageActionRegistration[];
   agentCardActions: PluginAgentCardActionRegistration[];
+  threadCardActions: PluginThreadCardActionRegistration[];
   agentsBoardActions: PluginAgentsBoardActionRegistration[];
   agentsViews: PluginAgentsViewRegistration[];
   timelineRenderers: PluginTimelineRendererRegistration[];
@@ -878,6 +896,7 @@ export function emptyRegistrationSet(pluginId: string, generation: number): Plug
     messageDirectives: [],
     messageActions: [],
     agentCardActions: [],
+    threadCardActions: [],
     agentsBoardActions: [],
     agentsViews: [],
     timelineRenderers: [],
@@ -981,6 +1000,7 @@ export function collectPluginApp(
     messageDirective: new Set<string>(),
     messageAction: new Set<string>(),
     agentCardAction: new Set<string>(),
+    threadCardAction: new Set<string>(),
     agentsBoardAction: new Set<string>(),
     agentsView: new Set<string>(),
     timelineRenderer: new Set<string>(),
@@ -1340,6 +1360,28 @@ export function collectPluginApp(
           throw new Error(`${kind}: "isAvailable" must be a function when set`);
         }
         set.agentCardActions.push(
+          stamp({
+            id,
+            title: requireNonEmptyString(kind, 'title', registration.title),
+            ...(registration.icon !== undefined
+              ? { icon: requireNonEmptyString(kind, 'icon', registration.icon) }
+              : {}),
+            ...(registration.isAvailable !== undefined ? { isAvailable: registration.isAvailable } : {}),
+            run: registration.run
+          })
+        );
+      },
+      experimental_threadCardAction: (registration) => {
+        const kind = 'slots.experimental_threadCardAction';
+        const id = requireSlotId(kind, registration.id);
+        requireUniqueId(kind, seen.threadCardAction, id);
+        if (typeof registration.run !== 'function') {
+          throw new Error(`${kind}: "run" must be a function`);
+        }
+        if (registration.isAvailable !== undefined && typeof registration.isAvailable !== 'function') {
+          throw new Error(`${kind}: "isAvailable" must be a function when set`);
+        }
+        set.threadCardActions.push(
           stamp({
             id,
             title: requireNonEmptyString(kind, 'title', registration.title),
