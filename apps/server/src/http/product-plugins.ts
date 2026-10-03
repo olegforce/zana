@@ -52,7 +52,7 @@ export async function productPushInbox(
 export function productListProjects(
   ctx: Pick<ProductHttpContext, 'projects'>
 ): PluginSdkProject[] {
-  return ctx.projects.list().map((row) => ({ id: row.id, name: row.name, path: row.path, ...(row.icon ? { icon: row.icon } : {}) }));
+  return ctx.projects.list().map((row) => ({ id: row.id, name: row.name, path: row.path, ...(row.icon ? { icon: row.icon } : {}), ...(row.quickAgent === true ? { quickAgent: true } : {}) }));
 }
 
 function toPluginThreadSummary(row: {

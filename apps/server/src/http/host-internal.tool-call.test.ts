@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConversationThread, getHost } from '@zana-ai/zcc-db';
+import { getConversationThread, getHost, getThreadPluginMetadata } from '@zana-ai/zcc-db';
 import { handleHostInternalHttp } from './host-internal.js';
 import type { ProductHttpContext } from './product-context.js';
 import { openThreadFilePreview } from '../services/threads/preview-file.js';
@@ -11,6 +11,7 @@ import { openThreadTerminal } from '../services/threads/open-thread-terminal.js'
 vi.mock('@zana-ai/zcc-db', () => ({
   getConversationThread: vi.fn(),
   getHost: vi.fn(),
+  getThreadPluginMetadata: vi.fn(),
   upsertHost: vi.fn()
 }));
 
@@ -96,11 +97,32 @@ const thread = {
 afterEach(() => {
   vi.mocked(getConversationThread).mockReset();
   vi.mocked(getHost).mockReset();
+  vi.mocked(getThreadPluginMetadata).mockReset();
   vi.mocked(openThreadFilePreview).mockReset();
   vi.mocked(openThreadTerminal).mockReset();
 });
 
 describe('host internal plugin tool-call', () => {
+  it('stamps remote presentation context from the authenticated thread, ignoring tool arguments', async () => {
+    vi.mocked(getHost).mockReturnValue({ id: 'host-1', hostKeyHash: 'hash' } as never);
+    vi.mocked(getConversationThread).mockReturnValue({ ...thread, originPluginId: 'chat' } as never);
+    vi.mocked(getThreadPluginMetadata).mockReturnValue({ metadata: { interactionSurface: { kind: 'remote', label: 'Chat' } }, corrupt: false } as never);
+    const invokeAgentTool = vi.fn(async () => ({ success: true, contentItems: [] }));
+    const captured = captureResponse();
+    await handleHostInternalHttp(request({
+      sessionId: 'inst-1', threadId: thread.id, providerThreadId: 'prov-1',
+      turnId: 'turn-1', callId: 'call-1', tool: 'plugin_query',
+      arguments: { desktopPresentation: true, threadId: 'forged-thread' }
+    }), captured.response, {
+      config: { getConfig: () => ({}) }, db: {}, plugins: { invokeAgentTool }
+    } as unknown as ProductHttpContext);
+    expect(captured.status).toBe(200);
+    expect(invokeAgentTool).toHaveBeenCalledWith(expect.objectContaining({
+      ctx: expect.objectContaining({ threadId: thread.id, desktopPresentation: false })
+    }));
+    expect(getThreadPluginMetadata).toHaveBeenCalledWith(expect.anything(), thread.id, 'chat');
+  });
+
   it('invokes the plugin tool for a host-owned thread', async () => {
     vi.mocked(getHost).mockReturnValue({ id: 'host-1', hostKeyHash: 'hash' } as never);
     vi.mocked(getConversationThread).mockReturnValue(thread as never);

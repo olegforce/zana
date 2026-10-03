@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireDesktopBrowserControl,
   createDesktopBrowserTab,
+  desktopBrowserTabAction,
+  syncDesktopBrowserTabs,
   DESKTOP_BROWSER_MAX_LEASES,
   listDesktopBrowserInstances,
   openDesktopBrowserConnection,
@@ -11,11 +13,12 @@ import {
 
 vi.mock('@zana-ai/zcc-db', () => ({
   getConversationThread: vi.fn(),
+  getThreadPluginMetadata: vi.fn(),
   getThreadTabs: vi.fn(),
   replaceThreadTabs: vi.fn()
 }));
 
-import { getConversationThread, getThreadTabs, replaceThreadTabs } from '@zana-ai/zcc-db';
+import { getConversationThread, getThreadPluginMetadata, getThreadTabs, replaceThreadTabs } from '@zana-ai/zcc-db';
 
 const SCOPE = {
   hostId: 'local',
@@ -47,6 +50,7 @@ function tab(over: Record<string, unknown> = {}) {
 
 afterEach(() => {
   vi.mocked(getConversationThread).mockReset();
+  vi.mocked(getThreadPluginMetadata).mockReset();
   vi.mocked(getThreadTabs).mockReset();
   vi.mocked(replaceThreadTabs).mockReset();
 });
@@ -182,5 +186,34 @@ describe('desktop browser leases', () => {
       status: 503,
       code: 'desktop_browser_unavailable'
     });
+  });
+});
+
+
+describe('remote browser automation', () => {
+  it('rejects create/reveal without an RPC, preserves hidden acquire/connection/release, and never publishes tabs', async () => {
+    vi.mocked(getConversationThread).mockReturnValue({ id: SCOPE.threadId, projectId: 'p1', originPluginId: 'chat' } as never);
+    vi.mocked(getThreadPluginMetadata).mockReturnValue({ corrupt: false, metadata: { interactionSurface: { kind: 'remote', label: 'Chat' } } });
+    const rpc = vi.fn(async ({ command }: { command: { type: string } }) => {
+      if (command.type === 'desktop.browser.create_tab') return { tab: tab() };
+      if (command.type === 'desktop.browser.list_tabs') return { tabs: [tab()] };
+      if (command.type === 'desktop.browser.open_connection') return { wsEndpoint: 'ws://127.0.0.1:54321/', expiresAt: Date.now() + 30_000 };
+      return { ok: true };
+    });
+    const c = ctx(rpc);
+    await expect(createDesktopBrowserTab(c, { ...SCOPE, url: 'about:blank', presentation: 'reveal' })).rejects.toMatchObject({ code: 'presentation_unavailable' });
+    await expect(desktopBrowserTabAction(c, { ...SCOPE, tabId: 'browser:tab-1' }, 'reveal')).rejects.toMatchObject({ code: 'presentation_unavailable' });
+    expect(rpc).not.toHaveBeenCalled();
+    await createDesktopBrowserTab(c, { ...SCOPE, url: 'about:blank', presentation: 'hidden' });
+    syncDesktopBrowserTabs(c, SCOPE, [tab() as never]);
+    expect(replaceThreadTabs).not.toHaveBeenCalled();
+    const lease = await acquireDesktopBrowserControl(c, { ...SCOPE, tabIds: ['browser:tab-1'], ttlMs: 30_000, controllerLabel: 'Test', allowPersonal: false });
+    expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({
+      type: 'desktop.browser.acquire_control', allowPresentation: false
+    }) }));
+    await expect(openDesktopBrowserConnection(c, lease)).resolves.toHaveProperty('wsEndpoint');
+    await releaseDesktopBrowserControl(c, lease);
+    await desktopBrowserTabAction(c, { ...SCOPE, tabId: 'browser:tab-1' }, 'close');
+    expect(rpc.mock.calls.some(([x]) => x.command.type === 'desktop.browser.reveal_tab')).toBe(false);
   });
 });

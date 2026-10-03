@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Session } from "electron";
 import type { DesktopBrowserChanged } from "@zana-ai/zcc-host-daemon-contract";
+import type { DesktopBrowserCdpAdapter } from "./desktop-browser-cdp.js";
+import { IPC } from "@zana-ai/zcc-desktop-contract";
+
+const cdp = vi.hoisted(() => ({ adapter: null as DesktopBrowserCdpAdapter | null }));
+vi.mock("./desktop-browser-cdp.js", () => ({
+  createDesktopBrowserCdpBridge: vi.fn(async ({ adapter }) => {
+    cdp.adapter = adapter;
+    return { grant: () => ({ endpoint: 'ws://127.0.0.1/fake', expiresAt: Date.now() + 60_000 }), close: async () => {} };
+  })
+}));
 
 vi.mock("electron", () => ({
   BrowserWindow: class {},
@@ -155,6 +165,44 @@ describe("desktop browser broker window cleanup", () => {
 });
 
 describe("desktop browser preview reuse", () => {
+  it.each([
+    { allowPresentation: false, presentation: 'reveal' as const, reveals: false },
+    { allowPresentation: true, presentation: 'hidden' as const, reveals: false },
+    { allowPresentation: true, presentation: 'reveal' as const, reveals: true },
+  ])('gates CDP new/reused page presentation and activation: %j', async ({ allowPresentation, presentation, reveals }) => {
+    const first = { ...nativeTab('first', THREAD_ID), presentation, profile: { kind: 'automation' as const, id: 'test' } };
+    const tabs = [first];
+    const manager = {
+      listTabs: () => tabs,
+      getAutomationTabs: () => tabs,
+      createTab: (request: { tabId: string; url: string }) => {
+        const next = { ...first, ...request, presentation: 'hidden' as const };
+        tabs.push(next);
+        return next;
+      },
+      subscribeAutomationTabs: () => () => {},
+      profileSession: () => ({}) as Session,
+      destroyAll: () => {},
+    };
+    const broker = createDesktopBrowserBroker({ manager: manager as unknown as DesktopBrowserViewManager, product: 'Chrome/1' });
+    const window = createFakeWindow();
+    broker.registerWindow(window as never);
+    broker.setHostId('host_local');
+    const scope = { ...broker.getTarget(window.webContents.id)!, threadId: THREAD_ID, leaseId: 'presentation-lease' };
+    try {
+      await broker.execute({ type: 'desktop.browser.acquire_control', ...scope, tabIds: ['first'], controllerLabel: 'test', expiresAt: Date.now() + 60_000, allowPresentation });
+      await broker.execute({ type: 'desktop.browser.open_connection', ...scope, tabIds: ['first'] });
+      const adapter = cdp.adapter!;
+      const adapterScope = { hostWebContentsId: window.webContents.id, threadId: THREAD_ID };
+      const signal = new AbortController().signal;
+      const next = await adapter.createTab!(adapterScope, 'https://other.example/', signal);
+      expect(await adapter.createTab!(adapterScope, 'https://other.example/', signal)).toBe(next);
+      await adapter.activateTab!(adapterScope, next, signal);
+      expect(tabs).toHaveLength(2);
+      expect(window.webContents.send.mock.calls.filter(([channel]) => channel === IPC.browser.reveal)).toHaveLength(reveals ? 3 : 0);
+    } finally { broker.dispose(); }
+  });
+
   it("reuses equivalent URLs only inside the requested thread and profile", async () => {
     const personal = { ...nativeTab("personal", THREAD_ID), url: "http://localhost:5173/" };
     const automation = { ...nativeTab("automation", THREAD_ID), url: personal.url, profile: { kind: "automation" as const, id: "run-a" } };

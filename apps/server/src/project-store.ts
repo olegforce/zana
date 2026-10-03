@@ -29,6 +29,7 @@ export interface ProjectRecord {
   tag?: string;
   category?: string;
   hostId?: string;
+  quickAgent?: boolean;
   remote?: unknown;
 }
 

@@ -5,6 +5,11 @@ description: Open web apps, localhost endpoints, and web previews in this thread
 
 # Visible web previews
 
+## Remote conversations
+
+If the host identifies a remote chat as the controlling surface, the user cannot see Zana's desktop panels or inline visualization UI. Do not follow the desktop presentation steps below. Return useful text through the configured conversation delivery tool; use a supported remote artifact or authenticated web-preview link only when available. Do not claim that a local file path, localhost URL, or desktop panel was shown to the remote user. Hidden browser automation and file creation for your own work remain available. A desktop handoff must be opened by the user in Zana.
+
+
 Use the in-app browser side panel for web previews, including development servers.
 Do not launch Chrome, Edge, the OS default browser, or `open` / `xdg-open` / `start`
 unless the user explicitly requests an external browser. With computer-use tools,

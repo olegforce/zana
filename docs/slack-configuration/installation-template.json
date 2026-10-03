@@ -1,0 +1,44 @@
+{
+  "recordedOn": "2026-10-01",
+  "slack": {
+    "appId": "<SLACK_APP_ID>",
+    "workspaceId": "<SLACK_WORKSPACE_ID>",
+    "enterpriseId": "<SLACK_ENTERPRISE_ID>",
+    "workspaceName": "<WORKSPACE_NAME>",
+    "ownerUserId": "<LINKED_OWNER_USER_ID>",
+    "display": {
+      "name": "Zana",
+      "backgroundColor": "#2C2D30",
+      "iconPath": "website/public/zana-icon-512.png",
+      "iconWidth": 512,
+      "iconHeight": 512,
+      "iconSha256": "6f403b768f5c246e5241fa154b97338a7e5a1353fdfab1059e87ea7aaa6149cc"
+    },
+    "embeddedPreviews": {
+      "allowSameOrigin": false
+    }
+  },
+  "plugin": {
+    "id": "slack-bridge-2ff2",
+    "name": "Zana for Slack",
+    "version": "0.14.2",
+    "connectionMode": "connect",
+    "observedConnection": "Connected",
+    "customTaskPanel": {
+      "enabled": true,
+      "origin": "https://zana-ide.com",
+      "viaConnect": true,
+      "localPort": 8792
+    },
+    "channels": [
+      {
+        "channel": "<SLACK_CHANNEL_ID>",
+        "projectId": "<PROJECT_ID>",
+        "hostId": "<EXECUTION_HOST_ID>",
+        "providerId": "codex",
+        "model": "gpt-6-astra",
+        "summaries": true
+      }
+    ]
+  }
+}

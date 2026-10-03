@@ -63,7 +63,7 @@ it('supports real MCP SDK initialization, discovery, ping and calls over statele
   } });
   try {
     await client.connect(transport);
-    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['zana_connect', 'zana_list_projects', 'zana_import_project', 'zana_launch_job', 'zana_job_status', 'zana_list_capabilities', 'zana_run_capability']);
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['zana_connect', 'zana_list_projects', 'zana_import_project', 'zana_launch_options', 'zana_launch_job', 'zana_job_status', 'zana_list_capabilities', 'zana_run_capability']);
     await client.ping();
     expect(await client.callTool({ name: 'zana_list_projects', arguments: {}, _meta: { slack: actor } })).toMatchObject({ structuredContent: { projects: [{ project_id: 'p1' }] } });
   } finally { await client.close(); }
@@ -226,4 +226,19 @@ it('describes an interrupted import accurately without creating a launch ledger 
   await link(); dispatch.mockRejectedValue(new Error('lost response'));
   expect(await data(rpc('zana_import_project', { project_id: 'p2' }))).toMatchObject({ structuredContent: { error: 'import_unconfirmed' } });
   expect((await db.query('SELECT COUNT(*) AS n FROM slack_mcp_requests'))[0].n).toBe(0);
+});
+
+
+it('discovers profiles and preserves chosen harness/model in signed idempotent launches', async () => {
+  await link();
+  await data(rpc('zana_launch_options', {project_id:'p1',harness:'cursor'}));
+  expect(JSON.parse(dispatch.mock.calls.at(-1)[0].payload.body)).toMatchObject({name:'zana_launch_options',arguments:{project_id:'p1',harness:'cursor'}});
+  dispatch.mockClear();
+  const chosen={...task,harness:'cursor',model:'grok-4.6'};
+  await data(rpc('zana_launch_job',chosen));
+  await data(rpc('zana_launch_job',{model:'grok-4.6',harness:'cursor',...task}));
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(dispatch.mock.calls[0][0].payload.body).arguments).toEqual(chosen);
+  expect(await data(rpc('zana_launch_job',{...chosen,model:'another'}))).toMatchObject({structuredContent:{error:'request_conflict'}});
+  for(const arguments_ of [{...chosen,harness:3},{...chosen,model:'x'.repeat(151)}]) expect(await (await mcp(rpc('zana_launch_job',arguments_))).json()).toMatchObject({error:{code:-32602}});
 });

@@ -1,3 +1,4 @@
+import { assertDesktopPresentation } from './interaction-surface.js';
 import { getConversationThread } from '@zana-ai/zcc-db';
 import { threadOpenSignalSchema, type ThreadOpenSignal } from '@zana-ai/zcc-server-contract';
 import type { ProductHttpContext } from '../../http/product-context.js';
@@ -32,6 +33,7 @@ export interface OpenThreadTerminalResult {
 }
 
 export interface OpenThreadTerminalDeps {
+  assertPresentation?(threadId: string): void;
   getThread(id: string): { id: string; projectId: string } | null;
   getProject(projectId: string): { id: string; remote?: unknown } | null;
   emit(payload: ThreadOpenSignal): number;
@@ -39,6 +41,7 @@ export interface OpenThreadTerminalDeps {
 
 export function openThreadTerminalDepsFromContext(ctx: ProductHttpContext): OpenThreadTerminalDeps {
   return {
+    assertPresentation: (id) => assertDesktopPresentation(ctx.db, id),
     getThread: (id) => {
       const thread = getConversationThread(ctx.db, id);
       return thread ? { id: thread.id, projectId: thread.projectId } : null;
@@ -73,6 +76,7 @@ export function openThreadTerminal(
   deps: OpenThreadTerminalDeps,
   input: OpenThreadTerminalInput
 ): OpenThreadTerminalResult {
+  deps.assertPresentation?.(input.threadId);
   const thread = deps.getThread(input.threadId);
   const projectId = thread?.projectId ?? input.projectId;
   if (!projectId) {

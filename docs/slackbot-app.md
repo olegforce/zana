@@ -2,7 +2,7 @@
 
 Zana for Slack **0.11** adds selective imports. Ask Slackbot to list your Projects and import the one you choose; it uses `zana_import_project` with an exact ID and your locally saved defaults. Enable **Allow imports from Slack** in the desktop settings first. New Projects are never automatically imported. Additional read-only plugin tools use `zana_list_capabilities` / `zana_run_capability` after local enablement. See [the capability contract](slack-capabilities.md).
 
-Zana for Slack 0.8 supports jobs through Slackbot's Apps feature. The hosted service also provides domain-based account setup. Ask Slackbot to connect your Zana domain, list connected Projects, start work in one of them, or check an earlier job. A job here is an agent conversation using the Project/channel's configured machine, provider and model; this interface does not launch a saved Job Team.
+Zana for Slack 0.8 supports jobs through Slackbot's Apps feature. The hosted service also provides domain-based account setup. Ask Slackbot to connect your Zana domain, list connected Projects, start work in one of them, or check an earlier job. A job here is an agent conversation using the Project/channel’s configured machine and sharing policy. Its saved harness/model are defaults; `zana_launch_options` discovers available choices and `zana_launch_job` accepts optional `harness`/`model` overrides for that task. Follow-ups keep the chosen profile. This interface does not launch a saved Job Team.
 
 Example: “Use Zana to review the failing tests in my website Project and put the job in #agent-work.” Slackbot lists the available destinations and starts the task using the selected IDs. Acceptance returns a job ID immediately. The existing Bridge queue creates a channel conversation, starts the agent and publishes its normal status updates. Ask “Check that Zana job” for progress and the latest confirmed shared answer. Existing mentions and Home controls remain available in the job's channel conversation.
 
@@ -10,7 +10,8 @@ Example: “Use Zana to review the failing tests in my website Project and put t
 | --- | --- |
 | `zana_connect` | Creates a private, ten-minute account-linking URL for the signed Slack caller. Accepts an optional claimed Zana domain or its label. Ownership and local approval are required before access becomes active. |
 | `zana_list_projects` | Only locally mapped Projects and model-ready channels; no local paths or credentials. |
-| `zana_launch_job` | Starts requested work and posts its task to the chosen channel. Requires exact `project_id`, `channel_id`, `task` and a stable `request_id`. |
+| `zana_launch_options` | Lists available harnesses and Project defaults. Supply `harness` to list its available models on the Project machine; specify `channel_id` when several connections exist. |
+| `zana_launch_job` | Starts requested work and posts its task to the chosen channel. Requires exact `project_id`, `channel_id`, `task` and a stable `request_id`; optional `harness`/`model` select a task profile. |
 | `zana_job_status` | Reads a `job_id` owned by the caller's current computer link. Returns state, attention, conversation URL and only a confirmed shared answer. |
 
 ## Connect your own domain
@@ -25,7 +26,7 @@ The domain image was built from the production v52 source with seven scoped appl
 
 ## Authorization and delivery
 
-The endpoint is `https://zana-ide.com/api/slack/mcp/`, using stateless Streamable HTTP and **Slack identity auth**. Every POST verifies Slack's raw-body signature and five-minute timestamp before accepting `_meta.slack.user_id` and `team_id`. An unresolved Enterprise workspace (`team_id: null`) fails closed. Discovery contains only static tool definitions. No bearer link credential, arbitrary thread ID, filesystem path or provider override is accepted as a tool-routing parameter.
+The endpoint is `https://zana-ide.com/api/slack/mcp/`, using stateless Streamable HTTP and **Slack identity auth**. Every POST verifies Slack's raw-body signature and five-minute timestamp before accepting `_meta.slack.user_id` and `team_id`. An unresolved Enterprise workspace (`team_id: null`) fails closed. Discovery contains only static tool definitions. No bearer link credential, arbitrary thread ID, filesystem path or arbitrary execution-machine override is accepted as a tool-routing parameter. Optional harness/model IDs are checked against the available catalog on the approved Project machine.
 
 Each call resolves the active Slack identity → Connect account → account-owned computer link. The signed envelope crosses the outbound tunnel to the local plugin, which independently checks the linked owner, app, workspace, connection and current mapping. Launches use existing Home/Bridge durable admission, channel checks and spawning. Local permission prompts stay in Zana.
 
@@ -70,3 +71,5 @@ ZCC_SLACK_BRIDGE_DIR=/absolute/path/to/slack-bridge-2ff2 pnpm test:e2e -- e2e/sl
 It uses isolated HOME, TLS, the real Connect tunnel, signed requests, actual plugin admission and an ACP fixture, with no real Slack posts or model spend. It asserts discovery, one launch across retries, completion/status, the visible thread and revocation. Run live mode/reasoning and Memory suites against an attached app with a usable host and running Memory plugin.
 
 Official references: [Slackbot MCP setup and signed identity](https://docs.slack.dev/ai/slackbot-mcp-client/), [Slack app approval](https://docs.slack.dev/ai/slackbot-mcp-client/admin-approval/), [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+Harness/model selection was added on 2 October 2026. Request keys include those arguments: changing the profile on retry is a conflict, and concurrent retries create only one launch. Removing a model before dispatch rejects the launch. Overrides preserve Project defaults and are revoked with their source mapping or owner connection.

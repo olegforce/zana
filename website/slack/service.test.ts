@@ -88,6 +88,58 @@ beforeEach(async () => {
     intervalMs: 100_000,
   });
 });
+it("admits verified owner DMs, legacy starts and modern stop events without widening channel browsing", async () => {
+  const a = await link(), original = call.getMockImplementation();
+  call.mockImplementation(async (m: string, args: any) => m === "conversations.info" && args.channel === "D123456" ? { ok: true, channel: { id: "D123456", user: "U123456", is_im: true } } : original(m, args));
+  const root = `${Math.floor(clock / 1000)}.000001`;
+  const dm = { ...event(), event_id: "EvDM", event: { type: "message", channel: "D123456", user: "U123456", text: "Review my Project", ts: root } };
+  expect((await ingress(dm)).status).toBe(200); await service.drain();
+  const scoped = createScopedSlack({ call, registry: service.registry, identity, origin: "https://example.com" });
+  expect(await scoped.proxy(a.link, "agents.sessions.setStatus", { channel_id: "D123456", thread_ts: root, status: "processing", initiator_user_id: "U123456", title: "Review" })).toHaveProperty("ok", true);
+  expect((await scoped.proxy(a.link, "conversations.list", {})).channels.every((c: any) => !c.id.startsWith("D"))).toBe(true);
+  expect((await ingress({ ...dm, event_id: "stop", event: { type: "agent_session_stopped", channel: "D123456", user: "U123456", thread_ts: root, event_ts: root } })).status).toBe(200);
+  expect((await ingress({ ...dm, event_id: "start", event: { type: "assistant_thread_started", assistant_thread: { user_id: "U123456", channel_id: "D123456", thread_ts: root }, event_ts: root } })).status).toBe(200);
+  await expect(scoped.proxy(a.link, "agents.sessions.setStatus", { channel_id: "D123456", thread_ts: root, status: "processing", initiator_user_id: "U234567" })).rejects.toThrow("invalid_status");
+  await expect(scoped.proxy(a.link, "assistant.threads.setSuggestedPrompts", { channel_id: "D123456", thread_ts: root, prompts: [{ title: "Review", message: "Review project" }] })).resolves.toHaveProperty("ok", true);
+  await expect(scoped.proxy(a.link, "assistant.threads.setStatus", { channel_id: "D123456", thread_ts: root, status: "" })).resolves.toHaveProperty("ok", true);
+  await expect(scoped.proxy(a.link, "assistant.threads.setStatus", { channel_id: "D123456", thread_ts: root, status: 1 })).rejects.toThrow("invalid_status");
+  await expect(scoped.proxy(a.link, "assistant.threads.setSuggestedPrompts", { channel_id: "D123456", thread_ts: root, prompts: [{}] })).rejects.toThrow("invalid_prompts");
+  await expect(scoped.proxy(a.link, "agents.sessions.setStatus", { channel_id: "D123456", thread_ts: "bad", status: "active" })).rejects.toThrow("invalid_timestamp");
+  await expect(scoped.proxy(a.link, "conversations.info", { channel: "D987654" })).rejects.toThrow();
+  call.mockImplementation(async (m: string, args: any) => m === "conversations.info" && args.channel === "D123456" ? { ok: true, channel: { id: "D123456", user: "U234567", is_im: true } } : original(m, args));
+  expect((await ingress({ ...dm, event_id: "forged" })).status).toBe(403);
+  await expect(scoped.proxy(a.link, "conversations.info", { channel: "D123456" })).rejects.toThrow("channel_not_owned");
+});
+it("scopes Canvas creation to an owned conversation and owner access to a delivered private Canvas", async () => {
+  const a = await link(), original = call.getMockImplementation();
+  await service.registry.bind(a.link, "C123456", "1790620000.000001");
+  const scoped = createScopedSlack({ call, registry: service.registry, identity, origin: "https://example.com" });
+  call.mockImplementation(async (m: string, args: any) => m === "canvases.create" ? { ok: true, canvas_id: "F123456" } : m === "conversations.info" && args.channel === "D123456" ? { ok: true, channel: { id: "D123456", user: "U123456", is_im: true } } : original(m, args));
+  const args = { conversation_channel: "C123456", conversation_ts: "1790620000.000001", channel_id: "C123456", title: "Review", document_content: { type: "markdown", markdown: "Shared answer" } };
+  expect(await scoped.proxy(a.link, "canvases.create", args)).toHaveProperty("canvas_id", "F123456");
+  expect(call).toHaveBeenCalledWith("canvases.create", { channel_id: "C123456", title: "Review", document_content: args.document_content });
+  const grant = { canvas_id: "F123456", access_level: "read", user_ids: ["U123456"] };
+  await expect(scoped.proxy(a.link, "canvases.access.set", grant)).rejects.toThrow();
+  await expect(scoped.proxy(a.link, "canvases.create", { ...args, channel_id: "C987654" })).rejects.toThrow("invalid_canvas");
+  await expect(scoped.proxy(a.link, "canvases.create", { ...args, document_content: { type: "html", markdown: "bad" } })).rejects.toThrow("invalid_canvas");
+  await expect(scoped.proxy(a.link, "canvases.create", { ...args, conversation_ts: "bad" })).rejects.toThrow("invalid_timestamp");
+  await service.registry.remember(a.link, `${a.link.id}:D123456`, "agent-dm"); await service.registry.bind(a.link, "D123456", args.conversation_ts);
+  const postsBefore = call.mock.calls.filter(([method]: any[]) => method === "chat.postMessage").length;
+  await expect(scoped.proxy(a.link, "chat.postMessage", { channel: "D123456", thread_ts: args.conversation_ts, text: "Canvas: https://app.slack.com/docs/T123456/F987654" })).rejects.toThrow();
+  expect(call.mock.calls.filter(([method]: any[]) => method === "chat.postMessage")).toHaveLength(postsBefore);
+  await scoped.proxy(a.link, "chat.postMessage", { channel: "D123456", thread_ts: args.conversation_ts, text: "Canvas: https://app.slack.com/docs/T123456/F123456" });
+  await expect(scoped.proxy(a.link, "canvases.access.set", grant)).resolves.toHaveProperty("ok", true);
+  for (const bad of [{ ...grant, access_level: "write" }, { ...grant, user_ids: ["U234567"] }, { ...grant, channel_ids: ["C123456"] }, { ...grant, canvas_id: "F987654" }]) await expect(scoped.proxy(a.link, "canvases.access.set", bad)).rejects.toThrow();
+  await expect(scoped.proxy(a.link, "canvases.create", { ...args, conversation_channel: "D123456" })).rejects.toThrow("invalid_canvas");
+  await expect(scoped.proxy(a.link, "canvases.edit", { canvas_id: "F123456" })).rejects.toThrow("method_not_allowed");
+});
+it("rejects a channel lookup whose Slack response names a different channel", async () => {
+  const a = await link(), original = call.getMockImplementation();
+  const scoped = createScopedSlack({ call, registry: service.registry, identity, origin: "https://example.com" });
+  call.mockImplementation(async (method: string, args: any) => method === "conversations.info" ? { ok: true, channel: { ...internal, id: "C987654" } } : original(method, args));
+  await expect(scoped.proxy(a.link, "chat.postMessage", { channel: "C123456", text: "Test" })).rejects.toThrow("channel_not_allowed");
+  expect(call.mock.calls.some(([method]: any[]) => method === "chat.postMessage")).toBe(false);
+});
 afterEach(async () => {
   await service.close();
   await db.close();
@@ -249,6 +301,62 @@ it("requires verified Slack, existing account ownership and a successful probe o
     (await api("revoke", { id: grant.linkId }, undefined, "bob")).status,
   ).toBe(404);
   expect((await api("status", {}, `${grant.linkId}.wrong`)).status).toBe(401);
+});
+it("shows the owned computer during connection approval without revealing another owner's target", async () => {
+  const a = await server("alice");
+  await connect.claimAddress("alice", a.serverId, "alice-zana");
+  const computer = (await connect.listServers("alice"))[0];
+  const code = await service.registry.start("U123456", computer.address);
+  const response = await api(`info?code=${encodeURIComponent(code)}`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ serverId: a.serverId, userId: "U123456" });
+  expect((await api(`info?code=${encodeURIComponent(code)}`, undefined, undefined, "bob")).status).toBe(403);
+});
+it("routes plain channel replies only to the existing thread's launcher and deduplicates them", async () => {
+  const a = await link(); await link("bob", "U234567");
+  const first = event(); await ingress(first); await service.drain();
+  clock += 1000; dispatch.mockClear();
+  const reply = { ...first, event_id: "EvPlain", event: { ...first.event, type: "message", thread_ts: first.event.ts, ts: `${Math.floor(clock / 1000)}.000002`, text: "My study plan?" } };
+  expect((await ingress(reply)).status).toBe(200); await service.drain();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(dispatch.mock.calls[0][0].serverId).toBe(a.serverId);
+  expect(JSON.parse(dispatch.mock.calls[0][0].payload.body).payload.event.text).toBe("My study plan?");
+  await ingress(reply); await service.drain(); expect(dispatch).toHaveBeenCalledTimes(1);
+  await ingress({ ...reply, event_id: "EvForeign", event: { ...reply.event, user: "U234567" } }); await service.drain();
+  await ingress({ ...reply, event_id: "EvUnlinked", event: { ...reply.event, user: "U345678" } }); await service.drain();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect((await db.query("SELECT * FROM slack_conversations"))).toHaveLength(1);
+  expect((await db.query("SELECT * FROM slack_requests"))).toHaveLength(2);
+});
+it("ignores ambient channel messages, invalid replies and mention duplicates before storing or forwarding", async () => {
+  await link(); const first = event(); await ingress(first); await service.drain();
+  clock += 1000; dispatch.mockClear();
+  const reply = { ...first, event_id: "EvPlain", event: { ...first.event, type: "message", thread_ts: first.event.ts, ts: `${Math.floor(clock / 1000)}.000002`, text: "Continue" } };
+  const patches = [
+    { thread_ts: undefined }, { thread_ts: "bad" }, { thread_ts: "1790000000.123456" },
+    { ts: first.event.ts }, { ts: "bad" }, { ts: "1790000000.123456" },
+    { hidden: true }, { subtype: "message_changed" }, { bot_id: "B123456" },
+    { text: " " }, { text: 1 }, { text: "x".repeat(12001) },
+    { text: `<@${identity.bot}> Continue` },
+  ];
+  for (const [i, patch] of patches.entries()) {
+    expect((await ingress({ ...reply, event_id: `ignored-${i}`, event: { ...reply.event, ...patch } })).status).toBe(200);
+  }
+  await service.drain(); expect(dispatch).not.toHaveBeenCalled();
+  expect((await db.query("SELECT * FROM slack_requests"))).toHaveLength(1);
+  expect((await db.query("SELECT * FROM slack_conversations"))).toHaveLength(1);
+});
+it.each(["is_shared", "is_ext_shared", "is_org_shared", "is_archived", "is_im", "is_mpim", "not member", "wrong id", "unknown flags", "api error"])("rejects channel replies when the destination is %s", async condition => {
+  await link(); const first = event(); await ingress(first); await service.drain();
+  clock += 1000; dispatch.mockClear();
+  const channel: any = { ...internal };
+  if (condition.startsWith("is_")) channel[condition] = true;
+  if (condition === "not member") channel.is_member = false;
+  if (condition === "wrong id") channel.id = "C987654";
+  if (condition === "unknown flags") delete channel.is_shared;
+  call.mockResolvedValue({ ok: condition !== "api error", channel });
+  expect((await ingress({ ...first, event_id: "EvPlain", event: { ...first.event, type: "message", thread_ts: first.event.ts, ts: `${Math.floor(clock / 1000)}.000002`, text: "Continue" } })).status).toBe(200);
+  await service.drain(); expect(dispatch).not.toHaveBeenCalled();
 });
 it("routes two owners to their own laptops, deduplicates retries and rejects cross-user thread controls", async () => {
   const a = await link(),
@@ -667,6 +775,40 @@ it("bounds direct Slack responses and never retries an ambiguous write", async (
   });
 });
 
+it('deletes only a bot message recorded for the linked owner and strips untrusted arguments', async () => {
+  const alice = await link(), bob = await link('bob', 'U234567');
+  const scoped = createScopedSlack({ call, registry: service.registry, identity });
+  const ts = '1790620000.000001';
+  await service.registry.remember(alice.link, `C123456:${ts}`, 'message');
+  expect(await scoped.proxy(alice.link, 'chat.delete', { channel: 'C123456', ts, as_user: true, text: 'ignored' })).toHaveProperty('ok', true);
+  expect(call).toHaveBeenCalledWith('chat.delete', { channel: 'C123456', ts });
+  await expect(scoped.proxy(bob.link, 'chat.delete', { channel: 'C123456', ts })).rejects.toThrow();
+  await expect(scoped.proxy(alice.link, 'chat.delete', { channel: 'C123456', ts: '1790620000.000002' })).rejects.toThrow();
+  for (const value of [undefined, 'bad', 1790620000, `${ts}:foreign`])
+    await expect(scoped.proxy(alice.link, 'chat.delete', { channel: 'C123456', ts: value })).rejects.toThrow('invalid_timestamp');
+  await expect(scoped.proxy(alice.link, 'chat.delete', { channel: 'C987654', ts })).rejects.toThrow();
+  expect(call.mock.calls.filter(([m]: any[]) => m === 'chat.delete')).toHaveLength(1);
+});
+
+it('clears preview metadata only on an owned message update, leaving content untouched', async () => {
+  const alice = await link(), bob = await link('bob', 'U234567');
+  const scoped = createScopedSlack({ call, registry: service.registry, identity, origin: 'https://example.com' });
+  const ts = '1790620000.000001';
+  await service.registry.remember(alice.link, `C123456:${ts}`, 'message');
+  const clear = { channel: 'C123456', ts, metadata: {}, attachments: [] };
+  expect(await scoped.proxy(alice.link, 'chat.update', clear)).toHaveProperty('ok', true);
+  const args = call.mock.calls.at(-1)[1];
+  expect(args.metadata).toEqual({}); expect(args.text).toBeUndefined(); expect(args.blocks).toBeUndefined();
+  expect(args.attachments).toEqual([]);
+  await expect(scoped.proxy(bob.link, 'chat.update', clear)).rejects.toThrow();
+  await expect(scoped.proxy(alice.link, 'chat.update', { ...clear, ts: '1790620000.000002' })).rejects.toThrow();
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', clear)).rejects.toThrow('invalid_attachments');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { ...clear, attachments: undefined })).rejects.toThrow('invalid_metadata');
+  for (const attachments of [null, {}, [{}]]) await expect(scoped.proxy(alice.link, 'chat.update', { ...clear, attachments })).rejects.toThrow('invalid_attachments');
+  for (const metadata of [null, [], { unknown: true }, { entities: [] }]) await expect(scoped.proxy(alice.link, 'chat.update', { ...clear, metadata })).rejects.toThrow('invalid_metadata');
+  expect(call.mock.calls.filter(([m]: any[]) => m === 'chat.update')).toHaveLength(1);
+});
+
 it('routes custom panels through the owned entity and signed connection, without cookies or query credentials', async () => {
   const alice = await link(), bob = await link('bob', 'U234567');
   const id = '00000000-0000-4000-8000-000000000042';
@@ -711,4 +853,48 @@ it('routes custom panels through the owned entity and signed connection, without
   dispatch.mockResolvedValueOnce({ status: 200, body: { accepted: true, response: { status: 200, body: 'ok', headers: {} } } }); expect((await page(`view/${id}`)).status).toBe(503);
   await service.registry.revoke(alice.link.id, 'alice');
   expect((await page(`view/${id}`)).status).toBe(403);
+});
+
+it("admits slash launches in only the linked owner's verified Zana DM", async () => {
+  const a = await link(), original = call.getMockImplementation();
+  const payload = {team_id: identity.team, api_app_id: identity.app, user_id: "U123456", command: "/zana", text: "run", channel_id: "D123456", trigger_id: "dm-trigger"};
+  call.mockImplementation(async (m: string,args: any) => m === "conversations.info" && args.channel === "D123456" ? {ok: true, channel: {id: "D123456", user: "U123456", is_im: true}} : original(m,args));
+  expect((await ingress(payload)).status).toBe(200);
+  const scoped = createScopedSlack({call, registry: service.registry, identity, origin: "https://example.com"});
+  expect(await scoped.proxy(a.link,"conversations.info",{channel: "D123456"})).toHaveProperty("ok",true);
+  call.mockImplementation(async (m: string,args: any) => m === "conversations.info" ? {ok: true, channel: {id: args.channel, user: "U234567", is_im: true}} : original(m,args));
+  expect((await ingress({...payload,trigger_id:"foreign"})).status).toBe(403);
+  call.mockImplementation(async (m: string,args: any) => m === "conversations.info" ? {ok: true, channel: {id: args.channel, user: "U123456", is_im: true,is_mpim:true}} : original(m,args));
+  expect((await ingress({...payload,trigger_id:"group"})).status).toBe(403);
+});
+it("forwards signed model suggestions only from a link-owned modal and returns its options", async () => {
+  const a = await link(); await service.registry.remember(a.link,"VMODELS","view");
+  const payload = {type:"block_suggestion",team:{id:identity.team},api_app_id:identity.app,user:{id:"U123456"},view:{id:"VMODELS"},action_id:"launch_model",block_id:"model_p1_codex",value:"gpt"};
+  dispatch.mockResolvedValue({status:200,body:{accepted:true,response:{options:[{text:{type:"plain_text",text:"GPT"},value:"gpt"}]}}});
+  expect(await (await ingress(payload)).json()).toEqual({options:[{text:{type:"plain_text",text:"GPT"},value:"gpt"}]});
+  expect((await ingress({...payload,view:{id:"VFOREIGN"}})).status).toBe(403);
+});
+
+
+it("admits a fresh owner mention in an ordinary existing thread without taking over another owner's conversation", async () => {
+  const alice=await link(), bob=await link("bob","U234567");
+  dispatch.mockClear();
+  const root="1790000000.123456";
+  const mention=event("U123456","EvOrdinaryThread",root);
+  expect((await ingress(mention)).status).toBe(200);
+  await service.drain();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(dispatch.mock.calls[0][0].serverId).toBe(alice.serverId);
+  await expect(service.registry.conversation(alice.link,"C123456",root)).resolves.toBeUndefined();
+  await ingress(mention); await service.drain();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect((await ingress(event("U234567","EvForeignThread",root))).status).toBe(403);
+  await expect(service.registry.conversation(bob.link,"C123456",root)).rejects.toThrow("conversation_not_owned");
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  for(const invalid of ["invalid",null,123,"", "1790000000.123456extra"]) {
+    const bad=event("U123456",`EvInvalid${String(invalid)}`); (bad.event as any).thread_ts=invalid;
+    expect((await ingress(bad)).status).toBe(200);
+  }
+  await service.drain();
+  expect(dispatch).toHaveBeenCalledTimes(1);
 });

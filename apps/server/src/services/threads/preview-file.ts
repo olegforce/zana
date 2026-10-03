@@ -1,3 +1,4 @@
+import { assertDesktopPresentation } from './interaction-surface.js';
 import { isAbsolute } from 'node:path';
 import {
   threadOpenSignalSchema,
@@ -41,6 +42,7 @@ export interface PreviewFileResult {
 }
 
 export interface PreviewFileDeps {
+  assertPresentation?(threadId: string): void;
   dataDir: string;
   getThread(id: string): { id: string; projectId: string; environmentId: string | null } | null;
   getEnvironmentPath(environmentId: string): string | null;
@@ -50,6 +52,7 @@ export interface PreviewFileDeps {
 
 export function previewFileDepsFromContext(ctx: ProductHttpContext): PreviewFileDeps {
   return {
+    assertPresentation: (id) => assertDesktopPresentation(ctx.db, id),
     dataDir: ctx.dataDir,
     getThread: (id) => getConversationThread(ctx.db, id),
     getEnvironmentPath: (environmentId) => getEnvironment(ctx.db, environmentId)?.path ?? null,
@@ -85,6 +88,7 @@ function confineCandidate(
  * back to the registered project path when `projectId` is supplied.
  */
 export function openThreadFilePreview(deps: PreviewFileDeps, input: PreviewFileInput): PreviewFileResult {
+  deps.assertPresentation?.(input.threadId);
   const thread = deps.getThread(input.threadId);
   const projectId = thread?.projectId ?? input.projectId;
   if (!projectId) {

@@ -1,3 +1,4 @@
+import { remotePreviewGuidance } from '@zana-ai/zcc-domain';
 import { SHARE_PREVIEW_TOOL, invokeSharePreview } from './host-share-preview-tool.js';
 /**
  * Host DynamicTools packed onto every conversation session.
@@ -155,7 +156,7 @@ export function isHostSessionTool(name: string): boolean {
 
 export function mergeHostSessionTooling(
   packed: PackedSessionTooling,
-  opts?: { inAppAgentTerminalsEnabled?: boolean }
+  opts?: { inAppAgentTerminalsEnabled?: boolean; remoteSurface?: { label: string } | null }
 ): PackedSessionTooling {
   const pluginTools = (packed.dynamicTools ?? []).filter((tool) => !isHostSessionTool(tool.name));
   const hostTools = opts?.inAppAgentTerminalsEnabled === true
@@ -172,8 +173,14 @@ export function mergeHostSessionTooling(
         HOST_CATALOG_INSTRUCTION
       ].join('\n')
     : HOST_SESSION_INSTRUCTION;
-  const tools = [...hostTools, ...pluginTools].slice(0, HOST_SESSION_TOOLS_MAX);
-  const instructions = [hostInstruction, packed.instructions]
+  const selectedHostTools = opts?.remoteSurface
+    ? hostTools.filter((tool) => tool.name !== 'preview_file' && tool.name !== 'run_in_terminal')
+    : hostTools;
+  const tools = [...selectedHostTools, ...pluginTools].slice(0, HOST_SESSION_TOOLS_MAX);
+  const guidance = opts?.remoteSurface
+    ? [remotePreviewGuidance(opts.remoteSurface.label), HOST_INBOX_INSTRUCTION, HOST_LIBRARY_INSTRUCTION, HOST_GOAL_INSTRUCTION, HOST_SCHEDULE_INSTRUCTION, HOST_CATALOG_INSTRUCTION].join('\n')
+    : hostInstruction;
+  const instructions = [guidance, packed.instructions]
     .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
     .join('\n\n')
     .slice(0, HOST_SESSION_INSTRUCTIONS_MAX)
