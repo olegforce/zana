@@ -93,6 +93,23 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         firstParty: ['Docs', 'Salesforce']
       },
       {
+        id: 'experimental_agentsView',
+        title: 'Agents view',
+        summary: 'Add a layout after Board, List and Flow in the global and project Agents view selectors.',
+        apiSymbols: ['PluginAppSlots.experimental_agentsView', 'PluginAgentsViewRegistration', 'PluginAgentsViewProps', 'PluginFleetMember', 'PluginFleetSchedule', 'PluginFleetExecution'],
+        bullets: [
+          'Register `{ id, title, icon?, component }`. Example: `app.slots.experimental_agentsView({ id: "world", title: "World", icon: "Building2", component: WorldView })`.',
+          'The host passes `projects`, `members`, `schedules` and `executions`, filtered by its project scope, search and calendar toggle. `projectId` is `null` in the global view.',
+          'Call `onInspect(item.key)` to open the existing agent, schedule or execution inspector. Keep these opaque keys unchanged; no extra polling is needed.',
+          'Members include live and exited sessions. Use `live` for population counts; `done` means a session ended, not that its task succeeded. Schedules and executions are separate records.',
+          'Desktop selection survives reload. If the plugin is disabled or removed, the host shows Board. Plugin reload remounts the view; release animation frames and subscriptions on unmount.',
+          'Phones choose views independently. The slot requires a host with this API; optional registration with `experimental_agentsView?.(...)` keeps older hosts working.',
+          'This slot adds an Agents layout without a sidebar page. Manage the plugin in Installed plugins; a separate page uses [Sidebar panel](navPanel).'
+        ],
+        firstParty: ['Agent City'],
+        experimental: true
+      },
+      {
         id: 'experimental_agentsBoardAction',
         title: 'Agents board action',
         summary: 'A toolbar control on the Agents board.',
@@ -202,9 +219,9 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
       {
         id: 'experimental_threadList',
         title: 'Agents list',
-        summary: 'Replace the Agents list pane.',
+        summary: 'Replace the thread list in the global and project sidebars.',
         apiSymbols: ['PluginAppSlots.experimental_threadList'],
-        bullets: ['Exclusive — last registered wins Appearance pin.'],
+        bullets: ['Exclusive replacement; projects and CLI Agents remain host-owned.', 'To add a layout to the Agents selector, use [Agents view](experimental_agentsView).'],
         experimental: true
       },
       {

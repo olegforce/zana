@@ -1,3 +1,5 @@
+import type { AgentsViewId } from './agents-view.js';
+export { isAgentsViewId, type AgentsViewId } from './agents-view.js';
 import type { ProjectIcon } from './project-icons.js';
 /**
  * Product vocabulary extracted from the historical `src/shared/types.ts` dump.
@@ -1899,7 +1901,7 @@ export interface AppConfig {
   workspaceModes?: Record<string, string>;
   /** Global Agents-board layout preference: kanban lanes, grouped list, or the
    *  squad-flow graph. */
-  agentsBoardView?: 'board' | 'list' | 'flow';
+  agentsBoardView?: AgentsViewId;
   /** Agents List view organization. Default keeps status lanes. */
   agentsListOrganization?: 'status' | 'team-run';
   /** Project navigation organization. Team-run mode hides worker rows. */

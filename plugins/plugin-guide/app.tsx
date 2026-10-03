@@ -7,6 +7,7 @@ function firstPartyPluginId(displayName: string): string | null {
     Tasks: 'tasks',
     Automations: 'automations',
     'PR Monitor': 'pr-monitor',
+    'Agent City': 'agent-city',
     Docs: 'docs',
     Salesforce: 'salesforce',
     Connect: 'connect',

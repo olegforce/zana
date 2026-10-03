@@ -1,3 +1,4 @@
+import { isAgentsViewId, type AgentsViewId } from '@zana-ai/zcc-domain/product';
 import { subscribeClientRecovery } from './lib/client-recovery.js';
 import { create } from 'zustand';
 import type {
@@ -339,7 +340,7 @@ export const PERSISTED_CORE_MODES: readonly CoreProjectView[] = [
   'feed'
 ];
 
-export type AgentsBoardView = 'board' | 'list' | 'flow';
+export type AgentsBoardView = AgentsViewId;
 
 export type SplitLayout = 'single' | 'vertical' | 'horizontal' | 'grid';
 
@@ -2377,9 +2378,7 @@ export const useData = create<DataState>((set, get) => ({
         useUi.setState({ projectView: views });
       }
       if (
-        config.agentsBoardView === 'board' ||
-        config.agentsBoardView === 'list' ||
-        config.agentsBoardView === 'flow'
+        isAgentsViewId(config.agentsBoardView)
       ) {
         useUi.setState({ agentsBoardView: config.agentsBoardView });
       }

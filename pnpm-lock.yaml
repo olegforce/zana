@@ -1265,6 +1265,8 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  plugins/agent-city: {}
+
   plugins/ask-user-question: {}
 
   plugins/automations: {}

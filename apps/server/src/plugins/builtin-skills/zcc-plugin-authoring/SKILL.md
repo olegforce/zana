@@ -284,6 +284,20 @@ app.slots.projectStatusbarItem({
   Message actions and the command palette also receive `openPanel`.
 - `experimental_newThreadPanelAction` — same registration fields; props
   `pluginId`, `projectId`, `params`.
+- `experimental_agentsView` — adds a layout after Board, List and Flow in global
+  and project Agents view selectors. Registration: `id`, `title`, optional `icon`,
+  `component`. `PluginAgentsViewProps` supplies `projectId` (null globally),
+  `projects`, `members`, `schedules`, `executions`, `searchQuery`,
+  `includeScheduled`, and `onInspect(key)`. Props update with host state and
+  respect scope/search/calendar filters. Pass opaque record keys unchanged to
+  `onInspect`; no duplicate polling is needed. Count `member.live` for live
+  populations; an ended session is not proven task success. Schedules and team
+  executions are separate records. Desktop selection persists; phones select
+  independently. If unavailable, the host falls back to Board. Reload remounts
+  the component: clean up timers and subscriptions. This slot adds no sidebar
+  page. Optional `app.slots.experimental_agentsView?.({ id: 'world', title:
+  'World', icon: 'Building2', component: WorldView })` keeps older hosts working
+  without exposing the view; the host must implement this experimental API.
 - `experimental_threadList` — `id`, `title`, `description`, `component`.
   Exclusive replacement of the thread portion of the global and project
   sidebars. Projects and CLI Agents remain host-owned. Props: `pluginId`,

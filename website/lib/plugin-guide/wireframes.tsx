@@ -637,6 +637,24 @@ export function ProjectShellWireframe(): ReactNode {
                 </Mark>
               ) : null}
             </header>
+            {workspace === 'agents' ? (
+              <div role="group" aria-label="Agents view selector" className="plugin-guide-ws-topbar">
+                <span>Board</span>
+                <span>List</span>
+                <span>Flow</span>
+                <span style={{ display: 'inline-flex' }}>
+                  <Mark
+                    id="experimental_agentsView"
+                    label="Agents view"
+                    chip="side"
+                    className="plugin-guide-agents-toolbar-btn"
+                    title="Agents view"
+                  >
+                    <Plug /> Your view
+                  </Mark>
+                </span>
+              </div>
+            ) : null}
             {workspace === 'library' ? (
               <div className="plugin-guide-fx-canvas">
                 <div className="plugin-guide-fx-card">

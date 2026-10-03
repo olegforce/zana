@@ -73,6 +73,7 @@ into `website/lib/plugin-guide/`; do not hand-edit that folder).
 ### Project shell
 
 - `projectTab` — per-project rail tab (`global: false` hides the sidebar entry). Use `header: 'custom'` when the component supplies its own toolbar; render its `headerActions` prop there to retain the host split-pane controls without an extra title row.
+- `experimental_agentsView` — add a layout after Board, List and Flow in the global and project Agents view selectors. See [Adding an Agents view](#adding-an-agents-view).
 - `experimental_agentsBoardAction` — toolbar control on the Agents board (`projectId` is `null` on the cross-project Agents nav)
 - `experimental_agentCardAction` — right-click item on an Agents board card
 - `projectStatusbarItem` — project statusbar chip (`align` left/right; `run` may `toProject` / `toPluginPanel` / `openDialog` / `openMenu`)
@@ -91,7 +92,7 @@ into `website/lib/plugin-guide/`; do not hand-edit that folder).
 - `threadPanelAction` — thread side-panel tabs; optional `scopes` include `"agent-session"` for the CLI-agent inspector. Both this slot and `experimental_newThreadPanelAction` accept an optional `category` label for the New Tab launcher. Omit it to group under the installed plugin’s display name. Categories are collapsible; search matches tool titles and category names across all groups. The optional `icon` is shown beside the tool.
 - `pendingInteraction` — custom in-thread prompt UI (`id` must match `zcc.ui.requestInput` `rendererId`)
 - `experimental_threadHeaderAction` — action in the thread detail header
-- `experimental_threadList` — replace the Agents list pane (exclusive; last registered wins Appearance pin)
+- `experimental_threadList` — replace the thread list in the global and project sidebars (exclusive); projects and CLI Agents remain host-owned
 - `experimental_timelineRenderer` — custom body for a timeline row kind
 - `messageDirective` — render `::name{attr}` leaves in markdown
 - `messageAction` — per-message menu item on the timeline
@@ -121,6 +122,76 @@ Headless (no pixels), plus picker chrome:
 Registrations replace wholesale per plugin id. Each carries a `generation` used
 as the React remount key. Wrap UI in `PluginSlotBoundary`. Live-reload with
 `zcc plugin dev`.
+
+## Adding an Agents view
+
+`app.slots.experimental_agentsView` adds a selectable Agents layout. Multiple plugins
+can contribute views; the host keeps the built-in Board, List and Flow choices.
+Agent City uses this slot for World. A view contribution does not add a sidebar
+page; its plugin remains manageable under **Plugins → Installed plugins**.
+
+```tsx
+import { definePluginApp, type PluginAgentsViewProps } from '@zana-ai/zcc-plugin-sdk/app';
+
+function WorldView({ projects, members, onInspect }: PluginAgentsViewProps) {
+  return (
+    <section aria-label="Project agents" style={{ height: '100%', overflow: 'auto' }}>
+      {projects.map((project) => (
+        <section key={project.id}>
+          <h2>{project.name}</h2>
+          {members.filter((member) => member.projectId === project.id).map((member) => (
+            <button key={member.key} onClick={() => onInspect(member.key)}>
+              {member.title} · {member.status}
+            </button>
+          ))}
+        </section>
+      ))}
+    </section>
+  );
+}
+
+export default definePluginApp((app) => {
+  app.slots.experimental_agentsView?.({
+    id: 'world',
+    title: 'World',
+    icon: 'Building2',
+    component: WorldView
+  });
+});
+```
+
+The registration is `PluginAgentsViewRegistration`: a plugin-local `id`, selector
+`title`, optional icon name, and React `component`. The host namespaces the saved
+view choice by plugin id and registration id.
+
+`PluginAgentsViewProps` provides:
+
+| Prop | Meaning |
+| --- | --- |
+| `projectId` | Current project id, or `null` for the global Agents view. |
+| `projects` | Projects in the current scope, with id, name and optional color. |
+| `members` | `PluginFleetMember` records for CLI Agents and threads, including live and exited sessions. |
+| `schedules` | `PluginFleetSchedule` plans, including enabled state, next run and whether running. |
+| `executions` | `PluginFleetExecution` team-run summaries, with state and attention flag. |
+| `searchQuery`, `includeScheduled` | Current host search and calendar-toggle values; supplied fleet data already respects these filters. |
+| `onInspect(key)` | Opens the host inspector for a supplied member, schedule or execution key. Pass the opaque key unchanged. |
+
+Use `member.live` for live population counts. Member statuses are `working`,
+`needs-you`, `idle`, `done`, `error` and `unknown`. `done` indicates an ended
+session, not proven task success. Schedules and executions are separate from
+member counts. The host updates these props; a visualization needs no duplicate
+polling, launch permission or server implementation.
+
+Desktop selection persists across reloads. Phones use an independent selection
+for their current app session and initially fall back to Board when the desktop
+has selected a plugin view. Disabling, removing or failing to load the selected
+plugin makes the selector fall back to Board. Reloading a plugin remounts its
+view, so components must clean up timers, observers and subscriptions.
+
+This API is experimental and requires the updated host that implements it.
+Optional chaining in the example makes registration a no-op on older hosts;
+it does not provide the view there. `experimental_threadList` replaces the sidebar's thread list and does not add a
+layout to this selector.
 
 ## Manifest
 

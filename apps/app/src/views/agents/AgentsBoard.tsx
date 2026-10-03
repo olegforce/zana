@@ -1,3 +1,5 @@
+import { PluginAgentsView } from '@/plugins/PluginAgentsView';
+import { agentsViewKey, projectAgentsView, fleetKey, executionKey } from '@/plugins/agents-view-model';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Bot, Moon, Plus, Puzzle, Search, X, Loader2 } from 'lucide-react';
@@ -123,7 +125,9 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
   const includeScheduled = useData((s) => s.includeScheduledAgentsInAgentView);
   const scheduledTasks = useScheduler((s) => s.tasks);
   const favoriteIds = useFavoriteAgents((s) => s.favoriteIds);
-  const { view: boardView, compact } = useAgentsBoardView();
+  const { view: boardView, compact, pluginViews } = useAgentsBoardView();
+  const pluginView = pluginViews.find((slot) => agentsViewKey(slot) === boardView);
+  const sensitivity = useData((s) => s.idleAttentionSensitivity);
   const threads = useThreads((s) => s.threads);
   useEnsureThreads();
   const location = useLocation();
@@ -265,6 +269,8 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
       )
     : fleet;
   const visibleCards = fleetAgentCards(visibleFleet);
+  const visibleExecutions = executions.filter((e) => !q || e.jobTitle.toLowerCase().includes(q)
+    || projects.find((p) => p.id === e.projectId)?.name.toLowerCase().includes(q));
 
   const reclaimableAgents = useMemo(
     () => visibleCards.filter((c) => isReclaimableIdle(c) && !favoriteIds[favoriteKey(c.session)]),
@@ -275,7 +281,7 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
   const activeId = activeThreadId ?? activeTabId;
   // Keep the toolbar (and this toggle) mounted after the user hides Scheduled
   // so they can turn the column back on even if that was the only fleet.
-  const showToolbar = fleet.length > 0 || executions.length > 0 || !includeScheduled;
+  const showToolbar = fleet.length > 0 || executions.length > 0 || !includeScheduled || pluginViews.length > 0;
 
   const inspect = (item: FleetItem) => {
     if (item.kind === 'thread') {
@@ -426,7 +432,22 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
         />
       )}
 
-      {boardView === 'flow' ? (
+      {pluginView ? (
+        <PluginAgentsView
+          slot={pluginView}
+          projectId={scopedProject?.id ?? null}
+          projects={(scopedProject ? [scopedProject] : projects).map(({ id, name, color }) => ({ id, name, color }))}
+          {...projectAgentsView(visibleFleet, visibleExecutions, sensitivity)}
+          includeScheduled={includeScheduled}
+          searchQuery={q}
+          onInspect={(key) => {
+            const item = visibleFleet.find((item) => fleetKey(item) === key);
+            if (item) { inspect(item); return; }
+            const execution = visibleExecutions.find((e) => executionKey(e) === key);
+            if (execution) setSelectedExecution({ projectId: execution.projectId, executionId: execution.executionId });
+          }}
+        />
+      ) : boardView === 'flow' ? (
         <SquadFlowView
           projectId={scopedProject?.id}
           onInspectExecution={(projectId, executionId) => setSelectedExecution({ projectId, executionId })}

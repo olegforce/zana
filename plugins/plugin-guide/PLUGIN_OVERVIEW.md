@@ -4,6 +4,7 @@ An in-app map of every surface a ZCC plugin can own. Use it while you author a p
 
 - A Plugin Guide panel that groups host surfaces: sidebar, thread, composer, settings, and more.
 - Copy-for-agent actions that seed a Creator thread with the right surface names.
+- An Agents view selector annotation, with the registration API, supplied fleet data, lifecycle behavior and Agent City as an example.
 - The same roster the public Plugin Guide website uses.
 
 ## How it works

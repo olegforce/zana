@@ -1,0 +1,23 @@
+{
+  "name": "@zcc-ext/agent-city",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "zcc": ">=1.0.0",
+    "zccPluginSdk": ">=0.1.0"
+  },
+  "zcc": {
+    "name": "Agent City",
+    "description": "A living miniature city for your agents, projects, and scheduled work. Open Agents \u2192 World.",
+    "branding": {
+      "icon": "Building2"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "scripts": {
+    "build": "node ../../packages/plugin-build/scripts/build-app.mjs .",
+    "test": "vitest run"
+  },
+  "private": true
+}
