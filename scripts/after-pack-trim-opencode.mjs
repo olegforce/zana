@@ -3,15 +3,15 @@
  * electron-builder afterPack hook: drop the unused OpenCode arch from
  * extraResources so each artifact ships only `opencode/<this-arch>/`.
  *
- * `scripts/fetch-opencode-binaries.mjs` still stages both mac arches into
- * `vendor/opencode/` (dev + the Intel/Apple Silicon CI matrix). extraResources
+ * `scripts/fetch-opencode-binaries.mjs` stages the build host's platform into
+ * `vendor/opencode/` (both arches on macOS). extraResources
  * copies that whole tree; this hook then deletes the other arch using
  * `context.arch`. Runtime `resolveOpencodeBinDir` still reads
  * `resourcesPath/opencode/<process.arch>/opencode` — the path contract is
  * unchanged.
  *
  * Universal mac builds keep both arches. Missing `opencode/` is a no-op
- * (linux/win, or a build that skipped fetch:opencode).
+ * (a build that skipped fetch:opencode).
  */
 import { copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
