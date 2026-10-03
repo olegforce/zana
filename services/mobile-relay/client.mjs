@@ -23,6 +23,7 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
     const stream = streams.get(key);
     if (!stream) return;
     streams.delete(key);
+    stream.releaseUpload?.();
     stream.request?.destroy();
     stream.response?.destroy();
     stream.ws?.terminate();
@@ -48,6 +49,7 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
     let responseWrites = Promise.resolve();
     let pendingResponseBytes = 0;
     let pendingResponseWrites = 0;
+    const blockedUploads = new Set();
     socket = ws;
     ws.on('open', () => {
       heartbeat(ws, heartbeatMs);
@@ -131,11 +133,16 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
               });
               response.on('end', async () => {
                 await stream.responseWrite;
+                stream.releaseUpload();
                 if (streams.delete(frame.id)) send(ws, { type: 'response-end', id: frame.id });
               });
               response.on('error', () => { if (streams.has(frame.id)) { send(ws, { type: 'error', id: frame.id }); dispose(frame.id); } });
             });
             stream.request = local;
+            stream.releaseUpload = () => {
+              local.off('drain', stream.releaseUpload);
+              if (blockedUploads.delete(local) && blockedUploads.size === 0) ws.resume();
+            };
             local.on('timeout', () => local.destroy(new Error('Timeout')));
             local.on('error', () => { if (streams.has(frame.id)) { send(ws, { type: 'error', id: frame.id }); dispose(frame.id); } });
           } else {
@@ -157,7 +164,13 @@ export function connectRelay({ publicUrl, token, gatewayPort, gatewayCredential,
           const chunk = bytes(frame);
           stream.size += chunk.length;
           if (stream.size > LIMITS.request || stream.request.writableLength > LIMITS.buffer) { send(ws, { type: 'error', id: frame.id }); dispose(frame.id); }
-          else stream.request.write(chunk);
+          else if (!stream.request.write(chunk) && !blockedUploads.has(stream.request)) {
+            // The relay's send callback only drains the tunnel socket. Propagate
+            // the loopback request's backpressure before its buffer reaches the cap.
+            blockedUploads.add(stream.request);
+            ws.pause();
+            stream.request.once('drain', stream.releaseUpload);
+          }
         } else if (frame.type === 'request-end' && stream.request && !stream.ended) { stream.ended = true; stream.request.end(); }
         else if (frame.type === 'ws-data' && stream.ws) {
           const data = bytes(frame, 1024 * 1024);

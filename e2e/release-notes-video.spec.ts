@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs';
 
 const releaseVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-test.use({ e2e: true, initialConfig: { lastSeenVersion: '2.2.0' } });
+test.use({ e2e: true, useAppManifest: true, initialConfig: { lastSeenVersion: '2.2.0' } });
 
 test('updated users see current notes and can play older bundled release videos with captions', async ({ app }) => {
   const page = app.window;
-  // Unpackaged Electron reports its own version here; shipped builds report
-  // Zana's version. Both use the same main-owned update notification path.
+  // The isolated manifest gives Electron the same version as a shipped app.
   const runningVersion = await app.electron.evaluate(({ app: electronApp }) => electronApp.getVersion());
+  expect(runningVersion).toBe(releaseVersion);
   const dialogTitle = `What’s new in v${runningVersion}`;
   let dialog = page.getByRole('dialog', { name: dialogTitle });
   await expect(dialog).toBeVisible();
