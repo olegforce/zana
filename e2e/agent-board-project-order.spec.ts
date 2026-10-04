@@ -35,23 +35,21 @@ test('closing Kanban cards keeps a busy project in place', async ({ app }) => {
     { projectId: projectIds[1], title: 'Beta card' },
     { projectId: projectIds[0], title: 'Alpha newest' }
   ];
-  const threadIds = await window.evaluate(async (rows) => {
-    const ids: string[] = [];
-    for (const row of rows) {
+  for (const row of titles) {
+    const threadId = await window.evaluate(async (row) => {
       const response = await fetch('/api/v1/threads', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...row, providerId: 'fake', input: 'Board ordering probe' })
       });
       const body = await response.json();
       if (!response.ok) throw new Error(JSON.stringify(body));
-      ids.push(body.thread.id);
-    }
-    return ids;
-  }, titles);
-  await expect.poll(() => window.evaluate(async (ids) => {
-    const threads = await Promise.all(ids.map(async (id) => (await (await fetch(`/api/v1/threads/${id}`)).json()).thread));
-    return threads.every((thread) => thread.status === 'idle');
-  }, threadIds)).toBe(true);
+      return body.thread.id as string;
+    }, row);
+    // Establish the idle fixture before creating its next card. Concurrent
+    // provider startup is separate from the board ordering under test.
+    await expect.poll(() => window.evaluate(async (id) =>
+      (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, threadId)).toBe('idle');
+  }
 
   await window.getByTestId('nav-agents').click();
   await window.getByRole('button', { name: 'Board view', exact: true }).click();
