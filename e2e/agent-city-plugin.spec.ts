@@ -94,6 +94,27 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await toggle.getByRole('button', { name: 'World view' }).click();
   const city = app.window.getByTestId('agent-city');
   await expect(city).toBeVisible();
+  await expect.poll(() => app.window.evaluate(async () =>
+    (await window.cc.config.get()).agentsBoardView)).toBe('plugin:agent-city/world');
+  async function expectCityAfterReload() {
+    try {
+      // A reload rehydrates config and imports the installed plugin bundle.
+      // Keep this startup budget distinct from ordinary in-view assertions.
+      await expect(city).toBeVisible({ timeout: 60_000 });
+    } catch (error) {
+      const state = await app.window.evaluate(() => ({
+        url: location.href, title: document.title, desktop: 'cc' in window,
+        body: document.body.innerText.slice(0, 12_000),
+        views: [...document.querySelectorAll('.agents-view-toggle button')].map(button => ({
+          label: button.getAttribute('aria-label'), pressed: button.getAttribute('aria-pressed')
+        }))
+      }));
+      await testInfo.attach('city-reload-state', {
+        body: Buffer.from(JSON.stringify({ ...state, errors })), contentType: 'application/json'
+      });
+      throw error;
+    }
+  }
   await city.getByRole('button', { name: 'Pause motion' }).click();
   await expect(city.getByRole('button', { name: /district/i })).toHaveCount(0);
   const map = city.locator('.city-world');
@@ -266,7 +287,7 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await navigate('/agents');
   await expect(city).toBeVisible();
   await app.window.reload();
-  await expect(city).toBeVisible();
+  await expectCityAfterReload();
   await city.getByRole('button', { name: /Scheduler station/ }).click();
   await expect(city.getByRole('heading', { name: 'Scheduler station' })).toBeVisible();
   // Live reload proves the host drops the old generation and mounts the rebuilt plugin.
@@ -277,6 +298,7 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await app.window.bringToFront();
   await app.window.emulateMedia({ reducedMotion: 'reduce' });
   await app.window.reload();
+  await expectCityAfterReload();
   await expect(city.getByRole('button', { name: 'Reduced motion' })).toBeDisabled();
   const reservation = createServer();
   await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve));
