@@ -113,7 +113,9 @@ describe('project-row workspace actions', () => {
 
   it('copies the workspace path through the desktop clipboard bridge', () => {
     const source = readFileSync(new URL('./ProjectsList.tsx', import.meta.url), 'utf8');
-    expect(source).toContain('void copyText(p.path)');
+    const actions = readFileSync(new URL('./ProjectOpenActions.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('<ProjectOpenActions project={p}');
+    expect(actions).toContain('void copyText(project.path)');
     expect(source).not.toContain('navigator.clipboard');
   });
 });
