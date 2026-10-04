@@ -10,7 +10,7 @@ test('saved host tools display ZCC while keeping their persisted execution ident
   const id = await win.evaluate(async () => {
     const project = (await window.cc.projects.list())[0];
     const response = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ projectId: project.id, providerId: 'codex', input: 'Branding history fixture' }) });
+      body: JSON.stringify({ projectId: project.id, providerId: 'fake', input: 'Branding history fixture' }) });
     if (!response.ok) throw new Error(await response.text());
     return (await response.json()).thread.id as string;
   });
