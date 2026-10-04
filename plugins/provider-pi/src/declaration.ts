@@ -1,5 +1,6 @@
 import type { PluginProviderDeclaration } from "@zana-ai/zcc-plugin-sdk";
 import { PI_NATIVE_ROOTS_DECLARATION } from "./native-roots.js";
+import { PI_BRIDGE_ENV } from "./bridge-env.js";
 
 export function piProviderDeclaration(): PluginProviderDeclaration {
   return {
@@ -13,7 +14,7 @@ export function piProviderDeclaration(): PluginProviderDeclaration {
       iconTint: { light: "#6D5DFB", dark: "#6D5DFB" },
     },
     maintenance: { health: true, usage: false, installation: true },
-    env: { passthrough: ["ZCC_PI_BRIDGE_COMMAND", "ZCC_PI_BRIDGE_ARGS", "BB_PI_BRIDGE_COMMAND", "BB_PI_BRIDGE_ARGS"] },
+    env: PI_BRIDGE_ENV,
     capabilities: {
       supportsServiceTier: false,
       supportsNativeUserQuestion: false,

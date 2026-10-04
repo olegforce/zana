@@ -1,5 +1,5 @@
 import type { ZccPluginApi } from "@zana-ai/zcc-plugin-sdk";
-import { piProviderDeclaration } from "./src/declaration.js";
+import { PI_BRIDGE_ENV } from "./src/bridge-env.js";
 
 /**
  * First-party Pi provider plugin (see
@@ -14,7 +14,7 @@ export default function plugin(zcc: ZccPluginApi) {
     id: "pi",
     displayName: "Pi",
     icon: "./icons/pi.svg",
-    env: piProviderDeclaration().env,
+    env: PI_BRIDGE_ENV,
     maintenance: { health: true, usage: false, installation: true },
     capabilities: {
       supportsServiceTier: false,
