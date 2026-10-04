@@ -280,7 +280,7 @@ describe("claude item presentation", () => {
     ]);
   });
 
-  it("emits a bb-injected tool call as server:bb with the definition's presentation", () => {
+  it("emits injected host tools under the ZCC server with the definition's presentation", () => {
     const translator = createClaudeDeltaTranslator({ sandboxEnabled: false });
     translator.configureInjectedTools([
       {
@@ -305,19 +305,19 @@ describe("claude item presentation", () => {
             {
               type: "tool_use",
               id: "bb-1",
-              name: "mcp__bb-bridge__bb_workflow_result",
+              name: "mcp__zcc__bb_workflow_result",
               input: { runId: "wfr_1" },
             },
             {
               type: "tool_use",
               id: "bb-2",
-              name: "mcp__bb-bridge__bb_thread_list",
+              name: "mcp__zcc__bb_thread_list",
               input: {},
             },
             {
               type: "tool_use",
               id: "bb-3",
-              name: "mcp__bb-bridge__not_in_session",
+              name: "mcp__zcc__not_in_session",
               input: {},
             },
           ],
@@ -332,7 +332,7 @@ describe("claude item presentation", () => {
         item: {
           type: "tool",
           tool: "bb_workflow_result",
-          server: "bb",
+          server: "zcc",
           args: { runId: "wfr_1" },
         },
         presentation: {
@@ -345,7 +345,7 @@ describe("claude item presentation", () => {
         },
       }),
       expect.objectContaining({
-        item: { type: "tool", tool: "bb_thread_list", server: "bb", args: {} },
+        item: { type: "tool", tool: "bb_thread_list", server: "zcc", args: {} },
         presentation: {
           label: {
             pending: "Running bb_thread_list",
@@ -355,8 +355,18 @@ describe("claude item presentation", () => {
         },
       }),
       expect.objectContaining({
-        item: { type: "tool", tool: "not_in_session", server: "bb", args: {} },
+        item: { type: "tool", tool: "not_in_session", server: "zcc", args: {} },
       }),
+    ]);
+  });
+
+  it.each(["zcc", "bb-bridge"])("normalizes %s host tools without affecting foreign MCP servers", server => {
+    const harness = createClaudeDeltaHarness();
+    expect(startedItems(harness.translate(toolUse("host", `mcp__${server}__inbox_push`, { comments: "Ready" })))).toEqual([
+      expect.objectContaining({ type: "toolCall", server: "zcc", tool: "inbox_push", arguments: { comments: "Ready" } }),
+    ]);
+    expect(startedItems(harness.translate(toolUse("foreign", "mcp__external__inbox_push", {})))).toEqual([
+      expect.objectContaining({ type: "toolCall", server: "external", tool: "inbox_push" }),
     ]);
   });
 

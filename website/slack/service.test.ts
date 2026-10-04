@@ -193,6 +193,67 @@ async function link(owner = "alice", user = "U123456") {
     link: await service.registry.owner(user),
   };
 }
+it('adds only the linked owner’s machines to Home, preserves controls and needs no channel posts', async () => {
+  const a = await link(), other = await server('alice'), outsider = await server('bob');
+  await db.query('UPDATE connect_servers SET name=$1 WHERE id=$2', ['Other computer', other.serverId]);
+  await db.query('UPDATE connect_servers SET name=$1 WHERE id=$2', ['BOB PRIVATE COMPUTER', outsider.serverId]);
+  await connect.markSeen(a.serverId);
+  call.mockClear();
+  const view = { type: 'home', callback_id: 'zana_home_v1', private_metadata: 'private-token', blocks: [{ type: 'header', text: { type: 'plain_text', text: 'Your agents' } }, { type: 'divider' }, { type: 'actions', elements: [{ type: 'button', action_id: 'home_stop', text: { type: 'plain_text', text: 'Stop' } }] }] };
+  expect((await api('call', { method: 'views.publish', args: { user_id: a.owner, view } }, a.credential)).status).toBe(200);
+  const published = call.mock.calls.find(([method]: any) => method === 'views.publish')![1].view;
+  expect(published).toMatchObject({ callback_id: view.callback_id, private_metadata: view.private_metadata });
+  const text = JSON.stringify(published);
+  expect(text).toContain("alice's laptop · 🟢 Online · Linked to Slack");
+  expect(text).toContain('Other computer · ⚪ Offline');
+  expect(text).toContain('home_stop');
+  expect(text).not.toContain('BOB PRIVATE COMPUTER');
+  expect(text).not.toContain(a.credential);
+  expect(call.mock.calls.map(([method]: any) => method)).toEqual(['views.publish']);
+  expect((await api('call', { method: 'views.publish', args: { user_id: 'U234567', view } }, a.credential)).status).toBe(403);
+  expect((await ingress({ type: 'block_actions', team: { id: identity.team }, api_app_id: identity.app, user: { id: a.owner }, actions: [{ action_id: 'connect_manage_machines' }] })).status).toBe(200);
+  expect(call).toHaveBeenCalledTimes(1);
+  await service.registry.revoke(a.link.id, 'alice');
+  expect((await api('call', { method: 'views.publish', args: { user_id: a.owner, view } }, a.credential)).status).toBe(401);
+});
+it('shows account machines when the linked computer is offline and refresh recovers through the owner Home path', async () => {
+  const a = await link();
+  const original = dispatch.getMockImplementation()!;
+  dispatch.mockRejectedValue(new Error('computer_offline'));
+  const home = { type: 'event_callback', team_id: identity.team, api_app_id: identity.app, event_id: 'EvHomeMachines', event: { type: 'app_home_opened', user: a.owner, tab: 'home' } };
+  await ingress(home); await service.drain();
+  let published = call.mock.calls.filter(([method]: any) => method === 'views.publish').at(-1)![1].view;
+  expect(JSON.stringify(published)).toContain("alice's laptop · ⚪ Offline · Linked to Slack");
+  expect(JSON.stringify(published)).toContain('connect_home_refresh');
+  const refresh = { type: 'block_actions', team: { id: identity.team }, api_app_id: identity.app, user: { id: a.owner }, view: { ...published, id: 'VOFFLINE' }, actions: [{ action_id: 'connect_home_refresh' }] };
+  await ingress(refresh); await service.drain();
+  expect(call.mock.calls.filter(([method]: any) => method === 'views.publish')).toHaveLength(2);
+  dispatch.mockImplementation(original);
+  const recovered = { ...refresh, actions: [{ action_id: 'connect_home_refresh', action_ts: 'new' }] };
+  await ingress(recovered); await service.drain();
+  expect(JSON.parse(dispatch.mock.calls.at(-1)![0].payload.body).payload).toMatchObject({ type: 'event_callback', event: { type: 'app_home_opened', user: a.owner } });
+  expect(call.mock.calls.filter(([method]: any) => method.startsWith('chat.'))).toHaveLength(0);
+  // Existing plugin Refresh also replaces a stale dashboard when it goes offline.
+  await service.registry.remember(a.link, 'VHOME', 'view');
+  dispatch.mockRejectedValue(new Error('computer_offline'));
+  await ingress({ ...refresh, view: { type: 'home', id: 'VHOME' }, actions: [{ action_id: 'home_refresh' }] });
+  published = call.mock.calls.filter(([method]: any) => method === 'views.publish').at(-1)![1].view;
+  expect(JSON.stringify(published)).toContain('Machines');
+  expect((await ingress({ ...refresh, team: { id: 'T987654' } })).status).toBe(403);
+});
+it('does not expose account machines if the link is revoked while a Home request is being delivered', async () => {
+  const a = await link();
+  dispatch.mockImplementation(async () => {
+    await service.registry.revoke(a.link.id, 'alice');
+    throw new Error('computer_offline');
+  });
+  const inventory = vi.spyOn(connect, 'listServers');
+  await ingress({ type: 'event_callback', team_id: identity.team, api_app_id: identity.app, event_id: 'EvRevokedHome', event: { type: 'app_home_opened', user: a.owner, tab: 'home' } });
+  await service.drain();
+  const view = call.mock.calls.filter(([method]: any) => method === 'views.publish').at(-1)![1].view;
+  expect(JSON.stringify(view)).not.toContain("alice's laptop");
+  expect(inventory).not.toHaveBeenCalled();
+});
 it.each(["Acme Engineering", undefined])("enriches only the matching workspace with its known name (%s) and keeps account lists private", async teamName => {
   const current = await link();
   const previous = await link("alice", "U234567");
@@ -773,6 +834,41 @@ it("bounds direct Slack responses and never retries an ambiguous write", async (
     ok: false,
     error: "invalid_auth",
   });
+});
+
+it('confines generated image uploads and reuse to the owning conversation', async () => {
+  const alice = await link(), bob = await link('bob', 'U234567');
+  const root = '1791050000.000001';
+  await service.registry.bind(alice.link, internal.id, root);
+  const original = call.getMockImplementation();
+  call.mockImplementation(async (method: string, args: any) => method === 'files.uploadDiagram' ? { ok: true, file_id: 'F987654' } : original(method, args));
+  const scoped = createScopedSlack({ call, registry: service.registry, identity });
+  const args = { channel: internal.id, thread_ts: root, png: Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex').toString('base64') };
+  await expect(scoped.proxy(bob.link, 'files.uploadDiagram', args)).rejects.toThrow('conversation_not_owned');
+  await expect(scoped.proxy(alice.link, 'files.uploadDiagram', { ...args, thread_ts: 'bad' })).rejects.toThrow('invalid_timestamp');
+  await expect(scoped.proxy(alice.link, 'files.uploadDiagram', { ...args, png: 'bad' })).rejects.toThrow('invalid_diagram');
+  expect(await scoped.proxy(alice.link, 'files.uploadDiagram', args)).toMatchObject({ ok: true, file_id: 'F987654' });
+  expect(call.mock.calls.find(([m]: any) => m === 'files.uploadDiagram')[1]).toEqual({ png: args.png });
+  const image = { type: 'image', slack_file: { id: 'F987654' }, alt_text: 'Diagram' };
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Architecture', blocks: [image] })).resolves.toHaveProperty('ok', true);
+  await expect(scoped.proxy(alice.link, 'chat.update', { channel: internal.id, conversation_ts: root, ts: '1790620000.000001', text: 'Updated', blocks: [image] })).resolves.toHaveProperty('ok', true);
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Unknown file', blocks: [{ ...image, slack_file: { id: 'FOTHER1' } }] })).rejects.toThrow('object_not_owned');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'URL', blocks: [{ ...image, image_url: 'https://evil.example' }] })).rejects.toThrow('invalid_diagram_image');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Nested foreign file', blocks: [{ type: 'section', accessory: { ...image, slack_file: { id: 'FOTHER1' } } }] })).rejects.toThrow('object_not_owned');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Invalid blocks', blocks: {} })).rejects.toThrow('invalid_blocks');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Too many blocks', blocks: Array.from({ length: 51 }, () => ({})) })).rejects.toThrow('invalid_blocks');
+  let deep: any = {};
+  for (let n = 0; n < 21; n++) deep = { child: deep };
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Too deep', blocks: [deep] })).rejects.toThrow('invalid_blocks');
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: root, text: 'Too many nodes', blocks: [{ elements: Array.from({ length: 2001 }, () => ({})) }] })).rejects.toThrow('invalid_blocks');
+  const otherRoot = '1791050000.000002';
+  await service.registry.bind(alice.link, internal.id, otherRoot);
+  await expect(scoped.proxy(alice.link, 'chat.postMessage', { channel: internal.id, thread_ts: otherRoot, text: 'Other conversation', blocks: [image] })).rejects.toThrow('object_not_owned');
+  await expect(scoped.proxy(alice.link, 'canvases.create', { conversation_channel: internal.id, conversation_ts: root, channel_id: internal.id, title: 'Architecture', document_content: { type: 'markdown', markdown: '![Diagram](https://test.slack.com/files/U999999/F987654/diagram.png)' } })).resolves.toHaveProperty('ok', true);
+  await expect(scoped.proxy(alice.link, 'canvases.create', { conversation_channel: internal.id, conversation_ts: otherRoot, channel_id: internal.id, title: 'Architecture', document_content: { type: 'markdown', markdown: '![Diagram](https://test.slack.com/files/U999999/F987654/diagram.png)' } })).rejects.toThrow('object_not_owned');
+  await expect(scoped.proxy(alice.link, 'files.completeUploadExternal', { files: [{ id: 'F987654' }] })).rejects.toThrow('method_not_allowed');
+  vi.spyOn(service.registry, 'count').mockResolvedValue(500);
+  await expect(scoped.proxy(alice.link, 'files.uploadDiagram', args)).rejects.toThrow('diagram_limit');
 });
 
 it('deletes only a bot message recorded for the linked owner and strips untrusted arguments', async () => {

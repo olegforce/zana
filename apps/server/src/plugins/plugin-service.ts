@@ -59,6 +59,7 @@ import {
 import { callPluginHostRpc, disposePluginHostWorkers } from './plugin-host-rpc.js';
 import { PluginHostArtifactRegistry } from './plugin-host-artifact-registry.js';
 import { loadPluginHostArtifactSnapshot } from './plugin-host-artifact.js';
+import { registerThreadProvider } from '../services/threads/thread-provider-catalog.js';
 import { discoverPluginSkillNames } from './plugin-skills.js';
 import {
   BUILTIN_PLUGINS,
@@ -391,6 +392,7 @@ export interface PluginServiceOptions {
 }
 
 interface LivePlugin {
+  unavailableProviders?: Array<{ unregister(): void }>;
   row: InstalledPluginRow;
   handle: Awaited<ReturnType<typeof createPluginApi>> | null;
   rpc: Map<string, (args: unknown) => unknown | Promise<unknown>>;
@@ -840,6 +842,7 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     const artifact = hostArtifacts.get(id);
     if (artifact && opts.productContext) await disposePluginHostWorkers(opts.productContext, id, artifact.generation);
     hostArtifacts.delete(id);
+    current.unavailableProviders?.forEach((provider) => provider.unregister());
     await current.handle?.dispose();
   }
 
@@ -901,26 +904,27 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       hostEntry = null;
     }
     let hostArtifact: Awaited<ReturnType<typeof loadPluginHostArtifactSnapshot>> = null;
+    let hostArtifactProblem: string | undefined;
     try {
       hostArtifact = await loadPluginHostArtifactSnapshot({
         pluginId: row.id,
         rootDir: row.rootDir,
         hostEntry,
         sourceKind: row.sourceKind,
+        rebuildBuiltin: opts.watchBuiltinPluginSources === true,
         zccVersion: hostVersion,
         dataDir: opts.dataDir
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (previous?.handle && previous.row.status === 'running') throw error;
-      await disposeOne(row.id);
-      const degraded = { ...row, status: 'degraded' as const, statusDetail: detail };
-      live.set(row.id, { row: degraded, handle: null, rpc: new Map() });
-      await store.upsert(degraded);
-      return;
+      // Read provider declarations even when the bridge cannot run. Existing
+      // threads keep their provider identity and receive an actionable error.
+      hostArtifactProblem = detail;
     }
     let configurationMessage: string | null = null;
     const handle = createPluginApi(row.id, join(kvRoot, row.id), {
+      providerUnavailableReason: hostArtifactProblem,
       requestPluginInteraction: opts.requestPluginInteraction,
       interruptPluginInteractions: opts.interruptPluginInteractions,
       spawnThread: opts.spawnThread,
@@ -997,6 +1001,7 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
         });
         await runFactoryTimeBoxed(factory, handle.api);
       }
+      if (hostArtifactProblem) throw new Error(hostArtifactProblem);
       const running = {
         ...row,
         serverEntry,
@@ -1012,14 +1017,17 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       if (previous && previous.handle && previous.handle !== handle) {
         await previous.handle.dispose();
       }
+      previous?.unavailableProviders?.forEach((provider) => provider.unregister());
       await applyMissingRequiredPluginStatus();
     } catch (error) {
       await handle.dispose();
       const detail = error instanceof Error ? error.message : String(error);
       if (previous?.handle && previous.row.status === 'running') throw error;
-      if (!previous?.handle) hostArtifacts.delete(row.id);
+      await disposeOne(row.id);
+      const unavailableProviders = handle.providerDeclarations.map((declaration) =>
+        registerThreadProvider(row.id, declaration, hostEntry, detail));
       const degraded = { ...row, status: 'degraded' as const, statusDetail: detail };
-      live.set(row.id, { row: degraded, handle: null, rpc: new Map() });
+      live.set(row.id, { row: degraded, handle: null, rpc: new Map(), unavailableProviders });
       await store.upsert(degraded);
     }
   }

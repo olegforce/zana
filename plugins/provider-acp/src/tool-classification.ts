@@ -58,7 +58,7 @@ export interface AcpClassifiedToolCall {
 }
 
 /**
- * A bb-injected tool the session was constructed with (Q31). The definition
+ * A zcc-injected tool the session was constructed with (Q31). The definition
  * carries its presentation once the server resolved one; a definition from
  * before the field existed presents generically.
  */
@@ -67,11 +67,11 @@ export interface AcpInjectedTool {
   presentation?: DeltaPresentation;
 }
 
-/** The `server` a bb-injected tool call carries on the wire (Q31). */
-const BB_TOOL_SERVER = "bb";
+/** The `server` a zcc-injected tool call carries on the wire (Q31). */
+const ZCC_TOOL_SERVER = "zcc";
 
 /**
- * Whether a tool call can be a call to a bb-injected tool: ACP agents report
+ * Whether a tool call can be a call to a zcc-injected tool: ACP agents report
  * MCP tool calls under the generic `other` kind (or no kind), never as a
  * command, a file change, or a native read/search/fetch/think.
  */
@@ -248,7 +248,7 @@ function joinStreams(stdout: string, stderr: string): string | undefined {
  * streams its `rawOutput` named. Never the envelope rendered as JSON.
  *
  * `reported` is the part that matters. An agent that named its streams has
- * told bb what the command printed even when that is nothing, and nothing is
+ * told zcc what the command printed even when that is nothing, and nothing is
  * what the row must show: `node -e "process.exit(3)"` prints nothing, and
  * before this the empty join fell through to the envelope and the row read
  * `{"exitCode":3,"stdout":"","stderr":""}`.
@@ -262,8 +262,8 @@ function acpCommandOutputSoFar(
     return { reported: true, output: content };
   }
   // A bare string `rawOutput` is the output, not an envelope to render: an
-  // agent that sends one has told bb what the command printed, mid-flight as
-  // much as at the close. No agent bb has read the wire for sends this, and
+  // agent that sends one has told zcc what the command printed, mid-flight as
+  // much as at the close. No agent zcc has read the wire for sends this, and
   // that is exactly why it must keep working — the generality costs nothing.
   if (typeof event.rawOutput === "string") {
     return {
@@ -294,7 +294,7 @@ function acpCommandOutputSoFar(
  * Mid-flight the rendered-envelope fallback is always wrong: a JSON object is
  * not "output so far", and the envelope carries an `exit_code` the command
  * has not reached. An agent whose in-progress envelope names no stream has
- * told bb nothing, and nothing is what the row shows until the close.
+ * told zcc nothing, and nothing is what the row shows until the close.
  */
 export function extractAcpStreamedCommandOutput(
   event: AcpToolCallUpdateEvent,
@@ -594,7 +594,7 @@ function genericToolItem(
 }
 
 /**
- * A call to a bb-injected tool: `server: "bb"` names its origin and the
+ * A call to a zcc-injected tool: `server: "zcc"` names its origin and the
  * definition the server handed the bridge says how the row reads, so no
  * tool-name table is needed anywhere downstream.
  */
@@ -606,7 +606,7 @@ function bbToolItem(
     item: {
       type: "tool",
       tool: injected.name,
-      server: BB_TOOL_SERVER,
+      server: ZCC_TOOL_SERVER,
       ...genericToolFields(event),
     },
     presentation: injected.presentation ?? toolPresentation(injected.name),
@@ -615,7 +615,7 @@ function bbToolItem(
 
 /**
  * Classify a (merged) tool_call event into its item shape and presentation.
- * A call bound to a bb-injected tool reads as that tool. Otherwise command
+ * A call bound to a zcc-injected tool reads as that tool. Otherwise command
  * and file-change come first, from the shared operation classifier (a diff
  * makes any kind a file change); then the native kind picks the shape; a
  * kind whose shape the agent left unfilled is a generic tool presenting as
@@ -633,7 +633,7 @@ export function classifyAcpToolCall(
   if (operation.kind === "command") {
     // ACP never says where the agent ran a command; the session cwd is where
     // the agent process runs, so that is the command's cwd. Without one the
-    // call stays a generic tool item: bb fabricates no `commandExecution
+    // call stays a generic tool item: zcc fabricates no `commandExecution
     // { cwd: "" }` (design §4).
     const cwd = toOptionalString(options?.cwd);
     if (cwd !== undefined) {

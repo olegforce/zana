@@ -405,6 +405,8 @@ export interface PluginFleetMember {
   detail: string;
   live: boolean;
   scheduled: boolean;
+  /** Display name of the session's harness, shared across thread and CLI surfaces. */
+  harness?: string;
   teamId?: string;
 }
 export interface PluginFleetSchedule {
@@ -414,6 +416,8 @@ export interface PluginFleetSchedule {
   enabled: boolean;
   nextRunAt: string | null;
   running: boolean;
+  /** Configured launch harness; a plan is not a live session. */
+  harness?: string;
 }
 export interface PluginFleetExecution {
   key: string;
@@ -428,9 +432,15 @@ export interface PluginAgentsViewProps {
   members: readonly PluginFleetMember[];
   schedules: readonly PluginFleetSchedule[];
   executions: readonly PluginFleetExecution[];
+  /** Full scoped population, before search. Use for stable spatial layouts; older hosts omit it. */
+  population?: {
+    members: readonly PluginFleetMember[];
+    schedules: readonly PluginFleetSchedule[];
+    executions: readonly PluginFleetExecution[];
+  };
   includeScheduled: boolean;
   searchQuery: string;
-  /** Host resolves only keys in the current, scoped projection. */
+  /** Host resolves only keys in the current scoped population, including search-hidden items. */
   onInspect(key: string): void;
 }
 export interface PluginAgentsViewRegistration extends PluginSlotBase {

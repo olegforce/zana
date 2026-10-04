@@ -342,6 +342,8 @@ declare module '@zana-ai/zcc-plugin-sdk/app' {
     detail: string;
     live: boolean;
     scheduled: boolean;
+    /** Display name of the session harness. */
+    harness?: string;
     teamId?: string;
   }
   export interface PluginFleetSchedule {
@@ -351,6 +353,8 @@ declare module '@zana-ai/zcc-plugin-sdk/app' {
     enabled: boolean;
     nextRunAt: string | null;
     running: boolean;
+    /** Configured launch harness; a plan is not a live session. */
+    harness?: string;
   }
   export interface PluginFleetExecution {
     key: string;
@@ -365,9 +369,15 @@ declare module '@zana-ai/zcc-plugin-sdk/app' {
     members: readonly PluginFleetMember[];
     schedules: readonly PluginFleetSchedule[];
     executions: readonly PluginFleetExecution[];
+    /** Full scoped population, before search. Use for stable spatial layouts; older hosts omit it. */
+    population?: {
+      members: readonly PluginFleetMember[];
+      schedules: readonly PluginFleetSchedule[];
+      executions: readonly PluginFleetExecution[];
+    };
     includeScheduled: boolean;
     searchQuery: string;
-    /** Host resolves only keys in the current, scoped projection. */
+    /** Host resolves only keys in the current scoped population, including search-hidden items. */
     onInspect(key: string): void;
   }
 

@@ -14,7 +14,7 @@ export interface WaitForGoalClearArgs {
 
 /**
  * Tracks observed provider Goal-clear events so callers can wait for the event
- * that makes the provider response durable in BB's event stream. Revisions
+ * that makes the provider response durable in ZCC's event stream. Revisions
  * close the response-before-notification race without missing a notification
  * that arrives between sending the request and beginning the wait.
  */

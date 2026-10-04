@@ -16,11 +16,11 @@ export function buildThreadShellEnvironment(
 ): Record<string, string> {
   return {
     ...(args.baseShellEnv ?? {}),
-    ...(args.projectId ? { BB_PROJECT_ID: args.projectId } : {}),
+    ...(args.projectId ? { ZCC_PROJECT_ID: args.projectId } : {}),
     ...(args.threadStoragePath
-      ? { BB_THREAD_STORAGE: args.threadStoragePath }
+      ? { ZCC_THREAD_STORAGE: args.threadStoragePath }
       : {}),
-    BB_THREAD_ID: args.threadId,
-    BB_ENVIRONMENT_ID: args.environmentId,
+    ZCC_THREAD_ID: args.threadId,
+    ZCC_ENVIRONMENT_ID: args.environmentId,
   };
 }

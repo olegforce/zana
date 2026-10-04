@@ -6,7 +6,7 @@ import { z } from "zod";
 
 /**
  * Bridge → runtime requests: the two channels where the provider needs an
- * answer from bb mid-turn. Both carry canonical bb shapes — the bridge maps
+ * answer from zcc mid-turn. Both carry canonical zcc shapes — the bridge maps
  * its provider's native forms in both directions.
  */
 export const BRIDGE_INBOUND_REQUEST_METHODS = {

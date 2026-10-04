@@ -157,6 +157,14 @@ function verify(
 }
 
 describe('threadProviderFamily', () => {
+  it('does not substitute another provider catalog for an unknown requested provider', () => {
+    const options = buildThreadExecutionOptions({ providerId: 'missing-plugin', availability: [] });
+    expect(options.providers.length).toBeGreaterThan(0);
+    expect(options.models).toEqual([]);
+    expect(options.selectedOnlyModels).toEqual([]);
+    expect(options.modelLoadError).toMatchObject({ providerId: 'missing-plugin', code: 'provider_unavailable' });
+  });
+
   it('maps thread ids onto PTY harness families and skips fake', () => {
     expect(threadProviderFamily('claude-code')).toBe('claude');
     expect(threadProviderFamily('acp-cursor')).toBe('cursor');

@@ -1,18 +1,20 @@
 ---
 name: codex-provider
-description: "Diagnose BB-specific Codex session controls, model acceptance, and durable goals."
+description: "Diagnose ZCC-specific Codex session controls, model acceptance, and durable goals."
 ---
 
 # Codex provider
 
 Codex supports structured plan requests, editing and rerunning eligible messages,
-and compaction through the corresponding core `bb thread` commands.
-`bb thread clear-goal <id>` clears its durable active Goal and waits for provider
-confirmation. Inspect the thread before recovery actions.
+and compaction through the thread’s supported controls. Inspect the thread with
+`zcc thread show <id> --json` before recovery actions, and use `zcc guide threads`
+for the commands available in this build. Clearing a durable active Goal requires
+provider confirmation.
 
 Unlisted model IDs are accepted by this provider; acceptance does not establish
-account access. Inspect models on the actual execution host with
-`bb provider models codex` using the machine or environment selector.
+account access. Select the actual execution machine in the thread composer when
+inspecting its model catalog. `zcc machine provider-cli status <host-id> --json`
+checks the host’s installed provider CLIs.
 
 Use the core CLI skill for command syntax and official Codex guidance for
 upstream product behavior.

@@ -205,7 +205,7 @@ it("the fork helper child exits once the fork is done", async () => {
 
 function scratchFiles(): string[] {
   return readdirSync(experimental_scratchDirForTests())
-    .filter((name) => name !== "bb-pi-extension.mjs")
+    .filter((name) => name !== "zcc-pi-extension.mjs")
     .sort();
 }
 

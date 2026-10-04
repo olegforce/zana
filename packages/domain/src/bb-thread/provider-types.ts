@@ -262,7 +262,7 @@ export type ToolCallResponse = z.infer<typeof toolCallResponseSchema>;
  *
  * `presentation` is how a call to this tool reads as a timeline row (grammar
  * v3, docs/provider-plugin-api.md §3): the bridge stamps it on the
- * `item.open`/`item.close` for the call beside `server: "bb"`, so no core
+ * `item.open`/`item.close` for the call beside `server: "zcc"`, so no core
  * table of bb tool names is needed to label the row. The server resolves it
  * once, at its boundary, for every tool it injects — from the owning
  * plugin's declaration, falling back to a generic label and the plugin's

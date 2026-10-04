@@ -113,9 +113,9 @@ function migrationStatementHash(statement: string): string {
 }
 
 /**
- * `createFakePluginHost` — an in-process stand-in for the BB server's plugin
+ * `createFakePluginHost` — an in-process stand-in for the ZCC server's plugin
  * runtime (apps/server/src/services/plugins/plugin-api.ts), for unit-testing
- * a plugin's `server.ts` without a server. `bb` satisfies {@link ZccPluginApi};
+ * a plugin's `server.ts` without a server. `ZCC` satisfies {@link ZccPluginApi};
  * `harness` drives and inspects it.
  *
  * Faithful where a plugin can observe it: registration name validation and
@@ -131,7 +131,7 @@ function migrationStatementHash(statement: string): string {
  * - storage is process-local: kv in a Map, `storage.database()` one shared
  *   better-sqlite3 handle in a temp directory (same data across calls, like
  *   the host's shared file), secret settings alongside plain values (no files).
- * - `bb.sdk` is always bound (no listen gate) and every unstubbed method
+ * - `zcc.sdk` is always bound (no listen gate) and every unstubbed method
  *   throws instead of hitting a server.
  * - http auth modes are recorded but not enforced — signature checks and
  *   token handling inside handlers still run.
@@ -210,7 +210,7 @@ export interface FakeAgentToolRecord {
   /**
    * The plugin's declared row presentation, null when it declared none.
    * Parsed by the shared `parsePluginAgentToolPresentation`, so the record
-   * holds exactly what the production host stores and a presentation bb
+   * holds exactly what the production host stores and a presentation ZCC
    * rejects is rejected here with the same message.
    */
   presentation: PluginAgentToolPresentation | null;
@@ -260,7 +260,7 @@ export interface FakePluginRegistrations {
   schedules: FakeScheduleRecord[];
   cli: FakeCliRecord | null;
   agentTools: FakeAgentToolRecord[];
-  /** Provider from bb.agents.configure, or null when none registered. */
+  /** Provider from zcc.agents.configure, or null when none registered. */
   agentConfigurationProvider:
     | ((context: PluginAgentConfigurationContext) => PluginAgentConfiguration)
     | null;
@@ -269,12 +269,12 @@ export interface FakePluginRegistrations {
     | ((ctx: { threadId: string; projectId: string }) => string | null)
     | null;
   threadEventHandlers: Record<PluginThreadEventName, number>;
-  /** The handler registered per hook by `bb.experimental_hooks.on`. */
+  /** The handler registered per hook by `zcc.experimental_hooks.on`. */
   hooks: {
     [K in PluginHookName]: PluginHookHandler<K> | null;
   };
   mentionProviders: FakeMentionProviderRecord[];
-  /** Live provider registrations from `bb.providers.register`
+  /** Live provider registrations from `zcc.providers.register`
    * (normalized declarations, registration order; dispose removes). */
   providerRegistrations: NormalizedPluginProviderDeclaration[];
   providerEnvResolvers: ReadonlyMap<
@@ -302,33 +302,33 @@ export interface FakePluginRegistrations {
 /** Read-only state for assertions after a plugin registers or handles work. */
 export interface FakePluginInspectionState {
   readonly pluginId: string;
-  /** Every `bb.log` line, in order. */
+  /** Every `zcc.log` line, in order. */
   readonly logEntries: FakeLogEntry[];
-  /** Every `bb.realtime.publish`, payload normalized like the wire. */
+  /** Every `zcc.realtime.publish`, payload normalized like the wire. */
   readonly realtimeSignals: FakeRealtimeSignal[];
-  /** Every `bb.status.needsConfiguration` message, in order. */
+  /** Every `zcc.status.needsConfiguration` message, in order. */
   readonly needsConfigurationMessages: string[];
   /**
    * How many times the plugin called
-   * `bb.experimental_hooks.recheck()` — the wake it asks core for when a
+   * `zcc.experimental_hooks.recheck()` — the wake it asks core for when a
    * condition its own waits depend on has changed.
    */
   readonly recheckCount: number;
-  /** Recorded `bb.sdk` calls + stub control. */
+  /** Recorded `zcc.sdk` calls + stub control. */
   readonly sdk: FakeSdkHarness;
   readonly registrations: FakePluginRegistrations;
   readonly sharedPortDeclarations: Array<{
     hostId: string;
     ports: number[];
   }>;
-  /** Calls made through bb.hosts.experimental_client, after input validation. */
+  /** Calls made through zcc.hosts.experimental_client, after input validation. */
   readonly experimental_hostRpcCalls: readonly ExperimentalFakeHostRpcCall[];
   readonly pendingInteractions: readonly (PluginInteractionRequest & {
     id: string;
   })[];
 }
 
-/** Deterministic inputs that stand in for behavior normally driven by BB. */
+/** Deterministic inputs that stand in for behavior normally driven by ZCC. */
 export interface FakePluginBehaviorDrivers {
   /** Deliver an unexpected host-worker exit to every registered client. */
   experimental_emitHostWorkerExit(hostId: string): Promise<void>;
@@ -356,14 +356,14 @@ export interface FakePluginBehaviorDrivers {
   /**
    * Invoke the plugin's CLI command with host semantics: the result's
    * exitCode must be a number, stdout/stderr default to "", and a throwing
-   * run() becomes `{ exitCode: 1, stderr: "bb <name> failed: …" }`.
+   * run() becomes `{ exitCode: 1, stderr: "ZCC <name> failed: …" }`.
    */
   runCli(
     argv: string[],
     ctx?: PluginCliContext,
   ): Promise<PluginCliExecutionResult>;
   /**
-   * Dispatch a request to a registered `bb.http` route (exact method+path
+   * Dispatch a request to a registered `zcc.http` route (exact method+path
    * match, like the host's V1 router) through a real Hono context. Auth
    * modes are not enforced. A throwing handler yields the host's 500
    * `{ ok: false, error: "plugin route failed: …" }` response.
@@ -373,7 +373,7 @@ export interface FakePluginBehaviorDrivers {
     path: string,
     init?: RequestInit,
   ): Promise<Response>;
-  /** Open and drive an exact-match `bb.http.experimental_websocket` route. */
+  /** Open and drive an exact-match `zcc.http.experimental_websocket` route. */
   experimental_openWebSocket(
     path: string,
     init?: RequestInit,
@@ -392,7 +392,7 @@ export interface FakePluginBehaviorDrivers {
   /** Run a registered schedule's function once (no timers, no cron sweep). */
   runSchedule(name: string): Promise<void>;
   /**
-   * Deliver a thread lifecycle event to every `bb.events.on` handler. Handlers run
+   * Deliver a thread lifecycle event to every `zcc.events.on` handler. Handlers run
    * sequentially; errors are caught and logged like the host's
    * fire-and-forget dispatch, and returned for assertions.
    */
@@ -411,7 +411,7 @@ export interface FakePluginBehaviorDrivers {
     input: unknown,
     ctx?: Partial<PluginAgentToolContext>,
   ): Promise<PluginAgentToolResult>;
-  /** Evaluate `bb.agents.configure` with production validation/fail-closed
+  /** Evaluate `zcc.agents.configure` with production validation/fail-closed
    * semantics. With no callback, every registered tool/declared test skill is
    * selected. Callback failures are logged and return empty selections. */
   resolveAgentConfiguration(context: PluginAgentConfigurationContext): Promise<{
@@ -442,7 +442,7 @@ export interface FakePluginLifecycleControls {
   /**
    * Dispose like a host reload/disable: abort services started via
    * runService, run onDispose hooks LIFO (isolated), close database handles,
-   * then poison the `bb` handle (further use throws
+   * then poison the `ZCC` handle (further use throws
    * PluginContextStaleError). Idempotent.
    */
   dispose(): Promise<void>;
@@ -466,17 +466,17 @@ export interface CreateFakePluginHostOptions {
   /** Defaults to "test-plugin". */
   pluginId?: string;
   /**
-   * Value served by `bb.server.experimental_appUrl`. Defaults to `null`.
+   * Value served by `zcc.server.experimental_appUrl`. Defaults to `null`.
    */
   appUrl?: string | null;
   /**
-   * Value served by `bb.server.loopbackBaseUrl` (always bound here, like
-   * `bb.sdk`). Defaults to "http://127.0.0.1:38886".
+   * Value served by `zcc.server.loopbackBaseUrl` (always bound here, like
+   * `zcc.sdk`). Defaults to "http://127.0.0.1:38886".
    */
   loopbackBaseUrl?: string;
   /**
-   * Value served by `bb.server.experimental_dataDir`. Defaults to
-   * "/tmp/bb-fake-data-dir".
+   * Value served by `zcc.server.experimental_dataDir`. Defaults to
+   * "/tmp/ZCC-fake-data-dir".
    */
   dataDir?: string;
   /**
@@ -486,15 +486,15 @@ export interface CreateFakePluginHostOptions {
    * the descriptor default on read, like the host.
    */
   settings?: Record<string, PluginSettingValue>;
-  /** Initial `bb.sdk` stubs; extend later via `harness.sdk.stub`. */
+  /** Initial `zcc.sdk` stubs; extend later via `harness.sdk.stub`. */
   sdk?: FakeSdkOverrides;
   /** Static manifest skill ids available to configure() in this fake host. */
   agentSkillIds?: readonly string[];
-  /** Read-only identities returned by bb.hosts.ensureSharedPortTunnel. */
+  /** Read-only identities returned by zcc.hosts.ensureSharedPortTunnel. */
   sharedPortTunnelIdentities?: Record<string, PluginSharedPortTunnelIdentity>;
   /**
-   * Whether the plugin's manifest declares a `bb.host` entry. Production
-   * refuses `bb.providers.register` (the provider would have no bridge to
+   * Whether the plugin's manifest declares a `zcc.host` entry. Production
+   * refuses `zcc.providers.register` (the provider would have no bridge to
    * run on) and `experimental_aiServices.register` (the service would have
    * nothing to run on) without one; the fake applies the same rules.
    * Defaults to true.
@@ -502,7 +502,7 @@ export interface CreateFakePluginHostOptions {
   experimental_hostEntry?: boolean;
   /**
    * The icon names the plugin's manifest declares under
-   * `bb.branding.experimental_icons`. Production refuses a provider `icon`
+   * `zcc.branding.experimental_icons`. Production refuses a provider `icon`
    * or a tool `presentation.icon.glyph` that is a namespaced glyph
    * (`"<pluginId>/<name>"`) naming another plugin or a name not declared
    * there; the fake applies the same rule against this list. Defaults to
@@ -1616,7 +1616,7 @@ function createFakePluginHostInternal(
   };
 
   // --- hooks ---
-  /** How many times `bb.experimental_hooks.recheck()` was called. */
+  /** How many times `zcc.experimental_hooks.recheck()` was called. */
   let requestedDrains = 0;
 
   // --- status ---
@@ -2266,7 +2266,7 @@ function createFakePluginHostInternal(
           {
             exitCode: 1,
             stdout: "",
-            stderr: `bb ${registration.name} failed: ${errorMessage(error)}`,
+            stderr: `zcc ${registration.name} failed: ${errorMessage(error)}`,
           },
           argv.includes("--json"),
         );

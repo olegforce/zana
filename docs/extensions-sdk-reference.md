@@ -174,8 +174,9 @@ view choice by plugin id and registration id.
 | `members` | `PluginFleetMember` records for CLI Agents and threads, including live and exited sessions. |
 | `schedules` | `PluginFleetSchedule` plans, including enabled state, next run and whether running. |
 | `executions` | `PluginFleetExecution` team-run summaries, with state and attention flag. |
+| `population` | Optional full scoped `members`, `schedules` and `executions` before search, for stable spatial layouts and live counts. It still respects the calendar toggle. Older hosts omit it. |
 | `searchQuery`, `includeScheduled` | Current host search and calendar-toggle values; supplied fleet data already respects these filters. |
-| `onInspect(key)` | Opens the host inspector for a supplied member, schedule or execution key. Pass the opaque key unchanged. |
+| `onInspect(key)` | Opens the host inspector for a supplied member, schedule or execution key, including search-hidden records in `population`. Pass the opaque key unchanged; the host resolves only the current scope. |
 
 Use `member.live` for live population counts. Member statuses are `working`,
 `needs-you`, `idle`, `done`, `error` and `unknown`. `done` indicates an ended
@@ -202,8 +203,8 @@ host chrome, not a plugin.
 
 | Field | Meaning |
 | --- | --- |
-| `skills` | Directory roots (BB). Default `["skills"]`; `[]` opts out. Each child dir with a regular `SKILL.md` is a skill named after the folder. |
-| `mcpServers` | Map of Claude CLI MCP servers for PTY / CLI Agent (`--mcp-config`). stdio `command` is basename-only; relative `args` are rewritten to contained paths. Conversation threads do not read this map — they get `zcc.agents.registerTool` via bb-bridge. |
+| `skills` | Directory roots. Default `["skills"]`; `[]` opts out. Each child dir with a regular `SKILL.md` is a skill named after the folder. |
+| `mcpServers` | Map of Claude CLI MCP servers for PTY / CLI Agent (`--mcp-config`). stdio `command` is basename-only; relative `args` are rewritten to contained paths. Conversation threads do not read this map — they get `zcc.agents.registerTool` via zcc. |
 | `extra` | Opaque JSON object (≤32 keys, ≤8 KiB). Displayed on install; never synced as skills/MCP. |
 | `requires` | Other plugin ids this plugin consumes via `zcc.services.use`. Host topo-sorts load order. A missing required plugin marks the consumer `needs-configuration`. |
 

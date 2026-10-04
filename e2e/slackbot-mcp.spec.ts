@@ -14,7 +14,7 @@ import { phonePortEnv } from './fixtures/phone-port.js';
 
 // Zana for Slack is an independently installed local plugin, outside core's checkout.
 const source = process.env.ZCC_SLACK_BRIDGE_DIR;
-test.skip(!source || !existsSync(join(source, 'src/slackbot.ts')), 'Set ZCC_SLACK_BRIDGE_DIR to the Zana for Slack 0.14.2 source project.');
+test.skip(!source || !existsSync(join(source, 'src/slackbot.ts')), 'Set ZCC_SLACK_BRIDGE_DIR to the Zana for Slack 0.14.3 source project.');
 test('Slackbot selective imports and plugin capabilities work through the real Connect tunnel and built desktop', async ({ home }, testInfo) => {
   test.setTimeout(180_000);
   const cert = join(home, 'slack-cert.pem'), key = join(home, 'slack-key.pem');
@@ -23,6 +23,7 @@ test('Slackbot selective imports and plugin capabilities work through the real C
   await db.query('CREATE TABLE users(id TEXT PRIMARY KEY,github_login TEXT)');
   await db.query('CREATE TABLE sessions(id TEXT PRIMARY KEY,user_id TEXT,expires_at BIGINT)');
   await db.query('INSERT INTO users VALUES($1,$1)', ['owner']);
+  await db.query('INSERT INTO users VALUES($1,$1)', ['outsider']);
   await db.query('INSERT INTO sessions VALUES($1,$2,$3)', ['fixture', 'owner', Date.now() + 180_000]);
   const cookie = `zcc_session=fixture.${createHmac('sha256', 'account-secret').update('fixture').digest('base64url')}`;
   let gateway: any, slack: any, origin: string;
@@ -49,6 +50,10 @@ test('Slackbot selective imports and plugin capabilities work through the real C
   const postedTs = new WeakMap<object, string>();
   const presentations: any[] = [];
   const modalViews: any[] = [], canvases: any[] = [], nativeStatuses: any[] = [];
+  const homeViews: any[] = [];
+  const diagramUploads: any[] = [];
+  const processingImages = new Set<string>();
+  let imageBlockRejections = 0;
   let rejectCanvas = false;
   const managed = new Map<string, any>();
   let channelCreates = 0;
@@ -80,14 +85,33 @@ test('Slackbot selective imports and plugin capabilities work through the real C
     if (method === 'conversations.invite') return { ok: true };
     if (method === 'conversations.rename') { const renamed = { ...managed.get(args.channel), name: args.name }; managed.set(args.channel, renamed); return { ok: true, channel: renamed }; }
     if (method === 'conversations.info') return { ok: true, channel: args.channel === 'D123456' ? { id: 'D123456', user: 'U123456', is_im: true, is_archived: false } : managed.get(args.channel) || channel };
-    if (method === 'views.publish') return { ok: true, view: { id: 'V123456' } };
+    if (method === 'views.publish') { homeViews.push(args.view); return { ok: true, view: { id: 'V123456' } }; }
     if (method === 'views.update') return { ok: true, view: { id: args.view_id } };
     if (method === 'views.open') { modalViews.push(args.view); return { ok: true, view: { id: `VFORM${modalViews.length}` } }; }
     if (method === 'agents.sessions.setStatus') { nativeStatuses.push(args); return { ok: true }; }
     if (method === 'assistant.threads.setSuggestedPrompts') return { ok: true };
+    if (method === 'files.uploadDiagram') {
+      const png = Buffer.from(args.png, 'base64');
+      expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      expect(png.readUInt32BE(16)).toBeGreaterThan(100);
+      expect(png.readUInt32BE(20)).toBeGreaterThan(30);
+      diagramUploads.push(png);
+      writeFileSync(testInfo.outputPath('slack-mermaid-rendered.png'), png);
+      const fileId = `FDIAGRAM${diagramUploads.length}`;
+      processingImages.add(fileId);
+      return { ok: true, file_id: fileId, permalink: `https://test.slack.com/files/U999999/${fileId}/diagram.png` };
+    }
     if (method === 'canvases.create') { canvases.push(args); return rejectCanvas ? { ok: false, error: 'missing_scope' } : { ok: true, canvas_id: 'F123456' }; }
     if (method === 'canvases.access.set') return { ok: true };
     if (method === 'chat.getPermalink') return { ok: true, permalink: `https://app.slack.com/client/${identity.team}/${channel.id}?thread_ts=${args.message_ts}` };
+    if (method === 'chat.postMessage' || method === 'chat.update') {
+      const processing = args.blocks?.find((b: any) => b.type === 'image' && processingImages.has(b.slack_file?.id));
+      if (processing) {
+        processingImages.delete(processing.slack_file.id);
+        imageBlockRejections++;
+        return { ok: false, error: 'invalid_blocks', response_metadata: { messages: ['invalid slack file'] } };
+      }
+    }
     if (method === 'chat.postMessage') { const ts = `${Math.floor(Date.now() / 1000)}.${String(++sequence).padStart(6, '0')}`; posts.push(args); postedTs.set(args, ts); return { ok: true, channel: args.channel, ts }; }
     if (method === 'chat.delete') { deletions.push(args); return { ok: true, channel: args.channel, ts: args.ts }; }
     if (method === 'chat.update') { if (!args.text && !args.blocks) return { ok: false, error: 'no_text' }; posts.push(args); return { ok: true, channel: args.channel, ts: args.ts }; }
@@ -112,11 +136,11 @@ test('Slackbot selective imports and plugin capabilities work through the real C
     cpSync(source!, fixtureSource, { recursive: true, filter: p => !['node_modules', '.git', 'coverage'].includes(p.split('/').at(-1)!) });
     symlinkSync(join(source!, 'node_modules'), join(fixtureSource, 'node_modules'), 'dir');
     renameSync(join(fixtureSource, 'server.ts'), join(fixtureSource, 'real-server.ts'));
-    writeFileSync(join(fixtureSource, 'server.ts'), `import original from './real-server.ts';\nexport default async zcc => {\n  let ask, publish; const register = zcc.agents.registerTool.bind(zcc.agents);\n  zcc.agents.registerTool = tool => { if (tool.name === 'slack_bridge_ask') ask = tool; if (tool.name === 'slack_bridge_publish') publish = tool; return register(tool); };\n  await original(zcc);\n  zcc.rpc.method('fixtureAsk', args => ask.execute({ questions: args.questions }, { threadId: args.threadId, projectId: args.projectId }));\n  zcc.rpc.method('fixturePublish', args => publish.execute({ text: args.text }, { threadId: args.threadId, projectId: args.projectId }));\n}\n`);
+    writeFileSync(join(fixtureSource, 'server.ts'), `import original from './real-server.ts';\nexport default async zcc => {\n  let ask, publish; const register = zcc.agents.registerTool.bind(zcc.agents);\n  const handlers = new Map(), on = zcc.events.on.bind(zcc.events);\n  zcc.events.on = (name, handler) => { handlers.set(name, handler); return on(name, handler); };\n  zcc.agents.registerTool = tool => { if (tool.name === 'slack_bridge_ask') ask = tool; if (tool.name === 'slack_bridge_publish') publish = tool; return register(tool); };\n  await original(zcc);\n  zcc.rpc.method('fixtureLifecycle', args => handlers.get(args.name)({ name: args.name, threadId: args.threadId }));\n  zcc.rpc.method('fixtureAsk', args => ask.execute({ questions: args.questions }, { threadId: args.threadId, projectId: args.projectId }));\n  zcc.rpc.method('fixturePublish', args => publish.execute({ text: args.text }, { threadId: args.threadId, projectId: args.projectId }));\n}\n`);
     const pluginStore = join(home, '.zcc/plugins'); mkdirSync(pluginStore, { recursive: true });
     writeFileSync(join(pluginStore, 'installed.json'), JSON.stringify({ version: 1, plugins: [{ id: 'slack-bridge-2ff2', version: '0.14.2', name: 'Zana for Slack', enabled: true, status: 'running', provenance: 'direct', sourceKind: 'path', source: `path:${fixtureSource}`, rootDir: fixtureSource, serverEntry: './server.ts', appEntry: './app.js', installedAt: Date.now(), updatedAt: Date.now() }] }));
     const consumer = join(home, 'slack-capability-fixture'); mkdirSync(consumer);
-    writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'slack-capability-fixture', version: '1.0.0', zcc: { name: 'Slack capability fixture', server: './server.mjs', requires: ['slack-bridge-2ff2'] } }));
+    writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'slack-capability-fixture', version: '1.0.0', zcc: { name: 'Slack capability fixture', description: 'Read-only fixture capability', branding: { icon: 'MessageSquare' }, server: './server.mjs', requires: ['slack-bridge-2ff2'] } }));
     writeFileSync(join(consumer, 'server.mjs'), `export default function(zcc) {
       const slack = zcc.services.use('slack-bridge-2ff2');
       const dispose = slack.register(zcc.pluginId, { id: 'inspect', title: 'Inspect fixture', description: 'Read a fixture Project summary', version: 1, readOnly: true, fields: {},
@@ -129,13 +153,26 @@ test('Slackbot selective imports and plugin capabilities work through the real C
     // Only this isolated agent emits phase signals; production code reads the
     // real normalized ACP events, without retaining thought or tool content.
     const activityBin = join(home, 'activity-bin'), activityAgent = join(home, 'slack-activity-agent.mjs');
+    const activityBegin = join(home, 'emoji-thinking.flag');
+    const activityAdvance = join(home, 'emoji-working.flag');
     mkdirSync(activityBin);
     const fakeAgent = readFileSync(resolve('plugins/provider-acp/src/bridge/fake-acp-agent.mjs'), 'utf8');
     const hangBranch = '  } else if (text.includes("hang")) {';
     expect(fakeAgent).toContain(hangBranch);
     writeFileSync(activityAgent, fakeAgent.replace(hangBranch, `  } else if (text.includes("slack-emoji-phase")) {
-      notifyUpdate({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "PRIVATE_REASONING_FIXTURE" } });
-      setTimeout(() => notifyUpdate({ sessionUpdate: "tool_call", toolCallId: "emoji-tool", title: "Fixture work", kind: "execute", status: "in_progress", rawInput: { command: "PRIVATE_TOOL_FIXTURE" } }), 16000);
+      let thinking = false;
+      const phaseTimer = setInterval(async () => {
+        const { existsSync } = await import('node:fs');
+        if (!thinking) {
+          if (!existsSync(${JSON.stringify(activityBegin)})) return;
+          thinking = true;
+          notifyUpdate({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "PRIVATE_REASONING_FIXTURE" } });
+          return;
+        }
+        if (!existsSync(${JSON.stringify(activityAdvance)})) return;
+        clearInterval(phaseTimer);
+        notifyUpdate({ sessionUpdate: "tool_call", toolCallId: "emoji-tool", title: "Fixture work", kind: "execute", status: "in_progress", rawInput: { command: "PRIVATE_TOOL_FIXTURE" } });
+      }, 100);
       return;
 ${hangBranch}`));
     const activityLauncher = join(activityBin, 'opencode');
@@ -163,9 +200,25 @@ ${hangBranch}`));
     const approved = await post('/api/connect/slack/approve/', { code, serverId: reservation.body.serverId, approved: true }, { cookie, origin });
     expect(approved.status).toBe(200);
     expect(await rpc('linkConnect', { origin, code: approved.body.activationCode })).toBeNull();
+    const extra = await registry.startEnrollment('Offline build computer');
+    await registry.approveEnrollment('owner', extra.userCode, true);
+    await registry.pollEnrollment(extra.deviceCode);
+    const privateMachine = await registry.startEnrollment('PRIVATE OTHER ACCOUNT');
+    await registry.approveEnrollment('outsider', privateMachine.userCode, true);
+    await registry.pollEnrollment(privateMachine.deviceCode);
+    await rpc('refreshHome');
+    await expect.poll(() => JSON.stringify(homeViews.at(-1))).toContain('Linked to Slack');
+    const dashboard = JSON.stringify(homeViews.at(-1));
+    expect(dashboard).toContain('🟢 Online · Linked to Slack');
+    expect(dashboard).toContain('Offline build computer · ⚪ Offline');
+    expect(dashboard).toContain('connect_manage_machines');
+    expect(dashboard).not.toContain('PRIVATE OTHER ACCOUNT');
+    expect(homeViews.at(-1).blocks.length).toBeLessThanOrEqual(100);
+    writeFileSync(testInfo.outputPath('slack-home-machines.json'), JSON.stringify(homeViews.at(-1), null, 2));
     expect(await win.evaluate(() => window.cc.pluginApps.getSettings('slack-bridge-2ff2'))).toMatchObject({ descriptors: {}, values: {} });
     const projectDir = join(home, 'slackbot-project'); mkdirSync(projectDir);
     const projectId = await win.evaluate(async path => { const p = await window.cc.projects.add(path); if (!p.ok) throw new Error(p.message); return p.value.id; }, projectDir);
+    expect(await win.evaluate(async () => { const value = await (await fetch('/api/v1/plugins')).json(); return value.plugins.find((p: any) => p.id === 'slack-capability-fixture'); })).toMatchObject({ status: 'running', statusDetail: null });
     const snapshot = await rpc('snapshot');
     const hostId = snapshot.hosts[0].id;
     const untouchedDir = join(home, 'stay-local'); mkdirSync(untouchedDir);
@@ -198,6 +251,7 @@ ${hangBranch}`));
     expect((await tool('zana_list_capabilities')).body.result.structuredContent.capabilities).toEqual([]);
     const capabilityId = 'slack-capability-fixture.inspect';
     expect((await tool('zana_run_capability', { capability_id: capabilityId, arguments_json: JSON.stringify({ project_id: projectId }) })).body.result.structuredContent.error).toBe('capability_unavailable');
+    await expect.poll(async () => (await rpc('snapshot')).capabilities.plugins, { timeout: 15_000 }).toContainEqual(expect.objectContaining({ id: capabilityId, title: 'Inspect fixture' }));
     await win.getByRole('switch', { name: 'Enable Inspect fixture' }).click();
     await expect.poll(async () => (await tool('zana_list_capabilities')).body.result.structuredContent.capabilities.length).toBe(1);
     expect((await tool('zana_run_capability', { capability_id: capabilityId, arguments_json: JSON.stringify({ project_id: projectId }) })).body.result.structuredContent).toMatchObject({ result: { project_id: projectId, user: 'U123456', answer: 'Fixture capability works' } });
@@ -207,6 +261,7 @@ ${hangBranch}`));
     await expect(win.getByRole('switch', { name: 'Enable Inspect fixture' })).toBeDisabled();
     await win.getByRole('switch', { name: 'Allow Use plugin tools' }).click();
     await expect.poll(async () => (await tool('zana_list_capabilities')).body.result.structuredContent.capabilities.length).toBe(1);
+    await expect.poll(async () => (await rpc('snapshot')).capabilities.plugins, { timeout: 15_000 }).toContainEqual(expect.objectContaining({ id: capabilityId, title: 'Inspect fixture' }));
     await win.getByRole('switch', { name: 'Enable Inspect fixture' }).click();
     await expect.poll(async () => (await tool('zana_list_capabilities')).body.result.structuredContent.capabilities.length).toBe(0);
     await win.screenshot({ path: testInfo.outputPath('slack-project-import-settings.png') });
@@ -309,7 +364,24 @@ ${hangBranch}`));
       expect((await signedEvent(phaseMention)).status).toBe(200);
       await expect.poll(async () => (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'status:EvEmojiLifecycle' && d.state === 'sent')?.ts, { timeout: 20_000 }).toBeTruthy();
       const phaseStatus = (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'status:EvEmojiLifecycle');
-      await expect.poll(() => posts.find(p => p.ts === phaseStatus.ts && p.text === '🧠 Thinking…'), { timeout: 25_000 }).toBeTruthy();
+      // A delayed idle callback must not settle the actual in-flight ACP turn.
+      await rpc('fixtureLifecycle', { name: 'thread.idle', threadId: launched.threadId });
+      expect((await rpc('snapshot')).requests.find((r: any) => r.id === 'EvEmojiLifecycle').state).toBe('running');
+      expect((await rpc('snapshot')).deliveries.find((d: any) => d.id === phaseStatus.id).text).not.toContain('No answer shared');
+      // Start the phase after launch confirmation, so startup bookkeeping cannot
+      // race an instant first thought. Both transitions remain explicitly tested.
+      writeFileSync(activityBegin, 'thinking');
+      await expect.poll(() => posts.find(p => p.ts === phaseStatus.ts && p.text === '🧠 Thinking…'), { timeout: 40_000 }).toBeTruthy().catch(async error => {
+        const snapshot = await rpc('snapshot');
+        await testInfo.attach('activity-phase-diagnostics.json', { body: JSON.stringify({
+          posts: posts.filter(p => p.ts === phaseStatus.ts),
+          binding: snapshot.bindings.find((b: any) => b.threadId === launched.threadId),
+          request: snapshot.requests.find((r: any) => r.id === 'EvEmojiLifecycle'),
+          delivery: snapshot.deliveries.find((d: any) => d.id === phaseStatus.id),
+        }, null, 2), contentType: 'application/json' });
+        throw error;
+      });
+      writeFileSync(activityAdvance, 'working');
       const thinkingIndex = posts.findIndex(p => p.ts === phaseStatus.ts && p.text === '🧠 Thinking…');
       await expect.poll(() => posts.slice(thinkingIndex + 1).find(p => p.ts === phaseStatus.ts && p.text.startsWith('⚙️ ')), { timeout: 25_000 }).toBeTruthy();
       expect((await signedEvent({...mention, event_id: 'EvEmojiStop', event: {...mention.event, ts: `${Math.floor(Date.now()/1000)}.444444`, text: '<@U999999> stop'}})).status).toBe(200);
@@ -320,15 +392,31 @@ ${hangBranch}`));
       expect((await signedEvent(cleanupEvent)).status).toBe(200);
       await expect.poll(async () => (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'status:EvCleanAnswer' && d.state === 'sent')?.ts, { timeout: 20_000 }).toBeTruthy();
       const cleanupStatus = (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'status:EvCleanAnswer');
-      expect(await rpc('fixturePublish', { threadId: launched.threadId, projectId: defaultProject.id, text: 'Clean answer without completion chatter.' })).toEqual({ state: 'queued' });
+      const formattedAnswer = '**Architecture ready.**\n\n- `UI` sends requests.\n- **Reasoner** coordinates work.\n\n```python\nwork()\n```\n\n```mermaid\nflowchart LR\n  UI --> Reasoner\n```';
+      expect(await rpc('fixturePublish', { threadId: launched.threadId, projectId: defaultProject.id, text: formattedAnswer })).toEqual({ state: 'queued' });
       await expect.poll(async () => (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'status:EvCleanAnswer')?.state, { timeout: 20_000 }).toBe('removed');
       const cleanAnswer = (await rpc('snapshot')).deliveries.find((d: any) => d.id === 'answer:EvCleanAnswer');
       expect(cleanAnswer.state).toBe('sent');
+      expect(cleanAnswer).toMatchObject({ imageRetries: 1, presentation: 'rich' });
+      expect(imageBlockRejections).toBe(1);
+      expect(posts.some(p => p.ts === cleanupStatus.ts && p.text.endsWith('🎨 Formatting in process…'))).toBe(true);
+      const formattedPost = posts.find(p => postedTs.get(p) === cleanAnswer.ts);
+      expect(formattedPost.blocks[0].type).toBe('rich_text');
+      expect(formattedPost.blocks[0].elements[0].elements[0]).toEqual({ type: 'text', text: 'Architecture ready.', style: { bold: true } });
+      expect(formattedPost.blocks[0].elements.some((e: any) => e.type === 'rich_text_list')).toBe(true);
+      expect(formattedPost.blocks[0].elements.filter((e: any) => e.type === 'rich_text_preformatted').map((e: any) => e.elements[0].text)).toEqual(['work()']);
+      expect(formattedPost.blocks).toContainEqual(expect.objectContaining({ type: 'image', slack_file: { id: 'FDIAGRAM1' } }));
+      expect(diagramUploads).toHaveLength(1);
+      expect(JSON.stringify(formattedPost.blocks)).not.toContain('flowchart LR');
+      expect(JSON.stringify(formattedPost.blocks)).not.toMatch(/PRIVATE_REASONING|PRIVATE_TOOL|\*\*|```/);
+      expect(JSON.stringify(formattedPost)).not.toContain('Formatting in process');
+      expect(posts.filter(p => postedTs.get(p) === cleanAnswer.ts)).toHaveLength(1);
       expect(deletions).toContainEqual({ channel: channel.id, ts: cleanupStatus.ts });
       expect(deletions.some(d => d.ts === cleanAnswer.ts)).toBe(false);
       expect(JSON.stringify(posts)).not.toContain('Turn ended');
-      expect(await rpc('fixturePublish', { threadId: launched.threadId, projectId: defaultProject.id, text: 'Revised clean answer.' })).toEqual({ state: 'queued' });
-      await expect.poll(() => posts.find(p => p.ts === cleanAnswer.ts && p.text === 'Revised clean answer.'), { timeout: 20_000 }).toBeTruthy();
+      expect(await rpc('fixturePublish', { threadId: launched.threadId, projectId: defaultProject.id, text: formattedAnswer.replace('Architecture ready.', 'Revised clean answer.') })).toEqual({ state: 'queued' });
+      await expect.poll(() => posts.find(p => p.ts === cleanAnswer.ts && p.text.includes('Revised clean answer.')), { timeout: 20_000 }).toBeTruthy();
+      expect(diagramUploads).toHaveLength(1);
       expect(deletions.filter(d => d.ts === cleanupStatus.ts)).toHaveLength(1);
 
       expect(JSON.stringify(posts)).not.toMatch(/PRIVATE_REASONING_FIXTURE|PRIVATE_TOOL_FIXTURE/);
@@ -545,9 +633,10 @@ ${hangBranch}`));
       expect((await signedEvent({ type: 'view_submission', team: { id: identity.team }, api_app_id: identity.app, user: { id: 'U123456' }, view: { id: questionViewId, callback_id: questionView.callback_id, private_metadata: questionView.private_metadata, state: { values: { q0: { choice: { selected_option: { value: '0' } } } } } } })).body).toEqual({ response_action: 'clear' });
       await expect.poll(async () => (await rpc('snapshot')).requests.some((r: any) => r.id.startsWith('form:') && r.state === 'settled'), { timeout: 30_000 }).toBe(true);
       expect((await rpc('snapshot')).bindings).toHaveLength(4);
-      expect(await rpc('publish', { threadId: privateBinding.threadId, projectId, text: 'Synthetic private chat result is ready.' })).toEqual({ state: 'queued' });
-      await expect.poll(async () => (await rpc('snapshot')).deliveries.find((d: any) => d.text === 'Synthetic private chat result is ready.')?.state).toBe('sent');
-      const result = (await rpc('snapshot')).deliveries.find((d: any) => d.text === 'Synthetic private chat result is ready.');
+      const privateDiagramAnswer = 'Synthetic private chat result is ready.\n\n```mermaid\nflowchart LR\n  Client --> Server\n```';
+      expect(await rpc('publish', { threadId: privateBinding.threadId, projectId, text: privateDiagramAnswer })).toEqual({ state: 'queued' });
+      await expect.poll(async () => (await rpc('snapshot')).deliveries.find((d: any) => d.text === privateDiagramAnswer)?.state, { timeout: 30_000 }).toBe('sent');
+      const result = (await rpc('snapshot')).deliveries.find((d: any) => d.text === privateDiagramAnswer);
       expect((await signedEvent(click('canvas_open', result, 'canvas-trigger'))).status).toBe(200);
       await expect.poll(() => modalViews.some(v => v.callback_id === 'zana_canvas_v1')).toBe(true);
       const canvasView = modalViews.find(v => v.callback_id === 'zana_canvas_v1');
@@ -556,6 +645,8 @@ ${hangBranch}`));
       await expect.poll(async () => (await rpc('snapshot')).surfaceLog.find((s: any) => s.id === canvasView.private_metadata)?.state, { timeout: 30_000 }).toBe('published');
       expect(canvases).toHaveLength(1); expect(canvases[0].channel_id).toBeUndefined();
       expect(canvases[0].document_content.markdown).toContain('Synthetic private chat result');
+      expect(canvases[0].document_content.markdown).toContain('![Diagram](https://test.slack.com/files/U999999/FDIAGRAM2/diagram.png)');
+      expect(canvases[0].document_content.markdown).not.toContain('flowchart LR');
       await expect(win.getByRole('link', { name: 'Open Canvas', exact: true })).toBeVisible();
       rejectCanvas = true;
       await rpc('publish', { threadId: privateBinding.threadId, projectId, text: 'Synthetic export failure trial.' });

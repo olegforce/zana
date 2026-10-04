@@ -1,18 +1,21 @@
 import type { ZccPluginApi } from "@zana-ai/zcc-plugin-sdk";
+import { piProviderDeclaration } from "./src/declaration.js";
 
 /**
  * First-party Pi provider plugin (see
  * plans/agent-provider-plugin-surface.md). The
  * declaration is the only source of this provider: with the core catalog seed
  * deleted, disabling this plugin removes the provider. The bridge itself is
- * daemon-bundled (`bb-pi-bridge.mjs`); this plugin does not ship a `zcc.host`
+ * daemon-bundled (`zcc-pi-bridge.mjs`); this plugin does not ship a `zcc.host`
  * artifact.
  */
-export default function plugin(bb: ZccPluginApi) {
-  bb.agents.experimental_registerProvider({
+export default function plugin(zcc: ZccPluginApi) {
+  zcc.agents.experimental_registerProvider({
     id: "pi",
     displayName: "Pi",
     icon: "./icons/pi.svg",
+    env: piProviderDeclaration().env,
+    maintenance: { health: true, usage: false, installation: true },
     capabilities: {
       supportsServiceTier: false,
       supportsNativeUserQuestion: false,

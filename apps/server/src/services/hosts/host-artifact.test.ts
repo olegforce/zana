@@ -79,9 +79,9 @@ describe('host-artifact locator', () => {
     const resources = mkdtempSync(join(tmpdir(), 'zcc-host-bridge-'));
     const bundled = join(resources, 'host-bridge');
     mkdirSync(bundled);
-    writeFileSync(join(bundled, 'bb-provider-bridge-worker.mjs'), 'worker\n');
+    writeFileSync(join(bundled, 'zcc-provider-bridge-worker.mjs'), 'worker\n');
     writeFileSync(join(bundled, 'zcc-plugin-host-worker.mjs'), 'export const pluginWorker = true;');
-    writeFileSync(join(bundled, 'bb-pi-bridge.mjs'), 'pi\n');
+    writeFileSync(join(bundled, 'zcc-pi-bridge.mjs'), 'pi\n');
     expect(resolvePrebuiltJoinBundleDir({
       here: join('/missing', 'out', 'main'),
       cwd: '/',
@@ -108,9 +108,9 @@ describe('host-artifact locator', () => {
     const bundled = join(resources, 'host-bridge');
     mkdirSync(bundled);
     writeFileSync(join(bundled, 'join.mjs'), 'export const join = true;\n');
-    writeFileSync(join(bundled, 'bb-provider-bridge-worker.mjs'), 'export const worker = true;\n');
+    writeFileSync(join(bundled, 'zcc-provider-bridge-worker.mjs'), 'export const worker = true;\n');
     writeFileSync(join(bundled, 'zcc-plugin-host-worker.mjs'), 'export const pluginWorker = true;');
-    writeFileSync(join(bundled, 'bb-pi-bridge.mjs'), 'export const pi = true;\n');
+    writeFileSync(join(bundled, 'zcc-pi-bridge.mjs'), 'export const pi = true;\n');
     const artifact = await resolveHostArtifact(
       { ...process.env, ZCC_HOST_ARTIFACT: '' },
       { here: join(resources, 'out', 'main'), cwd: '/', resourcesPath: resources }
@@ -120,8 +120,8 @@ describe('host-artifact locator', () => {
     const unpack = mkdtempSync(join(tmpdir(), 'zcc-prebuilt-unpack-'));
     expect(spawnSync('tar', ['-xzf', artifact.tarballPath, '-C', unpack]).status).toBe(0);
     expect(readFileSync(join(unpack, 'join.mjs'), 'utf8')).toBe('export const join = true;\n');
-    expect(existsSync(join(unpack, 'bb-provider-bridge-worker.mjs'))).toBe(true);
-    expect(existsSync(join(unpack, 'bb-pi-bridge.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-provider-bridge-worker.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-pi-bridge.mjs'))).toBe(true);
     expect(existsSync(join(unpack, 'zcc-plugin-host-worker.mjs'))).toBe(true);
     expect(JSON.parse(readFileSync(join(unpack, 'package.json'), 'utf8')).bin).toEqual({
       'zcc-host': 'join.mjs'
@@ -149,15 +149,15 @@ describe('host-artifact', () => {
 
   it('packs the provider-bridge worker so remotes do not resolve workspace packages', async () => {
     const unpack = await unpackArtifact();
-    expect(existsSync(join(unpack, 'bb-provider-bridge-worker.mjs'))).toBe(true);
-    expect(existsSync(join(unpack, 'bb-pi-bridge.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-provider-bridge-worker.mjs'))).toBe(true);
+    expect(existsSync(join(unpack, 'zcc-pi-bridge.mjs'))).toBe(true);
     expect(existsSync(join(unpack, 'zcc-plugin-host-worker.mjs'))).toBe(true);
 
     const joinLoad = isolatedNode([join(unpack, 'join.mjs')]);
     expect(joinLoad.status, joinLoad.stderr || joinLoad.stdout).toBe(0);
     expect(`${joinLoad.stderr}${joinLoad.stdout}`).not.toMatch(/Cannot find package '@zana-ai\//);
 
-    const workerUsage = isolatedNode([join(unpack, 'bb-provider-bridge-worker.mjs')]);
+    const workerUsage = isolatedNode([join(unpack, 'zcc-provider-bridge-worker.mjs')]);
     expect(workerUsage.status).not.toBe(0);
     expect(`${workerUsage.stderr}${workerUsage.stdout}`).toMatch(/provider bridge bootstrap usage/);
     expect(`${workerUsage.stderr}${workerUsage.stdout}`).not.toMatch(/Cannot find package '@zana-ai\//);
@@ -172,15 +172,15 @@ describe('host-artifact', () => {
       ''
     ].join('\n'));
     const workerStart = isolatedNode(
-      [join(unpack, 'bb-provider-bridge-worker.mjs'), bridge, 'plug', unpack],
+      [join(unpack, 'zcc-provider-bridge-worker.mjs'), bridge, 'plug', unpack],
       ''
     );
     expect(`${workerStart.stderr}${workerStart.stdout}`).not.toMatch(/Cannot find package '@zana-ai\//);
     expect(workerStart.status, workerStart.stderr || workerStart.stdout).toBe(0);
 
-    const piBridge = readFileSync(join(unpack, 'bb-pi-bridge.mjs'), 'utf8');
+    const piBridge = readFileSync(join(unpack, 'zcc-pi-bridge.mjs'), 'utf8');
     expect(piBridge.match(/^#!/gm) ?? []).toHaveLength(1);
-    const piCheck = isolatedNode(['--check', join(unpack, 'bb-pi-bridge.mjs')]);
+    const piCheck = isolatedNode(['--check', join(unpack, 'zcc-pi-bridge.mjs')]);
     expect(piCheck.status, piCheck.stderr || piCheck.stdout).toBe(0);
   }, 60_000);
 });

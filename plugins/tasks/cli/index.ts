@@ -554,7 +554,7 @@ function projectTable(
     folders.map((folder) => [folder.id, folder.name]),
   );
   return table(
-    ["PREFIX", "NAME", "FOLDER", "BB PROJECT", "ID"],
+    ["PREFIX", "NAME", "FOLDER", "ZCC PROJECT", "ID"],
     projects.map((project) => [
       project.prefix,
       project.name,

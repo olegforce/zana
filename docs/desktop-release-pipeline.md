@@ -19,6 +19,13 @@ directory operation while retaining file flushes and conflict checks. The native
 smoke probe loads Node built-ins through `process.getBuiltinModule` so it works
 in Electron's ESM main process.
 
+Every packaging path prepares compiled plugin runtimes in `out/packaged-plugins`.
+The package includes bundled server, app and PTY entries, prebuilt provider host
+artifacts, skills and declared runtime assets. Shipped providers validate these
+artifacts without recompiling retained source or requiring build dependencies.
+Provider startup, reload, corruption and recovery checks run against each
+packaged executable.
+
 Mac packages run the same boot/IPC smoke alongside packaged plugin authoring.
 Failed Mac checks retain a Playwright report per
 architecture, as the Windows job does.

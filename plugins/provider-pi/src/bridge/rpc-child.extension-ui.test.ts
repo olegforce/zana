@@ -1,5 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { PiRpcChild } from "./rpc-child.js";
+import { PiRpcChild, resolvePiLaunch } from "./rpc-child.js";
+
+it("accepts existing Pi command overrides, with ZCC values taking precedence", () => {
+  const legacy = { BB_PI_BRIDGE_COMMAND: "old-pi", BB_PI_BRIDGE_ARGS: '["old"]' };
+  expect(resolvePiLaunch(legacy)).toEqual({ command: "old-pi", args: ["old"] });
+  expect(resolvePiLaunch({ ...legacy, ZCC_PI_BRIDGE_COMMAND: "new-pi", ZCC_PI_BRIDGE_ARGS: '["new"]' })).toEqual({ command: "new-pi", args: ["new"] });
+  expect(() => resolvePiLaunch({ ...legacy, ZCC_PI_BRIDGE_ARGS: '[1]' })).toThrow("ZCC_PI_BRIDGE_ARGS");
+});
 
 function childScript(script: string): { command: string; args: string[] } {
   return { command: process.execPath, args: ["-e", script] };
@@ -7,11 +14,11 @@ function childScript(script: string): { command: string; args: string[] } {
 
 it("auto-cancels extension ui requests when no handler is installed", async () => {
   vi.stubEnv(
-    "BB_PI_BRIDGE_COMMAND",
+    "ZCC_PI_BRIDGE_COMMAND",
     process.execPath,
   );
   vi.stubEnv(
-    "BB_PI_BRIDGE_ARGS",
+    "ZCC_PI_BRIDGE_ARGS",
     JSON.stringify([
       "-e",
       [
@@ -53,8 +60,8 @@ it("forwards extension ui requests to the installed handler", async () => {
     "setTimeout(() => process.exit(), 50);",
   ].join("\n");
   const { command, args } = childScript(script);
-  vi.stubEnv("BB_PI_BRIDGE_COMMAND", command);
-  vi.stubEnv("BB_PI_BRIDGE_ARGS", JSON.stringify(args));
+  vi.stubEnv("ZCC_PI_BRIDGE_COMMAND", command);
+  vi.stubEnv("ZCC_PI_BRIDGE_ARGS", JSON.stringify(args));
   const child = new PiRpcChild({
     cwd: process.cwd(),
     env: process.env,
@@ -73,9 +80,9 @@ it("forwards extension ui requests to the installed handler", async () => {
 });
 
 it("respondToExtensionUi writes the response line to pi stdin", async () => {
-  vi.stubEnv("BB_PI_BRIDGE_COMMAND", process.execPath);
+  vi.stubEnv("ZCC_PI_BRIDGE_COMMAND", process.execPath);
   vi.stubEnv(
-    "BB_PI_BRIDGE_ARGS",
+    "ZCC_PI_BRIDGE_ARGS",
     JSON.stringify([
       "-e",
       [

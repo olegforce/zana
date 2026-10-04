@@ -643,7 +643,7 @@ describe("buildCodexConfig", () => {
     });
 
     expect(config).toMatchObject({
-      "shell_environment_policy.set.BB_THREAD_ID": "bb-thread-1",
+      "shell_environment_policy.set.ZCC_THREAD_ID": "bb-thread-1",
       "shell_environment_policy.set.PLUGIN_API_URL":
         "http://127.0.0.1:3334/plugins/example/auth",
       "shell_environment_policy.set.TEST_VAR": "123",

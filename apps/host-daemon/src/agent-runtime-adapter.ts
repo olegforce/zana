@@ -187,6 +187,7 @@ function toRuntimeBridgeLaunch(
       : launch.source;
   return {
     pluginId: launch.pluginId,
+    ...(launch.envPassthrough ? { envPassthrough: launch.envPassthrough } : {}),
     dataDir,
     source,
     capabilities: {

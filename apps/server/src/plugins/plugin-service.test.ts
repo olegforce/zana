@@ -12,6 +12,8 @@ import {
   toPluginAppSnapshot
 } from './plugin-service.js';
 import { containsNativeAddon } from './plugin-api.js';
+import { bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
+import { buildThreadExecutionOptions } from '../services/threads/thread-execution-options.js';
 import { PluginHostArtifactRegistry } from './plugin-host-artifact-registry.js';
 import { createPluginUninstalledStore, pluginUninstalledPath } from './plugin-uninstalled.js';
 
@@ -1492,6 +1494,48 @@ describe('host agent-tool source', () => {
 });
 
 describe('installBundledPlugin', () => {
+  it('retains unavailable provider identity, blocks launch, recovers and cleans up on disable', async () => {
+    const bundled = root();
+    const pluginDir = writePlugin(join(bundled, 'docs'), 'docs', `export default function(zcc) {
+      zcc.agents.experimental_registerProvider({ id: 'unavailable-fixture', displayName: 'Fixture',
+        capabilities: { fork: 'none', permissionModes: ['full'] },
+        models: { scope: 'host', fallback: [{ id: 'stale', displayName: 'Stale', supportedReasoningEfforts: [] }] }
+      });
+      zcc.rpc.method('must-not-run', () => true);
+    }`, { host: './host.ts' });
+    writeFileSync(join(pluginDir, 'host.ts'), 'export default { shipped: true };');
+    const { buildPluginHost } = await import('@zana-ai/zcc-plugin-build');
+    await buildPluginHost(pluginDir, '1.0.0');
+    const shipped = readFileSync(join(pluginDir, 'dist/host.js'));
+    writeFileSync(join(pluginDir, 'dist/host.js'), 'corrupted');
+    const artifacts = new PluginHostArtifactRegistry();
+    const service = createPluginService({ dataDir: root(), bundledRoot: bundled, pluginHostArtifacts: artifacts });
+    try {
+      expect((await service.install('builtin:docs')).status).toBe('degraded');
+      expect(getThreadProvider('unavailable-fixture')?.unavailableReason).toContain('digest');
+      expect(() => bridgeLaunchForProvider('unavailable-fixture', artifacts)).toThrow('Open Plugins');
+      const options = buildThreadExecutionOptions({ providerId: 'unavailable-fixture', availability: [] });
+      expect(options.providers).toContainEqual(expect.objectContaining({ id: 'unavailable-fixture', available: false }));
+      expect(options.models).toEqual([]);
+      expect(options.modelLoadError).toMatchObject({ code: 'provider_unavailable', detail: expect.stringContaining('Open Plugins') });
+      await service.reload('docs');
+      expect(getThreadProvider('unavailable-fixture')?.unavailableReason).toBeTruthy();
+      writeFileSync(join(pluginDir, 'dist/host.js'), shipped);
+      await service.reload('docs');
+      expect(service.get('docs')?.status).toBe('running');
+      expect(getThreadProvider('unavailable-fixture')?.unavailableReason).toBeUndefined();
+      expect(bridgeLaunchForProvider('unavailable-fixture', artifacts).source.kind).toBe('artifact');
+      // A bad replacement preserves the running provider generation.
+      writeFileSync(join(pluginDir, 'dist/host.js'), 'broken replacement');
+      await expect(service.reload('docs')).rejects.toThrow('digest');
+      expect(getThreadProvider('unavailable-fixture')?.unavailableReason).toBeUndefined();
+    } finally {
+      await service.disable('docs');
+      service.stop();
+    }
+    expect(getThreadProvider('unavailable-fixture')).toBeUndefined();
+  });
+
   it('returns null when the id is not a plugin package in the bundled root', async () => {
     expect(await installBundledPlugin('echo', { dataDir: root(), bundledRoot: root() })).toBeNull();
   });
@@ -1546,6 +1590,31 @@ describe('installBundledPlugin', () => {
     expect(snapshot?.path).toBe(join(pluginDir, 'dist', 'host.js'));
     await service.disable('hosty');
     expect(pluginHostArtifacts.get('hosty')).toBeUndefined();
+  });
+
+  it.each([false, true])('respects builtin source development on activation (enabled=%s)', async (watchBuiltinPluginSources) => {
+    const bundled = root();
+    const pluginDir = writePlugin(join(bundled, 'docs'), 'docs', undefined, { host: './host.ts' });
+    const { buildPluginHost } = await import('@zana-ai/zcc-plugin-build');
+    writeFileSync(join(pluginDir, 'host.ts'), 'export default { shipped: true };\n');
+    const built = await buildPluginHost(pluginDir, '1.0.0');
+    writeFileSync(join(pluginDir, 'host.ts'), watchBuiltinPluginSources
+      ? 'export default { development: true };\n'
+      : 'import value from "missing-build-dependency"; export default value;\n');
+    const pluginHostArtifacts = new PluginHostArtifactRegistry();
+    const service = createPluginService({ dataDir: root(), bundledRoot: bundled, pluginHostArtifacts, watchBuiltinPluginSources });
+    try {
+      const row = await service.install('builtin:docs');
+      expect(row.status).toBe('running');
+      const snapshot = pluginHostArtifacts.get('docs');
+      expect(snapshot).toBeDefined();
+      if (watchBuiltinPluginSources) expect(snapshot!.digest).not.toBe(built.artifactDigest);
+      else expect(snapshot!.digest).toBe(built.artifactDigest);
+      await service.reload('docs');
+      expect(service.get('docs')?.status).toBe('running');
+    } finally {
+      service.stop();
+    }
   });
 
   // The reload chain is a real fs.watch → 300ms debounce → esbuild buildApp/

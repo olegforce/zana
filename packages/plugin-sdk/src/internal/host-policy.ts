@@ -45,7 +45,7 @@ import type {
 /**
  * Shared registration policy for the real plugin host and the in-process fake.
  *
- * These rules decide whether `bb.*.register()` throws. The fake host must
+ * These rules decide whether `zcc.*.register()` throws. The fake host must
  * accept and reject the same names, schemas, and caps as production so plugin
  * unit tests are not lying about load-time behavior.
  */
@@ -57,7 +57,7 @@ export function pluginCliCollisionWarning(
   commandName: string,
 ): string | null {
   if (!RESERVED_BB_CLI_COMMANDS.includes(commandName)) return null;
-  return `CLI command "${commandName}" collides with core command "bb ${commandName}"; core keeps the short form. Use "bb plugin run ${pluginId}" to invoke this plugin.`;
+  return `CLI command "${commandName}" collides with core command "zcc ${commandName}"; core keeps the short form. Use "zcc plugin run ${pluginId}" to invoke this plugin.`;
 }
 
 /**
@@ -110,7 +110,7 @@ export const RPC_METHOD_PATTERN = /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/;
 // Service/schedule names appear in status text and plugin_schedules rows.
 export const BACKGROUND_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
-// CLI command names become `bb <name>` invocations.
+// CLI command names become `ZCC <name>` invocations.
 export const CLI_COMMAND_NAME_PATTERN = /^[a-z0-9-]+$/;
 
 // Agent tool names are shown to (and called by) the model.
@@ -901,7 +901,7 @@ const PROVIDER_MODEL_CATALOG_SCOPES = [
 
 /**
  * How far one `model/list` answer travels. Absent means `"workspace"`: a
- * bridge bb knows nothing about may read the workspace path, and probing per
+ * bridge ZCC knows nothing about may read the workspace path, and probing per
  * workspace is the answer that can only cost a redundant probe.
  */
 function validateProviderModelCatalogScope(
@@ -1116,7 +1116,7 @@ export const SERVER_DIRECT_AI_SERVICE_IDS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * Validate one `bb.experimental_aiServices.register` declaration the same
+ * Validate one `zcc.experimental_aiServices.register` declaration the same
  * way in the production host and the fake host. Throws on the first problem;
  * returns a normalized, frozen copy carrying only contract fields.
  */
@@ -1167,7 +1167,7 @@ export function validatePluginAiServiceDeclaration(
 
 /**
  * What an AI service binds to, decided at the
- * `bb.experimental_aiServices.register` call: the plugin's built `bb.host`
+ * `zcc.experimental_aiServices.register` call: the plugin's built `zcc.host`
  * artifact, or — when the plugin declares an entry that failed to build —
  * nothing yet, with the build problem. An unbound service is staged so the
  * factory completes; the load then fails on that problem before the staged
@@ -1179,9 +1179,9 @@ export type AiServiceHostBinding<THostArtifact> =
   | { readonly artifact: null; readonly problem: string };
 
 /**
- * The refusals a host makes at `bb.experimental_aiServices.register` before
+ * The refusals a host makes at `zcc.experimental_aiServices.register` before
  * it stages the declaration: a reserved server-direct id, and a plugin with
- * no `bb.host` entry for the service to run on. A plugin whose declared
+ * no `zcc.host` entry for the service to run on. A plugin whose declared
  * entry failed to build is not refused here: the service is staged unbound,
  * carrying the build problem, so the load fails on that problem — the
  * actionable one — after the factory instead of at this call, and a
@@ -1193,7 +1193,7 @@ export type AiServiceHostBinding<THostArtifact> =
  */
 export function assertAiServiceRegistrable<THostArtifact>(args: {
   id: string;
-  /** The plugin's built `bb.host` artifact, or null when it has none. */
+  /** The plugin's built `zcc.host` artifact, or null when it has none. */
   hostArtifact: THostArtifact | null;
   /** Why the artifact is missing when the plugin declared an entry that failed to build. */
   hostArtifactProblem: string | null;
@@ -1210,7 +1210,7 @@ export function assertAiServiceRegistrable<THostArtifact>(args: {
     return { artifact: null, problem: args.hostArtifactProblem };
   }
   throw new Error(
-    `AI service "${args.id}" needs a bb.host entry to run on: this plugin declares none`,
+    `AI service "${args.id}" needs a zcc.host entry to run on: this plugin declares none`,
   );
 }
 
@@ -1225,7 +1225,7 @@ export function providerAlreadyRegisteredMessage(id: string): string {
 }
 
 /**
- * Validate one `bb.providers.register` declaration. Plugin
+ * Validate one `zcc.providers.register` declaration. Plugin
  * sources are untyped at runtime, so every field is checked; the production
  * host and the fake host both call this, so they accept and reject provider
  * declarations identically. Throws a descriptive error on the first problem;
@@ -1389,11 +1389,11 @@ export function validatePluginProviderDeclaration(
         `provider "${id}" icon must be a non-blank string — a named host glyph ("Zap"), a plugin-relative path ("./icons/agent.svg"), or a declared icon ("<pluginId>/<name>")`,
       );
     }
-    // The `bb.branding.icon` forms plus one: a leading "./" means a
+    // The `zcc.branding.icon` forms plus one: a leading "./" means a
     // plugin-owned file and gets the escape rules; "<pluginId>/<name>" names
-    // an entry of the plugin's `bb.branding.experimental_icons` map (the host
+    // an entry of the plugin's `zcc.branding.experimental_icons` map (the host
     // checks the plugin id and the name at registration, since only it holds
-    // the manifest; `bb.branding.icon` itself refuses this form); anything
+    // the manifest; `zcc.branding.icon` itself refuses this form); anything
     // else names a host glyph. A path-shaped value that is neither would
     // otherwise be read as a glyph name that resolves to nothing.
     if (isPluginOwnedIconPath(declaration.icon)) {
@@ -1422,7 +1422,7 @@ export function validatePluginProviderDeclaration(
   });
   // Maintenance support: an omitted object or key means the bridge does not
   // implement that request. Filled here once, then an explicit boolean
-  // everywhere inside bb.
+  // everywhere inside zcc.
   const maintenance = declaration.maintenance ?? {};
   if (typeof maintenance !== "object" || maintenance === null) {
     throw new Error(`provider "${id}" maintenance must be an object`);
@@ -1892,7 +1892,7 @@ const RENAMED_AGENT_TOOL_FIELDS: ReadonlyMap<string, string> = new Map([
  * rule configure() output follows in the plugin service). The production
  * host and the fake host both call this before parsing `presentation`, so
  * a registration built against an older SDK fails a plugin's own unit test
- * with the message bb would give it.
+ * with the message ZCC would give it.
  */
 export function rejectStaleAgentToolFields(
   toolName: string,
@@ -1920,7 +1920,7 @@ export function rejectStaleAgentToolFields(
  * a plugin's object cannot smuggle prototypes or extra markup into the
  * persisted row. Labels share the status-label length cap. The production
  * host and the fake host both call this, so a presentation that registers
- * in a plugin unit test registers in bb, and one bb rejects is rejected
+ * in a plugin unit test registers in ZCC, and one ZCC rejects is rejected
  * with the same message.
  */
 export function parsePluginAgentToolPresentation(
@@ -2303,9 +2303,9 @@ function isResponseLike(value: unknown): value is Response {
 /**
  * The one rule for a namespaced glyph (`"<pluginId>/<name>"`) wherever a
  * plugin may reference its own declared icons — a tool presentation at
- * `bb.agents.registerTool`, a provider icon at `bb.providers.register`, and a
+ * `zcc.agents.registerTool`, a provider icon at `zcc.providers.register`, and a
  * row presentation at ingest: the plugin id must be the emitting plugin's
- * and the name must be in its `bb.branding.experimental_icons` map. The
+ * and the name must be in its `zcc.branding.experimental_icons` map. The
  * server and the fake plugin host apply it from here, so a registration the
  * fake accepts is one the server accepts.
  *
@@ -2328,7 +2328,7 @@ export function undeclaredIconProblem(
   return null;
 }
 
-/** `bb.providers.register` refusal for an icon {@link undeclaredIconProblem} rejects. */
+/** `zcc.providers.register` refusal for an icon {@link undeclaredIconProblem} rejects. */
 export function providerIconRefusalMessage(
   providerId: string,
   problem: string,
@@ -2336,7 +2336,7 @@ export function providerIconRefusalMessage(
   return `provider "${providerId}" icon ${problem}`;
 }
 
-/** `bb.agents.registerTool` refusal for a glyph {@link undeclaredIconProblem} rejects. */
+/** `zcc.agents.registerTool` refusal for a glyph {@link undeclaredIconProblem} rejects. */
 export function agentToolIconRefusalMessage(
   toolName: string,
   problem: string,
@@ -2345,12 +2345,12 @@ export function agentToolIconRefusalMessage(
 }
 
 /**
- * `bb.providers.register` refusal for a plugin whose manifest declares no
- * `bb.host` entry: a declaration is metadata, and the bridge it runs on is
+ * `zcc.providers.register` refusal for a plugin whose manifest declares no
+ * `zcc.host` entry: a declaration is metadata, and the bridge it runs on is
  * that entry.
  */
 export function providerWithoutBridgeMessage(providerId: string): string {
-  return `provider "${providerId}" has no bridge to run on: this plugin declares no "bb.host" entry in its manifest`;
+  return `provider "${providerId}" has no bridge to run on: this plugin declares no "zcc.host" entry in its manifest`;
 }
 
 /**

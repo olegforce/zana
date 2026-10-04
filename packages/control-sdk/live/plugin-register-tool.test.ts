@@ -5,7 +5,7 @@ import { Zcc } from '../src/client.js';
 
 const enabled = liveEnabled();
 const TOOL_NAME = 'ask_user_question';
-const BRIDGE_NAME = `mcp__bb-bridge__${TOOL_NAME}`;
+const BRIDGE_NAME = `mcp__zcc__${TOOL_NAME}`;
 const PLUGIN_ID = 'ask-user-question';
 const TIMEOUT_MS = 120_000;
 
@@ -28,6 +28,8 @@ function isRegisterToolCall(value: unknown): boolean {
   return tool === TOOL_NAME
     || tool === BRIDGE_NAME
     || tool.endsWith(`__${TOOL_NAME}`)
+    || title.includes('zcc MCP Server')
+    // Existing installed providers can still describe their old bridge.
     || title.includes('bb-bridge MCP Server');
 }
 
@@ -51,7 +53,7 @@ async function loadPlugins(zcc: Zcc): Promise<Array<{ id?: string; status?: stri
   return Array.isArray(listed) ? listed : listed.plugins ?? [];
 }
 
-describe.skipIf(!enabled)('live registerTool via bb-bridge', () => {
+describe.skipIf(!enabled)('live registerTool via zcc', () => {
   it('spawns a conversation thread that calls ask_user_question', async () => {
     const zcc = await Zcc.connect();
     try {
@@ -109,7 +111,7 @@ describe.skipIf(!enabled)('live registerTool via bb-bridge', () => {
   });
 });
 
-describe.skipIf(enabled)('live registerTool via bb-bridge (gated)', () => {
+describe.skipIf(enabled)('live registerTool via zcc (gated)', () => {
   it('does not run without ZCC_LIVE_CONTROL=1', () => {
     expect(liveEnabled()).toBe(false);
   });

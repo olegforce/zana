@@ -14,7 +14,9 @@ export const SELF_UPDATE_MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
 export const SELF_UPDATE_MAX_BYTES = 16 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 30_000;
-const FILES = new Set(['package.json', 'join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']);
+const FILES = new Set(['package.json', 'join.mjs', 'zcc-provider-bridge-worker.mjs', 'zcc-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']);
+const LEGACY_FILES = new Set(['package.json', 'join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']);
+const ALLOWED_FILES = new Set([...FILES, ...LEGACY_FILES]);
 interface UpdateAttempt { attemptedAt: number; attemptCount: number; protocolVersion: number }
 interface PendingUpdate { entry: string; backup: string; generation: string }
 export type ProtocolSelfUpdateResult = 'failed' | 'skipped' | 'updated' | 'backoff';
@@ -109,11 +111,11 @@ async function update(options: Options): Promise<ProtocolSelfUpdateResult> {
     await list({ file: archive, strict: true, onReadEntry(entry) {
       // macOS tar may include AppleDouble metadata. Never extract it.
       if (entry.path.startsWith('._') && entry.type === 'File') return;
-      if (entry.type !== 'File' || !FILES.has(entry.path) || seen.has(entry.path)) invalid = true;
+      if (entry.type !== 'File' || !ALLOWED_FILES.has(entry.path) || seen.has(entry.path)) invalid = true;
       seen.add(entry.path);
     } });
-    if (invalid || [...FILES].some(file => !seen.has(file))) throw new Error('Invalid host update archive entries');
-    await extract({ file: archive, cwd: stage, strict: true, filter: path => FILES.has(path), noChmod: true });
+    if (invalid || !([FILES, LEGACY_FILES].some(files => seen.size === files.size && [...files].every(file => seen.has(file))))) throw new Error('Invalid host update archive entries');
+    await extract({ file: archive, cwd: stage, strict: true, filter: path => ALLOWED_FILES.has(path), noChmod: true });
     await (options.validate ?? validateHostBundle)(join(stage, 'join.mjs'), remote);
     const entry = 'join.mjs';
     const backup = `.previous-${randomUUID()}.mjs`;

@@ -77,7 +77,7 @@ export const threadForkParamsSchema = z
     /**
      * Absent means fork at the tip. Bridges whose handshake advertises
      * `fork: "tip"` reject a request carrying a checkpoint instead of
-     * silently cloning more history than the bb timeline shows.
+     * silently cloning more history than the zcc timeline shows.
      */
     sourceProviderCheckpointId: z.string().min(1).optional(),
   })

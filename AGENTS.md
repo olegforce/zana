@@ -448,6 +448,22 @@ Core rules. Rationale: `docs/review-consensus-2026-06.md`.
   on a lone `` ` `` in code, so avoid stray backtick chars in that file's
   non-template-literal code (the guard test documents this).
 
+- **Packaged plugins ship compiled runtimes.** `before-pack-plugins.mjs` runs
+  for every electron-builder packaging path, producing `out/packaged-plugins`
+  with bundled server/app/pty entries, prebuilt `dist/host.js` + checksum,
+  skills, branding and explicitly declared `zcc.extra.runtimeAssets`. Never
+  copy plugin sources or node_modules into the app. Runtime assets referenced
+  by URL must be declared (Salesforce's `playground/dist` is one example).
+  `loadPluginHostArtifactSnapshot` validates shipped bridges without rebuilding,
+  even for older packages that retained source. Path installs rebuild; builtin
+  rebuilding requires `watchBuiltinPluginSources` (managed development).
+  A failed bridge retains unavailable provider declarations for existing threads,
+  clears usable model choices and directs users to Plugins. Failed replacements
+  preserve the last running generation. Run
+  `pnpm test:e2e -- e2e/packaged-provider-startup.spec.ts` on these seams: it
+  covers retained source, compiled runtimes, corruption and recovery. Mac and
+  Windows release gates also run it against their actual packaged executable.
+
 - **Plugin authoring must work outside the checkout and in live ZCC.** The CLI
   package's `scripts/postbuild.mjs` includes esbuild's installed platform binaries
   and the SDK app facade/types in `dist/`; `extraResources` copies that complete

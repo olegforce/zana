@@ -50,7 +50,7 @@ import {
   buildPiTurnOptions,
   type PiSessionParams,
 } from "../session-params.js";
-import { BB_PI_EXTENSION_SOURCE } from "./bb-pi-extension.js";
+import { ZCC_PI_EXTENSION_SOURCE } from "./zcc-pi-extension.js";
 import {
   createExtensionUiCoordinator,
   type ExtensionUiCoordinator,
@@ -227,7 +227,7 @@ function requireScratchDir(): string {
   if (scratchDir === null) {
     scratchDir = join(
       tmpdir(),
-      `bb-pi-bridge-${process.pid}-${Math.random().toString(16).slice(2)}`,
+      `zcc-pi-bridge-${process.pid}-${Math.random().toString(16).slice(2)}`,
     );
     scratchDirIsPrivate = true;
     mkdirSync(scratchDir, { recursive: true });
@@ -237,8 +237,8 @@ function requireScratchDir(): string {
 
 function requireExtensionPath(): string {
   if (extensionPath === null) {
-    const path = join(requireScratchDir(), "bb-pi-extension.mjs");
-    writeFileSync(path, BB_PI_EXTENSION_SOURCE, "utf8");
+    const path = join(requireScratchDir(), "zcc-pi-extension.mjs");
+    writeFileSync(path, ZCC_PI_EXTENSION_SOURCE, "utf8");
     extensionPath = path;
   }
   return extensionPath;
@@ -771,6 +771,12 @@ async function constructPiThreadSession(
   providerThreadId: string,
   params: PiSessionParams,
 ): Promise<ThreadSession> {
+  const gate = await getPiInstallGate();
+  if (!gate.ok) {
+    throw new Error(gate.status === "not_installed"
+      ? "Could not find the pi CLI on this host. Install @earendil-works/pi-coding-agent and retry."
+      : (gate.statusMessage ?? "Pi is not supported on this host."));
+  }
   const sessionSerial = nextSessionSerial();
   const sessionOptions = await buildSessionOptions({
     params,

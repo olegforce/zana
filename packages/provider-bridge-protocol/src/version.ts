@@ -1,5 +1,5 @@
 /**
- * The bb Provider Bridge Protocol version.
+ * The zcc Provider Bridge Protocol version.
  *
  * Negotiated in both directions during `initialize`. Bump only for changes an
  * older bridge or runtime cannot tolerate: removing a method, changing the

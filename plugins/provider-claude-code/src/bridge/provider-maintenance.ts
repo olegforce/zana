@@ -51,7 +51,7 @@ const claudeAccountSchema = z.object({
 });
 
 function claudeExecutable(): string {
-  return process.env.BB_CLAUDE_CODE_EXECUTABLE?.trim() || "claude";
+  return process.env.ZCC_CLAUDE_CODE_EXECUTABLE?.trim() || process.env.BB_CLAUDE_CODE_EXECUTABLE?.trim() || "claude";
 }
 
 function claudeDistTags(value: string | null): {

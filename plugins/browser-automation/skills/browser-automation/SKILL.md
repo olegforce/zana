@@ -1,6 +1,6 @@
 ---
 name: browser-automation
-description: Use the Browser Automation BB plugin to inspect and automate persistent browser pages in an explicit desktop or local headless session. Use for browser navigation, snapshots, clicking, forms, and verification screenshots.
+description: Use the Browser Automation ZCC plugin to inspect and automate persistent browser pages in an explicit desktop or local headless session. Use for browser navigation, snapshots, clicking, forms, and verification screenshots.
 ---
 
 Use `zcc browser-automation`. Open one session, retain its session ID, then inspect,

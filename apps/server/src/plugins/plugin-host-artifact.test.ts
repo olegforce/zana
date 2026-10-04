@@ -109,8 +109,8 @@ describe('loadPluginHostArtifactSnapshot', () => {
     expect(await readFile(join(dir, 'dist', 'host.js'), 'utf8')).toBe(prebuilt);
   });
 
-  it('does not rebuild an npm-installed plugin even when source is present', async () => {
-    const dir = await writePlugin('export default { rebuilt: true };\n');
+  it.each(['npm', 'builtin'] as const)('loads a shipped %s artifact with source present but dependencies absent', async (sourceKind) => {
+    const dir = await writePlugin('import value from "missing-build-dependency"; export default value;\n');
     await mkdir(join(dir, 'dist'), { recursive: true });
     const bytes = Buffer.from('export default "prebuilt";\n');
     const digest = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
@@ -120,16 +120,25 @@ describe('loadPluginHostArtifactSnapshot', () => {
       pluginId: 'from-npm',
       rootDir: dir,
       hostEntry: './host.ts',
-      sourceKind: 'npm',
+      sourceKind,
       zccVersion: '1.0.0'
     });
     expect(snapshot?.digest).toBe(digest);
     expect(await readFile(join(dir, 'dist', 'host.js'), 'utf8')).toBe('export default "prebuilt";\n');
   });
 
+  it('rebuilds builtin source only when development rebuilding is enabled', async () => {
+    const dir = await writePlugin('export default { development: true };\n');
+    const snapshot = await loadPluginHostArtifactSnapshot({
+      pluginId: 'development-fixture', rootDir: dir, hostEntry: './host.ts',
+      sourceKind: 'builtin', rebuildBuiltin: true, zccVersion: '1.0.0'
+    });
+    expect(snapshot?.byteLength).toBeGreaterThan(0);
+    expect(await readFile(snapshot!.path, 'utf8')).toContain('development: true');
+  });
+
   it('rejects a digest mismatch', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'zcc-host-mismatch-'));
-    tempDirs.push(dir);
+    const dir = await writePlugin('import value from "missing-build-dependency"; export default value;\n');
     await mkdir(join(dir, 'dist'), { recursive: true });
     await writeFile(join(dir, 'dist', 'host.js'), 'export default 1;\n');
     await writeFile(join(dir, 'dist', 'host.meta.json'), JSON.stringify({ artifactDigest: 'ab'.repeat(32) }));
@@ -137,21 +146,20 @@ describe('loadPluginHostArtifactSnapshot', () => {
       loadPluginHostArtifactSnapshot({
         pluginId: 'broken',
         rootDir: dir,
-        hostEntry: './src/bridge/bridge.ts',
+        hostEntry: './host.ts',
         sourceKind: 'builtin',
         zccVersion: '1.0.0'
       })
     ).rejects.toThrow(/has digest/u);
   });
 
-  it('rejects a missing packaged artifact', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'zcc-host-missing-'));
-    tempDirs.push(dir);
+  it('rejects a missing packaged artifact instead of compiling retained source', async () => {
+    const dir = await writePlugin('import value from "missing-build-dependency"; export default value;\n');
     await expect(
       loadPluginHostArtifactSnapshot({
         pluginId: 'missing',
         rootDir: dir,
-        hostEntry: './src/bridge/bridge.ts',
+        hostEntry: './host.ts',
         sourceKind: 'builtin',
         zccVersion: '1.0.0'
       })

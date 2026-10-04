@@ -82,7 +82,7 @@ export interface AgentRuntimeProcessExitInfo {
 
 /**
  * A bridge's `provider/recovery` notification, stamped with the provider it
- * came from. `threadId` is the bb thread for session-scoped hints and absent
+ * came from. `threadId` is the zcc thread for session-scoped hints and absent
  * for provider-wide ones (`authRequired`, account-level `rateLimited`).
  */
 export interface AgentRuntimeProviderRecoveryHint {
@@ -131,15 +131,15 @@ export interface AgentRuntimeOptions {
   skillRoots?: readonly AgentRuntimeSkillRoot[];
 
   /** Called when a provider emits a translated event.
-   *  Every event has `threadId` (bb ID) and `providerThreadId` (provider's internal ID). */
+   *  Every event has `threadId` (zcc ID) and `providerThreadId` (provider's internal ID). */
   onEvent: (event: ThreadEvent) => void;
 
   /** Called when a provider needs to execute a tool.
-   *  `threadId` is always the BB thread id and `providerThreadId` is always present. */
+   *  `threadId` is always the ZCC thread id and `providerThreadId` is always present. */
   onToolCall: (request: ToolCallRequest) => Promise<ToolCallResponse>;
 
   /** Called when a provider pauses for user permission or approval.
-   *  The runtime converts provider-native requests into bb's shared pending-interaction contract. */
+   *  The runtime converts provider-native requests into zcc's shared pending-interaction contract. */
   onInteractiveRequest?: (
     request: PendingInteractionCreate,
   ) => Promise<PendingInteractionResolution>;
@@ -211,7 +211,7 @@ export interface EnsureProviderArgs {
   bridgeLaunch?: AgentRuntimeBridgeLaunch;
   /**
    * Providers with thread-scoped processes use this to start the process for a
-   * specific bb thread. Omit it for provider-scoped maintenance work such as
+   * specific zcc thread. Omit it for provider-scoped maintenance work such as
    * model listing.
    */
   forThreadId?: string;
@@ -465,7 +465,7 @@ export interface AgentRuntime {
   getProviderSession(threadId: string): AgentRuntimeProviderSession | null;
 
   /**
-   * Stops idle live provider sessions without deleting bb thread state or
+   * Stops idle live provider sessions without deleting zcc thread state or
    * provider history. The next turn must resume from the persisted provider
    * thread id.
    */

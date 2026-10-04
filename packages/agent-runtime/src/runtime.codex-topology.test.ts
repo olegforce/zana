@@ -84,8 +84,8 @@ describe("codex process topology", () => {
         workspacePath: workspaceDir,
         env: {
           ...record.env,
-          BB_CODEX_BRIDGE_APP_SERVER_COMMAND: process.execPath,
-          BB_CODEX_BRIDGE_APP_SERVER_ARGS: JSON.stringify([
+          ZCC_CODEX_BRIDGE_APP_SERVER_COMMAND: process.execPath,
+          ZCC_CODEX_BRIDGE_APP_SERVER_ARGS: JSON.stringify([
             fakeAppServerPath,
             scriptPath,
           ]),

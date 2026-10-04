@@ -1,14 +1,19 @@
 import type { PluginAgentsViewProps, PluginFleetMember } from '@zana-ai/zcc-plugin-sdk/app';
 export const CITY_WIDTH = 1120, CITY_HEIGHT = 775, BLOCK = 340;
 const STYLES = [
-  { w: 176, d: 112, color: 'purple', variant: 0 },
-  { w: 160, d: 100, color: 'blue', variant: 1 },
-  { w: 132, d: 92, color: 'mint', variant: 2 }
+  { color: 'purple', variant: 0 },
+  { color: 'blue', variant: 1 },
+  { color: 'mint', variant: 2 }
 ] as const;
 export const STATUS_LABELS = { working: 'Working', 'needs-you': 'Needs you', idle: 'Idle', done: 'Done', error: 'Error', unknown: 'Unknown' };
 export type StatusFilter = 'all' | keyof typeof STATUS_LABELS;
-export function floors(count: number): number { return count <= 2 ? 1 : count <= 5 ? 2 : count <= 10 ? 3 : count <= 20 ? 5 : 6; }
-export function buildingHeight(count: number): number { return floors(count) * 24 + 52; }
+export function floors(count: number): number { return count <= 1 ? 1 : count < 5 ? 2 : count <= 10 ? 7 : count <= 20 ? 9 : 11; }
+export function buildingHeight(count: number): number { return count <= 1 ? 64 : floors(count) * 24 + 52; }
+export function buildingForm(count: number) {
+  return count <= 1 ? { form: 'house' as const, w: 142, d: 100 }
+    : count < 5 ? { form: 'office' as const, w: 160, d: 100 }
+      : { form: 'tower' as const, w: 198, d: 130 };
+}
 export function projectCity(props: Pick<PluginAgentsViewProps, 'projects' | 'members' | 'schedules' | 'executions' | 'searchQuery'>) {
   const groups = new Map<string, PluginFleetMember[]>();
   for (const member of props.members) {
@@ -17,17 +22,17 @@ export function projectCity(props: Pick<PluginAgentsViewProps, 'projects' | 'mem
     groups.set(member.projectId, list);
   }
   // Keep project order independent of activity; buildings never swap lots on a status change.
-  return props.projects.filter((p) => !props.searchQuery || p.name.toLowerCase().includes(props.searchQuery.toLowerCase()) || groups.has(p.id)
-    || props.schedules.some((s) => s.projectId === p.id) || props.executions.some((e) => e.projectId === p.id))
+  return props.projects.filter((p) => groups.get(p.id)?.some((m) => m.live) || props.schedules.some((s) => s.projectId === p.id))
     .map((p) => {
     const members = groups.get(p.id) ?? [];
-    return { ...p, members, count: members.filter((m) => m.live).length,
+    const schedules = props.schedules.filter((s) => s.projectId === p.id);
+    return { ...p, members, schedules, count: members.filter((m) => m.live).length,
       working: members.filter((m) => m.status === 'working').length,
       needs: members.filter((m) => m.status === 'needs-you').length };
   });
 }
 export type CityProject = ReturnType<typeof projectCity>[number];
-export type CityBuilding = CityProject & { u: number; v: number; lot: number } & typeof STYLES[number];
+export type CityBuilding = CityProject & { u: number; v: number; lot: number } & typeof STYLES[number] & ReturnType<typeof buildingForm>;
 /** Preserve occupied plots across insertion, reordering and activity changes. Reuse vacant plots. */
 export function reconcileLots(previous: ReadonlyMap<string, number>, projects: readonly { id: string }[]): Map<string, number> {
   const ids = new Set(projects.map((p) => p.id));
@@ -49,7 +54,7 @@ export function gridPlot(index: number) {
 export function cityBuildings(projects: CityProject[], lots: ReadonlyMap<string, number>): CityBuilding[] {
   return projects.map((p, i) => {
     const lot = lots.get(p.id) ?? i, { col, row } = gridPlot(lot + 1);
-    return { ...p, lot, u: col * BLOCK + 62, v: row * BLOCK + 82, ...STYLES[lot % STYLES.length] };
+    return { ...p, lot, u: col * BLOCK + 62, v: row * BLOCK + 82, ...STYLES[lot % STYLES.length], ...buildingForm(p.count) };
   });
 }
 export const projectPoint = (u: number, v: number, z = 0): [number, number] => [(u - v) * .72, (u + v) * .35 - z];
@@ -57,7 +62,9 @@ export function cityLayout(buildings: CityBuilding[], viewportWidth = CITY_WIDTH
   let cols = 2, rows = 1;
   for (const p of buildings) { cols = Math.max(cols, Math.floor(p.u / BLOCK) + 1); rows = Math.max(rows, Math.floor(p.v / BLOCK) + 1); }
   const width = cols * BLOCK + 20, frontage = rows * BLOCK, depth = frontage + 215;
-  const minX = -depth * .72, maxX = width * .72, minY = -140, maxY = (width + depth) * .35 + 25;
+  const minX = -depth * .72, maxX = width * .72, maxY = (width + depth) * .35 + 25;
+  let minY = -140;
+  for (const p of buildings) minY = Math.min(minY, projectPoint(p.u, p.v, buildingHeight(p.count) + 70)[1]);
   const scale = Math.min((viewportWidth - 48) / (maxX - minX), (viewportHeight - 95) / (maxY - minY));
   return { cols, rows, width, depth, frontage, scale, viewportWidth, viewportHeight,
     x: viewportWidth / 2 - (minX + maxX) / 2 * scale,

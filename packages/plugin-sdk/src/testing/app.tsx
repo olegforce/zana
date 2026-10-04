@@ -85,18 +85,18 @@ import {
 
 /**
  * `@zana-ai/zcc-plugin-sdk/testing/app` — the frontend plugin test harness. Tests a
- * plugin's `app.tsx` source directly under vitest + jsdom, without the bb
+ * plugin's `app.tsx` source directly under vitest + jsdom, without the ZCC
  * host or the esbuild bundle:
  *
  * - {@link installTestPluginRuntime} fills `globalThis.__bbPluginRuntime.
  *   pluginSdkApp` with a test implementation of the `@zana-ai/zcc-plugin-sdk/app`
- *   surface (the same seam `bb plugin build` shims to the real app). It must
+ *   surface (the same seam `zcc plugin build` shims to the real app). It must
  *   run BEFORE the plugin's `app.tsx` module evaluates, because that module
  *   binds the runtime at import time — so import `app.tsx` through
  *   {@link loadPluginApp}'s thunk form, or call the installer from a vitest
  *   setup file when you prefer static imports.
  * - {@link loadPluginApp} runs the definition's setup against a validating
- *   collector (ported from the BB app's interpreter, same error messages)
+ *   collector (ported from the ZCC app's interpreter, same error messages)
  *   and returns the typed slot registrations.
  * - {@link renderSlot} mounts one registration's component with mock hook
  *   backends: rpc as a method→handler map with a call log, realtime as a
@@ -260,7 +260,7 @@ function useSlotEnv(hook: string): SlotEnv {
 // The fake @zana-ai/zcc-plugin-sdk/app runtime.
 // ---------------------------------------------------------------------------
 
-/** Same shape (and checks) as the BB app's real definePluginApp. */
+/** Same shape (and checks) as the ZCC app's real definePluginApp. */
 function definePluginApp(setup: PluginAppSetup): PluginAppDefinition {
   if (typeof setup !== "function") {
     throw new Error("definePluginApp expects a setup function");
@@ -282,7 +282,7 @@ function isPluginAppDefinition(value: unknown): value is PluginAppDefinition {
  * records every public prop as a data attribute so plugin tests can assert
  * what their slot component passed without the real chat engine.
  * `leadingContent` renders inside the stub; each `messageActions` entry
- * renders as a button (`data-testid="bb-thread-chat-action-<id>"`) that
+ * renders as a button (`data-testid="ZCC-thread-chat-action-<id>"`) that
  * invokes its `run` with a synthetic assistant message reference, so plugin
  * tests can drive the action without the real timeline.
  */
@@ -1004,13 +1004,13 @@ export async function mountPluginContentScripts(
     if (controller.signal.aborted) return;
     if (typeof threadId !== "string" || threadId.trim().length === 0) {
       console.warn(
-        `bb plugin "${options.pluginId}": contentScript.experimental_setThreadRowStatus: "threadId" must be a non-empty string`,
+        `zcc plugin "${options.pluginId}": contentScript.experimental_setThreadRowStatus: "threadId" must be a non-empty string`,
       );
       return;
     }
     const normalizedThreadId = threadId.trim();
     const normalizedStatus = normalizePluginThreadRowStatus(status, (reason) =>
-      console.warn(`bb plugin "${options.pluginId}": ${reason}`),
+      console.warn(`zcc plugin "${options.pluginId}": ${reason}`),
     );
     if (normalizedStatus === undefined) return;
     const recordedStatus =
@@ -1167,7 +1167,7 @@ export interface RenderSlotOptions<
 export interface RenderedSlotBehaviorDrivers {
   /**
    * Push a realtime event to `useRealtime(channel, …)` subscribers, wrapped
-   * in act. The payload is JSON-round-tripped like `bb.realtime.publish`.
+   * in act. The payload is JSON-round-tripped like `zcc.realtime.publish`.
    */
   emitRealtime(channel: string, payload: unknown): Promise<void>;
   /** Drive the lifecycle of the same connection used by realtime events. */
@@ -1201,7 +1201,7 @@ export interface RenderedSlotLifecycleControls {
 }
 
 /**
- * Testing Library result plus BB-specific helpers. Direct members are
+ * Testing Library result plus ZCC-specific helpers. Direct members are
  * retained for compatibility; named views make intent explicit in new tests.
  */
 export interface RenderedSlot

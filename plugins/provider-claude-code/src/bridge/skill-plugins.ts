@@ -34,7 +34,7 @@ function pluginDirectoryName(root: ClaudeSkillPluginRoot): string {
     .slice(0, 16);
 }
 
-export const CLAUDE_SKILL_PLUGIN_NAME = "bb-global-skills";
+export const CLAUDE_SKILL_PLUGIN_NAME = "zcc-global-skills";
 
 function pluginNameFor(
   root: ClaudeSkillPluginRoot,
@@ -63,8 +63,8 @@ export function ensureClaudeSkillPlugin(args: {
     $schema: MANIFEST_SCHEMA,
     name,
     version: "0.1.0",
-    description: `Skills injected by bb (${args.root.id}).`,
-    author: { name: "bb" },
+    description: `Skills injected by ZCC (${args.root.id}).`,
+    author: { name: "zcc" },
     skills: "./skills",
   };
   writeFileSync(
@@ -90,5 +90,5 @@ export function ensureClaudeSkillPlugin(args: {
 
 export function createClaudeSkillPluginsRoot(baseDir = tmpdir()): string {
   mkdirSync(baseDir, { recursive: true });
-  return mkdtempSync(join(baseDir, "bb-claude-skill-plugins-"));
+  return mkdtempSync(join(baseDir, "zcc-claude-skill-plugins-"));
 }

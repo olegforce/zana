@@ -9,6 +9,7 @@ import type { PluginHostArtifactRegistry } from '../../plugins/plugin-host-artif
 export interface ThreadProviderRecord extends PluginProviderDeclaration {
   pluginId: string;
   hostEntry: string | null;
+  unavailableReason?: string;
 }
 
 const providers = new Map<string, ThreadProviderRecord[]>();
@@ -65,11 +66,13 @@ function syncFakeProvider(): void {
 export function registerThreadProvider(
   pluginId: string,
   declaration: PluginProviderDeclaration,
-  hostEntry?: string | null
+  hostEntry?: string | null,
+  unavailableReason?: string
 ): PluginProviderHandle {
   const record: ThreadProviderRecord = {
     ...declaration,
     pluginId,
+    ...(unavailableReason ? { unavailableReason } : {}),
     hostEntry: hostEntry ?? currentProvider(declaration.id)?.hostEntry ?? 'src/bridge/bridge.ts'
   };
   const stack = providers.get(declaration.id) ?? [];
@@ -151,9 +154,13 @@ export function bridgeLaunchForProvider(
   if (!provider) {
     throw new Error(`unknown thread provider: ${providerId}`);
   }
+  if (provider.unavailableReason) {
+    throw new Error(`Provider "${provider.displayName}" is unavailable: ${provider.unavailableReason}. Open Plugins to reload or update "${provider.pluginId}".`);
+  }
   if (isDaemonBundledProvider(provider.id)) {
     return {
       pluginId: provider.pluginId,
+      ...(provider.env ? { envPassthrough: [...provider.env.passthrough] } : {}),
       source: { kind: 'daemon-bundled', id: provider.id },
       capabilities: launchCapabilities(provider)
     };
@@ -166,6 +173,7 @@ export function bridgeLaunchForProvider(
   }
   return {
     pluginId: provider.pluginId,
+    ...(provider.env ? { envPassthrough: [...provider.env.passthrough] } : {}),
     source: {
       kind: 'artifact',
       digest: artifact.digest,

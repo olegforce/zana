@@ -60,6 +60,17 @@ it('filters global executions by title and project, and ignores missing projects
   expect(fixtures.last.executions.map((e: any) => e.title)).toEqual(['Review']);
   fireEvent.change(filter, { target: { value: 'absent' } });
   expect(fixtures.last.executions).toEqual([]); expect(fixtures.last.members).toEqual([]);
+  expect(fixtures.last.population.members.map((m: any) => m.title)).toEqual(['Coder']);
+  expect(fixtures.last.population.executions.map((e: any) => e.title)).toEqual(['Review']);
+  fixtures.last.onInspect('agent:a1'); expect(fixtures.inspect).toHaveBeenCalledWith('a1', 'p1', expect.any(Function));
+  fixtures.last.onInspect('execution:unknown:j2'); expect(screen.queryByTestId('execution')).toBeNull();
+});
+it('keeps the full population project-scoped and rejects inspect keys from another project', async () => {
+  useData.setState({ terminals: { ...useData.getState().terminals, p2: [{ id: 'a2', profile: 'codex', title: 'Other', status: 'running', projectId: 'p2' }] as any[] } });
+  render(<MemoryRouter><AgentsBoard scope={{ kind: 'project', project: projects[0] }} /></MemoryRouter>);
+  await screen.findByRole('button', { name: 'Review' });
+  expect(fixtures.last.population.members.map((m: any) => m.key)).toEqual(['agent:a1']);
+  fixtures.last.onInspect('agent:a2'); expect(fixtures.inspect).not.toHaveBeenCalled();
 });
 it('keeps the view toolbar available for an empty fleet and falls back when the slot disappears', async () => {
   fixtures.executions = []; useData.setState({ terminals: {} });

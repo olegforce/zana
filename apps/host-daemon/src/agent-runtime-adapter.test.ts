@@ -1150,6 +1150,7 @@ describe('agent runtime thread adapter', () => {
     const launch = {
       pluginId: 'provider-acp',
       source: { kind: 'artifact' as const, digest, byteLength: bytes.byteLength },
+      envPassthrough: ['ZCC_TEST_PROVIDER_COMMAND'],
       capabilities: {
         supportsServiceTier: true,
         permissionModes: ['full'],
@@ -1164,6 +1165,7 @@ describe('agent runtime thread adapter', () => {
       fetchPluginHostArtifact
     });
     expect(first.source.kind).toBe('artifact');
+    expect(first.envPassthrough).toEqual(['ZCC_TEST_PROVIDER_COMMAND']);
     if (first.source.kind === 'artifact') {
       expect(first.source.artifactPath).toBe(
         join(cwd, 'plugin-host-artifacts', 'provider-acp', digest, 'host.mjs')

@@ -900,7 +900,7 @@ describe("codex item translation", () => {
         item: {
           type: "toolCall",
           id: harness.itemId("dyn-bb-1"),
-          server: "bb",
+          server: "zcc",
           tool: "bb_workflow_run",
           arguments: { name: "review" },
           status: "pending",

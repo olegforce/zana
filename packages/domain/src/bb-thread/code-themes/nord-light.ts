@@ -308,7 +308,7 @@ export const nordLightCodeTheme = {
     "widget.shadow": "#00000066"
   },
   "displayName": "Nord Light",
-  "name": "bb:nord:light",
+  "name": "zcc:nord:light",
   "semanticHighlighting": true,
   "tokenColors": [
     {

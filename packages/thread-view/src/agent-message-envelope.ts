@@ -1,12 +1,12 @@
 const AGENT_MESSAGE_ENVELOPE_PATTERN =
-  /^\[bb message from thread:([^;\]\s]+)(?:;[^\]]*)?\]\s*/;
+  /^\[(?:zcc|bb) message from thread:([^;\]\s]+)(?:;[^\]]*)?\]\s*/;
 
 export interface AgentMessageEnvelope {
   bodyStart: number;
   senderThreadId: string;
 }
 
-/** Parses BB's reserved cross-thread message envelope from persisted text. */
+/** Parses ZCC's reserved cross-thread message envelope from persisted text. */
 export function parseAgentMessageEnvelope(
   text: string,
 ): AgentMessageEnvelope | null {

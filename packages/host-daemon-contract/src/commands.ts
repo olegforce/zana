@@ -232,6 +232,7 @@ export const hostDaemonBridgeLaunchSchema = z
     // a `bb.host` artifact like any other, so it gets the same plugin-scoped
     // data directory a host worker does.
     pluginId: z.string().min(1),
+    envPassthrough: z.array(z.string().regex(/^[A-Z_][A-Z0-9_]*$/u)).max(32).optional(),
     source: z.discriminatedUnion("kind", [
       z
         .object({
@@ -902,7 +903,7 @@ const hostDeleteSkillCommandSchema = z
       context.addIssue({
         code: "custom",
         path: ["cwd"],
-        message: "cwd is required to delete a bb-project skill",
+        message: "cwd is required to delete a ZCC project skill",
       });
     }
     const isBbScope =
@@ -911,7 +912,7 @@ const hostDeleteSkillCommandSchema = z
       context.addIssue({
         code: "custom",
         path: ["rootPath"],
-        message: "rootPath must be null for a bb skill",
+        message: "rootPath must be null for a ZCC skill",
       });
     }
     if (!isBbScope && command.rootPath === null) {
@@ -947,7 +948,7 @@ const hostWriteSkillCommandSchema = z
       context.addIssue({
         code: "custom",
         path: ["cwd"],
-        message: "cwd is required to edit a bb-project skill",
+        message: "cwd is required to edit a ZCC project skill",
       });
     }
   });

@@ -32,7 +32,7 @@ const NORMALIZED_ACP_UPDATE_KINDS = new Set<string>([
   "usage_update",
 ]);
 
-// Update kinds the agent may legitimately send but BB intentionally does not
+// Update kinds the agent may legitimately send but ZCC intentionally does not
 // render: replayed history, agent-side mode/command/config/session metadata.
 const NOISE_ACP_UPDATE_KINDS = new Set<string>([
   "user_message_chunk",

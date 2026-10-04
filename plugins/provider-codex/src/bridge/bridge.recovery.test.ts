@@ -70,9 +70,9 @@ let workspaceDir: string;
 function stubFakeAppServer(script: Record<string, unknown>): void {
   const scriptPath = join(workspaceDir, "fake-codex-script.json");
   writeFileSync(scriptPath, JSON.stringify(script), "utf8");
-  vi.stubEnv("BB_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
+  vi.stubEnv("ZCC_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
   vi.stubEnv(
-    "BB_CODEX_BRIDGE_APP_SERVER_ARGS",
+    "ZCC_CODEX_BRIDGE_APP_SERVER_ARGS",
     JSON.stringify([fakeAppServerPath, scriptPath]),
   );
 }

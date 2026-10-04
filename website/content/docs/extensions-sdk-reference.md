@@ -130,8 +130,8 @@ host chrome, not a plugin.
 
 | Field | Meaning |
 | --- | --- |
-| `skills` | Directory roots (BB). Default `["skills"]`; `[]` opts out. Each child dir with a regular `SKILL.md` is a skill named after the folder. |
-| `mcpServers` | Map of Claude CLI MCP servers for PTY / CLI Agent (`--mcp-config`). stdio `command` is basename-only; relative `args` are rewritten to contained paths. Conversation threads do not read this map — they get `zcc.agents.registerTool` via bb-bridge. |
+| `skills` | Directory roots. Default `["skills"]`; `[]` opts out. Each child dir with a regular `SKILL.md` is a skill named after the folder. |
+| `mcpServers` | Map of Claude CLI MCP servers for PTY / CLI Agent (`--mcp-config`). stdio `command` is basename-only; relative `args` are rewritten to contained paths. Conversation threads do not read this map — they get `zcc.agents.registerTool` via zcc. |
 | `extra` | Opaque JSON object (≤32 keys, ≤8 KiB). Displayed on install; never synced as skills/MCP. |
 | `requires` | Other plugin ids this plugin consumes via `zcc.services.use`. Host topo-sorts load order. A missing required plugin marks the consumer `needs-configuration`. |
 

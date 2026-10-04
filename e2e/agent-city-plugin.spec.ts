@@ -6,6 +6,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { test, expect } from './fixtures/app.js';
+import { interiorLayout, interiorScreen } from '../plugins/agent-city/interior.js';
 
 const exec = promisify(execFile);
 test.use({ initialConfig: { sponsorPromptDismissed: true }, launchEnv: { ZCC_FAKE_PROVIDER: '1' } });
@@ -21,6 +22,14 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   async function run(args: string[]) {
     return exec(process.execPath, [join(copiedCli, 'bin/zcc'), ...args], { cwd: source, env, timeout: 60_000, maxBuffer: 1024 * 1024 });
   }
+  // Seed real host-owned pending state, as in the approval-layout boundary spec.
+  const auth = JSON.parse(readFileSync(join(home, '.zcc', 'auth.json'), 'utf8'));
+  async function hostRequest(path: string, body: unknown) {
+    const response = await fetch(new URL(`/internal/hosts/${path}`, app.window.url()), {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-zcc-host-id': auth.hostId, authorization: `Bearer ${auth.hostKey}` }, body: JSON.stringify(body)
+    });
+    const result = await response.json(); expect(response.ok).toBe(true); expect(result.outcome).not.toBe('rejected'); return result;
+  }
   const root = join(home, 'city-project'); mkdirSync(root);
   const seed = await app.window.evaluate(async (path) => {
     const projectResponse = await fetch('/api/v1/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
@@ -31,12 +40,24 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
     const { thread } = await response.json();
     return { projectId: project.id, threadId: thread.id };
   }, root);
-  const additionalRoots = Array.from({ length: 9 }, (_, i) => join(home, `city-neighbor-${i + 1}`));
+  const additionalRoots = Array.from({ length: 10 }, (_, i) => join(home, `city-neighbor-${i + 1}`));
   for (const path of additionalRoots) mkdirSync(path);
   await app.window.evaluate(async (paths) => {
-    for (const path of paths) {
+    for (const [i, path] of paths.entries()) {
       const response = await fetch('/api/v1/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
       if (!response.ok) throw new Error(await response.text());
+      const { project } = await response.json();
+      if (i < 8) {
+        const agent = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: project.id, providerId: 'fake', title: `Neighbor ${i}`, input: 'Hello' }) });
+        if (!agent.ok) throw new Error(await agent.text());
+        if (i < 2) for (let j = 0; j < (i === 0 ? 4 : 2); j++) {
+          const extra = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: project.id, providerId: 'fake', title: `${i === 0 ? 'Tower' : 'Office'} worker ${j}`, input: 'Hello' }) });
+          if (!extra.ok) throw new Error(await extra.text());
+        }
+      } else if (i === 8) {
+        const plan = await window.cc.scheduler.create({ projectId: project.id, scope: { projectId: project.id }, name: 'City scheduled arrival', every: '24h', profile: 'codex', enabled: false });
+        if (!plan.ok) throw new Error(JSON.stringify(plan));
+      }
     }
   }, additionalRoots);
   const errors: string[] = [];
@@ -49,6 +70,8 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   const toggle = app.window.getByRole('group', { name: 'Agents view', exact: true }).filter({ visible: true });
   await expect(toggle.getByRole('button')).toHaveCount(4);
   await expect(toggle.getByRole('button').nth(3)).toHaveAccessibleName('World view');
+  const calendar = app.window.getByRole('group', { name: 'Scheduled column' }).filter({ visible: true }).getByRole('button');
+  if (await calendar.getAttribute('aria-pressed') !== 'true') await calendar.click();
   await toggle.getByRole('button', { name: 'World view' }).click();
   const city = app.window.getByTestId('agent-city');
   await expect(city).toBeVisible();
@@ -68,7 +91,98 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
       expect(box!.y + box!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height);
     }
   }
-  for (let i = 1; i <= 9; i++) await expect(city.getByRole('button', { name: new RegExp(`city-neighbor-${i}, 0 live`) })).toBeInViewport();
+  for (let i = 1; i <= 8; i++) await expect(city.getByRole('button', { name: new RegExp(`city-neighbor-${i}, ${i === 1 ? 5 : i === 2 ? 3 : 1} live`) })).toBeInViewport();
+  await expect(city.getByRole('button', { name: /city-neighbor-9, 0 live agents.*1 scheduled plans/ })).toBeInViewport();
+  await expect(city.getByRole('button', { name: /city-neighbor-10,/ })).toHaveCount(0);
+  await expect(city.getByRole('button', { name: /city-project, 1 live/ })).toHaveAttribute('data-building-form', 'house');
+  await expect(city.getByRole('button', { name: /city-neighbor-1, 5 live/ })).toHaveAttribute('data-building-form', 'tower');
+  await expect(city.getByRole('button', { name: /city-neighbor-2, 3 live/ })).toHaveAttribute('data-building-form', 'office');
+  await expect(city.getByRole('button', { name: /city-neighbor-9,/ })).toHaveAttribute('data-building-form', 'house');
+  await expect(city.getByRole('button', { name: /city-project, 1 live/ })).toHaveAttribute('data-commuters', '8');
+  await expect(city.getByRole('button', { name: /city-neighbor-1, 5 live/ })).toHaveAttribute('data-commuters', '40');
+  await expect(city.getByRole('button', { name: /city-neighbor-9,/ })).toHaveAttribute('data-commuters', '4');
+  await expect(city.getByLabel('Worker colors by harness')).toContainText('Codex');
+  await expect(city.getByLabel('Worker colors by harness')).toContainText('Fake');
+  const plots = await city.locator('.city-label').evaluateAll((labels) => labels.map((el) => [el.getAttribute('data-project-id'), el.getAttribute('style')]));
+  const search = app.window.getByLabel('Filter agents');
+  await search.fill('Tower worker');
+  await expect(city.getByRole('button', { name: /city-neighbor-1, 5 live/ })).toHaveAttribute('data-building-form', 'tower');
+  expect(await city.locator('.city-label').evaluateAll((labels) => labels.map((el) => [el.getAttribute('data-project-id'), el.getAttribute('style')]))).toEqual(plots);
+  await search.fill('no-agent-matches-this');
+  await expect(city.locator('.city-label[data-search-match=true]')).toHaveCount(0);
+  await expect(city.locator('.city-label')).toHaveCount(plots.length);
+  await search.fill('');
+  expect(await city.locator('.city-label').evaluateAll((labels) => labels.map((el) => [el.getAttribute('data-project-id'), el.getAttribute('style')]))).toEqual(plots);
+  await city.getByRole('button', { name: /city-neighbor-9,/ }).click();
+  await expect(city.getByRole('button', { name: 'Schedule board: City scheduled arrival' })).toBeVisible();
+  await expect(city.getByRole('group', { name: 'Agents on this floor' }).getByRole('button')).toHaveCount(1);
+  await expect(map).toHaveAttribute('data-interior-workers', '1');
+  await expect(map).toHaveAttribute('data-desk-workers', '1');
+  await expect(map).toHaveAttribute('data-idle-workers', '0');
+  await expect(city.getByText('1 on this floor · 0 live agents in building · 1 planned')).toBeVisible();
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-planned.png') });
+  await city.getByRole('button', { name: /Back to city/ }).click();
+  await city.getByRole('button', { name: /city-neighbor-1, 5 live/ }).click();
+  await expect(city.getByLabel('Building floor')).toHaveValue('1');
+  await expect(city.getByLabel('Agents on this floor').getByRole('button')).toHaveCount(4);
+  await expect(map).toHaveAttribute('data-interior-workers', '4');
+  await expect(map).toHaveAttribute('data-idle-workers', '4');
+  await expect(map).toHaveAttribute('data-desk-workers', '0');
+  await expect(city.getByText('4 on this floor · 5 live agents in building')).toBeVisible();
+  const seatedNames = await city.locator('.city-workstation strong').allTextContents();
+  const towerId = await city.getByLabel('Find a project building').inputValue();
+  const newWorkerId = await app.window.evaluate(async (projectId) => {
+    const response = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, providerId: 'fake', title: 'Interior arrival', input: 'Hello' }) });
+    if (!response.ok) throw new Error(await response.text());
+    return (await response.json()).thread.id as string;
+  }, towerId);
+  await expect(city.getByText('4 on this floor · 6 live agents in building')).toBeVisible();
+  expect(await city.locator('.city-workstation strong').allTextContents()).toEqual(seatedNames);
+  await hostRequest('interactive-request', { sessionId: newWorkerId, interaction: {
+    threadId: newWorkerId, turnId: 'turn-1', providerId: 'fake', providerThreadId: 'provider-1', providerRequestId: 'city-request',
+    payload: { kind: 'approval', reason: 'City attention fixture', availableDecisions: ['allow_once', 'deny'],
+      subject: { kind: 'command', itemId: 'city-request', command: 'true', cwd: root, actions: [], sessionGrant: null } }
+  } });
+  await city.getByRole('button', { name: 'Find next request · 1', exact: true }).click();
+  await expect(city.getByLabel('Building floor')).toHaveValue('2');
+  await expect(city.getByRole('button', { name: 'Worker Interior arrival, Needs you', exact: true })).toHaveAttribute('data-highlighted', 'true');
+  await expect(map).toHaveAttribute('data-desk-workers', '1');
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-request.png') });
+  await city.getByLabel('Building floor').selectOption('1');
+  await hostRequest('interactive-request/interrupt', { sessionId: newWorkerId, providerId: 'fake', threadIds: [newWorkerId], reason: 'City attention fixture complete' });
+  await app.window.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/threads/${id}/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    if (!response.ok) throw new Error(await response.text());
+  }, newWorkerId);
+  await expect(city.getByText('4 on this floor · 5 live agents in building')).toBeVisible();
+  expect(await city.locator('.city-workstation strong').allTextContents()).toEqual(seatedNames);
+  await city.getByRole('button', { name: 'Pause motion' }).click();
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-tower.png') });
+  await city.getByLabel('Building floor').selectOption('2');
+  await expect(city.getByLabel('Agents on this floor').getByRole('button')).toHaveCount(1);
+  const upperWorker = city.getByLabel('Agents on this floor').getByRole('button');
+  const upperTitle = await upperWorker.locator('strong').innerText();
+  await city.getByRole('button', { name: 'Take elevator to Floor 3' }).click();
+  await expect(city.getByLabel('Building floor')).toHaveValue('3');
+  await city.getByRole('button', { name: `Find worker ${upperTitle}`, exact: true }).click();
+  await expect(city.getByLabel('Building floor')).toHaveValue('2');
+  await expect(city.getByLabel('Agents on this floor').getByRole('button')).toHaveAttribute('data-highlighted', 'true');
+  await city.getByLabel('Building floor').selectOption('0');
+  await expect(city.getByText(/Welcome in/)).toBeVisible();
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-lobby.png') });
+  await city.getByLabel('Building floor').selectOption('6');
+  await expect(city.getByText(/breathing room/)).toBeVisible();
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-roof.png') });
+  await city.getByRole('button', { name: /Back to city/ }).click();
+  await city.getByRole('button', { name: /city-neighbor-2, 3 live/ }).click();
+  await expect(city.getByLabel('Building floor')).toHaveValue('0');
+  await expect(city.getByLabel('Agents on this floor').getByRole('button')).toHaveCount(3);
+  await app.window.screenshot({ path: testInfo.outputPath('city-interior-office.png') });
+  await app.window.keyboard.press('Escape');
+  await expect(city.getByRole('button', { name: /city-neighbor-2, 3 live/ })).toBeFocused();
+  await city.getByRole('button', { name: 'Resume motion' }).click();
+  const firstFrame = await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  await expect.poll(() => city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).not.toBe(firstFrame);
   await expectBuildingsInsideMap();
   await city.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect(city.getByLabel('Map zoom level')).toHaveText('125%');
@@ -83,23 +197,40 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await expect(city.getByLabel('Map zoom level')).toHaveText('100%');
   await expectBuildingsInsideMap();
   const arrival = join(home, 'city-new-arrival'); mkdirSync(arrival);
-  await app.window.evaluate(async (path) => {
+  const arrivalProjectId = await app.window.evaluate(async (path) => {
     const response = await fetch('/api/v1/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
     if (!response.ok) throw new Error(await response.text());
+    return (await response.json()).project.id as string;
   }, arrival);
-  await expect(city.getByRole('button', { name: /city-new-arrival, 0 live/ })).toBeInViewport();
+  await expect(city.getByRole('button', { name: /city-new-arrival,/ })).toHaveCount(0);
+  await app.window.evaluate(async (projectId) => {
+    const response = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, providerId: 'fake', title: 'New commuter', input: 'Hello' }) });
+    if (!response.ok) throw new Error(await response.text());
+  }, arrivalProjectId);
+  await expect(city.getByRole('button', { name: /city-new-arrival, 1 live/ })).toBeInViewport();
   await expectBuildingsInsideMap();
   await app.window.screenshot({ path: testInfo.outputPath('city-continuous.png') });
   await city.getByLabel('Find a project building').selectOption(seed.projectId);
-  await expect(city.getByRole('button', { name: /City live agent/ })).toBeVisible();
-  await expect(city.getByRole('button', { name: /city-project, 1 live agents/ })).toBeVisible();
+  await expect(city.locator('.city-member').filter({ hasText: 'City live agent' })).toBeVisible();
+  await expect(city.getByRole('button', { name: /Worker City live agent,/ })).toBeVisible();
+  await expect(map).toHaveAttribute('data-interior-workers', '1');
+  await expect(map).toHaveAttribute('data-idle-workers', '1');
+  await expect(map).toHaveAttribute('data-desk-workers', '0');
   await city.getByRole('button', { name: 'Pause motion' }).click();
   await expect(city.getByRole('button', { name: 'Resume motion' })).toHaveAttribute('aria-pressed', 'true');
+  const pausedFrame = await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  await app.window.waitForTimeout(250);
+  expect(await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).toBe(pausedFrame);
   await app.window.screenshot({ path: testInfo.outputPath('city-desktop.png') });
-  await city.getByRole('button', { name: /City live agent/ }).click();
+  const canvasBounds = (await city.locator('canvas').boundingBox())!;
+  const [deskX, deskY] = interiorScreen(42, 198, 69, interiorLayout(canvasBounds.width, canvasBounds.height));
+  await city.locator('canvas').click({ position: { x: deskX, y: deskY } });
   const inspector = app.window.getByRole('dialog', { name: 'City live agent', exact: true });
   await expect(inspector).toBeVisible();
   await inspector.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(city.getByRole('button', { name: /Back to city/ })).toBeVisible();
+  await app.window.keyboard.press('Escape');
+  await expect(city.getByLabel('Map zoom level')).toHaveText('100%');
   await navigate('/agents');
   await expect(city).toBeVisible();
   await app.window.reload();
@@ -139,8 +270,33 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
     await expect(phone.getByRole('button', { name: 'Reduced motion' })).toBeDisabled();
     for (const width of [320, 390, 820]) {
       await phone.setViewportSize({ width, height: 844 });
+      await phone.getByLabel('Find a project building').selectOption(seed.projectId);
+      await expect(phone.getByRole('button', { name: /Worker City live agent,/ })).toBeVisible();
       expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      await phone.screenshot({ path: testInfo.outputPath(`city-mobile-${width}.png`) });
+      await phone.getByRole('button', { name: /Back to city/ }).scrollIntoViewIfNeeded();
+      await phone.screenshot({ path: testInfo.outputPath(`city-interior-mobile-${width}.png`) });
+      await phone.getByRole('button', { name: /Worker City live agent,/ }).click();
+      // The mobile host opens its first-class conversation page instead of the desktop overlay.
+      await expect(phone).toHaveURL(new RegExp(`/threads/${seed.threadId}`));
+      await expect(phone.getByRole('heading', { name: 'City live agent', exact: true })).toBeVisible();
+      await phone.getByRole('link', { name: 'Back to agents', exact: true }).click();
+      await expect(phone.getByTestId('agent-city')).toBeVisible();
+      await expect(phone.getByRole('button', { name: /Worker City live agent,/ })).toHaveAttribute('data-highlighted', 'true');
+      await expect(phone.getByRole('button', { name: /Back to city/ })).toBeVisible();
+      await phone.getByRole('button', { name: /Back to city/ }).click();
+      const tower = phone.getByRole('button', { name: /city-neighbor-1, 5 live/ });
+      await tower.click();
+      await phone.getByLabel('Building floor').selectOption('2');
+      await expect(phone.getByLabel('Agents on this floor').getByRole('button')).toHaveCount(1);
+      const towerWorker = phone.getByLabel('Agents on this floor').getByRole('button'), towerTitle = await towerWorker.locator('strong').innerText();
+      await towerWorker.click();
+      await expect(phone.getByRole('heading', { name: towerTitle, exact: true })).toBeVisible();
+      await phone.getByRole('link', { name: 'Back to agents', exact: true }).click();
+      await expect(phone.getByLabel('Building floor')).toHaveValue('2');
+      await expect(phone.getByLabel('Agents on this floor').getByRole('button')).toHaveAttribute('data-highlighted', 'true');
+      await phone.getByLabel('Building floor').selectOption('6');
+      expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await phone.getByRole('button', { name: /Back to city/ }).click();
     }
   } finally {
     await browser.close();

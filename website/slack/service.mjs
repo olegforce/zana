@@ -5,6 +5,7 @@ import { envelope, hash, rateLimiter, readBody, SlackError, verifiedSlack } from
 import { createSlackbotMcp } from './mcp.mjs';
 import { createTaskEndpoint, taskBase, taskId, taskTrigger } from './embeds.mjs';
 import { createSlackOnboarding } from './onboarding.mjs';
+import { addHomeMachines, createHomeMachines } from './home-machines.mjs';
 
 const notice = text => ({ response_type: 'ephemeral', text });
 const offline = 'Your computer or Slack plugin is unavailable. No new request has been queued. Open Zana on your chosen computer, then try again.';
@@ -12,7 +13,8 @@ const uncertain = 'Delivery is unconfirmed. Check Zana for Slack → Diagnostics
 
 export async function createSlackService({ db, connect, dispatchPlugin, pluginId, sessionSecret, signingSecret, identity, call, now = Date.now, intervalMs = 1000 }) {
   const registry = createSlackRegistry({ db, sessionSecret, identity, now });
-  const scoped = createScopedSlack({ call, registry, identity, origin: connect.accountUrl });
+  const machineBlocks = createHomeMachines({ connect, now });
+  const scoped = createScopedSlack({ call, registry, identity, origin: connect.accountUrl, decorateHome: (view, link) => addHomeMachines(view, link, machineBlocks) });
   const rate = rateLimiter(now); let closed = false; let processing;
   const jobs = new Set();
   const run = job => { const promise = job.catch(() => {}).finally(() => jobs.delete(promise)); jobs.add(promise); return promise; };
@@ -24,13 +26,18 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
   const startConnection = createSlackOnboarding({ registry, connect });
   const mcp = createSlackbotMcp({ db, registry, identity, signingSecret, send, rate, now, startConnection });
   const refreshLink = link => registry.authenticate(`${link.id}.${registry.key(link)}`);
-  async function publishHome(user, text, connectButton = false) {
-    const blocks = [{ type: 'header', text: { type: 'plain_text', text: 'Zana · Your computer' } }, { type: 'section', text: { type: 'plain_text', text } }];
+  async function publishHome(user, text, connectButton = false, link) {
+    if (link) {
+      try { await refreshLink(link); }
+      catch { link = undefined; }
+    }
+    const blocks = [{ type: 'header', text: { type: 'plain_text', text: link ? 'Zana · Your agents' : 'Zana · Your computer' } }, { type: 'section', text: { type: 'plain_text', text } }];
+    if (link) blocks.push({ type: 'actions', elements: [{ type: 'button', action_id: 'connect_home_refresh', text: { type: 'plain_text', text: 'Refresh' } }] }, ...await machineBlocks(link));
     if (connectButton) { const code = await registry.start(user); blocks.push({ type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Connect my computer' }, url: `${connect.accountUrl}/connect/?slack=${code}`, action_id: 'connect_account' }] }); }
     await call('views.publish', { user_id: user, view: { type: 'home', blocks } });
   }
-  async function explain(payload, user, text) {
-    if (payload.event?.type === 'app_home_opened') return publishHome(user, text);
+  async function explain(payload, user, text, link) {
+    if (payload.event?.type === 'app_home_opened' || (payload.type === 'block_actions' && payload.view?.type === 'home' && payload.actions?.[0]?.action_id === 'home_refresh')) return publishHome(user, text, false, link);
     const channel = payload.event?.channel ?? payload.channel?.id ?? payload.channel_id;
     if (/^[CG][A-Z0-9]{5,30}$/.test(channel ?? '')) await call('chat.postEphemeral', { channel, user, text, ...(payload.event?.thread_ts ? { thread_ts: payload.event.thread_ts } : {}) });
   }
@@ -49,7 +56,7 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
       const text = notSent ? offline : uncertain;
       response = payload.type === 'view_submission' ? { response_action: 'update', view: { type: 'modal', title: { type: 'plain_text', text: 'Check Zana' }, close: { type: 'plain_text', text: 'Close' }, blocks: [{ type: 'section', text: { type: 'plain_text', text } }] } } : notice(text);
       await db.query('UPDATE slack_requests SET state=$1,response=$2,payload=\'\' WHERE id=$3', [notSent ? 'not-started' : 'needs-review', JSON.stringify(response), id]);
-      if (payload.type === 'event_callback' || payload.type === 'block_actions') await explain(payload, link.slack_user, text).catch(() => {});
+      if (payload.type === 'event_callback' || payload.type === 'block_actions') await explain(payload, link.slack_user, text, link).catch(() => {});
       return response;
     }
   }
@@ -74,6 +81,10 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     const team = event ? payload.team_id : payload.team?.id ?? payload.team_id;
     const user = event ? payload.event?.user ?? payload.event?.assistant_thread?.user_id : payload.user?.id ?? payload.user_id;
     if (team !== identity.team || payload.api_app_id !== identity.app || !/^[UW][A-Z0-9]{5,30}$/.test(user ?? '')) throw new SlackError('wrong_identity', 403);
+    // The fallback Home belongs to the gateway, so it has no plugin view token.
+    // Re-enter the ordinary owner Home-open path when its Refresh is clicked.
+    if (payload.type === 'block_actions' && payload.view?.type === 'home' && payload.actions?.[0]?.action_id === 'connect_home_refresh') return ingest({ type: 'event_callback', team_id: team, api_app_id: identity.app, event: { type: 'app_home_opened', user, tab: 'home' } }, id);
+    if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'connect_manage_machines') return {};
     if (event && !['app_mention', 'app_home_opened', 'entity_details_requested', 'message', 'assistant_thread_started', 'assistant_thread_context_changed', 'app_context_changed', 'agent_session_stopped', 'agent_session_title_changed'].includes(payload.event?.type)) return {};
     if (payload.event?.bot_id || payload.event?.subtype) return {};
     const channelReply = event && payload.event.type === 'message' && /^[CG][A-Z0-9]{5,30}$/.test(payload.event.channel ?? '');

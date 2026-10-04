@@ -33,8 +33,8 @@ export const REMOTE_TOOL_PROXY_INSTRUCTIONS = [
   'tools (Read, Write, Edit, Glob, Grep, Bash, LS) operate on a local placeholder',
   'and are disabled. Use remote_read, remote_write, remote_edit, remote_glob,',
   'remote_grep, and remote_exec instead (Claude Code exposes them as',
-  'mcp__bb-bridge__remote_read and the same mcp__bb-bridge__ prefix for the others;',
-  'ToolSearch select:mcp__bb-bridge__remote_exec if they are deferred). Paths are',
+  'mcp__zcc__remote_read and the same mcp__zcc__ prefix for the others;',
+  'ToolSearch select:mcp__zcc__remote_exec if they are deferred). Paths are',
   'relative to the remote project root (or absolute under that root). You never',
   'pass a host or credentials.'
 ].join(' ');

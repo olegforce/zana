@@ -124,7 +124,7 @@ function createCatalog(
 
   function storeEntry(id: string, entry: ThreadModelCatalogEntry): void {
     const previous = byProvider[id];
-    byProvider = { ...byProvider, [id]: entry.modelLoadError && previous?.lastSuccessAt != null
+    byProvider = { ...byProvider, [id]: entry.modelLoadError && entry.modelLoadError !== 'provider_unavailable' && previous?.lastSuccessAt != null
       ? { ...previous, modelLoadError: entry.modelLoadError, modelLoadErrorDetail: entry.modelLoadErrorDetail, lastAttemptAt: Date.now() }
       : { ...entry, lastAttemptAt: Date.now(), ...(entry.modelLoadError ? {} : { lastSuccessAt: Date.now() }) } };
     recordOutcome(id, entry.modelLoadError);

@@ -2,7 +2,7 @@
 
 /**
  * Scripted `pi --mode rpc` for hermetic pi-bridge tests: the subset of pi's
- * RPC dialect the bridge drives, with the REAL bb extension loaded the way
+ * RPC dialect the bridge drives, with the REAL zcc extension loaded the way
  * pi loads it. Commands in on stdin, responses and raw AgentSessionEvent
  * lines out on stdout, exactly pi's framing (LF-delimited JSON; U+2028 and
  * U+2029 stay raw inside strings, as pi writes them).
@@ -248,10 +248,11 @@ async function emitExtensionEvent(type, payload = {}) {
   }
 }
 
+import { createRequire } from "node:module";
 async function loadExtension(path) {
   const aliases = new Map([
     ["@earendil-works/pi-coding-agent", import.meta.resolve("@earendil-works/pi-coding-agent")],
-    ["typebox", import.meta.resolve("typebox")],
+    ["typebox", pathToFileURL(createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve("typebox")).href],
   ]);
   let hooksRegistered = false;
   if (typeof Bun === "undefined") {

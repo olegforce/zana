@@ -141,7 +141,7 @@ export default async function plugin(zcc: ZccPluginApi) {
       icon: { glyph: "GitBranch" },
     },
     description:
-      "Execute a workflow script that orchestrates multiple subagents deterministically. Workflows run in the background — this tool returns immediately with a run ID and a `previewDirective`. After a successful call, emit that directive exactly once on its own line (not in a code fence) so ZCC renders live progress in chat. A completion notification is sent to the origin thread. Use `zcc workflows status <run-id>` for a compact summary. For detailed history, redirect a bounded JSONL page from `zcc workflows history <run-id> --cursor <call-index> --limit <1-100>` into `$ZCC_THREAD_STORAGE` or `$BB_THREAD_STORAGE`, then inspect the file with normal filesystem tools.",
+      "Execute a workflow script that orchestrates multiple subagents deterministically. Workflows run in the background — this tool returns immediately with a run ID and a `previewDirective`. After a successful call, emit that directive exactly once on its own line (not in a code fence) so ZCC renders live progress in chat. A completion notification is sent to the origin thread. Use `zcc workflows status <run-id>` for a compact summary. For detailed history, redirect a bounded JSONL page from `zcc workflows history <run-id> --cursor <call-index> --limit <1-100>` into `$ZCC_THREAD_STORAGE`, then inspect the file with normal filesystem tools.",
     parameters: runInputSchema,
     async execute(raw, ctx) {
       try {
@@ -231,7 +231,7 @@ export default async function plugin(zcc: ZccPluginApi) {
       tools: ["zcc_workflow_run"],
       skills: ["workflows"],
       instructions:
-        "When zcc_workflow_run succeeds, copy its previewDirective into your response exactly once as a standalone line. Do not wrap it in backticks or a code fence, and do not invent or edit the run ID. The directive renders live workflow progress in ZCC chat. `zcc workflows status <run-id>` returns a compact summary. For detailed history, redirect `zcc workflows history <run-id> --cursor <call-index> --limit <1-100>` into a file under `$ZCC_THREAD_STORAGE` or `$BB_THREAD_STORAGE`, then inspect that JSONL file with normal filesystem tools. Use each page record's `nextCursor` to continue.",
+        "When zcc_workflow_run succeeds, copy its previewDirective into your response exactly once as a standalone line. Do not wrap it in backticks or a code fence, and do not invent or edit the run ID. The directive renders live workflow progress in ZCC chat. `zcc workflows status <run-id>` returns a compact summary. For detailed history, redirect `zcc workflows history <run-id> --cursor <call-index> --limit <1-100>` into a file under `$ZCC_THREAD_STORAGE`, then inspect that JSONL file with normal filesystem tools. Use each page record's `nextCursor` to continue.",
     };
   });
 

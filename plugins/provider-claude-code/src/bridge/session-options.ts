@@ -64,12 +64,12 @@ const READONLY_ALLOWED_TOOLS = new Set([
 ]);
 const READONLY_BASH_TOOL_NAME = "Bash";
 const READONLY_ASK_REASON =
-  "bb readonly mode requires approval before using tools that can modify state, run commands, access network, or perform non-read actions.";
+  "ZCC readonly mode requires approval before using tools that can modify state, run commands, access network, or perform non-read actions.";
 const SUMMARIZED_ADAPTIVE_THINKING = {
   type: "adaptive",
   display: "summarized",
 } satisfies Exclude<Options["thinking"], undefined>;
-const CLAUDE_CODE_EXECUTABLE_ENV = "BB_CLAUDE_CODE_EXECUTABLE";
+const CLAUDE_CODE_EXECUTABLE_ENV = "ZCC_CLAUDE_CODE_EXECUTABLE";
 
 /**
  * Claude Code omits TaskCreate/TodoWrite on Opus 4.8+, Sonnet 5, Fable 5, and
@@ -144,11 +144,11 @@ export function buildMutableFlagSettings(args: {
 }
 
 export function buildReadonlyDenialMessage(): string {
-  return "bb readonly mode allows reading and analysis only. Continue with a read-only answer; do not modify files, run mutating shell commands, use network, or use mutating tools.";
+  return "ZCC readonly mode allows reading and analysis only. Continue with a read-only answer; do not modify files, run mutating shell commands, use network, or use mutating tools.";
 }
 
 export function buildWorkspaceWriteDenialMessage(): string {
-  return "bb's workspace sandbox allows work inside the current workspace only. Stay inside the workspace or explain why extra access is needed.";
+  return "ZCC's workspace sandbox allows work inside the current workspace only. Stay inside the workspace or explain why extra access is needed.";
 }
 
 function buildReadonlyHooks(
@@ -296,7 +296,7 @@ function wellKnownClaudeExecutablePaths(env: NodeJS.ProcessEnv): string[] {
 export function resolveClaudeCodeExecutable(
   args: ResolveClaudeCodeExecutableArgs,
 ): string | null {
-  const explicitPath = args.env[CLAUDE_CODE_EXECUTABLE_ENV];
+  const explicitPath = args.env[CLAUDE_CODE_EXECUTABLE_ENV] ?? args.env.BB_CLAUDE_CODE_EXECUTABLE;
   const trimmedExplicitPath = explicitPath?.trim();
   if (trimmedExplicitPath && trimmedExplicitPath.length > 0) {
     try {

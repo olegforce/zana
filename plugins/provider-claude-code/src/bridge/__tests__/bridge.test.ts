@@ -1093,7 +1093,7 @@ describe("bridge", () => {
         permissionScope: "workspace",
       },
       {
-        BB_CLAUDE_CODE_EXECUTABLE: executablePath,
+        ZCC_CLAUDE_CODE_EXECUTABLE: executablePath,
         PATH: "/usr/bin",
       },
     );
@@ -1115,7 +1115,7 @@ describe("bridge", () => {
         permissionScope: "workspace",
       },
       {
-        BB_CLAUDE_CODE_EXECUTABLE: `  ${executablePath}  `,
+        ZCC_CLAUDE_CODE_EXECUTABLE: `  ${executablePath}  `,
         PATH: "/usr/bin",
       },
     );
@@ -1141,11 +1141,11 @@ describe("bridge", () => {
           permissionScope: "workspace",
         },
         {
-          BB_CLAUDE_CODE_EXECUTABLE: executablePath,
+          ZCC_CLAUDE_CODE_EXECUTABLE: executablePath,
           PATH: "/usr/bin",
         },
       ),
-    ).toThrow("BB_CLAUDE_CODE_EXECUTABLE must point to an executable");
+    ).toThrow("ZCC_CLAUDE_CODE_EXECUTABLE must point to an executable");
   });
 
   it("configures acceptEdits and auto sessions with the same Claude sandbox", () => {
@@ -1516,7 +1516,7 @@ describe("bridge", () => {
         },
         expected: {
           behavior: "deny",
-          messageIncludes: "bb's workspace sandbox allows work inside",
+          messageIncludes: "ZCC's workspace sandbox allows work inside",
         },
       },
       {
@@ -1532,7 +1532,7 @@ describe("bridge", () => {
         },
         expected: {
           behavior: "deny",
-          messageIncludes: "bb's workspace sandbox allows work inside",
+          messageIncludes: "ZCC's workspace sandbox allows work inside",
         },
       },
       {

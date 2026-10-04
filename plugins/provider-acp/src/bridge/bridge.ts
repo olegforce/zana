@@ -3,10 +3,10 @@
 /**
  * Generic ACP bridge.
  *
- * Speaks bb's runtime JSON-RPC on stdio and acts as the ACP *client* for the
+ * Speaks zcc's runtime JSON-RPC on stdio and acts as the ACP *client* for the
  * configured agent (Cursor): one agent subprocess and
- * one ACP session per bb thread. The bridge owns the cooperative permission
- * policy — it answers `session/request_permission` per bb's permission mode
+ * one ACP session per zcc thread. The bridge owns the cooperative permission
+ * policy — it answers `session/request_permission` per zcc's permission mode
  * (forwarding to the runtime when escalation is "ask") and enforces the
  * workspace write policy on client `fs/write_text_file` requests.
  */
@@ -189,7 +189,7 @@ interface AcpThreadSession {
   cwd: string;
   pendingInstructions: string | undefined;
   /**
-   * Which agent prompt is in flight for this bb turn: an ordinary `"turn"`,
+   * Which agent prompt is in flight for this zcc turn: an ordinary `"turn"`,
    * the provider-local `"compaction"` maintenance prompt, or none.
    */
   activePromptKind: "turn" | "compaction" | null;
@@ -1085,7 +1085,7 @@ async function loadSessionDiscoveredModels(
           method: "initialize",
           params: {
             protocolVersion: ACP_PROTOCOL_VERSION,
-            clientInfo: { name: "bb", version: "1.0.0" },
+            clientInfo: { name: "zcc", version: "1.0.0" },
             clientCapabilities: acpClientCapabilities(parameterizedModelPicker),
           },
           resultSchema: acpInitializeResultSchema,
@@ -1888,7 +1888,7 @@ async function handleFsWriteTextFile(
   ) {
     responder.error(
       -32000,
-      `File writes outside the workspace are denied by BB's accept-edits permission mode: ${parsed.data.path}`,
+      `File writes outside the workspace are denied by ZCC's accept-edits permission mode: ${parsed.data.path}`,
     );
     return;
   }
@@ -2084,7 +2084,7 @@ async function startAgentSession(
       method: "initialize",
       params: {
         protocolVersion: ACP_PROTOCOL_VERSION,
-        clientInfo: { name: "bb", version: "1.0.0" },
+        clientInfo: { name: "zcc", version: "1.0.0" },
         clientCapabilities: acpClientCapabilities(
           params.parameterizedModelPicker,
           true,
@@ -2393,7 +2393,7 @@ function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
       }
       session.promptRequestPending = false;
 
-      // Hard steer cancels the current prompt, then continues this bb turn.
+      // Hard steer cancels the current prompt, then continues this zcc turn.
       if (!session.stopping) {
         const next = session.queuedInputs.shift();
         if (next) {
@@ -2413,7 +2413,7 @@ function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Manual compaction travels the prompt path: bb's compact affordance sends a
+ * Manual compaction travels the prompt path: zcc's compact affordance sends a
  * standalone builtin `/compact` mention as turn input. ACP has no compaction
  * method, so the bridge runs the agent's own `/compact` command as a
  * provider-local maintenance prompt and reports it through the compaction
@@ -2835,7 +2835,7 @@ async function handleRequest(
         request.params.sourceProviderCheckpointId !== undefined
       ) {
         // ACP session/fork clones whole sessions; a fork:"tip" bridge rejects
-        // checkpoint forks instead of cloning history the bb timeline does
+        // checkpoint forks instead of cloning history the zcc timeline does
         // not show.
         sendError(
           request.id,
@@ -2896,8 +2896,8 @@ async function handleRequest(
     }
 
     case "turn/start": {
-      // Requests resolve the session by bb threadId: a resume fallback
-      // replaces the provider session id, but the bb thread stays the stable
+      // Requests resolve the session by zcc threadId: a resume fallback
+      // replaces the provider session id, but the zcc thread stays the stable
       // handle.
       const params = request.params;
       const session = sessionsByBbThreadId.get(params.threadId);
@@ -2926,7 +2926,7 @@ async function handleRequest(
         acpMode: requestedMode,
       });
       session.acpMode = requestedMode;
-      // A standalone builtin `/compact` mention is bb's manual-compaction
+      // A standalone builtin `/compact` mention is zcc's manual-compaction
       // request, not model input: it runs the agent's own compaction command
       // instead of becoming a prompt.
       if (isStandaloneBuiltinCompactCommand(params.input)) {
@@ -3059,7 +3059,7 @@ async function stopAllSessions(): Promise<void> {
 }
 
 // The bridge re-executes its own artifact as the MCP server child that
-// exposes bb's dynamic tools to the ACP agent (`node <artifact> --mcp-stdio`).
+// exposes zcc's dynamic tools to the ACP agent (`node <artifact> --mcp-stdio`).
 // That is a different program, not this bridge starting itself: the bootstrap
 // imports the artifact without the flag, so importing it starts nothing.
 if (process.argv.includes("--mcp-stdio")) {

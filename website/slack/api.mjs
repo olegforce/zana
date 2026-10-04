@@ -1,5 +1,6 @@
 import { taskEntity, taskTrigger } from "./embeds.mjs";
 import { SlackError } from "./security.mjs";
+import { diagramPng, uploadDiagram } from "./diagram-upload.mjs";
 
 const channelId = (value) =>
   typeof value === "string" && /^[CG][A-Z0-9]{5,30}$/.test(value);
@@ -13,6 +14,7 @@ const formMethods = new Set([
   "conversations.info",
   "conversations.list",
   "chat.getPermalink",
+  "files.getUploadURLExternal",
 ]);
 const managedChannelName = (value) =>
   typeof value === "string" &&
@@ -33,7 +35,8 @@ export const internalChannel = (c) =>
 
 /** Fixed Slack origin, no redirects, no retries of writes, bounded bodies. */
 export function slackClient(botToken, fetcher = fetch) {
-  return async (method, args = {}) => {
+  return async function call(method, args = {}) {
+    if (method === "files.uploadDiagram") return uploadDiagram(call, fetcher, args);
     if (!/^[a-z]+(?:\.[a-zA-Z]+){1,2}$/.test(method))
       throw new SlackError("invalid_method");
     // Slack's simple read methods ignore or reject their arguments when this
@@ -95,7 +98,7 @@ export function slackClient(botToken, fetcher = fetch) {
   };
 }
 
-export function createScopedSlack({ call, registry, identity, origin }) {
+export function createScopedSlack({ call, registry, identity, origin, decorateHome }) {
   async function memberChannels(link) {
     const ids = new Set();
     let cursor;
@@ -133,6 +136,19 @@ export function createScopedSlack({ call, registry, identity, origin }) {
   async function proxy(link, method, input) {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw new SlackError("invalid_arguments");
+    if (method === "files.uploadDiagram") {
+      await channel(link, input.channel);
+      if (!timestamp(input.thread_ts)) throw new SlackError("invalid_timestamp");
+      await registry.conversation(link, input.channel, input.thread_ts);
+      diagramPng(input.png);
+      if (await registry.count(link, "diagram") >= 500) throw new SlackError("diagram_limit", 429);
+      const value = await call(method, { png: input.png });
+      if (value.ok && /^F[A-Z0-9]{5,30}$/.test(value.file_id || "")) {
+        await registry.remember(link, value.file_id, "diagram", 90 * 86400_000);
+        await registry.remember(link, `${input.channel}:${input.thread_ts}:${value.file_id}`, "diagram-destination", 90 * 86400_000);
+      }
+      return value;
+    }
     if (["agents.sessions.setStatus", "assistant.threads.setStatus", "assistant.threads.setSuggestedPrompts"].includes(method)) {
       await channel(link, input.channel_id);
       if (!timestamp(input.thread_ts)) throw new SlackError("invalid_timestamp");
@@ -158,6 +174,7 @@ export function createScopedSlack({ call, registry, identity, origin }) {
       await registry.conversation(link, input.conversation_channel, input.conversation_ts);
       if (typeof input.title !== "string" || !input.title || input.title.length > 200 || input.document_content?.type !== "markdown" || typeof input.document_content.markdown !== "string" || Buffer.byteLength(input.document_content.markdown) > 24000 || (directId(input.conversation_channel) ? input.channel_id !== undefined : input.channel_id !== input.conversation_channel)) throw new SlackError("invalid_canvas");
       if (await registry.count(link, "canvas") >= 500) throw new SlackError("canvas_limit", 429);
+      for (const match of input.document_content.markdown.matchAll(/https:\/\/[^\s)]+\/files\/[^\s)]*?(F[A-Z0-9]{5,30})(?:\/[^\s)]*)?/g)) await registry.object(link, `${input.conversation_channel}:${input.conversation_ts}:${match[1]}`, "diagram-destination");
       const value = await call(method, { title: input.title, document_content: { type: "markdown", markdown: input.document_content.markdown }, ...(input.channel_id ? { channel_id: input.channel_id } : {}) });
       if (value.ok && /^F[A-Z0-9]{5,30}$/.test(value.canvas_id || "")) await registry.remember(link, value.canvas_id, "canvas", 365 * 86400_000);
       return value;
@@ -252,7 +269,7 @@ export function createScopedSlack({ call, registry, identity, origin }) {
         throw new SlackError("user_not_owned", 403);
       const value = await call(method, {
         user_id: link.slack_user,
-        view: input.view,
+        view: decorateHome ? await decorateHome(input.view, link) : input.view,
       });
       if (value.ok && value.view?.id)
         await registry.remember(link, value.view.id, "view", 30 * 86400_000);
@@ -342,6 +359,28 @@ export function createScopedSlack({ call, registry, identity, origin }) {
       await registry.conversation(link, input.channel, input.thread_ts);
       args.thread_ts = input.thread_ts;
     }
+    // Images must be uploaded for this exact conversation by this linked owner.
+    const imageBlocks = [];
+    let blockNodes = 0;
+    const inspect = (value, depth = 0) => {
+      if (++blockNodes > 2000 || depth > 20) throw new SlackError("invalid_blocks");
+      if (!value || typeof value !== "object") return;
+      if (value.type === "image") imageBlocks.push(value);
+      for (const child of Object.values(value)) if (child && typeof child === "object") inspect(child, depth + 1);
+    };
+    if (input.blocks !== undefined) {
+      if (!Array.isArray(input.blocks) || input.blocks.length > 50) throw new SlackError("invalid_blocks");
+      inspect(input.blocks);
+    }
+    for (const block of imageBlocks) {
+      if (!/^F[A-Z0-9]{5,30}$/.test(block.slack_file?.id || "") || block.image_url || block.slack_file.url) throw new SlackError("invalid_diagram_image");
+      const root = input.thread_ts || input.conversation_ts;
+      if (!timestamp(root)) throw new SlackError("invalid_timestamp");
+      await registry.conversation(link, input.channel, root);
+      if (method === "chat.update") await registry.object(link, `${input.channel}:${input.ts}:${root}`, "message-conversation");
+      await registry.object(link, block.slack_file.id, "diagram");
+      await registry.object(link, `${input.channel}:${root}:${block.slack_file.id}`, "diagram-destination");
+    }
     const canvasMatch = directId(input.channel) && typeof input.text === "string"
       ? input.text.match(new RegExp(`https://app\\.slack\\.com/docs/${identity.team}/(F[A-Z0-9]{5,30})(?:\\s|$)`))
       : undefined;
@@ -356,6 +395,7 @@ export function createScopedSlack({ call, registry, identity, origin }) {
         "message",
         90 * 86400_000,
       );
+      if (method === "chat.postMessage" && input.thread_ts) await registry.remember(link, `${input.channel}:${value.ts}:${input.thread_ts}`, "message-conversation", 90 * 86400_000);
       if (method === "chat.postMessage" && !input.thread_ts)
         await registry.bind(link, input.channel, value.ts);
       if (canvasMatch)

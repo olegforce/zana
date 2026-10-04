@@ -5,7 +5,7 @@ const normalizedToolCallRequestSchema = z.object({
   providerThreadId: z.string().min(1),
   threadId: z.string().min(1).optional(),
   // Canonical bridge wire form: required string when known, required null when
-  // the provider cannot resolve the BB turn id itself.
+  // the provider cannot resolve the ZCC turn id itself.
   turnId: z.union([z.string().min(1), z.null()]),
   callId: z.string().min(1),
   tool: z.string().min(1),

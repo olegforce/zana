@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CLAUDE_CODE_MOCK_CLI_TRAFFIC_CONFIG } from "@zana-ai/zcc-domain/thread-runtime";
 import { createProviderForId } from "./provider-registry.js";
 import type { HostDaemonAcpLaunchSpec } from "@zana-ai/zcc-host-daemon-contract";
@@ -82,7 +82,7 @@ function expectBridgeSpawn(
     expect(workerArgs.at(-1)).toMatch(/bridge-worker-entry\.ts$/u);
   } else {
     expect(workerArgs).toEqual([
-      `${expected.bundleDir}/bb-provider-bridge-worker.mjs`,
+      `${expected.bundleDir}/zcc-provider-bridge-worker.mjs`,
     ]);
   }
 }
@@ -128,7 +128,7 @@ describe("provider registry", () => {
     });
 
     expectBridgeSpawn(piProvider, {
-      module: "/tmp/bb-pi-bridge.mjs",
+      module: "/tmp/zcc-pi-bridge.mjs",
       bundleDir: "/tmp",
     });
   });
@@ -166,7 +166,7 @@ describe("provider registry", () => {
     expect(provider.id).toBe("pi");
     expect(provider.process.command).toBe("node");
     expectBridgeSpawn(provider, {
-      module: /agent-runtime\/src\/pi\/bridge\/bridge\.ts$/u,
+      module: /plugins\/provider-pi\/src\/bridge\/bridge\.ts$/u,
     });
     expect(existsSync(provider.process.args.at(-3) ?? "")).toBe(true);
   });
@@ -215,7 +215,7 @@ describe("provider registry", () => {
 
   it("carries the built-in cursor launch spec to the acp bridge", () => {
     // The server resolves launch specs only for configured and known ACP
-    // agents; bb's own cursor provider has none, so the registry's built-in
+    // agents; zcc's own cursor provider has none, so the registry's built-in
     // table is the only thing that tells the bridge what to spawn — and it has
     // to survive the move onto the generic artifact route.
     const provider = createProviderForId("acp-cursor", {
@@ -412,7 +412,7 @@ describe("provider registry", () => {
         permissionScope: "full",
         approvalReviewer: null,
         permissionEscalation: null,
-        envVars: { BB_THREAD_ID: "thread-1" },
+        envVars: { ZCC_THREAD_ID: "thread-1" },
       },
       instructionMode: "append",
     });
@@ -430,7 +430,7 @@ describe("provider registry", () => {
     });
   });
 
-  // Pi is the last bridge bb delivers in the daemon bundle: its launch names
+  // Pi is the last bridge zcc delivers in the daemon bundle: its launch names
   // that bundled bridge instead of carrying an artifact hash.
   it("routes pi to its bundled canonical bridge", () => {
     const provider = createProviderForId("pi", {
@@ -440,8 +440,23 @@ describe("provider registry", () => {
 
     expect(provider.process.command).toBe("node");
     const bridgeEntry = provider.process.args.at(-3) ?? "";
-    expect(bridgeEntry).toMatch(/agent-runtime\/src\/pi\/bridge\/bridge\.ts$/u);
+    expect(bridgeEntry).toMatch(/plugins\/provider-pi\/src\/bridge\/bridge\.ts$/u);
     expect(existsSync(bridgeEntry)).toBe(true);
+  });
+
+  it("restores only declared host environment values with explicit overrides taking priority", () => {
+    vi.stubEnv("ZCC_TEST_PROVIDER_OVERRIDE", "host-value");
+    vi.stubEnv("ZCC_UNDECLARED_PROVIDER_SETTING", "must-not-inherit");
+    try {
+      const options = { additionalWorkspaceWriteRoots: [], bridgeLaunch: {
+        ...PI_BRIDGE_LAUNCH,
+        envPassthrough: ["ZCC_TEST_PROVIDER_OVERRIDE", "ZCC_MISSING_PROVIDER_SETTING"],
+      } };
+      expect(createProviderForId("pi", options).process.env).toEqual({ ZCC_TEST_PROVIDER_OVERRIDE: "host-value" });
+      expect(createProviderForId("pi", { ...options, bridgeNodeEnv: { ZCC_TEST_PROVIDER_OVERRIDE: "explicit-value" } }).process.env)
+        .toEqual({ ZCC_TEST_PROVIDER_OVERRIDE: "explicit-value" });
+      expect(createProviderForId("pi", { additionalWorkspaceWriteRoots: [], bridgeLaunch: PI_BRIDGE_LAUNCH }).process.env).toEqual({});
+    } finally { vi.unstubAllEnvs(); }
   });
 
   // Every bridge-bound command carries a launch, so a missing one means the

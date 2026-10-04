@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { BRIDGE_JSON_RPC_ERRORS } from "@zana-ai/zcc-plugin-sdk/provider-bridge";
 import { PI_BRIDGE_ARGS_ENV, PI_BRIDGE_COMMAND_ENV } from "./rpc-child.js";
 import {
+  FULL_PERMISSION_OPTIONS,
   type FakePiBridgeHarness,
   fakePiPath,
   startFakePiBridge,
@@ -82,6 +83,11 @@ it("reports not_installed when the launch command is missing", async () => {
     code: BRIDGE_JSON_RPC_ERRORS.MISSING_EXECUTABLE,
     message: expect.stringContaining("Could not find the pi CLI"),
   });
+  const thread = await harness.request(nextRequestId(), "thread/start", {
+    threadId: "missing-cli-thread", cwd: harness.workspaceDir,
+    options: { ...FULL_PERMISSION_OPTIONS, model: "default" }, instructionMode: "append",
+  });
+  expect(thread.error).toMatchObject({ message: expect.stringContaining("Could not find the pi CLI") });
 });
 
 it("fails closed when pi cannot report its version, with install guidance", async () => {
@@ -105,6 +111,11 @@ it("fails closed when pi cannot report its version, with install guidance", asyn
   expect(models.error).toMatchObject({
     message: expect.stringContaining("Could not determine the pi version"),
   });
+  const thread = await harness.request(nextRequestId(), "thread/start", {
+    threadId: "bad-version-thread", cwd: harness.workspaceDir,
+    options: { ...FULL_PERMISSION_OPTIONS, model: "default" }, instructionMode: "append",
+  });
+  expect(thread.error).toMatchObject({ message: expect.stringContaining("Could not determine the pi version") });
 });
 
 it("memoizes the install gate per launch path across health polls", async () => {

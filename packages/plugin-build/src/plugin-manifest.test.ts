@@ -151,7 +151,7 @@ describe("validatePluginBuildManifest: bb.branding assets", () => {
         join(scriptedLogo.dir, "package.json"),
       ),
     ).rejects.toThrow(
-      /bb\.branding\.logo\.light \("\.\/logo\.svg"\) must not contain a <script> element/,
+      /zcc\.branding\.logo\.light \("\.\/logo\.svg"\) must not contain a <script> element/,
     );
 
     const handlerDark = await fixture(
@@ -170,7 +170,7 @@ describe("validatePluginBuildManifest: bb.branding assets", () => {
         join(handlerDark.dir, "package.json"),
       ),
     ).rejects.toThrow(
-      /bb\.branding\.logo\.dark \("\.\/logo-dark\.svg"\) must not contain a <path onload> event handler attribute/,
+      /zcc\.branding\.logo\.dark \("\.\/logo-dark\.svg"\) must not contain a <path onload> event handler attribute/,
     );
 
     const doctypeIcon = await fixture(
@@ -185,7 +185,7 @@ describe("validatePluginBuildManifest: bb.branding assets", () => {
         join(doctypeIcon.dir, "package.json"),
       ),
     ).rejects.toThrow(
-      /bb\.branding\.icon must not contain a doctype declaration/,
+      /zcc\.branding\.icon must not contain a doctype declaration/,
     );
     const externalIcon = await fixture(
       {},
@@ -228,6 +228,6 @@ describe("validatePluginBuildManifest: bb.branding assets", () => {
     const { dir, manifest } = await fixture({ Receipt: "./icons/r.svg" });
     await expect(
       validatePluginBuildManifest(manifest, dir, join(dir, "package.json")),
-    ).rejects.toThrow(/bb\.branding\.experimental_icons\.Receipt/);
+    ).rejects.toThrow(/zcc\.branding\.experimental_icons\.Receipt/);
   });
 });

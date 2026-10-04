@@ -100,6 +100,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         bullets: [
           'Register `{ id, title, icon?, component }`. Example: `app.slots.experimental_agentsView({ id: "world", title: "World", icon: "Building2", component: WorldView })`.',
           'The host passes `projects`, `members`, `schedules` and `executions`, filtered by its project scope, search and calendar toggle. `projectId` is `null` in the global view.',
+          'Optional `population` contains the full scoped fleet before search, for stable maps and live counts. It respects the calendar toggle. Use the filtered records for search results; older hosts omit `population`.',
           'Call `onInspect(item.key)` to open the existing agent, schedule or execution inspector. Keep these opaque keys unchanged; no extra polling is needed.',
           'Members include live and exited sessions. Use `live` for population counts; `done` means a session ended, not that its task succeeded. Schedules and executions are separate records.',
           'Desktop selection survives reload. If the plugin is disabled or removed, the host shows Board. Plugin reload remounts the view; release animation frames and subscriptions on unmount.',

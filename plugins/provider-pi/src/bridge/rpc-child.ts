@@ -8,8 +8,8 @@ import {
   withoutBridgeRuntimeEnv,
 } from "@zana-ai/zcc-plugin-sdk/provider-bridge";
 
-export const PI_BRIDGE_COMMAND_ENV = "BB_PI_BRIDGE_COMMAND";
-export const PI_BRIDGE_ARGS_ENV = "BB_PI_BRIDGE_ARGS";
+export const PI_BRIDGE_COMMAND_ENV = "ZCC_PI_BRIDGE_COMMAND";
+export const PI_BRIDGE_ARGS_ENV = "ZCC_PI_BRIDGE_ARGS";
 
 export const PI_CHANNEL_RECORDING_KEY = "bbChannel";
 
@@ -70,11 +70,11 @@ export function resolvePiLaunch(env: NodeJS.ProcessEnv): {
   command: string;
   args: string[];
 } {
-  const command = env[PI_BRIDGE_COMMAND_ENV];
+  const command = env[PI_BRIDGE_COMMAND_ENV] ?? env.BB_PI_BRIDGE_COMMAND;
   if (!command) {
     return { command: "pi", args: [] };
   }
-  const rawArgs = env[PI_BRIDGE_ARGS_ENV];
+  const rawArgs = env[PI_BRIDGE_ARGS_ENV] ?? env.BB_PI_BRIDGE_ARGS;
   if (!rawArgs) {
     return { command, args: [] };
   }

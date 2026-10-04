@@ -86,8 +86,8 @@ interface BuildPiSessionOptionsArgs {
 
 /**
  * The canonical Provider Bridge Protocol params, per method. A new Pi session
- * uses its bb thread id as provider identity; a resumed session can have a new
- * bb thread id while retaining the provider id that names its persisted file.
+ * uses its zcc thread id as provider identity; a resumed session can have a new
+ * zcc thread id while retaining the provider id that names its persisted file.
  */
 const piCommandSchema = z.discriminatedUnion("method", [
   z.object({
@@ -260,7 +260,7 @@ function createForwardToolCall(getThreadId: () => string): ToolCallForwarder {
     }
     return forwardToolCall({
       arguments: args,
-      // The stable provider identity, not the bb thread id: a resumed session
+      // The stable provider identity, not the zcc thread id: a resumed session
       // can run under a new thread id while keeping its persisted-file name.
       providerThreadId: threadSession.providerThreadId,
       scope: threadSession,
@@ -376,7 +376,7 @@ function emitForSession(
 /**
  * A session announces identity before any `thread/event`. Pi sessions always
  * persist to the file named by their stable provider identity, so every
- * session is restorable even when bb resumes it under a new thread id.
+ * session is restorable even when zcc resumes it under a new thread id.
  */
 function sendThreadIdentity(threadId: string, providerThreadId: string): void {
   send({
@@ -633,9 +633,9 @@ async function handleRequest(
       // configuration decides which providers are configured.
       await handleModelList(request.id, request.params);
       break;
-    // A start mints provider identity from the bb thread id. Resume keeps the
+    // A start mints provider identity from the zcc thread id. Resume keeps the
     // caller's stable provider identity while registering the live session
-    // under the new bb thread id used by later turn commands.
+    // under the new zcc thread id used by later turn commands.
     case "thread/start":
       await handleThreadConstruction(
         request.id,
@@ -798,7 +798,7 @@ async function startPiThreadSession(
 }
 
 /**
- * Announce the constructed session. Starts mint identity from the bb thread
+ * Announce the constructed session. Starts mint identity from the zcc thread
  * id; resumes return the earlier identity whose session file was reopened.
  * The synchronous result keeps callers from racing the notification.
  */
@@ -825,7 +825,7 @@ async function handleThreadConstruction(
   sendThreadSessionResult(id, threadId, providerThreadId);
 }
 
-// Pi mints provider identity from the bb thread id for new sessions, and the
+// Pi mints provider identity from the zcc thread id for new sessions, and the
 // session file is the deterministic path for that provider id. Forking means
 // materializing source history at the NEW thread's path, then launching like
 // thread/start. A dedicated handler keeps "open my own file fresh" distinct
@@ -920,7 +920,7 @@ function startPiPrompt(
 }
 
 /**
- * Manual compaction travels the prompt path: bb's compact affordance sends a
+ * Manual compaction travels the prompt path: zcc's compact affordance sends a
  * standalone builtin `/compact` mention as turn input. Pi's own `/compact`
  * slash command belongs to its interactive mode, so the bridge runs the SDK
  * compaction directly; the resulting `compaction_start`/`compaction_end`

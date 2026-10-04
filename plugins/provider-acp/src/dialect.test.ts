@@ -47,7 +47,7 @@ describe("resolveAcpDialect", () => {
     ).toBe(GENERIC_ACP_DIALECT);
   });
 
-  // Selecting on the launch command, not a bb provider id, is what lets a
+  // Selecting on the launch command, not a zcc provider id, is what lets a
   // user-configured instance of the same agent get the same dialect.
   it("gives an unknown agent the generic dialect, which answers nothing", () => {
     const dialect = resolveAcpDialect({ command: "amp" });
@@ -360,7 +360,7 @@ describe("cursor sub-agents", () => {
     });
   });
 
-  // bb answered cursor/task with -32601: a protocol error for a request the
+  // zcc answered cursor/task with -32601: a protocol error for a request the
   // agent is entitled to send, and the sub-agent detail was thrown away.
   it("acknowledges cursor/task and reports the sub-agent it names", () => {
     expect(
@@ -415,7 +415,7 @@ describe("grok dialect", () => {
     ).toEqual({ name: "run_terminal_command", kind: "execute" });
   });
 
-  // The side channel is the vendor's, so it is read defensively: a kind bb's
+  // The side channel is the vendor's, so it is read defensively: a kind zcc's
   // vocabulary does not have is no kind at all, and a call with no _meta
   // leaves every decision to the protocol fields.
   it("ignores a kind outside the ACP vocabulary and a missing _meta", () => {

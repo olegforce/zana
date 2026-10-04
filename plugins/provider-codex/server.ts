@@ -12,8 +12,8 @@ function booleanSetting(
  * this provider: with the core catalog seed deleted, disabling this plugin
  * removes it. The host artifact is the `codex app-server` bridge (`zcc.host`).
  */
-export default function plugin(bb: ZccPluginApi) {
-  bb.settings.define({
+export default function plugin(zcc: ZccPluginApi) {
+  zcc.settings.define({
     memoryEnabled: {
       type: "boolean",
       label: "Memory",
@@ -27,7 +27,7 @@ export default function plugin(bb: ZccPluginApi) {
       default: false,
     },
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "codex",
     displayName: "Codex",
     icon: "./icons/codex.svg",

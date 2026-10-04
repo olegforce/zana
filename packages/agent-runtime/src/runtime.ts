@@ -367,7 +367,7 @@ function resolveThreadStoragePath(
 
 /**
  * Coordinates provider processes for an environment and bridges provider
- * JSON-RPC traffic into bb thread events, dynamic tool calls, and pending
+ * JSON-RPC traffic into zcc thread events, dynamic tool calls, and pending
  * interactions.
  */
 export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
@@ -826,7 +826,7 @@ function createAgentRuntimeInternal(
       sendJsonRpcError({
         child: args.proc.child,
         id: args.parsedId,
-        message: `Unable to resolve BB thread id for ${args.requestKind} on provider thread "${args.providerThreadId}"`,
+        message: `Unable to resolve ZCC thread id for ${args.requestKind} on provider thread "${args.providerThreadId}"`,
       });
       return null;
     }
@@ -834,7 +834,7 @@ function createAgentRuntimeInternal(
       sendJsonRpcError({
         child: args.proc.child,
         id: args.parsedId,
-        message: `${formatProviderRequestKindForSentence(args.requestKind)} thread hint "${args.threadIdHint}" did not match resolved BB thread "${resolvedThreadId}" for provider thread "${args.providerThreadId}"`,
+        message: `${formatProviderRequestKindForSentence(args.requestKind)} thread hint "${args.threadIdHint}" did not match resolved ZCC thread "${resolvedThreadId}" for provider thread "${args.providerThreadId}"`,
       });
       return null;
     }
@@ -1015,7 +1015,7 @@ function createAgentRuntimeInternal(
       !runtimeConfig ||
       // The experiment extends release to every restorable provider. It does
       // not gate release: Codex idle sessions are released without it, which
-      // is the behavior BB shipped before the experiment.
+      // is the behavior ZCC shipped before the experiment.
       (args.providerSessionReapingEnabled
         ? !runtimeConfig.sessionRestorable
         : runtimeConfig.providerId !== CODEX_PROVIDER_ID)
@@ -1204,7 +1204,7 @@ function createAgentRuntimeInternal(
       ) {
         // Codex archive/unarchive is not idempotent at the protocol layer;
         // duplicate-state errors mean the requested final state is already
-        // reached from bb's perspective.
+        // reached from zcc's perspective.
       } else {
         throw error;
       }
@@ -1382,7 +1382,7 @@ function createAgentRuntimeInternal(
 
       if (targetThreadIds.length === 0) {
         options.onStderr?.(
-          `Dropping unscoped provider event ${event.type}; no bb thread could be resolved`,
+          `Dropping unscoped provider event ${event.type}; no ZCC thread could be resolved`,
         );
         continue;
       }
@@ -1513,7 +1513,7 @@ function createAgentRuntimeInternal(
 
     // The runtime does NOT interpret notification content — it delegates
     // entirely to the adapter's translateEvent. Every provider now speaks the
-    // canonical bridge protocol, so this is always a bb/* envelope the generic
+    // canonical bridge protocol, so this is always a zcc/* envelope the generic
     // adapter unwraps; the branch stays provider-agnostic regardless.
     handleProviderNotification({
       parsed: parsedLine.parsed,
@@ -1982,7 +1982,7 @@ function createAgentRuntimeInternal(
             });
             // An ambiguous threadId is not sufficient to adopt a provider
             // thread, but it is safe to use for best-effort cleanup because
-            // the BB staging id is unique to this rewind operation.
+            // the ZCC staging id is unique to this rewind operation.
             providerThreadIdForCleanup =
               result.providerThreadId ??
               result.thread?.id ??

@@ -114,7 +114,7 @@ function threadEventsOfType(type: string): Record<string, unknown>[] {
   return threadEvents().filter((event) => event.type === type);
 }
 
-/** The bb thread id a provider session id belongs to. */
+/** The zcc thread id a provider session id belongs to. */
 const bbThreadIdByProviderThreadId = new Map<string, string>();
 
 function bbThreadIdFor(providerThreadId: string): string {
@@ -369,7 +369,7 @@ function sendTurnRequest(
 
 /**
  * The composer's standalone builtin `/compact` mention, as a turn/start input:
- * bb's manual-compaction request rides the ordinary turn path.
+ * zcc's manual-compaction request rides the ordinary turn path.
  */
 function compactCommandInput(): unknown[] {
   return JSON.parse(
@@ -1806,10 +1806,10 @@ describe("acp bridge", () => {
     const env = new Map(
       mcpServerConfig.env.map(({ name, value }) => [name, value]),
     );
-    const host = env.get("BB_ACP_DYNAMIC_TOOL_HOST");
-    const port = Number(env.get("BB_ACP_DYNAMIC_TOOL_PORT"));
-    const threadId = env.get("BB_ACP_DYNAMIC_TOOL_THREAD_ID");
-    const token = env.get("BB_ACP_DYNAMIC_TOOL_TOKEN");
+    const host = env.get("ZCC_ACP_DYNAMIC_TOOL_HOST");
+    const port = Number(env.get("ZCC_ACP_DYNAMIC_TOOL_PORT"));
+    const threadId = env.get("ZCC_ACP_DYNAMIC_TOOL_THREAD_ID");
+    const token = env.get("ZCC_ACP_DYNAMIC_TOOL_TOKEN");
     if (!host || !Number.isInteger(port) || !threadId || !token) {
       throw new Error("MCP server config is missing dynamic tool bridge env");
     }
@@ -1942,7 +1942,7 @@ describe("acp bridge", () => {
       "bound execution tool completion",
     );
     expect(completed.item).toMatchObject({
-      server: "bb",
+      server: "zcc",
       tool: "execution_start",
     });
     startedProviderThreadIds.pop();
@@ -2015,7 +2015,7 @@ describe("acp bridge", () => {
     const prompt: unknown = JSON.parse(
       readFileSync(promptLog, "utf8").trim().split("\n")[0] ?? "null",
     );
-    expect(prompt).toContain("Available bb skills:");
+    expect(prompt).toContain("Available ZCC skills:");
     expect(prompt).toContain(
       "- deploy: Ship the app. (SKILL.md: /staged/acp-skills/deploy/SKILL.md)",
     );

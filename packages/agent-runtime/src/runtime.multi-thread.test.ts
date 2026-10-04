@@ -254,7 +254,7 @@ describe("createAgentRuntime multi-thread routing", () => {
       threadId: "my-thread",
     });
 
-    // Every event with a threadId should have the bb threadId, not the provider's
+    // Every event with a threadId should have the zcc threadId, not the provider's
     const threadEvents = events.filter((e) => "threadId" in e);
     expect(threadEvents.length).toBeGreaterThan(0);
     for (const e of threadEvents) {

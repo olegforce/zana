@@ -87,7 +87,7 @@ import {
 
 /**
  * The per-event translation scope the caller passes in (the bridge stamps the
- * bb thread id).
+ * zcc thread id).
  */
 interface AcpDeltaTranslationContext {
   threadId?: string;
@@ -247,14 +247,14 @@ export function createAcpDeltaTranslator(
   const mergedToolCalls = new Map<string, AcpOpenToolCall>();
 
   /**
-   * The bb-injected tools of the session, by name. One translator lives per
+   * The zcc-injected tools of the session, by name. One translator lives per
    * session, so the set is session-wide.
    */
   let injectedToolsByName = new Map<string, AcpInjectedTool>();
-  /** The bb tool each unsettled call is bound to, by call key. */
+  /** The zcc tool each unsettled call is bound to, by call key. */
   const injectedToolBindings = new Map<string, AcpInjectedTool>();
   /**
-   * bb tool calls the MCP proxy forwarded before the agent announced a
+   * zcc tool calls the MCP proxy forwarded before the agent announced a
    * matching tool_call, per thread, oldest first.
    */
   const pendingInjectedCalls = new Map<string, AcpInjectedTool[]>();
@@ -314,7 +314,7 @@ export function createAcpDeltaTranslator(
   }
 
   // -------------------------------------------------------------------------
-  // bb-injected tools (Q31)
+  // zcc-injected tools (Q31)
   // -------------------------------------------------------------------------
 
   function configureInjectedTools(tools: readonly AcpInjectedTool[]): void {
@@ -338,7 +338,7 @@ export function createAcpDeltaTranslator(
   }
 
   /**
-   * Bind a freshly announced tool_call to a bb tool: the one its title names,
+   * Bind a freshly announced tool_call to a zcc tool: the one its title names,
    * else the oldest proxied call still waiting for its announcement.
    */
   function bindAnnouncedCall(
@@ -356,7 +356,7 @@ export function createAcpDeltaTranslator(
   }
 
   /**
-   * The MCP proxy forwarded a call to bb tool `tool` for this thread. ACP
+   * The MCP proxy forwarded a call to zcc tool `tool` for this thread. ACP
    * gives the bridge no id that links the proxied call to the agent's own
    * tool_call (Cursor announces every MCP call as "MCP: tool", kind `other`),
    * so the binding is positional: the unbound candidate whose title names the
@@ -383,9 +383,9 @@ export function createAcpDeltaTranslator(
     pendingInjectedCalls.set(threadId, queue);
   }
 
-  /** Classify a call with its bb-tool binding, if it has one. */
+  /** Classify a call with its zcc-tool binding, if it has one. */
   /**
-   * Classify a call with its bb-tool binding, if it has one. The agent's own
+   * Classify a call with its zcc-tool binding, if it has one. The agent's own
    * dialect gets the first word — only it can know that a tool call is a
    * sub-agent, which version 1 of the protocol cannot express — and the
    * shared classifier decides everything else.
@@ -1250,7 +1250,7 @@ export function createAcpDeltaTranslator(
    * tool_call said "Web Fetch" with an empty rawInput). Bind it to the
    * in-flight call it describes: the call with the same id, else — Cursor
    * asks under its own id (`web_fetch_0`) — the single in-flight call of the
-   * same kind, the positional rule bb-injected tools already use.
+   * same kind, the positional rule zcc-injected tools already use.
    *
    * The merge is additive and never re-shapes an open row. A call that
    * already has a core shape keeps its own description (opencode's
@@ -1362,7 +1362,7 @@ export function createAcpDeltaTranslator(
     ];
   }
 
-  /** The bb tool an unsettled call is bound to (Q31), for its permission. */
+  /** The zcc tool an unsettled call is bound to (Q31), for its permission. */
   function getInjectedToolBinding(
     threadId: string,
     toolCallId: string,

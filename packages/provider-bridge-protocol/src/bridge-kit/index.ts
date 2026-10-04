@@ -2,7 +2,7 @@
  * The provider bridge kit: the runtime-agnostic building blocks a bridge
  * process uses to speak the canonical protocol — JSON-RPC plumbing, the stdio
  * harness, tool-call and interaction codecs, turn/item id scoping, and the
- * translation helpers every bb-authored bridge shares.
+ * translation helpers every zcc-authored bridge shares.
  *
  * A bridge ships from its plugin as a self-contained bundle, so everything
  * here must stay free of `@zana-ai/zcc-agent-runtime` (the runtime imports the kit, not

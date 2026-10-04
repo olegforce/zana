@@ -1,25 +1,113 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { PluginAgentsViewProps } from '@zana-ai/zcc-plugin-sdk/app';
-vi.mock('./use-city.js', () => ({ useCityCanvas: () => ({ available: true, reduced: false, viewport: { width: 1120, height: 775 } }) }));
+const canvasHooks = vi.hoisted(() => ({ select: (_key: string) => {}, hover: (_key?: string) => {} }));
+vi.mock('./use-city.js', () => ({ useCityCanvas: (...args: any[]) => { canvasHooks.select = args[5]; canvasHooks.hover = args[7]; return { available: true, reduced: false, viewport: { width: 1120, height: 775 } }; } }));
 import definition from './app.tsx';
 import { AgentCity } from './city-app.js';
 import server from './server.ts';
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 function data(n = 3): PluginAgentsViewProps {
   return { projectId: null, projects: Array.from({ length: 7 }, (_, i) => ({ id: `p${i}`, name: `Project ${i}` })),
     members: Array.from({ length: n }, (_, i) => ({ key: `agent:${i}`, title: `Agent ${i}`, projectId: 'p0', kind: 'agent', live: i !== 2, scheduled: i === 1, teamId: i === 1 ? 'team' : undefined, status: i === 0 ? 'needs-you' : i === 2 ? 'done' : 'working', detail: `Detail ${i}` })),
     schedules: [{ key: 'schedule:s', title: 'Nightly review', projectId: 'p0', enabled: true, running: false, nextRunAt: null }], executions: [{ key: 'execution:j', projectId: 'p0', title: 'Review team', state: 'RUNNING', needsAttention: true }], includeScheduled: true, searchQuery: '', onInspect: vi.fn() };
 }
 describe('Agent City interactions', () => {
+  it('keeps actual population, plots and an open interior stable through search, while filtering and highlighting matches', () => {
+    const props = data(6); props.members = props.members.map((m) => ({ ...m, live: true })); props.schedules = []; props.executions = [];
+    props.population = { members: props.members, schedules: [], executions: props.executions };
+    const { rerender } = render(<AgentCity {...props}/>);
+    const label = screen.getByRole('button', { name: /Project 0,/ });
+    const position = label.getAttribute('style'); expect(label.getAttribute('data-building-form')).toBe('tower');
+    rerender(<AgentCity {...props} members={[props.members[0]]} searchQuery="Agent 0"/>);
+    expect(label.getAttribute('style')).toBe(position); expect(label.getAttribute('data-building-form')).toBe('tower');
+    expect(label.getAttribute('data-search-match')).toBe('true');
+    rerender(<AgentCity {...props} members={[]} executions={[]} searchQuery="absent"/>);
+    expect(label.getAttribute('style')).toBe(position); expect(label.getAttribute('data-search-match')).toBe('false');
+    fireEvent.click(label); expect(document.querySelector('.city-world')?.getAttribute('data-interior-workers')).toBe('4');
+    expect(screen.getByText('No matches in this roster.')).toBeTruthy();
+    rerender(<AgentCity {...props} members={[props.members[0]]} searchQuery="Agent 0"/>);
+    expect(document.querySelectorAll('.city-member')).toHaveLength(1);
+    expect(screen.getByText('4 on this floor · 6 live agents in building')).toBeTruthy();
+    rerender(<AgentCity {...props}/>); expect(document.querySelectorAll('.city-member')).toHaveLength(6);
+    fireEvent.click(screen.getByRole('button', { name: /Back to city/ })); expect(screen.getByRole('button', { name: /Project 0,/ }).getAttribute('style')).toBe(position);
+  });
+  it('finds requests across floors, highlights their real worker and makes elevator and hover targets useful', () => {
+    const props = data(6); props.schedules = []; props.executions = [];
+    props.members = props.members.map((m, i) => ({ ...m, live: true, status: i === 5 ? 'needs-you' : 'idle' }));
+    render(<AgentCity {...props}/>);
+    expect(document.querySelector('.city-attention-beacon')?.textContent).toBe('!');
+    fireEvent.click(screen.getByRole('button', { name: /Project 0,/ }));
+    expect(screen.getByRole('option', { name: 'Floor 2 · 2 agents · 1 need you' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Find next request/ }));
+    expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('2');
+    const worker = screen.getByRole('button', { name: 'Worker Agent 5, Needs you' });
+    expect(worker.getAttribute('data-highlighted')).toBe('true'); expect(document.activeElement).toBe(worker);
+    fireEvent.click(screen.getByRole('button', { name: 'Take elevator to Floor 3' })); expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('3');
+    act(() => canvasHooks.select('city-floor:2')); expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('2');
+    act(() => canvasHooks.select('city-floor:99')); expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('2');
+    act(() => canvasHooks.hover('agent:5')); expect(screen.getByText('Agent 5 · Needs you')).toBeTruthy();
+    act(() => canvasHooks.hover('city-floor:3')); expect(screen.getByText('Elevator → Floor 3')).toBeTruthy();
+    act(() => canvasHooks.hover(undefined)); expect(screen.queryByText('Elevator → Floor 3')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Review requests · 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Find worker Agent 5' })); expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('2');
+    fireEvent.click(screen.getByRole('button', { name: 'Find worker Agent 0' })); expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('1');
+    act(() => canvasHooks.select('agent:0')); expect(props.onInspect).toHaveBeenLastCalledWith('agent:0');
+  });
+  it('restores the interior, worker highlight, pause and camera after inspection, with separate global and project snapshots', () => {
+    const props = data(6); props.members = props.members.map((m) => ({ ...m, live: true })); props.schedules = [];
+    let view = render(<AgentCity {...props}/>);
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    fireEvent.click(screen.getByRole('button', { name: /Project 0,/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Find worker Agent 5' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause motion' }));
+    props.onInspect = () => view.unmount(); view.rerender(<AgentCity {...props}/>);
+    fireEvent.click(screen.getByRole('button', { name: 'Worker Agent 5, Working' }));
+    view = render(<AgentCity {...props}/>);
+    expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe('2');
+    expect(screen.getByRole('button', { name: 'Resume motion' })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Worker Agent 5, Working' }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to city/ })); expect(screen.getByLabelText('Map zoom level').textContent).toBe('125%');
+    view.rerender(<AgentCity {...props} projectId="p0"/>); expect(screen.getByLabelText('Map zoom level').textContent).toBe('100%');
+    expect(screen.queryByLabelText('Building floor')).toBeNull();
+    view.rerender(<AgentCity {...props}/>); expect(screen.getByLabelText('Map zoom level').textContent).toBe('125%');
+  });
+  it('finds a worker on a later desk page and keeps seats stable as neighbors change', () => {
+    const props = data(105); props.members = props.members.map((m) => ({ ...m, live: true })); props.schedules = [];
+    const { rerender } = render(<AgentCity {...props}/>);
+    fireEvent.click(screen.getByRole('button', { name: /Project 0,/ }));
+    fireEvent.change(screen.getByLabelText('Search this roster'), { target: { value: 'Agent 91' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Find worker Agent 91' }));
+    const worker = screen.getByRole('button', { name: 'Worker Agent 91, Working' });
+    const floor = (screen.getByLabelText('Building floor') as HTMLSelectElement).value, number = worker.querySelector('.city-desk-number')?.textContent;
+    expect(screen.getByText(/Workers [23] \/ 3/)).toBeTruthy();
+    rerender(<AgentCity {...props} members={[{ ...props.members[0], key: 'agent:!arrival', title: 'Arrival' }, ...props.members]}/>);
+    expect((screen.getByLabelText('Building floor') as HTMLSelectElement).value).toBe(floor);
+    expect(screen.getByRole('button', { name: 'Worker Agent 91, Working' }).querySelector('.city-desk-number')?.textContent).toBe(number);
+  });
+  it('omits empty buildings and retains idle and scheduled-only projects with honest labels', () => {
+    const props = data(1);
+    props.members = [{ ...props.members[0], status: 'idle', harness: 'Codex' }];
+    props.schedules = [{ ...props.schedules[0], projectId: 'p1', harness: 'Cursor' }];
+    render(<AgentCity {...props}/>);
+    expect(document.querySelectorAll('.city-label')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /Project 2,/ })).toBeNull();
+    expect(screen.getByLabelText('Worker colors by harness').textContent).toContain('Codex');
+    expect(screen.getByLabelText('Worker colors by harness').textContent).toContain('Cursor');
+    fireEvent.click(screen.getByRole('button', { name: /Project 1,/ }));
+    expect(screen.getByRole('button', { name: 'Schedule board: Nightly review' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Agents on this floor' }).querySelectorAll('button')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule board: Nightly review' }));
+    expect(props.onInspect).toHaveBeenCalledWith('schedule:s');
+  });
   it('opens actual agents, schedules and team requests with opaque host keys', () => {
     const props = data(); render(<AgentCity {...props}/>); fireEvent.click(screen.getByRole('button', { name: /Project 0, / }));
     fireEvent.click(screen.getByRole('button', { name: /Agent 0 Detail/ })); expect(props.onInspect).toHaveBeenLastCalledWith('agent:0');
     fireEvent.click(screen.getByRole('button', { name: /Review requests/ }));
     fireEvent.click(screen.getByRole('button', { name: /Review team/ })); expect(props.onInspect).toHaveBeenLastCalledWith('execution:j');
     fireEvent.click(screen.getByRole('button', { name: /Scheduler station/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Nightly review/ })); expect(props.onInspect).toHaveBeenLastCalledWith('schedule:s');
+    fireEvent.click(screen.getByRole('button', { name: /^Nightly review/ })); expect(props.onInspect).toHaveBeenLastCalledWith('schedule:s');
     fireEvent.click(screen.getByRole('button', { name: /Done pavilion/ }));
     expect(screen.getByRole('button', { name: /Agent 2 Detail/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Agent 0 Detail/ })).toBeNull();
@@ -40,31 +128,35 @@ describe('Agent City interactions', () => {
     expect(screen.queryByRole('button', { name: /Agent 1 Detail/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /All 92/ }));
   });
-  it('shows every project together, keeps them visible when inspecting, and grows without paging', () => {
+  it('enters a building, preserves the city camera on return, and keeps stable project selection as the city grows', () => {
     const props = { ...data(), projects: Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, name: `Project ${i}` })) };
+    props.members = props.projects.map((p) => ({ ...data().members[0], key: p.id, projectId: p.id, harness: 'Codex' }));
     const { rerender } = render(<AgentCity {...props}/>);
     expect(screen.getByText('10 projects · one city')).toBeTruthy();
     expect(document.querySelectorAll('.city-label')).toHaveLength(10);
     expect(screen.queryByRole('button', { name: /district/i })).toBeNull();
     expect(screen.queryByRole('complementary')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Project 9, / }));
-    expect(screen.getByRole('heading', { name: 'Project 9' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Project 9' })).toHaveLength(2);
+    expect(document.querySelectorAll('.city-label')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: /Back to city/ }));
     expect(document.querySelectorAll('.city-label')).toHaveLength(10);
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     expect(screen.getByLabelText('Map zoom level').textContent).toBe('125%');
     fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
     expect(screen.getByLabelText('Map zoom level').textContent).toBe('100%');
     fireEvent.click(screen.getByRole('button', { name: 'Fit city' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All 10' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close roster' }));
     expect(screen.queryByRole('complementary')).toBeNull();
     fireEvent.change(screen.getByRole('combobox', { name: 'Find a project building' }), { target: { value: 'p6' } });
-    expect(screen.getByRole('heading', { name: 'Project 6' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Project 6' })).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Pause motion' }));
     expect(screen.getByRole('button', { name: 'Resume motion' }).getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: 'Resume motion' }));
-    rerender(<AgentCity {...props} projects={[{ id: 'new', name: 'New arrival' }, ...props.projects]}/>);
-    expect(document.querySelectorAll('.city-label')).toHaveLength(11);
-    expect(screen.getByRole('heading', { name: 'Project 6' })).toBeTruthy();
+    rerender(<AgentCity {...props} projects={[{ id: 'new', name: 'New arrival' }, ...props.projects]} members={[...props.members, { ...props.members[0], key: 'new', projectId: 'new' }]}/>);
+    expect(screen.getByRole('combobox', { name: 'Find a project building' }).querySelectorAll('option')).toHaveLength(12);
+    expect(screen.getAllByRole('heading', { name: 'Project 6' })).toHaveLength(2);
     rerender(<AgentCity {...props} projects={props.projects.slice(0, 1)}/>);
     expect(screen.getByRole('heading', { name: 'All agents' })).toBeTruthy();
   });
@@ -81,8 +173,62 @@ describe('Agent City interactions', () => {
   it('shows running and paused schedules without a fake ETA', () => {
     const props = data(); props.schedules = [...props.schedules, { key: 's2', title: 'Paused plan', projectId: 'p0', enabled: false, running: false, nextRunAt: null }, { key: 's3', title: 'Running plan', projectId: 'p0', enabled: true, running: true, nextRunAt: null }];
     render(<AgentCity {...props}/>); fireEvent.click(screen.getByRole('button', { name: /Scheduler station/ }));
-    expect(within(screen.getByRole('button', { name: /Paused plan/ })).getByText('Paused')).toBeTruthy();
-    expect(within(screen.getByRole('button', { name: /Running plan/ })).getByText('Running')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: /^Paused plan/ })).getByText('Paused')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: /^Running plan/ })).getByText('Running')).toBeTruthy();
+  });
+  it('opens real workstation keys, moves between tower floors and restores focus and zoom on Escape', () => {
+    const props = data(6); props.members = props.members.map((m) => ({ ...m, live: true }));
+    render(<AgentCity {...props}/>);
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    const label = screen.getByRole('button', { name: /Project 0,/ }); label.focus(); fireEvent.click(label);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Back to city/ }));
+    expect(screen.getByRole('group', { name: 'Agents on this floor' }).querySelectorAll('button')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Worker Agent 0, Needs you' })); expect(props.onInspect).toHaveBeenCalledWith('agent:0');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Building floor' }), { target: { value: '2' } });
+    expect(screen.getByRole('group', { name: 'Agents on this floor' }).querySelectorAll('button')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Worker Agent 5, Working' })); expect(props.onInspect).toHaveBeenLastCalledWith('agent:5');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Building floor' }), { target: { value: '0' } }); expect(screen.getByText(/Welcome in/)).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Building floor' }), { target: { value: '6' } }); expect(screen.getByText(/breathing room/)).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Building floor' }), { target: { value: '4' } }); expect(screen.getByText(/Ready for scheduled work/)).toBeTruthy();
+    const hostDialog = document.createElement('div'); hostDialog.setAttribute('role', 'dialog'); document.body.append(hostDialog);
+    fireEvent.keyDown(document, { key: 'Escape' }); expect(screen.getByLabelText('Building floor')).toBeTruthy(); hostDialog.remove();
+    const prevented = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }); prevented.preventDefault(); document.dispatchEvent(prevented);
+    expect(screen.getByLabelText('Building floor')).toBeTruthy(); fireEvent.keyDown(document, { key: 'Tab' });
+    fireEvent.keyDown(screen.getByRole('button', { name: /Back to city/ }), { key: 'Escape' });
+    expect(screen.getByLabelText('Map zoom level').textContent).toBe('125%');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Project 0,/ }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    const selector = screen.getByLabelText('Find a project building'); selector.focus(); fireEvent.change(selector, { target: { value: 'p0' } });
+    fireEvent.click(screen.getByRole('button', { name: /Back to city/ })); expect(document.activeElement).toBe(selector);
+  });
+  it('pages bounded workstation drawings and keeps a quiet floor useful when sessions disappear', () => {
+    const props = data(105); props.members = props.members.map((m) => ({ ...m, live: true })); props.schedules = [];
+    const { rerender } = render(<AgentCity {...props}/>); fireEvent.click(screen.getByRole('button', { name: /Project 0,/ }));
+    expect(screen.getByRole('button', { name: 'Previous workstations' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Next workstations' }));
+    expect(screen.getByText('Workers 2 / 3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous workstations' })); expect(screen.getByText('Workers 1 / 3')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Building floor'), { target: { value: '8' } });
+    rerender(<AgentCity {...props} members={props.members.map((m) => ({ ...m, live: false }))}/>);
+    expect(screen.queryByLabelText('Building floor')).toBeNull(); expect(screen.queryByRole('button', { name: /Project 0,/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Done pavilion/ }));
+    expect(screen.getByRole('button', { name: /Agent 0 Detail/ })).toBeTruthy();
+  });
+  it('moves idle agents out of desks without changing their count or key, while scheduled and busy agents remain seated', () => {
+    const props = data(1); props.schedules = [];
+    const { rerender } = render(<AgentCity {...props}/>); fireEvent.click(screen.getByRole('button', { name: /Project 0,/ }));
+    const map = document.querySelector('.city-world')!;
+    expect(map.getAttribute('data-interior-workers')).toBe('1'); expect(map.getAttribute('data-desk-workers')).toBe('1');
+    const idle = { ...props, members: [{ ...props.members[0], status: 'idle' as const }] };
+    rerender(<AgentCity {...idle}/>);
+    expect(map.getAttribute('data-interior-workers')).toBe('1'); expect(map.getAttribute('data-desk-workers')).toBe('0'); expect(map.getAttribute('data-idle-workers')).toBe('1');
+    fireEvent.click(screen.getByRole('button', { name: 'Worker Agent 0, Idle' })); expect(props.onInspect).toHaveBeenLastCalledWith('agent:0');
+    rerender(<AgentCity {...idle} members={[{ ...idle.members[0], scheduled: true }]}/>);
+    expect(map.getAttribute('data-desk-workers')).toBe('1'); expect(map.getAttribute('data-idle-workers')).toBe('0');
+    expect(screen.getByText('At a desk · Scheduled')).toBeTruthy();
+    rerender(<AgentCity {...props} members={[{ ...props.members[0], status: 'working' }]}/>);
+    expect(map.getAttribute('data-interior-workers')).toBe('1'); expect(map.getAttribute('data-desk-workers')).toBe('1');
   });
 });
 

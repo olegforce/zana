@@ -1,23 +1,25 @@
-import { describe, expect, it } from "vitest";
-import { createFakePluginHost } from "@zana-ai/zcc-plugin-sdk/testing";
-import piPlugin from "./server.js";
+import { describe, expect, it, vi } from "vitest";
+import type { ZccPluginApi } from "@zana-ai/zcc-plugin-sdk";
+import plugin from "./server.js";
+import { piProviderDeclaration } from "./src/declaration.js";
 
-function registeredDeclaration() {
-  const host = createFakePluginHost({ pluginId: "provider-pi" });
-  piPlugin(host.bb);
-  const declaration = host.harness.registrations.providerRegistrations.find(
-    (entry) => entry.id === "pi",
-  );
-  if (declaration === undefined)
-    throw new Error("expected pi to be registered");
-  return declaration;
-}
+const registeredDeclaration = piProviderDeclaration;
 
 describe("the pi plugin's environment passthrough", () => {
   it("declares the bridge command override variables so a host-set value reaches the bridge", () => {
     expect(registeredDeclaration().env).toEqual({
-      passthrough: ["BB_PI_BRIDGE_COMMAND", "BB_PI_BRIDGE_ARGS"],
+      passthrough: ["ZCC_PI_BRIDGE_COMMAND", "ZCC_PI_BRIDGE_ARGS", "BB_PI_BRIDGE_COMMAND", "BB_PI_BRIDGE_ARGS"],
     });
+  });
+
+  it("registers CLI passthrough and maintenance on the actual plugin entry", () => {
+    const register = vi.fn();
+    plugin({ agents: { experimental_registerProvider: register } } as unknown as ZccPluginApi);
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      env: registeredDeclaration().env,
+      maintenance: { health: true, usage: false, installation: true },
+      capabilities: expect.objectContaining({ permissionModes: ["full"] }),
+    }));
   });
 });
 

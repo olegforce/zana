@@ -67,11 +67,11 @@ export function createUnhandledProviderEvent(
 ): ProviderUnhandledEvent {
   const threadId = args.threadId ?? getThreadIdFromRawEvent(args.rawEvent);
   const providerThreadId = args.providerThreadId ?? threadId;
-  // Only a turn id the caller vouched for — one bb itself opened and can
+  // Only a turn id the caller vouched for — one zcc itself opened and can
   // therefore be trusted to have a stored turn/started — may scope this event.
   // A provider labels its own internal traffic with turn ids of its own making
   // (Codex tags automatic-compaction events "auto-compact-N"), and callers omit
-  // `turnId` precisely when bb has no active turn, so reading one out of the
+  // `turnId` precisely when zcc has no active turn, so reading one out of the
   // raw event would scope the event to a turn that never existed.
   const turnId = args.turnId;
 

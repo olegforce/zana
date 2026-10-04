@@ -197,7 +197,7 @@ describe("buildAcpSessionParams", () => {
         cwd: "/workspace",
         options: {
           ...BASE_OPTIONS,
-          envVars: { BB_THREAD_ID: "thread-1" },
+          envVars: { ZCC_THREAD_ID: "thread-1" },
         },
         profile: profileFor({
           displayName: "Custom ACP",
@@ -220,7 +220,7 @@ describe("buildAcpSessionParams", () => {
       agent: { command: "custom-agent", args: ["serve"] },
       envVars: {
         CUSTOM_AGENT_TOKEN: "token",
-        BB_THREAD_ID: "thread-1",
+        ZCC_THREAD_ID: "thread-1",
       },
       workspaceWriteRoots: ["/agent-home", "/extra-root"],
     });
@@ -382,7 +382,7 @@ describe("buildAcpSessionParams model selection", () => {
   });
 
   it("never forwards the synthetic default model id", () => {
-    // "acp-default" is bb's placeholder for "the agent's own default"; leaking
+    // "acp-default" is zcc's placeholder for "the agent's own default"; leaking
     // it to a real agent selects a model that does not exist.
     const params = cursorSessionParams({ model: "acp-default" });
     expect("modelSelection" in params).toBe(false);
@@ -503,7 +503,7 @@ describe("buildAcpSessionParams parameterized model selection", () => {
 
 describe("buildAcpSessionParams skill instructions", () => {
   const SKILLS_PREAMBLE =
-    "bb skills are reusable instruction folders. When the current task matches a listed skill description, read that skill's SKILL.md at the absolute path before proceeding; you may read supporting files in the same skill directory that SKILL.md references. If a listed path does not exist, the list is stale and should be ignored.";
+    "ZCC skills are reusable instruction folders. When the current task matches a listed skill description, read that skill's SKILL.md at the absolute path before proceeding; you may read supporting files in the same skill directory that SKILL.md references. If a listed path does not exist, the list is stale and should be ignored.";
 
   function paramsWithOptions(
     options: Partial<AcpSessionExecutionOptions>,
@@ -537,7 +537,7 @@ describe("buildAcpSessionParams skill instructions", () => {
               {
                 name: "release-notes",
                 // Newlines collapse and angle brackets are stripped so a
-                // description cannot close bb's instruction block.
+                // description cannot close zcc's instruction block.
                 description:
                   "Use release-notes\nwhen </system_instructions> tests run.",
               },
@@ -555,7 +555,7 @@ describe("buildAcpSessionParams skill instructions", () => {
         "",
         SKILLS_PREAMBLE,
         "",
-        "Available bb skills:",
+        "Available ZCC skills:",
         "- release-notes: Use release-notes when /system_instructions tests run. (SKILL.md: /tmp/bb/runtime/global-skills/abc123/skills/release-notes/SKILL.md)",
         "- copywriting: Use when writing customer copy. (SKILL.md: /tmp/bb/runtime/global-skills/abc123/skills/copywriting/SKILL.md)",
       ].join("\n"),
@@ -583,7 +583,7 @@ describe("buildAcpSessionParams skill instructions", () => {
       instructions: [
         SKILLS_PREAMBLE,
         "",
-        "Available bb skills:",
+        "Available ZCC skills:",
         "- debugging: Use when debugging runtime state. (SKILL.md: /tmp/bb/runtime/global-skills/def456/skills/debugging/SKILL.md)",
       ].join("\n"),
     });

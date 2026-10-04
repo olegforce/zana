@@ -15,7 +15,7 @@
  *
  * Icons are names: host glyphs from the shared icon registry
  * (`@bb/shared-ui/icon`), or a plugin's own declared icon as
- * `"<pluginId>/<name>"` (`bb.branding.experimental_icons`); the persisted
+ * `"<pluginId>/<name>"` (`zcc.branding.experimental_icons`); the persisted
  * form is a name, never bytes or a path.
  */
 import {

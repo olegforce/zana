@@ -20,9 +20,9 @@ const extraAcpCapabilities = {
  * First-party ACP provider plugin. Registers Cursor, OpenCode, OMP, Grok Build,
  * Mastra Code, Hermes Agent, and optional custom ACP agents from plugin settings.
  */
-export default function plugin(bb: ZccPluginApi) {
-  const settings = bb.settings.define(ACP_CUSTOM_AGENTS_SETTING);
-  bb.agents.experimental_registerProvider({
+export default function plugin(zcc: ZccPluginApi) {
+  const settings = zcc.settings.define(ACP_CUSTOM_AGENTS_SETTING);
+  zcc.agents.experimental_registerProvider({
     id: "acp-cursor",
     displayName: "Cursor",
     icon: "./icons/cursor.svg",
@@ -39,7 +39,7 @@ export default function plugin(bb: ZccPluginApi) {
     },
     composerActions: [],
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "acp-opencode",
     displayName: "OpenCode",
     icon: "./icons/opencode.svg",
@@ -57,7 +57,7 @@ export default function plugin(bb: ZccPluginApi) {
     },
     composerActions: [],
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "acp-omp",
     displayName: "OMP",
     icon: "./icons/omp.svg",
@@ -65,7 +65,7 @@ export default function plugin(bb: ZccPluginApi) {
     capabilities: extraAcpCapabilities,
     composerActions: [],
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "acp-grok",
     displayName: "Grok Build",
     icon: "./icons/grok.svg",
@@ -73,7 +73,7 @@ export default function plugin(bb: ZccPluginApi) {
     capabilities: extraAcpCapabilities,
     composerActions: [],
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "acp-mastracode",
     displayName: "Mastra Code",
     icon: "./icons/mastracode.svg",
@@ -81,7 +81,7 @@ export default function plugin(bb: ZccPluginApi) {
     capabilities: extraAcpCapabilities,
     composerActions: [],
   });
-  bb.agents.experimental_registerProvider({
+  zcc.agents.experimental_registerProvider({
     id: "acp-hermes-agent",
     displayName: "Hermes Agent",
     icon: "./icons/hermes.svg",
@@ -92,7 +92,7 @@ export default function plugin(bb: ZccPluginApi) {
 
   let customHandles: PluginProviderHandle[] = [];
   const applyCustom = (raw: string | number | boolean | undefined) => {
-    customHandles = syncCustomAcpAgents(bb, raw, customHandles);
+    customHandles = syncCustomAcpAgents(zcc, raw, customHandles);
   };
   void settings.get().then((values) => applyCustom(values[CUSTOM_ACP_AGENTS_SETTING]));
   settings.onChange((values) => applyCustom(values[CUSTOM_ACP_AGENTS_SETTING]));

@@ -1,13 +1,13 @@
 /**
- * `@zana-ai/zcc-plugin-sdk/ai-services` — the contract between bb's AI-services
+ * `@zana-ai/zcc-plugin-sdk/ai-services` — the contract between ZCC's AI-services
  * feature (server-side helper inference: thread titles, commit messages;
  * voice transcription) and a plugin that serves them from a host.
  *
  * A plugin registers one or more services with
- * `bb.experimental_aiServices.register({ id, displayName, kinds })` in its
- * `server.ts`, and implements the methods below in its `bb.host` entry
+ * `zcc.experimental_aiServices.register({ id, displayName, kinds })` in its
+ * `server.ts`, and implements the methods below in its `zcc.host` entry
  * (`experimental_defineHostEntry({ contract: experimental_aiServicesHostContract, ... })`).
- * Core routes the user's configured `BB_INFERENCE` / `BB_TRANSCRIPTION`
+ * Core routes the user's configured `ZCC_INFERENCE` / `ZCC_TRANSCRIPTION`
  * (`<serviceId>/<model>`) to the plugin that registered `serviceId` and calls
  * the method on the primary host. The `serviceId` travels on every call so one
  * plugin can serve several services from one host entry.

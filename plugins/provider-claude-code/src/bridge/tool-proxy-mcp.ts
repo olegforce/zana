@@ -9,9 +9,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { BB_BRIDGE_MCP_SERVER_NAME } from "../tool-classification.js";
+import { ZCC_BRIDGE_MCP_SERVER_NAME } from "../tool-classification.js";
 
-export const BRIDGE_MCP_SERVER_NAME = BB_BRIDGE_MCP_SERVER_NAME;
+export const BRIDGE_MCP_SERVER_NAME = ZCC_BRIDGE_MCP_SERVER_NAME;
 
 type BridgeToolCallContent =
   | { type: "text"; text: string }

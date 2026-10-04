@@ -15,6 +15,7 @@ describe('Windows release pipeline', () => {
       expect(gateIndex).toBeGreaterThan(0);
       expect(gateIndex).toBeLessThan(uploadIndex);
       expect(steps[gateIndex].run).toContain('e2e/plugin-authoring-live.spec.ts');
+      expect(steps[gateIndex].run).toContain('e2e/packaged-provider-startup.spec.ts');
       expect(steps[gateIndex]['continue-on-error']).toBeUndefined();
     }
     const mac = workflow.jobs.build.steps.find((step: any) => step.name === 'Verify packaged plugin authoring');

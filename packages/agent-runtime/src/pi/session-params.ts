@@ -18,8 +18,8 @@ export const piReasoningLevelValues = [
 export const piReasoningLevelSchema = z.enum(piReasoningLevelValues);
 export type PiReasoningLevel = z.infer<typeof piReasoningLevelSchema>;
 
-// BB's reasoning ladder is a superset of Pi's thinking levels. The only name
-// that differs is BB's "none" (no extended thinking), which Pi calls "off".
+// ZCC's reasoning ladder is a superset of Pi's thinking levels. The only name
+// that differs is ZCC's "none" (no extended thinking), which Pi calls "off".
 // Levels Pi does not support ("ultracode", "ultra") are dropped so the bridge
 // never receives a value it would reject; reconciliation picks the closest
 // supported level before this point, so this is a defensive floor.
@@ -76,7 +76,7 @@ export interface PiSessionParams {
   cwd: string;
   dynamicTools?: readonly DynamicTool[];
   model?: string;
-  /** Always carries BB_THREAD_ID; pi applies it as its shell env policy. */
+  /** Always carries ZCC_THREAD_ID; pi applies it as its shell env policy. */
   shellEnvOverrides: Record<string, string>;
   thinkingLevel?: PiReasoningLevel;
 }
@@ -89,7 +89,7 @@ export function buildPiSessionParams(
   return {
     cwd: args.cwd,
     shellEnvOverrides: {
-      BB_THREAD_ID: args.threadId,
+      ZCC_THREAD_ID: args.threadId,
       ...buildShellEnvOverrides(args.options.envVars),
     },
     ...(instructions

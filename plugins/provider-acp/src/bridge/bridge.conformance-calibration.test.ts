@@ -28,7 +28,7 @@ import { handleLine } from "./bridge.js";
  * The fake agent does not advertise loadSession, so the resume scenario
  * exercises the fresh-session fallback: the kit tolerates that because turn
  * and item ids carry per-session entropy (unique across resumes) and the
- * post-resume turn works — canonical handlers resolve sessions by bb
+ * post-resume turn works — canonical handlers resolve sessions by zcc
  * threadId, not by the stale providerThreadId.
  */
 

@@ -1,7 +1,7 @@
 /**
  * ACP event-translation core.
  *
- * Translates ACP bridge notifications into bb thread events and owns the
+ * Translates ACP bridge notifications into zcc thread events and owns the
  * per-thread turn state that translation accumulates. The adapter instantiates
  * one translator per adapter instance; the acp bridge (a separate process
  * entry) can instantiate the same translator.
@@ -342,10 +342,10 @@ function mergeAcpToolCallEvents(
 export interface CreateAcpEventTranslatorOptions {
   /** Provider id stamped onto unhandled-event envelopes. */
   providerId: string;
-  /** Prefix for bb-owned turn ids emitted by this translator instance. */
+  /** Prefix for zcc-owned turn ids emitted by this translator instance. */
   turnIdPrefix?: string;
   /**
-   * Prefix for bb-owned assistant/reasoning item ids. The legacy adapter keeps
+   * Prefix for zcc-owned assistant/reasoning item ids. The legacy adapter keeps
    * one translator per thread for the process lifetime, so its per-session
    * counters ("acp-assistant-N") stay unique. A per-session translator (the
    * canonical bridge surface) restarts those counters on resume, so it must

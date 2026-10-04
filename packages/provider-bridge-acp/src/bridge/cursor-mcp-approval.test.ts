@@ -19,12 +19,12 @@ function makeTempDir(prefix: string): string {
 
 function mcpConfig(threadId = "thread-1"): AcpMcpServerConfig {
   return {
-    name: "bb-bridge",
+    name: "zcc",
     command: "/usr/local/bin/node",
     args: ["/app/bridge.js", "--mcp-stdio"],
     env: [
-      { name: "BB_TOKEN", value: "secret" },
-      { name: "BB_THREAD", value: threadId },
+      { name: "ZCC_TOKEN", value: "secret" },
+      { name: "ZCC_THREAD", value: threadId },
     ],
   };
 }
@@ -42,7 +42,7 @@ describe("Cursor ACP session MCP approvals", () => {
         config: mcpConfig(),
         projectRoot: "/workspace/project",
       }),
-    ).toBe("bb-bridge-d4709a3db84ddb48");
+    ).toBe("zcc-2e466394c1a49d03");
   });
 
   it("does not touch Cursor data for other ACP agents", async () => {

@@ -129,6 +129,7 @@ describe('thread provider catalog', () => {
     const handle = registerThreadProvider('provider-acp', {
       id: 'acp-opencode',
       displayName: 'OpenCode',
+      env: { passthrough: ['ZCC_TEST_PROVIDER_COMMAND'] },
       capabilities: {
         supportsServiceTier: true,
         fork: 'tip',
@@ -141,6 +142,7 @@ describe('thread provider catalog', () => {
     });
     try {
       const launch = bridgeLaunchForProvider('acp-opencode', artifacts);
+      expect(launch.envPassthrough).toEqual(['ZCC_TEST_PROVIDER_COMMAND']);
       expect(launch.source).toEqual({
         kind: 'artifact',
         digest: 'ab'.repeat(32),

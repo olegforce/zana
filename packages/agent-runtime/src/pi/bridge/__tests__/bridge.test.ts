@@ -833,7 +833,7 @@ describe("pi bridge", () => {
       // Source file is left untouched by the fork.
       expect(readFileSync(sourceFile, "utf8")).toBe(sourceContent);
 
-      // The bridge opens the new thread's deterministic file and keeps bb's
+      // The bridge opens the new thread's deterministic file and keeps zcc's
       // threadId as the provider identity (no provider-id remap).
       expect(mockOpen).toHaveBeenCalledWith(targetFile, sessionDir);
       expect(bridge.messages).toContainEqual(

@@ -11,11 +11,11 @@ import { z } from "zod";
 // wrong tool while keeping the dynamic tool's displayed name.
 export const ACP_BRIDGE_MCP_SERVER_NAME = "zcc";
 
-const ENV_HOST = "BB_ACP_DYNAMIC_TOOL_HOST";
-const ENV_PORT = "BB_ACP_DYNAMIC_TOOL_PORT";
-const ENV_TOKEN = "BB_ACP_DYNAMIC_TOOL_TOKEN";
-const ENV_THREAD_ID = "BB_ACP_DYNAMIC_TOOL_THREAD_ID";
-const ENV_TOOLS = "BB_ACP_DYNAMIC_TOOLS";
+const ENV_HOST = "ZCC_ACP_DYNAMIC_TOOL_HOST";
+const ENV_PORT = "ZCC_ACP_DYNAMIC_TOOL_PORT";
+const ENV_TOKEN = "ZCC_ACP_DYNAMIC_TOOL_TOKEN";
+const ENV_THREAD_ID = "ZCC_ACP_DYNAMIC_TOOL_THREAD_ID";
+const ENV_TOOLS = "ZCC_ACP_DYNAMIC_TOOLS";
 
 export interface AcpStdioMcpServerConfig {
   name: string;
@@ -119,15 +119,20 @@ export function buildAcpHttpMcpServerConfig(
   };
 }
 
+// Honor existing configured proxies during an upgrade; emit only ZCC keys.
+function bridgeEnv(key: string): string | undefined {
+  return process.env[key] ?? process.env[key.replace(/^ZCC_/, "BB_")];
+}
+
 function readEnvironment(): McpServerEnvironment {
-  const port = Number(process.env[ENV_PORT]);
+  const port = Number(bridgeEnv(ENV_PORT));
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error(`${ENV_PORT} must be a positive integer`);
   }
-  const host = process.env[ENV_HOST];
-  const token = process.env[ENV_TOKEN];
-  const threadId = process.env[ENV_THREAD_ID];
-  const toolsJson = process.env[ENV_TOOLS];
+  const host = bridgeEnv(ENV_HOST);
+  const token = bridgeEnv(ENV_TOKEN);
+  const threadId = bridgeEnv(ENV_THREAD_ID);
+  const toolsJson = bridgeEnv(ENV_TOOLS);
   if (!host || !token || !threadId || !toolsJson) {
     throw new Error("Missing ACP dynamic tool MCP server environment");
   }

@@ -6,6 +6,11 @@ import { describe, expect, it } from 'vitest';
 import { PACKED_BRIDGE_WORKER_FILE, packedBridgeBundleDir } from './packed-bridge-dir.js';
 
 describe('packedBridgeBundleDir', () => {
+  it('recognizes a pre-rename installed bundle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-legacy-bridge-'));
+    writeFileSync(join(dir, 'bb-provider-bridge-worker.mjs'), '');
+    expect(packedBridgeBundleDir(pathToFileURL(join(dir, 'join.mjs')).href)).toBe(dir);
+  });
   it('returns the directory when the worker file sits beside the caller', () => {
     const dir = mkdtempSync(join(tmpdir(), 'zcc-packed-bridge-'));
     writeFileSync(join(dir, PACKED_BRIDGE_WORKER_FILE), '');

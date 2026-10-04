@@ -18,7 +18,7 @@ describe('City renderer', () => {
       renderer.draw(buildings, 'p0', 0, true); renderer.draw(buildings, 'p1', 20, false);
     }
     expect(fill).toHaveBeenCalled();
-    const buildings = cityBuildings(projectCity({ projects, members: [], schedules: [], executions: [], searchQuery: '' }), new Map());
+    const buildings = cityBuildings(projectCity({ projects, members: projects.map((p) => ({ key: p.id, projectId: p.id, status: 'idle' as const, live: true, kind: 'agent' as const, title: p.id, detail: '', scheduled: false, harness: 'Codex' })), schedules: [], executions: [], searchQuery: '' }), new Map());
     renderer.draw(buildings, '', 0, false);
     const layout = cityLayout(buildings), p = buildings[0], [x, y] = projectPoint(p.u + p.w / 2, p.v + p.d / 2, buildingHeight(p.count) + 8);
     expect(renderer.hit(layout.x + x * layout.scale, layout.y + y * layout.scale)).toBe('p0'); expect(renderer.hit(-20, -20)).toBeUndefined();

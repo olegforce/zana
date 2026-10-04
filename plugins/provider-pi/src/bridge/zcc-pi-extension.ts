@@ -1,4 +1,4 @@
-export const BB_PI_EXTENSION_SOURCE = String.raw`
+export const ZCC_PI_EXTENSION_SOURCE = String.raw`
 import { readFileSync, renameSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
@@ -47,7 +47,7 @@ function readLines(input, onLine) {
   });
 }
 
-// ---- JSON Schema → TypeBox (the bb tool definitions carry JSON Schema) ----
+// ---- JSON Schema → TypeBox (the zcc tool definitions carry JSON Schema) ----
 
 function toJsonSchemaObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -166,7 +166,7 @@ function buildParameters(inputSchema) {
 // ---- the extension ----
 
 export default function bbExtension(pi) {
-  const toolsFile = process.env.PI_BB_TOOLS_FILE;
+  const toolsFile = (process.env.PI_ZCC_TOOLS_FILE ?? process.env.PI_BB_TOOLS_FILE);
   const tools = toolsFile ? JSON.parse(readFileSync(toolsFile, "utf8")) : [];
   const pendingToolCalls = new Map();
   let nextId = 0;
@@ -339,7 +339,7 @@ export default function bbExtension(pi) {
       ...currentModelScope(),
     });
     // Pi's active-tool set is session state; a resumed or forked session can
-    // predate the bb tools, so make sure every injected tool is active.
+    // predate the zcc tools, so make sure every injected tool is active.
     if (tools.length > 0 && typeof pi.setActiveTools === "function") {
       const active = new Set(pi.getActiveTools?.() ?? []);
       let missing = false;

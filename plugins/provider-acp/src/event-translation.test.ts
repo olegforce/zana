@@ -55,7 +55,7 @@ function completedItems(events: ThreadEvent[]) {
 
 describe("acp event translation (bridge-shared invariants)", () => {
   // Historical fix 0c2f4cc9a: an update arriving after turn completion must
-  // not fabricate a fresh bb turn. A synthetic turn/started here would open a
+  // not fabricate a fresh zcc turn. A synthetic turn/started here would open a
   // turn that never completes, wedging the thread.
   it("does not synthesize a turn for updates that arrive after turn completion", () => {
     const translator = createAcpEventTranslator({ providerId: "acp" });

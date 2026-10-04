@@ -829,7 +829,7 @@ async function loadSessionDiscoveredModels(
           method: "initialize",
           params: {
             protocolVersion: ACP_PROTOCOL_VERSION,
-            clientInfo: { name: "bb", version: "1.0.0" },
+            clientInfo: { name: "zcc", version: "1.0.0" },
             clientCapabilities: acpClientCapabilities(parameterizedModelPicker),
           },
           resultSchema: acpInitializeResultSchema,
@@ -1537,7 +1537,7 @@ async function handleFsWriteTextFile(
   ) {
     responder.error(
       -32000,
-      `File writes outside the workspace are denied by BB's accept-edits permission mode: ${parsed.data.path}`,
+      `File writes outside the workspace are denied by ZCC's accept-edits permission mode: ${parsed.data.path}`,
     );
     return;
   }
@@ -1743,7 +1743,7 @@ async function startAgentSession(
       method: "initialize",
       params: {
         protocolVersion: ACP_PROTOCOL_VERSION,
-        clientInfo: { name: "bb", version: "1.0.0" },
+        clientInfo: { name: "zcc", version: "1.0.0" },
         clientCapabilities: acpClientCapabilities(
           params.parameterizedModelPicker,
           true,

@@ -28,7 +28,7 @@
     "branding": {
       "icon": "./icons/pi.svg"
     },
-    "server": "./server.mjs",
+    "server": "./server.ts",
     "app": "./app.tsx",
     "extra": {
       "threadProvider": true

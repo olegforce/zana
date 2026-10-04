@@ -158,7 +158,7 @@ const DIALECTS = {
   /**
    * `pi --mode rpc`: commands carry `{ id, type }`, responses are
    * `{ id, type: "response", command, success }`, and every other line is a
-   * raw AgentSessionEvent (or an `extension_ui_request`). The bb extension's
+   * raw AgentSessionEvent (or an `extension_ui_request`). The zcc extension's
    * channel (fd 3 child → bridge, fd 4 bridge → child) is recorded on the
    * same lanes wrapped as `{ bbChannel: <message> }`; this dialect routes
    * those back onto the channel fds.
@@ -173,7 +173,7 @@ const DIALECTS = {
       const channel = message.bbChannel;
       if (typeof channel === "object" && channel !== null) {
         // The extension mints tool-call ids; the bridge mints request ids
-        // (`cr-N`), disjoint from its stdin ids (`bb-N`).
+        // (`cr-N`), disjoint from its stdin ids (`zcc-N`).
         if (channel.kind === "tool-call" || channel.kind === "request") {
           return {
             kind: "request",
@@ -198,7 +198,7 @@ const DIALECTS = {
     isInitialize(classified) {
       // Every pi child the bridge spawns (session, catalog, fork helper)
       // opens with `get_state`, and the bridge numbers its requests per
-      // child from `bb-1`; later `get_state` probes (compaction guard, steer
+      // child from `zcc-1`; later `get_state` probes (compaction guard, steer
       // settlement) carry higher ids and do not start a segment.
       return (
         classified.kind === "request" &&

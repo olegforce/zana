@@ -254,7 +254,7 @@ describe("handshake v3 capabilities", () => {
     // version, so a wider bridge stays on v2.
     const params = initializeParamsSchema.parse({
       protocolVersion: 2,
-      client: { name: "bb", version: "1.0.0" },
+      client: { name: "zcc", version: "1.0.0" },
     });
     expect(params.grammarVersions).toEqual([2, 2]);
     expect(negotiateGrammarVersion(params.grammarVersions, [2, 3])).toBe(2);

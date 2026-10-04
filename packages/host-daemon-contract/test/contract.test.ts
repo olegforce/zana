@@ -1,4 +1,4 @@
-import { collectOptionalFieldPaths } from "@zana-ai/zcc-agent-runtime";
+import { collectOptionalFieldPaths } from "../../server-contract/test/collect-optional-field-paths.js";
 import { threadScope, turnScope, type JsonObject } from "@zana-ai/zcc-domain/thread-runtime";
 import { describe, expect, it } from "vitest";
 import * as contract from "../src/index.js";
@@ -686,6 +686,19 @@ function terminalDataBase64(byteLength: number): string {
 }
 
 const INTENTIONAL_OPTIONAL_HOST_DAEMON_FIELDS: Record<string, string> = {
+  "hostDaemonCommandSchema.acpMode": "ACP mode is optional for providers without native session modes.",
+  "hostDaemonCommandSchema.bridgeLaunch.envPassthrough": "Only providers declaring host environment overrides include variable names.",
+  "hostDaemonCommandSchema.options.providerOptions": "Provider-owned launch statics are absent for providers without extra options.",
+  "hostDaemonCommandSchema.resumeContext.acpMode": "Resume preserves a native ACP mode only when selected.",
+  "hostDaemonCommandSchema.resumeContext.bridgeLaunch.envPassthrough": "Resume preserves declared host environment override names when present.",
+  "hostDaemonOnlineRpcCommandSchema.bridgeLaunch.envPassthrough": "Provider maintenance and model probes preserve declared host environment override names.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.badge": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.badge.hint": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.badge.tone": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.detail": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.suppress": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.tint": "Interaction presentation is optional provider-owned display metadata.",
+  "hostDaemonInteractiveRequestSchema.interaction.payload.subject.presentation.title": "Interaction presentation is optional provider-owned display metadata.",
   "hostDaemonCommandSchema.acpLaunchSpec":
     "thread.start and turn.submit include an ACP launch spec only for dynamic ACP providers; built-ins resolve from daemon-side profiles.",
   "hostDaemonCommandSchema.acpLaunchSpec.cwd":
@@ -1138,7 +1151,7 @@ describe("host-daemon command schemas", () => {
   // mixed version. Version 113 carried the Devin Desktop open target rename
   // and remains part of the protocol lineage.
   it("uses the current host-daemon protocol version", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(133);
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(134);
     expect(HOST_ARTIFACT_MAX_BYTES).toBe(256 * 1024 * 1024);
   });
 

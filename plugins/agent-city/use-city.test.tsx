@@ -2,10 +2,11 @@
 import { useRef } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-const renderer = vi.hoisted(() => ({ draw: vi.fn(), refreshPalette: vi.fn(), hit: vi.fn(() => 'p0') }));
+const renderer = vi.hoisted(() => ({ draw: vi.fn(), refreshPalette: vi.fn(), dispose: vi.fn(), hit: vi.fn(() => 'p0') }));
 vi.mock('./scene.js', () => ({ createCityRenderer: vi.fn(() => renderer) }));
 import { useCityCanvas } from './use-city.js';
 import { createCityRenderer } from './scene.js';
+import type { InteriorModel } from './interior.js';
 let motionChange: () => void, intersect: (entries: { isIntersecting: boolean }[]) => void, resize: () => void, mutate: () => void;
 let frame: FrameRequestCallback;
 const disconnect = vi.fn();
@@ -18,9 +19,9 @@ function setup() {
   vi.stubGlobal('IntersectionObserver', class { constructor(cb: typeof intersect) { intersect = cb; } observe() {} disconnect = disconnect; });
   vi.stubGlobal('MutationObserver', class { constructor(cb: () => void) { mutate = cb; } observe() {} disconnect = disconnect; });
 }
-function Harness({ paused = false, onSelect = vi.fn() }) {
+function Harness({ paused = false, onSelect = vi.fn(), interior, onHover }: { onHover?: (key?: string) => void; paused?: boolean; onSelect?: (key: string) => void; interior?: InteriorModel }) {
   const root = useRef<HTMLElement>(null), canvas = useRef<HTMLCanvasElement>(null);
-  const state = useCityCanvas(root, canvas, [], 'p0', paused, onSelect);
+  const state = useCityCanvas(root, canvas, [], 'p0', paused, onSelect, interior, onHover);
   return <section ref={root}><canvas ref={canvas} data-testid="canvas"/><span>{state.reduced ? 'reduced' : 'motion'}</span><span>{state.available ? 'available' : 'unavailable'}</span></section>;
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); media.matches = false; });
@@ -45,7 +46,7 @@ it('reports unavailable canvas without creating observers or animation', () => {
   expect(screen.getByText('unavailable')).toBeTruthy(); expect(requestAnimationFrame).not.toHaveBeenCalled();
 });
 it('maps clicks through the zoomed canvas bounds and publishes viewport resizing', () => {
-  setup(); const select = vi.fn(); render(<Harness onSelect={select}/>);
+  setup(); const select = vi.fn(), hover = vi.fn(); render(<Harness onSelect={select} onHover={hover}/>);
   const canvas = screen.getByTestId('canvas');
   Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 500 });
   Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 300 });
@@ -54,6 +55,18 @@ it('maps clicks through the zoomed canvas bounds and publishes viewport resizing
   fireEvent.click(canvas, { clientX: 600, clientY: 350 });
   expect(renderer.hit).toHaveBeenLastCalledWith(250, 150);
   expect(select).toHaveBeenCalledWith('p0');
+  fireEvent.pointerMove(canvas, { clientX: 600, clientY: 350 }); expect(hover).toHaveBeenLastCalledWith('p0');
+  fireEvent.pointerLeave(canvas); expect(hover).toHaveBeenLastCalledWith(undefined);
   renderer.hit.mockReturnValueOnce(undefined as never);
   select.mockClear(); fireEvent.click(canvas); expect(select).not.toHaveBeenCalled();
+});
+it('redraws floor changes through the existing loop, including while paused, and releases the loop on exit', () => {
+  setup(); const interior = { building: { id: 'p0' }, floor: { id: 1 } } as InteriorModel;
+  const { rerender, unmount } = render(<Harness interior={interior} paused/>);
+  expect(renderer.draw).toHaveBeenLastCalledWith([], 'p0', 0, false, interior);
+  const next = { ...interior, floor: { ...interior.floor, id: 2 } };
+  rerender(<Harness interior={next} paused/>); expect(renderer.draw).toHaveBeenLastCalledWith([], 'p0', 0, false, next);
+  expect(media.addEventListener).toHaveBeenCalledTimes(1);
+  rerender(<Harness paused/>); expect(renderer.draw).toHaveBeenLastCalledWith([], 'p0', 0, false, undefined);
+  unmount(); expect(disconnect).toHaveBeenCalledTimes(3);
 });

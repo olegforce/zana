@@ -38,9 +38,9 @@ export interface ClaudeInjectedTool {
   presentation?: DeltaPresentation;
 }
 
-export const BB_BRIDGE_MCP_SERVER_NAME = "bb-bridge";
+export const ZCC_BRIDGE_MCP_SERVER_NAME = "zcc";
 
-const BB_TOOL_SERVER = "bb";
+const ZCC_TOOL_SERVER = "zcc";
 
 const claudeBackgroundFlagSchema = z
   .object({ run_in_background: z.boolean().optional() })
@@ -335,7 +335,7 @@ function bbTool(
     shape: {
       type: "tool",
       tool,
-      server: BB_TOOL_SERVER,
+      server: ZCC_TOOL_SERVER,
       ...(toolArguments ? { args: toolArguments } : {}),
     },
     presentation: injected?.presentation ?? toolPresentation(tool),
@@ -455,7 +455,8 @@ export function classifyClaudeToolUse(args: {
       if (mcp === null) {
         return genericTool(toolName, input);
       }
-      if (mcp.server === BB_BRIDGE_MCP_SERVER_NAME) {
+      // Existing sessions/transcript replays can still carry the old bridge key.
+      if (mcp.server === ZCC_BRIDGE_MCP_SERVER_NAME || mcp.server === "bb-bridge") {
         return bbTool(mcp.tool, input, args.injectedTools.get(mcp.tool));
       }
       return mcpTool(toolName, mcp.server, mcp.tool, input);

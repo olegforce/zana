@@ -8,6 +8,7 @@ directories:
 
 files:
   - out/**/*
+  - "!out/packaged-plugins/**"
   - package.json
   - "!**/*.{md,markdown,d.ts.map,js.map}"
   # Renderer-only libraries are already bundled into out/renderer. They used to
@@ -87,34 +88,16 @@ extraResources:
     to: host-bridge
     filter:
       - join.mjs
-      - bb-provider-bridge-worker.mjs
-      - bb-pi-bridge.mjs
+      - zcc-provider-bridge-worker.mjs
+      - zcc-pi-bridge.mjs
       - zcc-plugin-host-worker.mjs
-  # First-party plugins (`plugins/<id>` with a package.json `zcc` block).
-  # PluginService.reconcileBuiltins auto-installs from this tree; tests and
-  # packaging scripts stay in the repo and are not shipped.
-  #
-  # Do NOT exclude `*/src/**`. Handwritten `server.mjs` / `app.js` files and
-  # jiti-loaded `server.ts` entries import runtime modules from `src/` (the
-  # Docs HEALTH crash was `server.mjs` → `src/library-mentions.js` after this
-  # glob stripped the tree). The packaged-plugin-runtime guard walks those
-  # import graphs against this filter.
-  - from: plugins
+  # Runtime-only trees prepared by beforePack. All imports are bundled before
+  # sources/dependencies are omitted; a build failure aborts the release.
+  - from: out/packaged-plugins
     to: plugins
     filter:
       - "**/*"
-      - "!README.md"
-      - "!**/README.md"
-      - "!**/playground/src/**"
-      - "!*/scripts/**"
-      - "!*/node_modules/**"
-      - "!**/*.{test,spec}.{ts,tsx,js,mjs}"
       - "!**/*.map"
-      - "!**/vitest.config.ts"
-      - "!**/vite.config.ts"
-      - "!**/tsconfig.json"
-      - "!**/tsconfig.*.json"
-      - "!**/.turbo/**"
   # Bundled agent-detection manifests (herdr TOML format), read by
   # src/main/manifest-detector.ts via process.resourcesPath/manifests in packaged
   # builds; dev falls back to the repo-relative manifests/ dir. User overrides
@@ -146,6 +129,7 @@ publish:
 
 # Drop the unused OpenCode arch after extraResources copies vendor/opencode.
 # See scripts/after-pack-trim-opencode.mjs.
+beforePack: scripts/before-pack-plugins.mjs
 afterPack: scripts/after-pack-trim-opencode.mjs
 
 asar: true

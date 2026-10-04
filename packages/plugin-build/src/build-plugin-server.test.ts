@@ -133,7 +133,7 @@ describe("plugin server build", () => {
       await expect(
         buildPluginServer(dir, "0.0.0-test", await testToolchain()),
       ).rejects.toThrow(
-        '"@zana-ai/zcc-plugin-sdk/host" is not installed for this plugin (no node_modules/@zana-ai/zcc-plugin-sdk); a server entry\'s "@zana-ai/zcc-plugin-sdk/host" import is bundled from the plugin\'s own SDK install (bb serves only the bare "@zana-ai/zcc-plugin-sdk" at load time), so the plugin needs the SDK as a dependency',
+        '"@zana-ai/zcc-plugin-sdk/host" is not installed for this plugin (no node_modules/@zana-ai/zcc-plugin-sdk); a server entry\'s "@zana-ai/zcc-plugin-sdk/host" import is bundled from the plugin\'s own SDK install (ZCC serves only the bare "@zana-ai/zcc-plugin-sdk" at load time), so the plugin needs the SDK as a dependency',
       );
     });
 

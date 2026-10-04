@@ -8,13 +8,13 @@
  * `gpt-5.3-codex-low`, bare `gpt-5.3-codex` for medium, `gpt-5.5-extra-high`
  * as an alternate xhigh spelling, with an optional `-fast` service tail after
  * the effort token (`gpt-5.3-codex-low-fast`). This module groups those raw
- * variants into bb model families so the picker offers one clean entry per
+ * variants into zcc model families so the picker offers one clean entry per
  * family with selectable reasoning efforts, and resolves a (family, effort,
  * serviceTier) selection back to the exact raw id at session launch — by table
  * lookup, never string synthesis, because effort spellings vary per family.
  *
  * The `-fast` tail is a service tier, not a separate model: both the normal
- * and fast raw ids for a given effort collapse into one family, and the bb
+ * and fast raw ids for a given effort collapse into one family, and the zcc
  * "Fast mode" toggle (serviceTier) selects between them at launch.
  *
  * Cursor's "thinking" marker (appearing as an infix `…-thinking-medium` or a
@@ -73,7 +73,7 @@ const BARE_PROVIDER_MODEL_LINE_PATTERN = /^\S+\/\S+$/;
 const BULLETED_MODEL_LINE_PATTERN = /^[*-]\s+(\S+)(?:\s+\([^)]*\))?$/u;
 
 // Trailing id tokens that mark a reasoning-effort variant, longest first so
-// `extra-high` wins over `high`. `none` maps onto bb's "none" (thinking-off)
+// `extra-high` wins over `high`. `none` maps onto zcc's "none" (thinking-off)
 // level, used by explicit `-none` ids and by the non-thinking collapse.
 const EFFORT_TOKENS: ReadonlyArray<readonly [string, ReasoningLevel]> = [
   ["extra-high", "xhigh"],
@@ -250,7 +250,7 @@ export function buildAcpNativeReasoningSupport(
   if (supportedReasoningEfforts.length === 0) {
     return {
       // An omitted option preserves the legacy agent-managed fallback. A
-      // declared option is authoritative, even when bb cannot map its values.
+      // declared option is authoritative, even when zcc cannot map its values.
       supportedReasoningEfforts:
         thoughtLevelOption === undefined ? ACP_NATIVE_REASONING_EFFORTS : [],
       defaultReasoningEffort: "medium",
@@ -405,7 +405,7 @@ const EFFORT_DISPLAY_WORDS: Readonly<Record<string, string>> = {
 
 /**
  * Family display name: the default variant's name minus its own effort word
- * ("Opus 4.8 1M Medium" → "Opus 4.8 1M") — bb renders reasoning separately,
+ * ("Opus 4.8 1M Medium" → "Opus 4.8 1M") — zcc renders reasoning separately,
  * so keeping the word would show the level twice. Only the default variant's
  * explicit token is stripped; brand words that happen to match another
  * effort ("Codex 5.1 Max") are untouched.
@@ -445,7 +445,7 @@ interface VariantTier {
 }
 
 /**
- * Group raw variants into model families. The family's bb-facing id is the raw
+ * Group raw variants into model families. The family's zcc-facing id is the raw
  * id of its default variant — the non-fast, thinking "medium" when present,
  * else the first non-`none` non-fast variant, else the first listed — so
  * threads persist real agent ids and the picker preselects a real effort, not

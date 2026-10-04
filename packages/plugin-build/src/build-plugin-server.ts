@@ -40,7 +40,7 @@ async function unresolvedSdkSubpathError(args: {
   resolveDir: string;
   esbuildErrors: readonly { text: string }[];
 }): Promise<string> {
-  const need = `a server entry's "${args.specifier}" import is bundled from the plugin's own SDK install (bb serves only the bare "${PLUGIN_SDK_SPECIFIER}" at load time), so the plugin needs`;
+  const need = `a server entry's "${args.specifier}" import is bundled from the plugin's own SDK install (ZCC serves only the bare "${PLUGIN_SDK_SPECIFIER}" at load time), so the plugin needs`;
   const packageDir = await installedPluginSdkDirectory(args.resolveDir);
   if (packageDir === null) {
     return `"${args.specifier}" is not installed for this plugin (no node_modules/${PLUGIN_SDK_PACKAGE_NAME}); ${need} the SDK as a dependency`;
@@ -81,7 +81,7 @@ async function readPluginServerConfig(
   }
   if (!isRecord(json) || !isRecord(json.bb) || json.bb.server === undefined) {
     throw new Error(
-      `no server entry: ${packageJsonPath} has no "bb": { "server": "./server.ts" } field`,
+      `no server entry: ${packageJsonPath} has no "zcc": { "server": "./server.ts" } field`,
     );
   }
   const manifest = await validatePluginBuildManifest(
@@ -91,18 +91,18 @@ async function readPluginServerConfig(
   );
   const server = manifest.bb.server;
   if (isAbsolute(server)) {
-    throw new Error(`manifest bb.server must be relative, got "${server}"`);
+    throw new Error(`manifest zcc.server must be relative, got "${server}"`);
   }
   const serverEntry = resolve(rootDir, server);
   if (serverEntry !== rootDir && !serverEntry.startsWith(rootDir + "/")) {
     throw new Error(
-      `manifest bb.server escapes the plugin directory: "${server}"`,
+      `manifest zcc.server escapes the plugin directory: "${server}"`,
     );
   }
   try {
     await stat(serverEntry);
   } catch {
-    throw new Error(`manifest bb.server points at a missing file: ${server}`);
+    throw new Error(`manifest zcc.server points at a missing file: ${server}`);
   }
   return {
     serverEntry,

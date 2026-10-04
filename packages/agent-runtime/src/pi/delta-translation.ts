@@ -49,7 +49,7 @@ export interface PiContextWindowModel {
 }
 
 // Keep Pi's SDK-level turn_start/turn_end outside the translated delta union
-// until replay proves they represent bb turn boundaries rather than internal
+// until replay proves they represent zcc turn boundaries rather than internal
 // provider subturns.
 const piEventTypeSchema = z
   .object({
@@ -83,7 +83,7 @@ const piPromptSettledEnvelopeSchema = z.object({
 // renders as "Unhandled Pi event" in the transcript.
 //
 // `agent_settled` fires after every agent run completes (Pi's
-// AgentSession._emitAgentSettled). BB already derives turn completion from
+// AgentSession._emitAgentSettled). ZCC already derives turn completion from
 // `agent_end` plus its `willRetry` flag, so the settle signal carries nothing
 // extra for us.
 const PI_IGNORED_EVENT_TYPES = new Set(["agent_settled"]);
@@ -137,7 +137,7 @@ const piConversationMessageSchema = z
 
 /**
  * Pi's `message_start`/`message_end` for an extension-injected message
- * (`pi.sendMessage`, Pi's `CustomMessage`). Only this role is parsed: bb
+ * (`pi.sendMessage`, Pi's `CustomMessage`). Only this role is parsed: zcc
  * already owns the user, assistant, and tool-result boundaries through its own
  * input lifecycle and the streamed/terminal assistant payloads. `display`
  * is the extension's own statement of whether the message is meant to be seen.
@@ -183,7 +183,7 @@ const piCompactionEndEventSchema = z
 /**
  * Pi refuses a manual compaction before it calls the model when the session
  * has nothing to summarize. Pi reports the refusal through the same
- * `compaction_end.errorMessage` field as a real failure, so bb must tell them
+ * `compaction_end.errorMessage` field as a real failure, so zcc must tell them
  * apart: a refusal is a no-op, not a failed turn.
  */
 const piCompactionNoopMessages = new Set([
@@ -278,7 +278,7 @@ function thinkingStreamChannel(contentIndex: number): string {
 /**
  * Pi's bash tool runs in the session's working directory unless its args name
  * one, so the command item's `cwd` is the call's own or the thread's. Neither
- * known, the call stays a generic tool item: bb fabricates no
+ * known, the call stays a generic tool item: zcc fabricates no
  * `commandExecution { cwd: "" }` (design §4).
  */
 function classifyPiToolUse(

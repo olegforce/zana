@@ -14,6 +14,7 @@ import { createRequire } from 'node:module';
 import { createSqliteDatabase, listHosts, getPrimaryHost, getConversationThread } from '@zana-ai/zcc-db';
 import type {
   PluginAgentConfigureContext,
+  PluginProviderDeclaration,
   PluginAgentConfigureResult,
   PluginAgentToolRecord,
   PluginCliExecutionResult,
@@ -177,6 +178,7 @@ export interface PluginHostEvent {
   kind: 'plugin.host.worker-exited' | 'plugin.host.signal'; signal?: string; payload?: unknown;
 }
 export interface PluginHandle {
+  providerDeclarations: PluginProviderDeclaration[];
   emitHostEvent(event: PluginHostEvent): Promise<void>;
   api: ZccPluginApi;
   extraSkillRoots: string[];
@@ -338,6 +340,7 @@ export function createPluginApi(
     listProjects?: (args: { pluginId: string }) => Promise<Array<{ id: string; name: string; path?: string; icon?: ProjectIcon }>>;
     productContext?: import('../http/product-context.js').ProductHttpContext;
     hostEntryPath?: string | null;
+    providerUnavailableReason?: string;
     hostCall?: (method: string, input?: unknown, hostId?: string, signal?: AbortSignal, timeoutMs?: number) => Promise<unknown>;
     dataDir?: string;
     services?: PluginServicesRegistry;
@@ -348,6 +351,7 @@ export function createPluginApi(
   const kvPath = join(kvDir, 'kv.json');
   const settingsPath = join(kvDir, 'settings.json');
   const disposeHooks: Array<() => void | Promise<void>> = [];
+  const providerDeclarations: PluginProviderDeclaration[] = [];
   const extraSkillRoots: string[] = [];
   const extraInstructions: string[] = [];
   const extraInstructionProviders: PluginHandle['extraInstructionProviders'] = [];
@@ -1248,7 +1252,8 @@ export function createPluginApi(
       },
       experimental_registerProvider: (declaration) => {
         assertLive();
-        const handle = registerThreadProvider(pluginId, declaration, options?.hostEntryPath);
+        providerDeclarations.push(declaration);
+        const handle = registerThreadProvider(pluginId, declaration, options?.hostEntryPath, options?.providerUnavailableReason);
         disposeHooks.push(() => handle.unregister());
         return handle;
       },
@@ -1322,6 +1327,7 @@ export function createPluginApi(
   };
   return {
     api,
+    providerDeclarations,
     extraSkillRoots,
     extraInstructions,
     extraInstructionProviders,

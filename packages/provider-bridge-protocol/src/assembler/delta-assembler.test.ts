@@ -1181,7 +1181,7 @@ describe("delta assembler (keyed provider turns)", () => {
     );
     const reopenedId =
       events[1]?.type === "item/started" ? events[1].item.id : "";
-    // The new session's reused provider ids mint fresh bb ids: uniqueness
+    // The new session's reused provider ids mint fresh zcc ids: uniqueness
     // across resumes survives central minting.
     expect(reopenedId).not.toBe("");
     expect(reopenedId).not.toBe(firstItemId);

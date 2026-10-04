@@ -35,14 +35,17 @@ export function assertHostArtifactByteLength(pluginId: string, byteLength: numbe
 function shouldRebuildHostArtifact(
   sourceKind: InstalledPluginRow['sourceKind'],
   rootDir: string,
-  hostEntry: string
+  hostEntry: string,
+  rebuildBuiltin: boolean
 ): boolean {
-  if (sourceKind !== 'path' && sourceKind !== 'builtin') return false;
+  // Older packages retained source but shipped no build dependencies. Source
+  // presence must never cause a released builtin to be recompiled.
+  if (sourceKind !== 'path' && !(sourceKind === 'builtin' && rebuildBuiltin)) return false;
   return existsSync(join(rootDir, hostEntry));
 }
 
 /**
- * Pack (when source is present) and validate `dist/host.js` for daemon delivery.
+ * Build editable installs and validate `dist/host.js` for daemon delivery.
  * Returns null when the plugin declares no host entry.
  */
 export async function loadPluginHostArtifactSnapshot(args: {
@@ -52,9 +55,11 @@ export async function loadPluginHostArtifactSnapshot(args: {
   sourceKind: InstalledPluginRow['sourceKind'];
   zccVersion: string;
   dataDir?: string;
+  /** Opt in only for builtin source development; shipped artifacts are read-only. */
+  rebuildBuiltin?: boolean;
 }): Promise<PluginHostArtifactSnapshot | null> {
   if (args.hostEntry === null) return null;
-  if (shouldRebuildHostArtifact(args.sourceKind, args.rootDir, args.hostEntry)) {
+  if (shouldRebuildHostArtifact(args.sourceKind, args.rootDir, args.hostEntry, args.rebuildBuiltin === true)) {
     await buildPluginHost(args.rootDir, args.zccVersion, await getPluginBuildToolchain(args.dataDir));
   }
   const jsPath = join(args.rootDir, 'dist', 'host.js');
