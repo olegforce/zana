@@ -7,6 +7,7 @@ import '@/lib/plugin-guide/plugin-guide.css';
 import './components/plugin-guide/plugin-guide-site.css';
 import { Nav, Footer } from './components/Nav';
 import { Reveal } from './components/Reveal';
+import { GoogleAnalytics } from './components/GoogleAnalytics';
 import { fetchRepoStarCount } from '@/lib/github-stars';
 import { site } from '@/lib/site';
 
@@ -91,6 +92,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <main id="main">{children}</main>
         <Footer />
         <Reveal />
+        <GoogleAnalytics measurementId={process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID} />
       </body>
     </html>
   );
