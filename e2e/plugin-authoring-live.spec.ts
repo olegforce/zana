@@ -3,13 +3,14 @@ import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:f
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { test, expect } from './fixtures/app.js';
+import { test, expect, launchApp } from './fixtures/app.js';
 
 const exec = promisify(execFile);
 test.use({ initialConfig: { sponsorPromptDismissed: true }, launchEnv: { npm_config_registry: 'https://registry.npmjs.org/' } });
 
-test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built Electron', async ({ app, home }) => {
+test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built Electron', async ({ app: initialApp, home }) => {
   test.setTimeout(240_000);
+  let app = initialApp;
   const id = 'live-authoring-e2e';
   const copiedCli = join(home, 'cli');
   const shippedCli = await app.electron.evaluate(({ app }) => {
@@ -56,7 +57,7 @@ test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built 
     await expect(app.window.getByText('No todos yet', { exact: true })).toBeVisible();
     await app.window.getByRole('textbox', { name: 'Todo title' }).fill('Saved across reload');
     await app.window.getByRole('button', { name: 'Add', exact: true }).click();
-    const todo = app.window.getByRole('checkbox', { name: 'Saved across reload' });
+    let todo = app.window.getByRole('checkbox', { name: 'Saved across reload' });
     await todo.click();
     await expect(todo).toBeChecked();
     const listed = await run(['plugin', 'run', id, 'list']);
@@ -90,12 +91,22 @@ test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built 
     const recovered = await run(['plugin', 'dev', '--once']);
     expect(recovered.code, recovered.stderr).toBe(0);
     await expect(todo).toBeChecked();
-    // Direct UI-style reload rebuilds stale sources using the server's cache.
-    // Force the Electron utility process to bootstrap its own cold toolchain.
+    // Stop the isolated app before clearing its toolchain: Windows locks the
+    // running esbuild executable. Restart with the persisted plugin and a cold
+    // cache, then exercise the server's own rebuild/bootstrap path.
+    await app.electron.close();
     const cacheRoot = join(home, '.zcc/plugins');
     for (const cache of readdirSync(cacheRoot).filter((name) => name.startsWith('toolchain-'))) {
-      rmSync(join(cacheRoot, cache), { recursive: true, force: true });
+      rmSync(join(cacheRoot, cache), { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
+    app = await launchApp(home, {
+      initialConfig: { sponsorPromptDismissed: true },
+      env: { npm_config_registry: 'https://registry.npmjs.org/' }
+    });
+    env.ZCC_SERVER_URL = new URL(app.window.url()).origin;
+    await app.window.locator('.nav-item', { hasText: id }).first().click();
+    todo = app.window.getByRole('checkbox', { name: 'Saved across reload' });
+    await expect(todo).toBeChecked();
     writeFileSync(appPath, updated.replace('Reload verified', 'Server build verified'));
     const serverRebuild = await run(['plugin', 'reload', id]);
     expect(serverRebuild.code, serverRebuild.stderr).toBe(0);
@@ -118,5 +129,6 @@ test('packaged CLI creates, exercises, reloads, and diagnoses a plugin in built 
     await expect(app.window.locator('.nav-item', { hasText: id })).toHaveCount(0);
   } finally {
     await run(['plugin', 'remove', id]);
+    if (app !== initialApp) await app.electron.close();
   }
 });
