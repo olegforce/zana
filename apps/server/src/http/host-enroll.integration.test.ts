@@ -618,6 +618,35 @@ describe('host enroll hub and thread create', () => {
     expect(listConversationThreadEvents(server!.ctx.db, spawned.value.id)).toHaveLength(before + 1);
   });
 
+  it.each(['completed', 'failed', 'interrupted'] as const)('preserves a fast turn result when session startup acknowledges late: %s', async status => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-proj-'));
+    const { enrollToken } = await startServer(projectRoot);
+    const instanceId = randomUUID();
+    const enrolled = await enrollHost(enrollToken, 'alpha', instanceId);
+    const socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(projectRoot));
+    await waitForHost(enrolled.hostId);
+    const spawned = await fetch(`${server!.url}api/v1/threads`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: 'proj-1', providerId: 'claude', input: ['hi'] })
+    }).then(response => response.json()) as { value: { id: string } };
+    const threadId = spawned.value.id;
+    const send = (events: unknown[]) => socket.send(JSON.stringify({
+      type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+      hostId: enrolled.hostId, instanceId, events
+    }));
+    send([{ threadId, kind: 'turn.completed', payload: {
+      type: 'turn/completed', scope: { kind: 'turn', turnId: 'fast' }, status
+    } }]);
+    await waitForThreadStatus(threadId, status === 'failed' ? 'error' : 'idle');
+    send([{ threadId, kind: 'thread.started' }]);
+    await vi.waitFor(() => expect(listConversationThreadEvents(server!.ctx.db, threadId).at(-1)?.type).toBe('thread.started'));
+    expect(getConversationThread(server!.ctx.db, threadId)?.status).toBe(status === 'failed' ? 'error' : 'idle');
+    send([{ threadId, kind: 'thread.event', payload: {
+      type: 'turn/started', scope: { kind: 'turn', turnId: 'followup' }
+    } }]);
+    await waitForThreadStatus(threadId, 'active');
+  });
+
   it.each(['completed', 'failed', 'interrupted'] as const)(
     'keeps a parent active after a distant child %s event, including after host reconnect', async (status) => {
       const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-proj-'));

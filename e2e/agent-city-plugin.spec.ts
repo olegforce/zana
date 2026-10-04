@@ -12,7 +12,8 @@ const exec = promisify(execFile);
 test.use({ initialConfig: { sponsorPromptDismissed: true }, launchEnv: { ZCC_FAKE_PROVIDER: '1' } });
 
 test('Agent City adds the fourth Agents view, opens real work, reloads and falls back on disable', async ({ app, home }, testInfo) => {
-  test.setTimeout(180_000);
+  // Full desktop and three mobile sizes, including two real plugin builds.
+  test.setTimeout(480_000);
   const source = join(home, 'agent-city');
   cpSync(resolve('plugins/agent-city'), source, { recursive: true, filter: (path) => !path.includes('node_modules') });
   const copiedCli = join(home, 'cli');
@@ -93,22 +94,34 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await toggle.getByRole('button', { name: 'World view' }).click();
   const city = app.window.getByTestId('agent-city');
   await expect(city).toBeVisible();
+  await city.getByRole('button', { name: 'Pause motion' }).click();
   await expect(city.getByRole('button', { name: /district/i })).toHaveCount(0);
   const map = city.locator('.city-world');
   await expect(city).toHaveCSS('border-radius', '0px');
   await expect(map).toHaveCSS('border-radius', '0px');
   async function expectBuildingsInsideMap() {
-    const bounds = await map.boundingBox();
-    expect(bounds).not.toBeNull();
-    for (const label of await city.locator('.city-label').all()) {
-      const box = await label.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(bounds!.x);
-      expect(box!.y).toBeGreaterThanOrEqual(bounds!.y);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
-      expect(box!.y + box!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height);
+    const { bounds, boxes } = await city.evaluate(root => {
+      const bounds = root.querySelector('.city-world')!.getBoundingClientRect().toJSON();
+      const boxes = [...root.querySelectorAll('.city-label')].map(label => label.getBoundingClientRect().toJSON());
+      return { bounds, boxes };
+    });
+    expect(bounds.width).toBeGreaterThan(0);
+    for (const box of boxes) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.x).toBeGreaterThanOrEqual(bounds.x);
+      expect(box.y).toBeGreaterThanOrEqual(bounds.y);
+      expect(box.right).toBeLessThanOrEqual(bounds.right);
+      expect(box.bottom).toBeLessThanOrEqual(bounds.bottom);
     }
   }
+  // Return a compact raster rather than putting full-resolution frames into
+  // every Playwright trace poll while checking motion.
+  const frame = () => city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
+    const thumbnail = document.createElement('canvas');
+    thumbnail.width = 64; thumbnail.height = 64;
+    thumbnail.getContext('2d')!.drawImage(canvas, 0, 0, 64, 64);
+    return thumbnail.toDataURL();
+  });
   for (let i = 1; i <= 8; i++) await expect(city.getByRole('button', { name: new RegExp(`city-neighbor-${i}, ${i === 1 ? 5 : i === 2 ? 3 : 1} live`) })).toBeInViewport();
   await expect(city.getByRole('button', { name: /city-neighbor-9, 0 live agents.*1 scheduled plans/ })).toBeInViewport();
   await expect(city.getByRole('button', { name: /city-neighbor-10,/ })).toHaveCount(0);
@@ -170,7 +183,6 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   }, newWorkerId);
   await expect(city.getByText('4 on this floor · 5 live agents in building')).toBeVisible();
   expect(await city.locator('.city-workstation strong').allTextContents()).toEqual(seatedNames);
-  await city.getByRole('button', { name: 'Pause motion' }).click();
   await app.window.screenshot({ path: testInfo.outputPath('city-interior-tower.png') });
   await city.getByLabel('Building floor').selectOption('2');
   await expect(city.getByLabel('Agents on this floor').getByRole('button')).toHaveCount(1);
@@ -195,8 +207,9 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await app.window.keyboard.press('Escape');
   await expect(city.getByRole('button', { name: /city-neighbor-2, 3 live/ })).toBeFocused();
   await city.getByRole('button', { name: 'Resume motion' }).click();
-  const firstFrame = await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
-  await expect.poll(() => city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).not.toBe(firstFrame);
+  const firstFrame = await frame();
+  await expect.poll(frame).not.toBe(firstFrame);
+  await city.getByRole('button', { name: 'Pause motion' }).click();
   await expectBuildingsInsideMap();
   await city.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect(city.getByLabel('Map zoom level')).toHaveText('125%');
@@ -230,11 +243,14 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await expect(map).toHaveAttribute('data-interior-workers', '1');
   await expect(map).toHaveAttribute('data-idle-workers', '1');
   await expect(map).toHaveAttribute('data-desk-workers', '0');
-  await city.getByRole('button', { name: 'Pause motion' }).click();
   await expect(city.getByRole('button', { name: 'Resume motion' })).toHaveAttribute('aria-pressed', 'true');
-  const pausedFrame = await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
-  await app.window.waitForTimeout(250);
-  expect(await city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).toBe(pausedFrame);
+  // Selecting an interior schedules one paint even while motion is paused.
+  // Wait for that scene paint, then require a stable interval.
+  await expect.poll(async () => {
+    const pausedFrame = await frame();
+    await app.window.waitForTimeout(250);
+    return await frame() === pausedFrame;
+  }).toBe(true);
   await app.window.screenshot({ path: testInfo.outputPath('city-desktop.png') });
   const canvasBounds = (await city.locator('canvas').boundingBox())!;
   const [deskX, deskY] = interiorScreen(42, 198, 69, interiorLayout(canvasBounds.width, canvasBounds.height));

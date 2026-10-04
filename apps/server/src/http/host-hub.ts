@@ -467,6 +467,7 @@ export function createHostHub(
           const lifecycleEvent = conversationLifecycleEventForHostEvent({
             kind: event.kind,
             payload: event.payload,
+            threadStatus: conversation.status,
             nestedTurn: (event.kind === 'turn.completed' || eventType === 'turn/completed') && isNestedConversationTurnCompletion(
               event.payload,
               (turnId) => getConversationTurnStart(db, conversation.id, turnId)

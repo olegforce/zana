@@ -1,4 +1,4 @@
-import type { ThreadLifecycleEvent } from '@zana-ai/zcc-domain/thread-runtime';
+import type { ThreadLifecycleEvent, ThreadStatus } from '@zana-ai/zcc-domain/thread-runtime';
 
 function payloadEventType(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object' || !('type' in payload)) return null;
@@ -63,13 +63,20 @@ export function conversationLifecycleEventForHostEvent(event: {
   kind: string;
   payload?: unknown;
   nestedTurn?: boolean;
+  threadStatus?: ThreadStatus;
 }): ThreadLifecycleEvent | null {
   if (isInFlightRetryPayload(event.payload)) return null;
   const eventType = payloadEventType(event.payload);
   if (eventType === 'turn/started') {
     return parentToolCallIdOf(event.payload) ? null : { type: 'run.started' };
   }
-  if (event.kind === 'thread.started') return { type: 'run.started' };
+  // Session construction can acknowledge after its first turn has completed.
+  // Only settle startup here; a new turn has its own turn/started boundary.
+  if (event.kind === 'thread.started') {
+    return event.threadStatus === 'starting' || event.threadStatus === 'pending'
+      ? { type: 'run.started' }
+      : null;
+  }
   if (event.kind === 'turn.completed' || eventType === 'turn/completed') {
     if (event.nestedTurn) return null;
     return turnCompletionStatus(event.payload) === 'failed'
