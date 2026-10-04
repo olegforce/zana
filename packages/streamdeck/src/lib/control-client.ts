@@ -1,5 +1,5 @@
 /**
- * Client for the running app's control plane (the UDS at ~/.zcc/control.sock).
+ * Client for the running app's control plane (Unix socket or Windows pipe).
  *
  * This is a near-verbatim port of `@zcc/cli`'s `lib/control-client.ts` — the
  * same token/nonce handshake, the same resolve-to-result (never-reject)
@@ -82,10 +82,15 @@ export function readControlToken(dataDir: string): TokenFile | null {
   }
 }
 
-/** True when the control plane appears to be up (socket + readable token). */
+/** Pipes have no filesystem entry; the actual connect establishes availability. */
+function hasControlEndpoint(socket: string): boolean {
+  return socket.startsWith('\\\\.\\pipe\\') || existsSync(socket);
+}
+
+/** True when the control plane appears to be up (endpoint + readable token). */
 export function isAppRunning(dataDir: string): boolean {
   const tok = readControlToken(dataDir);
-  return !!tok && existsSync(tok.socket);
+  return !!tok && hasControlEndpoint(tok.socket);
 }
 
 /**
@@ -96,7 +101,7 @@ export function callControlPlane(opts: ControlCallOpts): Promise<ControlClientRe
   const dataDir = opts.dataDir ?? resolveDataDir();
   return new Promise((resolve) => {
     const tok = readControlToken(dataDir);
-    if (!tok || !existsSync(tok.socket)) {
+    if (!tok || !hasControlEndpoint(tok.socket)) {
       resolve({
         ok: false,
         code: 'APP_NOT_RUNNING',

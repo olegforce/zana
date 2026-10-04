@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { connect } from 'node:net';
+import { connect, Server } from 'node:net';
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,11 +15,24 @@ import {
   classifyCaller,
   dispatchOp,
   startControlPlane,
+  controlSocketAddress,
   type ControlPlaneDeps,
   type ControlPlaneHandle
 } from './control-plane.js';
 
 const EXPECTED = { token: 'good-token', nonce: 'good-nonce' };
+
+describe('controlSocketAddress', () => {
+  it('preserves POSIX socket paths and isolates deterministic Windows pipes by data dir', () => {
+    expect(controlSocketAddress('/tmp/one/control.sock', 'darwin')).toBe('/tmp/one/control.sock');
+    expect(controlSocketAddress('/tmp/one/control.sock', 'linux')).toBe('/tmp/one/control.sock');
+    const pipe = controlSocketAddress('C:\\Users\\one\\.zcc\\control.sock', 'win32');
+    expect(pipe.startsWith('\\\\.\\pipe\\zcc-control-')).toBe(true);
+    expect(pipe.slice(pipe.lastIndexOf('-') + 1)).toMatch(/^[a-f0-9]{64}$/);
+    expect(controlSocketAddress('C:\\Users\\one\\.zcc\\control.sock', 'win32')).toBe(pipe);
+    expect(controlSocketAddress('C:\\Users\\two\\.zcc\\control.sock', 'win32')).not.toBe(pipe);
+  });
+});
 
 describe('classifyCaller', () => {
   it('treats absence of a caller-session marker as operator', () => {
@@ -565,6 +578,40 @@ describe('startControlPlane (real socket)', () => {
     ]);
     expect(resp).toMatchObject({ ok: true });
     expect(resp.value.projects).toBe(1);
+  });
+
+  it('publishes and listens on the Windows pipe, authorizes requests, and cleans up the token', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const originalListen = Server.prototype.listen;
+    let pipe: string | undefined;
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-ctl-pipe-'));
+    dirs.push(dir);
+    const localSocket = join(dir, 'test.sock');
+    // Exercise Windows endpoint/lifecycle behavior while transporting bytes
+    // over a real local Unix socket on this unit-test host.
+    const listen = vi.spyOn(Server.prototype, 'listen').mockImplementation(function(this: Server, ...args: any[]) {
+      pipe = args[0];
+      args[0] = localSocket;
+      return Reflect.apply(originalListen, this, args);
+    });
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const tokenPath = join(dir, 'control.token');
+      handle = await startControlPlane({ socketPath: join(dir, 'control.sock'), tokenPath, ...makeDeps() });
+      const tok = JSON.parse(readFileSync(tokenPath, 'utf8'));
+      expect(tok.socket).toBe(pipe);
+      expect(tok.socket).toBe(controlSocketAddress(join(dir, 'control.sock'), 'win32'));
+      const denied = await rawRequest(localSocket, [JSON.stringify({ ...tok, token: 'wrong', op: 'status' }) + '\n']);
+      expect(denied).toMatchObject({ ok: false, code: 'UNAUTHORIZED' });
+      const allowed = await rawRequest(localSocket, [JSON.stringify({ ...tok, op: 'status' }) + '\n']);
+      expect(allowed).toMatchObject({ ok: true });
+      await handle.close(); handle = null;
+      expect(existsSync(tokenPath)).toBe(false);
+    } finally {
+      if (handle) { await handle.close(); handle = null; }
+      Object.defineProperty(process, 'platform', platform);
+      listen.mockRestore();
+    }
   });
 
   it('reassembles a request split across multiple data chunks (newline straddling)', async () => {

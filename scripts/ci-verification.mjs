@@ -25,6 +25,7 @@ export function boundarySpecs(paths) {
     if (/timeline|thread-store|renderer-resource-budget/.test(path)) add('renderer-resource-budget');
     if (/job-team|execution-routing|execution-service/.test(path)) add('job-team-launch-ui', 'cli-agent-job-team-run', 'modern-owner-job-team-run');
     if (/harness\/|(?:^|\/)pty\.ts$/.test(path)) add('job-team-launch-ui', 'cli-agent-job-team-run', 'modern-owner-job-team-run');
+    if (/control-plane|control-client/.test(path)) add('plugin-authoring-live', 'job-team-launch-ui', 'cli-agent-job-team-run', 'modern-owner-job-team-run');
     if (/opencode/.test(path)) add('opencode-launch-boundary');
     if (/desktop-browser/.test(path)) add('desktop-browser-broker');
     if (/mobile-relay|mobile\/|mobile-/.test(path)) add('mobile-shell', 'mobile-relay-upload');

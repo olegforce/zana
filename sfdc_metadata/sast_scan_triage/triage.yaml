@@ -16,4 +16,40 @@ false_positive:
     justification: >
       False match on a Mastra Code TUI capability comment (seed-prompt / headless
       argv behavior). It does not name or select a restricted AI model.
+  - id: packages/agent-runtime/src/pi/model-list.ts:6f7ac1823da81d2e52d1a1549ee69c85bbf8bb56d06682849e7c09da2785ce3b
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
+  - id: packages/agent-runtime/src/pi/model-list.ts:253a94f0f20f0327c97bd20bba310b5e91cc1441a5807669868da3d3bc8bf94f
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
+  - id: packages/agent-runtime/src/pi/bridge/sdk-session.ts:6f7ac1823da81d2e52d1a1549ee69c85bbf8bb56d06682849e7c09da2785ce3b
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
+  - id: packages/agent-runtime/src/pi/event-translation.ts:6f7ac1823da81d2e52d1a1549ee69c85bbf8bb56d06682849e7c09da2785ce3b
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
+  - id: packages/agent-runtime/src/pi/model-list.ts:3189e2b9c00ab84a1f1bd0ed5ee6e1817196f94b374d1df335c2df86d53fa18b
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
+  - id: packages/agent-runtime/src/pi/delta-translation.ts:6f7ac1823da81d2e52d1a1549ee69c85bbf8bb56d06682849e7c09da2785ce3b
+    justification: >
+      This finding points only to an explanatory comment about preserving provider
+      identity and parsing model ids containing slashes. The example is not a
+      configured model, selection, default, or network request. Runtime routing
+      honors the user-selected provider and never chooses the comment example.
 not_exploitable: []
