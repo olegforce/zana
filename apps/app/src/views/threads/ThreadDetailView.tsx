@@ -520,8 +520,8 @@ export function ThreadDetail({
     panel.selectPin('diff');
   }, [panel]);
 
-  const startPanelTerminal = useCallback(async () => {
-    if (!projectId) return;
+  const startPanelTerminal = useCallback(async (command: string | null = null) => {
+    if (!projectId) throw new Error('The thread project is still loading.');
     const created = await product.terminals.create({
       projectId,
       profile: 'shell',
@@ -529,11 +529,12 @@ export function ThreadDetail({
       workspace: environmentId ? { kind: 'reuse', environmentId } : undefined,
       cwd: cwd ?? undefined,
       cols: 80,
-      rows: 24
+      rows: 24,
+      prompt: command ?? undefined,
+      title: command?.slice(0, 200) ?? 'Terminal'
     });
-    if (created.ok) {
-      panel.addTab({ kind: 'terminal', title: 'Terminal', sessionId: created.value.id });
-    }
+    if (!created.ok) throw new Error(created.message ?? 'Could not open terminal');
+    panel.addTab({ kind: 'terminal', title: created.value.title, sessionId: created.value.id });
   }, [cwd, panel, projectId, hostId, environmentId]);
 
   const pin = activePinnedView(panel.state);
@@ -597,7 +598,7 @@ export function ThreadDetail({
         onOpenBrowser={() => panel.addTab({ kind: 'browser', title: 'Browser', url: '' })}
         onOpenExplorer={() => panel.addTab({ kind: 'explorer', title: 'Explorer' })}
         onOpenInbox={() => panel.addTab({ kind: 'inbox', title: 'Inbox' })}
-        onStartTerminal={() => { void startPanelTerminal(); }}
+        onStartTerminal={() => { void startPanelTerminal().catch(error => setLoadError(threadDetailLoadError(error))); }}
         onOpenPlugin={(moduleId, title, options) => {
           appendThreadRecentItem(threadId, { kind: 'plugin', moduleId, actionId: options?.actionId, title });
           panel.addTab({
@@ -964,6 +965,7 @@ export function ThreadDetail({
               />}
               {archivedAt ? <ArchivedThreadBanner key={threadId} threadId={threadId} onRestored={() => { setArchivedAt(null); runLoadRef.current(); }} /> : <ThreadCommandComposer
                 threadId={threadId}
+                onRunTerminal={startPanelTerminal}
                 project={project ?? undefined}
                 autoFocus={!embedded && pane?.isFocused !== false && pendingInteractions.length === 0}
                 status={status}

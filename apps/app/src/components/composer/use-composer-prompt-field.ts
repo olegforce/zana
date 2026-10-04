@@ -56,6 +56,7 @@ export type ComposerKeyInterceptor = (event: {
 
 export interface ComposerSlashCatalog {
   kind: ComposerSlashKind;
+  localCommands?: readonly { name: string; description: string; source?: 'command' | 'skill' }[];
   providerId?: string;
   composerActions?: readonly string[];
   providerDisplayName?: string;
@@ -168,12 +169,13 @@ export function useComposerPromptField({
   }, []);
 
   useEffect(() => {
-    const fallback = slashCatalog.kind === 'thread'
+    const providerCommands = slashCatalog.kind === 'thread'
       ? commandsFromComposerActions(
         slashCatalog.composerActions ?? [],
         slashCatalog.providerDisplayName
       )
       : [];
+    const fallback = mergeCommandCatalogs([slashCatalog.localCommands ?? [], providerCommands]);
     setCommands(slashCatalog.kind === 'cli' ? filterCliComposerCommands(fallback) : fallback);
     setCommandsLoaded(true);
 
@@ -209,6 +211,7 @@ export function useComposerPromptField({
     projectRoot,
     slashCatalog.composerActions,
     slashCatalog.kind,
+    slashCatalog.localCommands,
     slashCatalog.providerDisplayName,
     slashCatalog.providerId
   ]);

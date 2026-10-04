@@ -77,6 +77,7 @@ import { useComposerProviderCli } from './composer/use-composer-provider-cli.js'
 import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { ComposerRunSettings, composerRunSummary } from './composer/ComposerRunSettings.js';
 import { useMobileComposerExpansion } from './composer/useMobileComposerExpansion.js';
+import { COMPOSER_TERMINAL_COMMAND, parseComposerTerminalCommand, submitComposerTerminalCommand } from './composer/composer-terminal-command.js';
 import '../styles/mobile-composer.css';
 
 export type ThreadSendMode = 'start' | 'auto' | 'steer' | 'queue-if-active' | 'steer-if-active';
@@ -100,6 +101,7 @@ export interface ThreadCommandComposerProps extends ComposerProjectSelectionProp
   /** Focus the prompt after mounting (hub/browse create-plugin seed). */
   autoFocus?: boolean;
   onCreated?: (threadId: string) => void;
+  onRunTerminal?: (command: string | null) => Promise<void>;
   /** Sticky requested mode from `thread_execution_state` (plan/goal/agent or native ACP id). */
   executionModeRequested?: string | null;
   planAction?: { id: number; threadId: string; kind: 'revise' | 'implement'; revision: number } | null;
@@ -125,6 +127,7 @@ export function ThreadCommandComposer({
   initialText,
   autoFocus = false,
   onCreated,
+  onRunTerminal,
   executionModeRequested = null,
   planAction,
   onPlanActionPending,
@@ -342,6 +345,7 @@ export function ThreadCommandComposer({
     options.setAcpMode(entry.nativeValue);
   }, [composerModeEntriesForProvider, options]);
   const provider = options.provider ?? fallbackProviderOption(options.providerId);
+  const localCommands = useMemo(() => onRunTerminal ? [COMPOSER_TERMINAL_COMMAND] : [], [onRunTerminal]);
   const field = useComposerPromptField({
     ariaLabel: 'Message',
     placeholder: threadId
@@ -358,6 +362,7 @@ export function ThreadCommandComposer({
     initialText,
     slashCatalog: {
       kind: 'thread',
+      localCommands,
       providerId: options.providerId,
       composerActions: provider.composerActions,
       providerDisplayName: provider.displayName
@@ -510,9 +515,23 @@ export function ThreadCommandComposer({
   }, [hostAction, hostBusy, hosts, runPeerDaemon]);
 
   const submit = useCallback(async (opts?: { modifierEnter?: boolean }) => {
-    if (busy || sendBlocked || hostSendBlocked || providerCliBlocked || followUpSubmitBlocked) return;
+    if (busy) return;
     if (field.typeaheadOpen && field.suggestions.length > 0) return;
     const serialized = field.serialize();
+    if (parseComposerTerminalCommand(serialized.text)) {
+      setBusy(true);
+      setError(null);
+      try {
+        await submitComposerTerminalCommand({ text: serialized.text, imageCount: field.images.length, runTerminal: onRunTerminal });
+        field.clear();
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Could not open terminal');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (sendBlocked || hostSendBlocked || providerCliBlocked || followUpSubmitBlocked) return;
     if (!serialized.text.trim() && field.images.length === 0) {
       setError('Enter a message first');
       field.focus();
@@ -633,6 +652,7 @@ export function ThreadCommandComposer({
     navigate,
     navigateOnCreate,
     onCreated,
+    onRunTerminal,
     options.model,
     options.reasoningLevel,
     options.acpMode,
@@ -662,7 +682,8 @@ export function ThreadCommandComposer({
     field.handleChromeKeyDown(event);
   };
 
-  const sendLabel = busy ? 'Sending' : submitMode.kind === 'queue'
+  const terminalIntent = onRunTerminal ? parseComposerTerminalCommand(field.text) : null;
+  const sendLabel = busy ? 'Sending' : terminalIntent ? 'Run terminal' : submitMode.kind === 'queue'
     ? composerSendMode === 'steer' ? 'Steer' : 'Queue'
     : 'Send';
   const sendButton = (
@@ -670,7 +691,7 @@ export function ThreadCommandComposer({
       className={`thread-command-send${busy ? ' is-sending' : ''}`}
       aria-label={sendLabel}
       title={
-        hostSendBlocked && hostAction.kind !== 'ready'
+        terminalIntent ? sendLabel : hostSendBlocked && hostAction.kind !== 'ready'
           ? hostAction.reason
           : providerCliBlocked && providerCli.status
             ? `${providerCli.status.installed ? 'Update' : 'Install'} ${providerCli.status.displayName} before starting a thread.`
@@ -680,7 +701,7 @@ export function ThreadCommandComposer({
       }
       aria-busy={busy}
       data-testid="thread-command-send"
-      disabled={busy || sendBlocked || hostSendBlocked || providerCliBlocked || followUpSubmitBlocked || !canSend}
+      disabled={busy || (!terminalIntent && (sendBlocked || hostSendBlocked || providerCliBlocked || followUpSubmitBlocked || !canSend))}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => void submit()}
     >

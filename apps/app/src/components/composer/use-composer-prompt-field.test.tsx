@@ -8,8 +8,10 @@ import type { DragEvent as ReactDragEvent } from 'react';
 import { useComposerPromptField } from './use-composer-prompt-field.js';
 import { PROJECT_DRAG_MIME } from '../../lib/project-drag.js';
 import { serializePromptEditor } from './serialize-prompt-editor.js';
+import { COMPOSER_TERMINAL_COMMAND } from './composer-terminal-command.js';
 
 const attachments = vi.hoisted(() => ({ desktop: false, pickFiles: vi.fn(async (): Promise<string[]> => []) }));
+const suggestionState = vi.hoisted(() => ({ commands: [] as Array<{ name: string; description: string }> }));
 const editorState = vi.hoisted(() => ({
   json: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'before' }] }] } as unknown,
   options: undefined as undefined | {
@@ -66,7 +68,10 @@ vi.mock('../../lib/product-client.js', () => ({
 }));
 vi.mock('./use-composer-suggestions.js', () => ({
   useMentionProviderRows: () => [],
-  useComposerSuggestions: () => ({ suggestions: [], menuOpen: false })
+  useComposerSuggestions: (args: { commands: Array<{ name: string; description: string }> }) => {
+    suggestionState.commands = args.commands;
+    return { suggestions: [], menuOpen: false };
+  }
 }));
 
 function Probe() {
@@ -89,6 +94,15 @@ describe('useComposerPromptField', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it('keeps local terminal commands in the catalog when remote catalogs are empty', async () => {
+    const localCommands = [COMPOSER_TERMINAL_COMMAND];
+    renderHook(() => useComposerPromptField({
+      placeholder: 'Prompt', testId: 'prompt', projectId: 'p1', projects: [],
+      slashCatalog: { kind: 'thread', localCommands }, onSubmit: vi.fn()
+    }));
+    await waitFor(() => expect(suggestionState.commands).toContainEqual(COMPOSER_TERMINAL_COMMAND));
   });
 
   it('rerenders consumers with updated serialized editor text', () => {
