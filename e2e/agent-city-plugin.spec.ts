@@ -42,24 +42,42 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   }, root);
   const additionalRoots = Array.from({ length: 10 }, (_, i) => join(home, `city-neighbor-${i + 1}`));
   for (const path of additionalRoots) mkdirSync(path);
-  await app.window.evaluate(async (paths) => {
+  const waitForIdle = async (id: string) => {
+    await expect.poll(() => app.window.evaluate(async (id) =>
+      (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, id), { timeout: 30_000 }).toBe('idle');
+  };
+  await waitForIdle(seed.threadId);
+  const projectIds = await app.window.evaluate(async (paths) => {
+    const ids: string[] = [];
     for (const [i, path] of paths.entries()) {
       const response = await fetch('/api/v1/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
       if (!response.ok) throw new Error(await response.text());
       const { project } = await response.json();
-      if (i < 8) {
-        const agent = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: project.id, providerId: 'fake', title: `Neighbor ${i}`, input: 'Hello' }) });
-        if (!agent.ok) throw new Error(await agent.text());
-        if (i < 2) for (let j = 0; j < (i === 0 ? 4 : 2); j++) {
-          const extra = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: project.id, providerId: 'fake', title: `${i === 0 ? 'Tower' : 'Office'} worker ${j}`, input: 'Hello' }) });
-          if (!extra.ok) throw new Error(await extra.text());
-        }
-      } else if (i === 8) {
+      ids.push(project.id);
+      if (i === 8) {
         const plan = await window.cc.scheduler.create({ projectId: project.id, scope: { projectId: project.id }, name: 'City scheduled arrival', every: '24h', profile: 'codex', enabled: false });
         if (!plan.ok) throw new Error(JSON.stringify(plan));
       }
     }
+    return ids;
   }, additionalRoots);
+  async function addIdleWorker(projectId: string, title: string) {
+    const id = await app.window.evaluate(async (row) => {
+      const response = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...row, providerId: 'fake', input: 'Hello' }) });
+      if (!response.ok) throw new Error(await response.text());
+      return (await response.json()).thread.id as string;
+    }, { projectId, title });
+    // Establish the state required by the interior assertions before starting
+    // the next fake session; concurrent startup is a separate runtime concern.
+    await waitForIdle(id);
+    return id;
+  }
+  for (let i = 0; i < 8; i++) {
+    await addIdleWorker(projectIds[i], `Neighbor ${i}`);
+    if (i < 2) for (let j = 0; j < (i === 0 ? 4 : 2); j++) {
+      await addIdleWorker(projectIds[i], `${i === 0 ? 'Tower' : 'Office'} worker ${j}`);
+    }
+  }
   const errors: string[] = [];
   app.window.on('pageerror', (error) => errors.push(error.message));
   await run(['plugin', 'install', '.']);
@@ -131,11 +149,7 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await expect(city.getByText('4 on this floor · 5 live agents in building')).toBeVisible();
   const seatedNames = await city.locator('.city-workstation strong').allTextContents();
   const towerId = await city.getByLabel('Find a project building').inputValue();
-  const newWorkerId = await app.window.evaluate(async (projectId) => {
-    const response = await fetch('/api/v1/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, providerId: 'fake', title: 'Interior arrival', input: 'Hello' }) });
-    if (!response.ok) throw new Error(await response.text());
-    return (await response.json()).thread.id as string;
-  }, towerId);
+  const newWorkerId = await addIdleWorker(towerId, 'Interior arrival');
   await expect(city.getByText('4 on this floor · 6 live agents in building')).toBeVisible();
   expect(await city.locator('.city-workstation strong').allTextContents()).toEqual(seatedNames);
   await hostRequest('interactive-request', { sessionId: newWorkerId, interaction: {
