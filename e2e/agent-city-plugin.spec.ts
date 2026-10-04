@@ -114,13 +114,12 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
       expect(box.bottom).toBeLessThanOrEqual(bounds.bottom);
     }
   }
-  // Return a compact raster rather than putting full-resolution frames into
-  // every Playwright trace poll while checking motion.
-  const frame = () => city.locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
-    const thumbnail = document.createElement('canvas');
-    thumbnail.width = 64; thumbnail.height = 64;
-    thumbnail.getContext('2d')!.drawImage(canvas, 0, 0, 64, 64);
-    return thumbnail.toDataURL();
+  // Hash all pixels: tiny thumbnails can erase subpixel commuter motion on
+  // software-rendered Linux. Keep the trace bounded to a digest per sample.
+  const frame = () => city.locator('canvas').evaluate(async (canvas: HTMLCanvasElement) => {
+    const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
+    const digest = await crypto.subtle.digest('SHA-256', pixels);
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   });
   for (let i = 1; i <= 8; i++) await expect(city.getByRole('button', { name: new RegExp(`city-neighbor-${i}, ${i === 1 ? 5 : i === 2 ? 3 : 1} live`) })).toBeInViewport();
   await expect(city.getByRole('button', { name: /city-neighbor-9, 0 live agents.*1 scheduled plans/ })).toBeInViewport();
@@ -206,9 +205,12 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await app.window.screenshot({ path: testInfo.outputPath('city-interior-office.png') });
   await app.window.keyboard.press('Escape');
   await expect(city.getByRole('button', { name: /city-neighbor-2, 3 live/ })).toBeFocused();
+  await app.window.bringToFront();
+  await expect.poll(() => app.window.evaluate(() => document.visibilityState)).toBe('visible');
   await city.getByRole('button', { name: 'Resume motion' }).click();
   const firstFrame = await frame();
-  await expect.poll(frame).not.toBe(firstFrame);
+  // SwiftShader canvas readback can take several seconds under Xvfb.
+  await expect.poll(frame, { timeout: 60_000 }).not.toBe(firstFrame);
   await city.getByRole('button', { name: 'Pause motion' }).click();
   await expectBuildingsInsideMap();
   await city.getByRole('button', { name: 'Zoom in', exact: true }).click();

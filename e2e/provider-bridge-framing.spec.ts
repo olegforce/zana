@@ -92,9 +92,10 @@ test('recording preserves large UTF-8 provider output, resumed turns, and app sh
   const nativeInput = requests().find(row => row.method === 'turn/start').params.input;
   expect(nativeInput.some((item: { type: string; text?: string }) => item.type === 'text' && item.text?.includes(INPUT))).toBe(true);
 
-  // The fake app-server emits completion before its turn/start response. Stop
-  // through the product UI before resuming, as the writer-handoff fixture does.
-  await app.window.getByRole('button', { name: 'Stop', exact: true }).click();
+  // The fake app-server completes before acknowledging turn/start. Its late
+  // session acknowledgement must preserve idle, so follow up after settlement.
+  await expect.poll(() => app.window.evaluate(async id =>
+    (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, threadId)).toBe('idle');
   await expect(app.window.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   const composer = app.window.getByTestId('thread-command-input');
   await composer.fill('Following framed turn');

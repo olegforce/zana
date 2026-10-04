@@ -38,7 +38,6 @@ jobs:
       ASC_APP_ID: ${{ vars.ASC_APP_ID }}
       ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
       ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
-      ASC_API_KEY_PATH: ${{ runner.temp }}/zana-asc-api-key.p8
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
       - uses: actions/checkout@v7
@@ -51,7 +50,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Validate release configuration
-        run: node scripts/release-config.mjs prepare
+        run: |
+          export ASC_API_KEY_PATH="$RUNNER_TEMP/zana-asc-api-key.p8"
+          printf 'ASC_API_KEY_PATH=%s\n' "$ASC_API_KEY_PATH" >> "$GITHUB_ENV"
+          node scripts/release-config.mjs prepare
       - name: Require submission secret before spending build capacity
         if: ${{ inputs.submit }}
         env:
@@ -112,4 +114,4 @@ jobs:
           node scripts/testflight-distribute.mjs --version "$APP_VERSION" --build "$BUILD_NUMBER" --group "$BETA_GROUP" --key-path "$ASC_API_KEY_PATH"
       - name: Remove temporary submission key
         if: ${{ always() }}
-        run: rm -f -- "$ASC_API_KEY_PATH"
+        run: rm -f -- "$RUNNER_TEMP/zana-asc-api-key.p8"
