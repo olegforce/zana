@@ -64,7 +64,7 @@ async function waitFor<T>(
   }
 }
 
-async function waitForFileWithRealTimer(path: string, expectedContent?: string): Promise<void> {
+async function waitForFileWithRealTimer(path: string, expectedContent?: string | ((content: string) => boolean)): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     // The client fs/write is not atomic: the file exists before its content is
     // fully flushed. Existence alone races an empty read under load, so when a
@@ -72,7 +72,8 @@ async function waitForFileWithRealTimer(path: string, expectedContent?: string):
     if (existsSync(path)) {
       if (expectedContent === undefined) return;
       try {
-        if (readFileSync(path, "utf8") === expectedContent) return;
+        const content = readFileSync(path, "utf8");
+        if (typeof expectedContent === "function" ? expectedContent(content) : content === expectedContent) return;
       } catch {
         // transient read during the write — keep polling
       }
@@ -1963,6 +1964,7 @@ describe("acp bridge", () => {
     });
     expect((await waitForResponse(configureId)).error).toBeUndefined();
 
+    try {
     const promptLog = join(workspaceDir, "canonical-skills-prompt-log.jsonl");
     const threadId = "thread-canonical-skills";
     const startId = sendRequest("thread/start", {
@@ -2010,7 +2012,7 @@ describe("acp bridge", () => {
       },
     });
     await waitForResponse(turnId);
-    await waitForFileWithRealTimer(promptLog);
+    await waitForFileWithRealTimer(promptLog, content => content.endsWith("\n") && typeof JSON.parse(content.trim().split("\n")[0] ?? "null") === "string");
 
     const prompt: unknown = JSON.parse(
       readFileSync(promptLog, "utf8").trim().split("\n")[0] ?? "null",
@@ -2019,8 +2021,10 @@ describe("acp bridge", () => {
     expect(prompt).toContain(
       "- deploy: Ship the app. (SKILL.md: /staged/acp-skills/deploy/SKILL.md)",
     );
-    // The latch is process-scoped; clear it so later tests see no skills.
-    await waitForResponse(sendRequest("skills/configure", { roots: [] }));
+    } finally {
+      // The latch is process-scoped; clear it even if an assertion fails.
+      await waitForResponse(sendRequest("skills/configure", { roots: [] }));
+    }
   });
 
   it("prepends instructions to the first prompt only", async () => {

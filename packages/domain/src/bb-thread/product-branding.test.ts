@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { builtInThemes, customThemeNameSchema, formatPluginThemeId, isBuiltInThemeId } from "./app-theme.js";
 import { PLUGIN_CATALOG_CATEGORIES, pluginCatalogCategory, pluginMarketplaceCollectionSchema } from "./plugin-catalog-category.js";
 
+import { formatRegisteredCodeThemeName } from "./code-theme.js";
+
 describe("product catalogue branding", () => {
   it("uses ZCC in descriptions while keeping stable category identifiers", () => {
     for (const category of PLUGIN_CATALOG_CATEGORIES) {
@@ -10,6 +12,11 @@ describe("product catalogue branding", () => {
     }
     expect(pluginCatalogCategory("themes-and-appearance")?.description).toContain("ZCC");
     expect(pluginCatalogCategory("unknown")).toBeUndefined();
+  });
+
+  it("names registered code themes consistently with bundled palette files", () => {
+    expect(formatRegisteredCodeThemeName("nord", "light")).toBe("zcc:nord:light");
+    expect(formatRegisteredCodeThemeName("plugin:custom", "dark")).toBe("zcc:plugin:custom:dark");
   });
 
   it("keeps saved theme identifiers while presenting the current product name", () => {

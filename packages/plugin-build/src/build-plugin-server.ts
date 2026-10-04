@@ -31,8 +31,8 @@ export const PLUGIN_SERVER_EXTERNALS: readonly string[] = [
   "better-sqlite3",
 ];
 
-const PLUGIN_SDK_ROOT_FILTER = /^@get-bb\/plugin-sdk$|^@bb\/plugin-sdk$/;
-const PLUGIN_SDK_SUBPATH_FILTER = /^@get-bb\/plugin-sdk\//;
+const PLUGIN_SDK_ROOT_FILTER = /^@zana-ai\/zcc-plugin-sdk$|^@get-bb\/plugin-sdk$|^@bb\/plugin-sdk$/;
+const PLUGIN_SDK_SUBPATH_FILTER = /^@zana-ai\/zcc-plugin-sdk\//;
 const PLUGIN_SDK_SUBPATH_RESOLVE_MARK = "bb-server-sdk-subpath";
 
 async function unresolvedSdkSubpathError(args: {

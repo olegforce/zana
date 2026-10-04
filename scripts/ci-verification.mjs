@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { parse } from '@babel/parser';
 // Reuse the workspace build toolchain's declared compiler dependency.
 const { transformSync } = createRequire(new URL('../packages/plugin-build/package.json', import.meta.url))('esbuild');
 
@@ -52,7 +53,21 @@ export function changedLines(diff) {
 
 function productionFile(path) {
   return /^(apps\/.*\/src\/|packages\/.*\/src\/|plugins\/[^/]+\/|website\/(lib|app)\/|services\/|scripts\/)/.test(path) &&
-    /\.(?:[cm]?js|tsx?)$/.test(path) && !/^plugins\/[^/]+\/(app\.js|server\.mjs)$/.test(path) && !/(?:\.test\.|\.spec\.|\/__tests__\/|\/(test|testing|fixtures)\/|\/fake-[^/]+\.[cm]?js$|\.d\.ts$)/.test(path);
+    /\.(?:[cm]?js|tsx?)$/.test(path) && !/^plugins\/[^/]+\/(app\.js|server\.mjs)$/.test(path) && !/(?:\.test\.|\.spec\.|\/vitest\.config\.|\/__tests__\/|\/(test|testing|fixtures)\/|\/fake-[^/]+\.[cm]?js$|\.d\.ts$)/.test(path);
+}
+
+/** Comments do not change runtime behavior, even inside an uncovered function. */
+export function codeLines(path, text) {
+  let source;
+  try {
+    source = parse(text, { sourceType: 'unambiguous', plugins: ['typescript', ...(path.endsWith('.tsx') ? ['jsx'] : [])], tokens: true });
+  } catch { return null; } // Keep malformed code fail-closed.
+  const lines = new Set();
+  for (const token of source.tokens) {
+    if (token.type === 'CommentLine' || token.type === 'CommentBlock' || token.type.label === 'eof') continue;
+    for (let line = token.loc.start.line; line <= token.loc.end.line; line++) lines.add(line);
+  }
+  return lines;
 }
 
 function hasRuntime(path) {
@@ -66,9 +81,12 @@ export function coverageFailures(changes, coverage, root = process.cwd(), thresh
   const failures = [];
   for (const [path, lines] of changes) {
     if (!lines.size || !productionFile(path) || !existsSync(resolve(root, path))) continue;
+    const tokens = codeLines(path, readFileSync(resolve(root, path), 'utf8'));
+    const changedCode = tokens ? [...lines].filter(line => tokens.has(line)) : [...lines];
+    if (!changedCode.length) continue;
     const report = coverage[resolve(root, path)];
     if (!report) { if (hasRuntime(resolve(root, path))) failures.push(`${path}: missing coverage`); continue; }
-    const touches = loc => loc && [...lines].some(line => line >= loc.start.line && line <= loc.end.line);
+    const touches = loc => loc && changedCode.some(line => line >= loc.start.line && line <= loc.end.line);
     const statements = Object.entries(report.statementMap).filter(([, loc]) => touches(loc)).map(([id]) => report.s[id]);
     const branches = Object.entries(report.branchMap).filter(([, branch]) => touches(branch.loc)).flatMap(([id]) => report.b[id]);
     for (const [kind, counts] of [['statements', statements], ['branches', branches]]) {

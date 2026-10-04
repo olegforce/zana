@@ -55,7 +55,7 @@ if (
 
 const tempDir = await createPluginProcessTempDir({
   pluginId,
-  prefix: "zcc-provider-bridge",
+  prefix: "bb-provider-bridge",
 });
 
 let removedTempDir = false;

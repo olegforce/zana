@@ -12,6 +12,7 @@ let frame: FrameRequestCallback;
 const disconnect = vi.fn();
 const media = { matches: false, addEventListener: vi.fn((_key: string, cb: () => void) => { motionChange = cb; }), removeEventListener: vi.fn() };
 function setup() {
+  vi.stubGlobal('PointerEvent', MouseEvent);
   vi.stubGlobal('matchMedia', () => media);
   vi.stubGlobal('requestAnimationFrame', vi.fn((cb: FrameRequestCallback) => { frame = cb; return 1; }));
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
@@ -69,4 +70,13 @@ it('redraws floor changes through the existing loop, including while paused, and
   expect(media.addEventListener).toHaveBeenCalledTimes(1);
   rerender(<Harness paused/>); expect(renderer.draw).toHaveBeenLastCalledWith([], 'p0', 0, false, undefined);
   unmount(); expect(disconnect).toHaveBeenCalledTimes(3);
+});
+
+it('allows hover-free views and handles a zero-sized canvas without invalid coordinates', () => {
+  setup(); const { rerender } = render(<Harness/>); const canvas = screen.getByTestId('canvas');
+  fireEvent.pointerMove(canvas); fireEvent.pointerLeave(canvas);
+  const hover = vi.fn(); rerender(<Harness onHover={hover}/>);
+  fireEvent.pointerMove(canvas, { clientX: 0, clientY: 0 });
+  expect(renderer.hit).toHaveBeenLastCalledWith(0, 0);
+  expect(hover).toHaveBeenCalledWith('p0');
 });

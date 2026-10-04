@@ -237,7 +237,7 @@ export function checkPresentationIconsDeclared(
     if (!isThreadEventWithItem(event)) {
       continue;
     }
-    if (event.item.type === "toolCall" && event.item.server === "zcc") {
+    if (event.item.type === "toolCall" && (event.item.server === "zcc" || event.item.server === "bb")) {
       continue;
     }
     const glyph =
@@ -289,7 +289,7 @@ export async function runRpcHygieneScenarios(
   // and dependent checks report skipped rather than false failures.
   let unknownMethodsAnswered = false;
   {
-    const id = client.request("zcc/conformance/definitely-unknown-method", {});
+    const id = client.request("bb/conformance/definitely-unknown-method", {});
     const response = await client.waitForResponse(id);
     const title = "unknown method answers METHOD_NOT_FOUND";
     if (response === null) {
@@ -346,7 +346,7 @@ export async function runRpcHygieneScenarios(
       );
     } else {
       client.sendRaw("this is { not json");
-      const probe = client.request("zcc/conformance/alive-probe", {});
+      const probe = client.request("bb/conformance/alive-probe", {});
       const response = await client.waitForResponse(probe);
       results.push(
         response === null
@@ -370,7 +370,7 @@ export async function runRpcHygieneScenarios(
       client.sendRaw(
         JSON.stringify({ jsonrpc: "2.0", id: 999_999, result: {} }),
       );
-      const probe = client.request("zcc/conformance/alive-probe", {});
+      const probe = client.request("bb/conformance/alive-probe", {});
       const response = await client.waitForResponse(probe);
       const echoed = client
         .responsesFor(999_999)

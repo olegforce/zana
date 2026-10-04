@@ -781,3 +781,10 @@ describe("toCodexUserInput", () => {
     ]);
   });
 });
+
+it("adds thread identity only when supplied without leaking the previous environment key", () => {
+  expect(buildCodexConfig({ threadId: "thread-current", gitWritableRoots: [] })).toMatchObject({ "shell_environment_policy.set.ZCC_THREAD_ID": "thread-current" });
+  const config = buildCodexConfig({ gitWritableRoots: [] });
+  expect(config).not.toHaveProperty("shell_environment_policy.set.ZCC_THREAD_ID");
+  expect(config).not.toHaveProperty("shell_environment_policy.set.BB_THREAD_ID");
+});

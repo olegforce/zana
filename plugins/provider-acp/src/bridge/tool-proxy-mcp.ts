@@ -124,7 +124,7 @@ function bridgeEnv(key: string): string | undefined {
   return process.env[key] ?? process.env[key.replace(/^ZCC_/, "BB_")];
 }
 
-function readEnvironment(): McpServerEnvironment {
+export function readEnvironment(): McpServerEnvironment {
   const port = Number(bridgeEnv(ENV_PORT));
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error(`${ENV_PORT} must be a positive integer`);

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { resolve, join } from 'node:path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { boundarySpecs, changedLines, coverageFailures, runVerification, mergeCoverage } from './ci-verification.mjs';
+import { boundarySpecs, changedLines, codeLines, coverageFailures, runVerification, mergeCoverage } from './ci-verification.mjs';
 
 it('selects required ownership boundaries, deduplicates specs and leaves docs alone', () => {
   expect(boundarySpecs(['docs/readme.md'])).toEqual([]);
@@ -40,15 +40,29 @@ it('handles added, replaced, and deletion-only hunks', () => {
 
 it('checks only changed executable statements and branch arms with an 80% floor', () => {
   const file = 'scripts/ci-verification.mjs';
-  const changes = new Map([[file, new Set([10])], ['docs/readme.md', new Set([1])], ['scripts/ci-verification.test.ts', new Set([1])]]);
-  const loc = { start: { line: 10 }, end: { line: 10 } };
-  const report = { statementMap: { a: loc, old: { start: { line: 1 }, end: { line: 1 } } }, s: { a: 1, old: 0 }, branchMap: { b: { loc } }, b: { b: [1, 1, 1, 1, 0] } };
+  const changes = new Map([[file, new Set([1])], ['docs/readme.md', new Set([1])], ['scripts/ci-verification.test.ts', new Set([1])]]);
+  const loc = { start: { line: 1 }, end: { line: 1 } };
+  const report = { statementMap: { a: loc, old: { start: { line: 500 }, end: { line: 500 } } }, s: { a: 1, old: 0 }, branchMap: { b: { loc } }, b: { b: [1, 1, 1, 1, 0] } };
   expect(coverageFailures(changes, { [resolve(file)]: report })).toEqual([]);
   report.s.a = 0; report.b.b = [0, 1];
   expect(coverageFailures(changes, { [resolve(file)]: report })).toHaveLength(2);
   expect(coverageFailures(changes, {})).toEqual([`${file}: missing coverage`]);
   expect(coverageFailures(new Map([[file, new Set()]]), {})).toEqual([]);
   expect(coverageFailures(new Map([['packages/domain/src/thread.ts', new Set([1])]]), {})).toEqual([]);
+});
+
+it('ignores comment-only lines without losing executable strings, JSX or malformed source', () => {
+  expect([...codeLines('fixture.ts', '// comment\nexport const value = `first\n// literal content\nlast`;\n/* end */')!]).toEqual([2, 3, 4]);
+  expect([...codeLines('fixture.tsx', 'export const view = <div>text</div>;')!]).toEqual([1]);
+  expect(codeLines('fixture.ts', 'export const = ;')).toBeNull();
+  const root = mkdtempSync(join(tmpdir(), 'zcc-comment-coverage-'));
+  const dir = join(root, 'plugins/fixture'); mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'source.ts'), 'export function work() {\n// changed comment\nreturn 1;\n}');
+  writeFileSync(join(dir, 'vitest.config.ts'), 'export default {};');
+  try {
+    expect(coverageFailures(new Map([['plugins/fixture/source.ts', new Set([2])], ['plugins/fixture/vitest.config.ts', new Set([1])]]), {}, root)).toEqual([]);
+    expect(coverageFailures(new Map([['plugins/fixture/source.ts', new Set([3])]]), {}, root)).toEqual(['plugins/fixture/source.ts: missing coverage']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 it('runs the private production app suite only for affected paths and fails missing coverage', () => {
@@ -99,5 +113,6 @@ it('keeps the existing required CI check as an always-running gate over both job
   expect(workflow).not.toContain('continue-on-error: true');
   expect(workflow).toContain('plugins/tasks/vitest.config.ts --coverage');
   expect(workflow).toContain('pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage');
-  expect(workflow).toContain('coverage/tasks/coverage-final.json coverage/pi/coverage-final.json');
+  expect(workflow).toContain('--config vitest.release-coverage.config.ts --coverage');
+  expect(workflow).toContain('coverage/tasks/coverage-final.json coverage/pi/coverage-final.json coverage/release/coverage-final.json');
 });
