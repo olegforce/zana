@@ -19,8 +19,8 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, GitBranch, ClipboardCopy, Star, AppWindow, RefreshCw, Activity, ChevronRight, MoreHorizontal, ChevronUp, ChevronDown, ListFilter, MessageCirclePlus } from 'lucide-react';
-import { CursorIcon } from '../icons/CursorIcon.js';
+import { Plus, Search, Trash2, X, Check, Pencil, FolderOpen, LayoutDashboard, Settings2, Network, GitBranch, Star, AppWindow, RefreshCw, Activity, ChevronRight, MoreHorizontal, ChevronUp, ChevronDown, ListFilter, MessageCirclePlus } from 'lucide-react';
+import { ProjectOpenActions } from './ProjectOpenActions.js';
 import {
   useData,
   useUi,
@@ -31,7 +31,7 @@ import {
   listedTerminals,
   projectRailTerminals
 } from '../../store.js';
-import type { OpenTarget, Project, TerminalSession } from '@zana-ai/zcc-domain/product';
+import type { Project, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { getScopedProjectId } from '../../lib/windowScope.js';
 import { PROJECT_COLORS } from '@zana-ai/zcc-domain/project-colors';
 import { ListPaneResizer } from '../ListPaneResizer.js';
@@ -52,7 +52,6 @@ import type { AgentCard } from '../AgentBoard.js';
 import { useThreads } from '../../thread-store.js';
 import { useEnsureThreads } from '../../hooks/useEnsureThreads.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
-import { copyText } from '../../lib/copy-text.js';
 import { getAgentSessionRoutePath, getThreadRoutePath } from '../../lib/route-paths.js';
 import { railThreadsForProject, threadIsLiveForRail } from '../fleet-item.js';
 import { POST_DRAG_CLICK_SUPPRESS_MS, suppressPostDragClick } from '../../lib/suppress-post-drag-click.js';
@@ -185,7 +184,6 @@ export function ProjectsList({
   const setNav = useUi((s) => s.setNav);
   const openProjectSettings = useUi((s) => s.openProjectSettings);
   const selectedTabId = useUi((s) => s.selectedTabId);
-  const pushToast = useUi((s) => s.pushToast);
   const unread = useUi((s) => s.unread);
   const projectExpanded = useUi((s) => s.projectExpanded);
   const setProjectExpanded = useUi((s) => s.setProjectExpanded);
@@ -240,14 +238,6 @@ export function ProjectsList({
     return map;
   }, [threads]);
 
-  const openIn = async (target: OpenTarget, path: string) => {
-    try {
-      const r = await product.openers.openIn(target, path);
-      if (!r.ok) pushToast(r.message ?? `Failed to open in ${target}`, 'error');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : `Failed to open in ${target}`, 'error');
-    }
-  };
   const [dropOver, setDropOver] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -1197,6 +1187,8 @@ export function ProjectsList({
           )}
           {p && (
             <>
+              <ProjectOpenActions project={p} onClose={() => setMenu(null)} />
+              <div className="project-menu-sep" />
               {mobile && (
                 <button className="project-menu-item" onClick={() => { setMenu(null); spawnDefaultAgent(p); }}>
                   <MessageCirclePlus size={16} />
@@ -1237,47 +1229,6 @@ export function ProjectsList({
                 <span>{p.favorite ? 'Remove from favorites' : 'Add to favorites'}</span>
               </button>
               <div className="project-menu-sep" />
-              <button
-                className="project-menu-item"
-                onClick={() => { setMenu(null); openIn('cursor', p.path); }}
-              >
-                <CursorIcon size={12} />
-                <span>Open in Cursor</span>
-              </button>
-              <button
-                className="project-menu-item"
-                onClick={() => { setMenu(null); openIn('code', p.path); }}
-              >
-                <Code2 size={12} />
-                <span>Open in VS Code</span>
-              </button>
-              <button
-                className="project-menu-item"
-                onClick={() => { setMenu(null); openIn('finder', p.path); }}
-              >
-                <FolderOpen size={12} />
-                <span>Reveal in Finder</span>
-              </button>
-              <button
-                className="project-menu-item"
-                onClick={() => { setMenu(null); openIn('terminal', p.path); }}
-              >
-                <TerminalSquare size={12} />
-                <span>Open in external Terminal</span>
-              </button>
-              <button
-                className="project-menu-item"
-                onClick={() => {
-                  setMenu(null);
-                  void copyText(p.path).then(
-                    () => pushToast('Path copied', 'info'),
-                    () => pushToast('Failed to copy path', 'error')
-                  );
-                }}
-              >
-                <ClipboardCopy size={12} />
-                <span>Copy path</span>
-              </button>
               {!scopedProjectId && (
                 <button
                   className="project-menu-item"

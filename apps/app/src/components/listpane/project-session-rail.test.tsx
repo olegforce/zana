@@ -1,7 +1,10 @@
+// @vitest-environment happy-dom
 import { renderToStaticMarkup } from 'react-dom/server';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
 import type { Project, TerminalSession } from '@zana-ai/zcc-domain/product';
 import type { ThreadListItem } from '../../thread-store.js';
 import { RAIL_IDLE_THREAD_LIMIT } from '../fleet-item.js';
@@ -16,10 +19,12 @@ const project: Project = {
 
 const h = vi.hoisted(() => ({
   data: {
+    projects: [] as Project[],
     terminals: {} as Record<string, TerminalSession[]>,
     projectNavigationOrganization: 'sessions' as 'sessions' | 'team-runs',
     closeTerminal: vi.fn(),
-    restoreTerminal: vi.fn()
+    restoreTerminal: vi.fn(),
+    updateProject: vi.fn()
   },
   ui: {
     unread: {} as Record<string, boolean>,
@@ -30,11 +35,14 @@ const h = vi.hoisted(() => ({
     setNav: vi.fn(),
     enterProjectFocus: vi.fn(),
     selectTab: vi.fn(),
-    setProjectView: vi.fn()
+    setProjectView: vi.fn(),
+    projectExpanded: {} as Record<string, boolean>,
+    pushToast: vi.fn()
   },
   status: { byId: {} as Record<string, string> },
   triage: { byId: {} as Record<string, unknown> },
-  threads: [] as ThreadListItem[]
+  threads: [] as ThreadListItem[],
+  open: vi.fn()
 }));
 
 vi.mock('../../store.js', () => ({
@@ -51,6 +59,9 @@ vi.mock('../../store.js', () => ({
     getState: () => h.triage
   }),
   useSubagents: (selector: (state: { byId: Record<string, number> }) => unknown) => selector({ byId: {} }),
+  sortProjectsForDisplay: (projects: Project[]) => projects,
+  sortProjectsAlphabetically: (projects: Project[]) => projects,
+  listedTerminals: (list: TerminalSession[] | undefined) => list ?? [],
   projectRailTerminals: (list: TerminalSession[] | undefined) =>
     (list ?? []).filter((session) => session.status !== 'exited' && !session.scheduled)
 }));
@@ -61,6 +72,11 @@ vi.mock('../../thread-store.js', () => ({
   )
 }));
 vi.mock('../../hooks/useEnsureThreads.js', () => ({ useEnsureThreads: () => undefined }));
+vi.mock('../../lib/product-client.js', () => ({ product: { openers: { openIn: h.open } } }));
+vi.mock('../../lib/app-surface.js', () => ({ hasDesktopBridge: () => true }));
+vi.mock('../../lib/windowScope.js', () => ({ getScopedProjectId: () => null }));
+vi.mock('../ListPaneResizer.js', () => ({ ListPaneResizer: () => null }));
+vi.mock('./ProjectRollupDot.js', () => ({ ProjectRollupDot: () => null }));
 vi.mock('../agentCardActions.js', () => ({
   useAgentCardActions: () => ({
     menu: null,
@@ -83,6 +99,13 @@ vi.mock('../threadCardActions.js', () => ({
   openThreadMenu: vi.fn()
 }));
 vi.mock('../PromptModal.js', () => ({ PromptModal: () => null }));
+vi.mock('./FocusedProjectMenu.js', () => ({
+  FocusedProjectMenu: ({ project, x, y, onClose }: { project: Project; x: number; y: number; onClose: () => void }) => (
+    <div data-testid="focused-project-menu" data-project={project.id} data-x={x} data-y={y}>
+      <button onClick={onClose}>Close project menu</button>
+    </div>
+  )
+}));
 vi.mock('../sidebar/useThreadRowSplitDrag.js', () => ({
   usePaneContentSplitDrag: () => ({ onPointerDown: undefined, openInSplit: vi.fn(), consumeClick: () => false }),
   useThreadRowSplitDrag: () => ({ onPointerDown: undefined, openInSplit: vi.fn(), consumeClick: () => false })
@@ -92,6 +115,7 @@ vi.mock('../sidebar/paneContentSplitIndicator.js', () => ({
 }));
 
 import { ProjectSessionRail } from './project-session-rail.js';
+import { ProjectsList } from './ProjectsList.js';
 
 function thread(over: Partial<ThreadListItem> & Pick<ThreadListItem, 'id' | 'status'>): ThreadListItem {
   return {
@@ -128,6 +152,21 @@ function renderRail() {
 }
 
 describe('ProjectSessionRail', () => {
+  afterEach(cleanup);
+  it('opens project actions on right-click and from the keyboard-accessible overflow button', () => {
+    h.data.terminals = {};
+    h.threads = [];
+    render(<MemoryRouter><ProjectSessionRail project={project} /></MemoryRouter>);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open zana-command-center' }), { clientX: 90, clientY: 130 });
+    const menu = screen.getByTestId('focused-project-menu');
+    expect(menu.dataset.project).toBe(project.id);
+    expect(menu.dataset.x).toBe('90');
+    expect(menu.dataset.y).toBe('130');
+    fireEvent.click(screen.getByRole('button', { name: 'Close project menu' }));
+    expect(screen.queryByTestId('focused-project-menu')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for zana-command-center' }));
+    expect(screen.getByTestId('focused-project-menu').dataset.project).toBe(project.id);
+  });
   it('still renders the Project collection when this project has no nestable sessions', () => {
     h.data.terminals = {};
     h.threads = [];
@@ -151,7 +190,7 @@ describe('ProjectSessionRail', () => {
     // clicking the current project navigates into it — parity with the global list.
     expect(markup).toContain('class="project-select project-meta project-meta--inline"');
     expect(markup).toContain('aria-label="Open zana-command-center"');
-    const source = readFileSync(new URL('./project-session-rail.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(new NodeURL('./project-session-rail.tsx', import.meta.url), 'utf8');
     expect(source).toContain("ui.setNav('projects')");
     expect(source).toContain('ui.enterProjectFocus(project.id)');
   });
@@ -252,7 +291,7 @@ describe('ProjectSessionRail', () => {
   });
 
   it('opens nested rows on the project-scoped session and thread routes', () => {
-    const source = readFileSync(new URL('./project-session-rail.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(new NodeURL('./project-session-rail.tsx', import.meta.url), 'utf8');
     expect(source).toContain('railThreadsForProject');
     expect(source).toContain('projectRailTerminals');
     expect(source).toContain('navigate(getThreadRoutePath(thread.id, project.id))');
@@ -270,5 +309,26 @@ describe('ProjectSessionRail', () => {
     expect(source).not.toContain('Organize projects');
     expect(source).not.toContain('Add project');
     expect(source).not.toContain('sidebarProjectSort');
+  });
+});
+
+describe('global project editor actions', () => {
+  afterEach(cleanup);
+  it('puts editor actions first and opens the chosen project from right-click and overflow', async () => {
+    h.data.projects = [project];
+    h.data.terminals = {};
+    h.threads = [];
+    h.open.mockReset().mockResolvedValue({ ok: true });
+    render(<MemoryRouter><ProjectsList placement="sidebar" /></MemoryRouter>);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open zana-command-center' }), { clientX: 80, clientY: 100 });
+    const actions = document.querySelector('.project-menu')!;
+    expect(actions.querySelector('button')?.textContent).toBe('Open in Cursor');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Cursor' }));
+    await waitFor(() => expect(h.open).toHaveBeenCalledWith('cursor', project.path));
+    expect(document.querySelector('.project-menu')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for zana-command-center' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open in VS Code' }));
+    await waitFor(() => expect(h.open).toHaveBeenCalledWith('code', project.path));
+    expect(document.querySelector('.project-menu')).toBeNull();
   });
 });

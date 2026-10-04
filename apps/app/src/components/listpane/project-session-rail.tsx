@@ -1,7 +1,7 @@
-import { useMemo, type HTMLAttributes, type MouseEvent } from 'react';
+import { useMemo, useState, type HTMLAttributes, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { ChevronRight, MessageCirclePlus, Network } from 'lucide-react';
+import { ChevronRight, MessageCirclePlus, MoreHorizontal, Network } from 'lucide-react';
 import type { Project, TerminalSession } from '@zana-ai/zcc-domain/product';
 import {
   projectRailTerminals,
@@ -27,6 +27,7 @@ import { PromptModal } from '../PromptModal.js';
 import type { AgentCard } from '../AgentBoard.js';
 import { ProjectAgentRailRow, ProjectThreadRailRow } from './project-session-rail-rows.js';
 import { projectNavigationSessions } from '../../lib/teamRunOrganization.js';
+import { FocusedProjectMenu } from './FocusedProjectMenu.js';
 
 const SIDEBAR_PROJECT_SESSION_SECTION_KEY = 'sidebar:project-sessions';
 const SIDEBAR_PROJECT_SESSION_TREE_ID = 'sidebar-project-sessions-tree';
@@ -84,6 +85,12 @@ export function ProjectSessionRail({
     submitRename: submitAgentRename
   } = useAgentCardActions();
   const { menu: threadMenu, setMenu: setThreadMenu } = useThreadCardActions();
+  const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
+  const showProjectMenu = (x: number, y: number) => {
+    setAgentMenu(null);
+    setThreadMenu(null);
+    setProjectMenu({ x, y });
+  };
 
   const sessionToCard = (session: TerminalSession): AgentCard => ({
     session,
@@ -97,6 +104,7 @@ export function ProjectSessionRail({
   const openAgentCardMenu = (e: MouseEvent, session: TerminalSession) => {
     e.preventDefault();
     e.stopPropagation();
+    setProjectMenu(null);
     setThreadMenu(null);
     setAgentMenu({ card: sessionToCard(session), ...clampMenuAnchor(e) });
   };
@@ -140,7 +148,11 @@ export function ProjectSessionRail({
         className="sidebar-projects-body"
         hidden={collapsed}
       >
-        <div className="project-item">
+        <div className="project-item" onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showProjectMenu(event.clientX, event.clientY);
+        }}>
           <ProjectDot project={project} unread={hasUnread} />
           <button
             type="button"
@@ -158,6 +170,14 @@ export function ProjectSessionRail({
             )}
           </button>
           {nestedCount > 0 ? <span className="project-badge">{nestedCount}</span> : null}
+          <button type="button" className="project-actions" aria-label={`Project actions for ${displayName}`}
+            title="Project actions" onClick={(event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              showProjectMenu(rect.right, rect.bottom);
+            }}>
+            <MoreHorizontal size={15} />
+          </button>
           <button
             type="button"
             className="project-spawn"
@@ -183,7 +203,10 @@ export function ProjectSessionRail({
                 onOpen={() => {
                   navigate(getThreadRoutePath(thread.id, project.id));
                 }}
-                onContextMenu={(e) => openThreadMenu(e, thread, setThreadMenu)}
+                onContextMenu={(e) => {
+                  setProjectMenu(null);
+                  openThreadMenu(e, thread, setThreadMenu);
+                }}
               />
             ))}
             {liveList.map((session) => (
@@ -204,6 +227,7 @@ export function ProjectSessionRail({
           </div>
         ) : null}
       </div>
+      {projectMenu && <FocusedProjectMenu project={project} {...projectMenu} onClose={() => setProjectMenu(null)} />}
       {agentMenu && (
         <AgentCardMenu menu={agentMenu} setMenu={setAgentMenu} actions={agentActions} />
       )}
