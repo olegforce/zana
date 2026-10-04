@@ -25,7 +25,9 @@ test('global and focused project menus open the checkout in external editors thr
   await globalRow.click({ button: 'right' });
   const menu = win.locator('.project-menu');
   await expect(menu.getByRole('button', { name: 'Open in Cursor', exact: true })).toBeVisible();
-  await win.screenshot({ path: testInfo.outputPath('project-menu-global.png'), animations: 'disabled' });
+  if (process.env.ZCC_PROJECT_MENU_SCREENSHOTS === '1') {
+    await win.screenshot({ path: testInfo.outputPath('project-menu-global.png'), animations: 'disabled' });
+  }
   await menu.getByRole('button', { name: 'Open in Cursor', exact: true }).click();
   await expect.poll(() => { try { return readFileSync(log, 'utf8'); } catch { return ''; } }).toBe(`cursor\n-n\n${canonicalProjectPath}\n`);
   await expect(menu).toHaveCount(0);
@@ -36,7 +38,9 @@ test('global and focused project menus open the checkout in external editors thr
   const focusedRow = focusedRail.locator('.project-item');
   await focusedRow.click({ button: 'right' });
   await expect(menu.getByRole('button', { name: 'Open in VS Code', exact: true })).toBeVisible();
-  await win.screenshot({ path: testInfo.outputPath('project-menu-focused.png'), animations: 'disabled' });
+  if (process.env.ZCC_PROJECT_MENU_SCREENSHOTS === '1') {
+    await win.screenshot({ path: testInfo.outputPath('project-menu-focused.png'), animations: 'disabled' });
+  }
   await menu.getByRole('button', { name: 'Open in VS Code', exact: true }).click();
   await expect.poll(() => readFileSync(log, 'utf8')).toContain(`code\n-n\n${canonicalProjectPath}\n`);
   await focusedRail.getByRole('button', { name: 'Project actions for editor project with spaces' }).focus();
