@@ -1,8 +1,8 @@
 /**
  * @vitest-environment happy-dom
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { definePluginApp } from '@zana-ai/zcc-plugin-sdk';
 import { product } from '../lib/product-client.js';
@@ -87,6 +87,20 @@ describe('PluginSettingsForm', () => {
 });
 
 describe('PluginDefinedSettings', () => {
+  beforeEach(() => {
+    vi.mocked(product.pluginApps.getSettings).mockReset().mockResolvedValue(snap);
+    setSettings.mockReset().mockImplementation(async (_pluginId, values) => ({
+      ...snap,
+      values: { ...snap.values, ...values }
+    }));
+  });
+
+  async function renderSettings(pluginId: string) {
+    // Finish async snapshot loading and the field's initial passive effect
+    // before dispatching edits; a DOM query alone can observe the first commit.
+    await act(async () => { render(<PluginDefinedSettings pluginId={pluginId} />); });
+  }
+
   afterEach(() => {
     cleanup();
     clearPluginSlots('custom-instructions');
@@ -103,7 +117,7 @@ describe('PluginDefinedSettings', () => {
         });
       })
     );
-    render(<PluginDefinedSettings pluginId="custom-instructions" />);
+    await renderSettings('custom-instructions');
     await waitFor(() => {
       expect(screen.getByText('Enabled')).toBeTruthy();
     });
@@ -116,7 +130,7 @@ describe('PluginDefinedSettings', () => {
       values: { ...agentsSnap.values, ...values }
     }));
     vi.mocked(product.pluginApps.getSettings).mockResolvedValueOnce(agentsSnap);
-    render(<PluginDefinedSettings pluginId="provider-acp" />);
+    await renderSettings('provider-acp');
     const agents = (await screen.findByLabelText('Custom ACP agents')) as HTMLTextAreaElement;
     expect(agents.value).toBe('[]');
     const edited = [
@@ -134,7 +148,7 @@ describe('PluginDefinedSettings', () => {
       expect(Number(agents.rows)).toBe(9);
     });
     expect(setSettings).not.toHaveBeenCalled();
-    fireEvent.blur(agents);
+    await act(async () => { fireEvent.blur(agents); });
     await waitFor(() => {
       expect(setSettings).toHaveBeenCalledWith('provider-acp', { customAgents: edited });
     });
@@ -143,14 +157,13 @@ describe('PluginDefinedSettings', () => {
   it('shows a save error under the field', async () => {
     setSettings.mockRejectedValueOnce(new Error('Custom agents must be a JSON array'));
     vi.mocked(product.pluginApps.getSettings).mockResolvedValueOnce(agentsSnap);
-    render(<PluginDefinedSettings pluginId="provider-acp" />);
-    const agents = await screen.findByLabelText('Custom ACP agents');
+    await renderSettings('provider-acp');
+    const agents = screen.getByLabelText('Custom ACP agents') as HTMLTextAreaElement;
     fireEvent.change(agents, { target: { value: '{}' } });
-    fireEvent.blur(agents);
-    // blur → autosave rejects → error state → re-render with role=alert is a
-    // multi-tick async chain; the default 1000ms findBy budget can be exceeded
-    // under full-suite parallel load (observed 1013ms), so give it real room.
-    expect((await screen.findByRole('alert', {}, { timeout: 5_000 })).textContent).toContain(
+    expect(agents.value).toBe('{}');
+    await act(async () => { fireEvent.blur(agents); });
+    expect(setSettings).toHaveBeenCalledWith('provider-acp', { customAgents: '{}' });
+    expect(screen.getByRole('alert').textContent).toContain(
       'Custom agents must be a JSON array'
     );
   });
