@@ -78,7 +78,9 @@ jobs:
   e2e:
     name: Affected Electron boundaries
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Broad release branches select about 40 production-boundary cases. Keep
+    # their private build and full passing run bounded without cutting it off.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:

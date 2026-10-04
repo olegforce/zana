@@ -22,6 +22,9 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
+  // Preserve the first actionable trace promptly; a broad boundary selection
+  // should not consume its whole job budget before reporting a failure.
+  maxFailures: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never', outputFolder: `playwright-report/${runId}` }]] : 'list',
   use: {
     // Artifacts only on failure — a booted app is heavy to trace always-on.
