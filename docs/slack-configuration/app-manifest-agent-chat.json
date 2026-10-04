@@ -6,8 +6,7 @@
     "app_home": {
       "home_tab_enabled": true,
       "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false,
-      "agent_tasks_enabled": true
+      "messages_tab_read_only_enabled": false
     },
     "bot_user": {
       "display_name": "Zana",
@@ -22,6 +21,15 @@
         "should_escape": true
       }
     ],
+    "rich_previews": {
+      "is_active": true,
+      "entity_types": [
+        "slack#/entities/file"
+      ],
+      "domain_allowlist": [
+        "zana-ide.com"
+      ]
+    },
     "agent_view": {
       "agent_description": "Work with agents on your connected Zana Projects. Select a Project, start a task, answer questions, and share results. Keep your Zana computer running.",
       "suggested_prompts": [
@@ -34,34 +42,25 @@
           "message": "Help me plan the next task in my connected Project."
         }
       ]
-    },
-    "rich_previews": {
-      "is_active": true,
-      "entity_types": [
-        "slack#/entities/file"
-      ],
-      "domain_allowlist": [
-        "zana-ide.com"
-      ]
     }
   },
   "oauth_config": {
     "scopes": {
       "bot": [
-        "im:read",
+        "groups:write",
         "app_mentions:read",
-        "assistant:write",
-        "channels:history",
         "channels:read",
         "chat:write",
         "commands",
-        "files:write",
-        "groups:history",
         "groups:read",
-        "groups:write",
         "mcp:connect",
         "users:read",
-        "im:history"
+        "channels:history",
+        "groups:history",
+        "files:write",
+        "im:read",
+        "im:history",
+        "assistant:write"
       ]
     },
     "pkce_enabled": false

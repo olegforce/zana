@@ -1,4 +1,6 @@
 import { validatePluginHostValue } from './plugin-host-rpc.js';
+import { searchPluginInbox, readPluginInbox } from './plugin-inbox.js';
+import { completePluginAssistant } from './plugin-assistant.js';
 import { isProjectIcon, spawnEnvironmentChoiceSchema, type ProjectIcon } from '@zana-ai/zcc-domain';
 import { readHostFile, writeHostFile } from '../http/files-via-host.js';
 import { readPluginProjectFile, writePluginProjectFile } from '../http/plugin-project-files.js';
@@ -365,6 +367,7 @@ export function createPluginApi(
   const realtimeListeners = new Set<(event: string, payload: unknown) => void>();
   let settingDescriptors: Record<string, PluginSettingDescriptor> = {};
   let stale = false;
+  const assistantLifecycle = new AbortController();
   const cliRecord: { registration: PluginCliRegistration | null } = { registration: null };
   const httpRoutes: PluginHttpRouteRecord[] = [];
   const agentTools: PluginAgentToolRecord[] = [];
@@ -561,6 +564,15 @@ export function createPluginApi(
       }
     },
     sdk: {
+      assistant: {
+        complete: async (args) => {
+          assertLive();
+          if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
+          const result = await completePluginAssistant(options.productContext, { ...args, signal: args.signal ? AbortSignal.any([args.signal, assistantLifecycle.signal]) : assistantLifecycle.signal });
+          assertLive();
+          return result;
+        }
+      },
       system: {
         defaultHost: async () => {
           assertLive();
@@ -841,6 +853,20 @@ export function createPluginApi(
         }
       },
       inbox: {
+        search: async (args) => {
+          assertLive();
+          if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
+          const result = await searchPluginInbox(options.productContext, args);
+          assertLive();
+          return result;
+        },
+        read: async (args) => {
+          assertLive();
+          if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
+          const result = await readPluginInbox(options.productContext, args);
+          assertLive();
+          return result;
+        },
         push: async (args) => {
           assertLive();
           if (!options?.pushInbox) {
@@ -1380,6 +1406,7 @@ export function createPluginApi(
     },
     async dispose() {
       stale = true;
+      assistantLifecycle.abort();
       hostWorkerExitHandlers.length = 0; hostSignalHandlers.clear();
       options?.interruptPluginInteractions?.(pluginId);
       for (const handle of sqliteHandles) {

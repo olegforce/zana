@@ -99,3 +99,7 @@ Environment choices are validated by the server; omit the choice for the project
 `sdk.environments.pullRequest` support task attachments and delegated worktrees.
 HTTP routes receive request `headers` and bounded `rawBody` (25 MiB maximum),
 plus parsed `body` for JSON. Response `body` accepts `Uint8Array` for binary downloads.
+
+Plugins can read a bounded inbox page with `sdk.inbox.search({ projectIds, query, unreadOnly, reportsOnly, limit, before })` and open an attached report with `sdk.inbox.read({ projectIds, entryId, documentIndex })`. Main validates every Project ID; report paths come from the stored inbox entry and are confined to its registered checkout, including symlinks. Reads preserve unread and archive state. Plugins remain responsible for authorizing the destination before sharing returned content.
+
+`sdk.assistant.complete({ instructions, prompt, signal })` provides a bounded text call through the configured Claude CLI and login. It runs outside Project checkouts with tools and ambient MCP servers disabled, a 30-second timeout, a 6,000-character output cap, and at most two concurrent calls. It never launches a Project worker.

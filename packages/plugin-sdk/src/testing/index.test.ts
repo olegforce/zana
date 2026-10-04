@@ -245,3 +245,17 @@ describe('createFakePluginHost sdk stubs', () => {
     await expect(wired.zcc.sdk.providers.list()).resolves.toEqual([{ id: 'claude-code', available: true }]);
   });
 });
+
+it('records assistant and scoped inbox calls, with unavailable defaults', async () => {
+  const { zcc, harness } = createFakePluginHost({ pluginId: 'reader' });
+  await expect(zcc.sdk.assistant.complete({ instructions: 'classify', prompt: 'hi' })).rejects.toThrow(/not available/);
+  await expect(zcc.sdk.inbox.search({ projectIds: ['p1'] })).rejects.toThrow(/not available/);
+  await expect(zcc.sdk.inbox.read({ projectIds: ['p1'], entryId: 'r' })).rejects.toThrow(/not available/);
+  harness.sdk.stub('assistant.complete', () => ({ text: 'answer' }));
+  harness.sdk.stub('inbox.search', () => ({ entries: [], hasMore: false }));
+  harness.sdk.stub('inbox.read', () => ({ content: 'report', truncated: false }));
+  expect(await zcc.sdk.assistant.complete({ instructions: 'classify', prompt: 'hi' })).toEqual({ text: 'answer' });
+  expect(await zcc.sdk.inbox.search({ projectIds: ['p1'] })).toEqual({ entries: [], hasMore: false });
+  expect(await zcc.sdk.inbox.read({ projectIds: ['p1'], entryId: 'r' })).toEqual({ content: 'report', truncated: false });
+  expect(harness.sdk.callsTo('inbox.read')).toEqual([[{ projectIds: ['p1'], entryId: 'r' }], [{ projectIds: ['p1'], entryId: 'r' }]]);
+});

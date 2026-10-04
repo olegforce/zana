@@ -469,6 +469,43 @@ export interface PluginSdkInboxPushArgs {
 
 export interface PluginSdkInbox {
   push(args: PluginSdkInboxPushArgs): Promise<{ id: string }>;
+  /** Read-only, explicitly scoped to registered Projects; never marks entries read. */
+  search(args: PluginSdkInboxSearchArgs): Promise<PluginSdkInboxSearchResult>;
+  /** Read only a document attached to the named inbox entry. */
+  read(args: { projectIds: string[]; entryId: string; documentIndex?: number }): Promise<PluginSdkInboxReport>;
+}
+
+export interface PluginSdkInboxSearchArgs {
+  projectIds: string[];
+  query?: string;
+  before?: string;
+  limit?: number;
+  unreadOnly?: boolean;
+  reportsOnly?: boolean;
+}
+export interface PluginSdkInboxEntry {
+  id: string;
+  ts: number;
+  projectId: string;
+  projectName: string;
+  subject: string;
+  comments: string;
+  documents: number;
+  unread: boolean;
+}
+export interface PluginSdkInboxSearchResult {
+  entries: PluginSdkInboxEntry[];
+  hasMore: boolean;
+  nextBefore?: string;
+}
+export interface PluginSdkInboxReport extends PluginSdkInboxEntry {
+  documentIndex?: number;
+  content: string;
+  truncated: boolean;
+}
+export interface PluginSdkAssistant {
+  /** Bounded text-only inference, without agent tools or Project access. */
+  complete(args: { instructions: string; prompt: string; signal?: AbortSignal }): Promise<{ text: string }>;
 }
 
 export interface PluginSdkProject {
@@ -494,6 +531,7 @@ export interface PluginSdk {
   };
   threads: PluginSdkThreads;
   inbox: PluginSdkInbox;
+  assistant: PluginSdkAssistant;
   projects: PluginSdkProjects;
   environments: PluginSdkEnvironments;
   files: PluginSdkFiles;

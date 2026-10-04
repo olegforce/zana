@@ -28,6 +28,7 @@ let db: any,
   service: any,
   dispatch: any,
   call: any,
+  onIngressRejection: any,
   clock: number;
 beforeEach(async () => {
   clock = Date.now();
@@ -75,6 +76,7 @@ beforeEach(async () => {
         ? { linkId: args.payload.linkId }
         : { accepted: true, response: {} },
   }));
+  onIngressRejection = vi.fn();
   service = await createSlackService({
     db,
     connect,
@@ -86,7 +88,22 @@ beforeEach(async () => {
     call,
     now: () => clock,
     intervalMs: 100_000,
+    onIngressRejection,
   });
+});
+it('reports bounded native-control rejection metadata without event content or identifiers', async () => {
+  const payload = { ...event(), team_id: 'TFOREIGN', event: { type: 'agent_session_stopped', user: 'U123456', channel: 'D123456', team_id: identity.team, text: 'PRIVATE-CONTENT' } };
+  expect((await ingress(payload)).status).toBe(403);
+  expect(onIngressRejection).toHaveBeenCalledWith({ event: 'agent_session_stopped', teamMatches: false, teamPresent: true, eventTeamMatches: true, eventTeamPresent: true, authorizationMatches: false, contextTeamMatches: false, appMatches: true, userValid: true, channelValid: true, reason: 'wrong_identity' });
+  expect(JSON.stringify(onIngressRejection.mock.calls)).not.toMatch(/PRIVATE-CONTENT|TFOREIGN|U123456|D123456/);
+  await ingress(payload);
+  expect(onIngressRejection).toHaveBeenCalledTimes(1);
+  clock += 60_000;
+  onIngressRejection.mockImplementation(() => { throw new Error('logger unavailable'); });
+  expect((await ingress(payload)).status).toBe(403);
+  expect(onIngressRejection).toHaveBeenCalledTimes(2);
+  await ingress({ ...payload, event: { type: 'message', text: 'PRIVATE-CONTENT' } });
+  expect(onIngressRejection).toHaveBeenCalledTimes(2);
 });
 it("admits verified owner DMs, legacy starts and modern stop events without widening channel browsing", async () => {
   const a = await link(), original = call.getMockImplementation();
@@ -109,6 +126,27 @@ it("admits verified owner DMs, legacy starts and modern stop events without wide
   call.mockImplementation(async (m: string, args: any) => m === "conversations.info" && args.channel === "D123456" ? { ok: true, channel: { id: "D123456", user: "U234567", is_im: true } } : original(m, args));
   expect((await ingress({ ...dm, event_id: "forged" })).status).toBe(403);
   await expect(scoped.proxy(a.link, "conversations.info", { channel: "D123456" })).rejects.toThrow("channel_not_owned");
+});
+it('admits Grid native controls through the exact bot installation while retaining DM and thread ownership', async () => {
+  const a = await link(), original = call.getMockImplementation();
+  call.mockImplementation(async (m: string, args: any) => m === 'conversations.info' && args.channel === 'D123456' ? { ok: true, channel: { id: 'D123456', user: 'U123456', is_im: true } } : original(m, args));
+  const root = `${Math.floor(clock / 1000)}.000001`;
+  await service.registry.bind(a.link, 'D123456', root);
+  const control = { ...event(), team_id: 'TORIGIN', authorizations: [{ team_id: identity.team, user_id: identity.bot, is_bot: true }], event: { type: 'agent_session_stopped', channel: 'D123456', user: 'U123456', thread_ts: root, event_ts: root } };
+  expect((await ingress({ ...control, event_id: 'GridStop' })).status).toBe(200);
+  await service.drain();
+  expect(JSON.parse(dispatch.mock.calls.at(-1)[0].payload.body).payload).toMatchObject({ team_id: identity.team, event: { type: 'agent_session_stopped', user: 'U123456', thread_ts: root } });
+  expect((await ingress({ ...control, event_id: 'GridTitle', event: { ...control.event, team_id: 'TORIGIN', type: 'agent_session_title_changed', title: 'My task' } })).status).toBe(200);
+  for (const team_id of [undefined, '', 'EORIGIN', 'TOTHERTEAM']) {
+    expect((await ingress({ ...control, team_id, event_id: `GridStop-${team_id}`, event: { ...control.event, team_id: 'TORIGIN' } })).status).toBe(200);
+  }
+  await link('bob', 'U234567');
+  for (const authorization of [undefined, [], [{ team_id: 'TORIGIN', user_id: identity.bot, is_bot: true }], [{ team_id: identity.team, user_id: 'UFOREIGN', is_bot: true }], [{ team_id: identity.team, user_id: identity.bot, is_bot: false }]]) {
+    expect((await ingress({ ...control, authorizations: authorization })).status).toBe(403);
+  }
+  for (const override of [{ api_app_id: 'AFOREIGN' }, { event: { ...control.event, type: 'message', ts: root, text: 'Do work' } }, { event: { ...control.event, channel: 'C123456' } }, { event: { ...control.event, user: 'U234567' } }, { event: { ...control.event, thread_ts: `${Math.floor(clock / 1000)}.000002` } }]) {
+    expect((await ingress({ ...control, ...override })).status).toBe(403);
+  }
 });
 it("scopes Canvas creation to an owned conversation and owner access to a delivered private Canvas", async () => {
   const a = await link(), original = call.getMockImplementation();

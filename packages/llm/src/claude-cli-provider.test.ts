@@ -94,3 +94,11 @@ describe('ClaudeCliProvider CLI success', () => {
     expect(result.usage).toBeUndefined();
   });
 });
+
+it('disables tools, ambient MCP servers, hooks and persistence for conversation inference', async () => {
+  const child = makeFakeChild(); spawnMock.mockReturnValue(child);
+  const pending = new ClaudeCliProvider('/configured/claude').run({ system: 'classify', user: '--user-input', disableTools: true });
+  expect(spawnMock).toHaveBeenCalledWith('/configured/claude', expect.arrayContaining(['--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--settings', '{"disableAllHooks":true}', '--no-session-persistence']), expect.objectContaining({ shell: false }));
+  expect(spawnMock.mock.calls[0][1].slice(-2)).toEqual(['--', '--user-input']);
+  child.emitStdout('answer'); child.emitClose(0); await expect(pending).resolves.toMatchObject({ ok: true, text: 'answer' });
+});
