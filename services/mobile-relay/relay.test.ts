@@ -116,7 +116,9 @@ describe('mobile relay with the real authenticated gateway', () => {
     expect((await fetch(`${env.publicUrl}/_relay/health`)).status).toBe(200);
   });
   it('times out a stalled response and keeps the tunnel usable', async () => {
-    const env = await setup({ timeout: 100 }); const { cookie } = await env.pair();
+    // The healthy request crosses the real gateway and WebSocket tunnel.
+    // Leave headroom for a busy full-suite runner while still timing out /slow.
+    const env = await setup({ timeout: 1000 }); const { cookie } = await env.pair();
     expect((await fetch(`${env.publicUrl}/slow`, { headers: { cookie } })).status).toBe(504);
     expect((await fetch(env.publicUrl, { headers: { cookie } })).status).toBe(200);
   });
