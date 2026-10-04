@@ -286,9 +286,13 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await expect(city.getByLabel('Map zoom level')).toHaveText('100%');
   await navigate('/agents');
   await expect(city).toBeVisible();
+  // Motion was verified above. Keep cold reload checks still on software GPUs.
+  await app.window.emulateMedia({ reducedMotion: 'reduce' });
   await app.window.reload();
   await expectCityAfterReload();
-  await city.getByRole('button', { name: /Scheduler station/ }).click();
+  const station = city.getByRole('button', { name: /Scheduler station/ });
+  await station.focus();
+  await station.press('Enter');
   await expect(city.getByRole('heading', { name: 'Scheduler station' })).toBeVisible();
   // Live reload proves the host drops the old generation and mounts the rebuilt plugin.
   const appPath = join(source, 'city-app.tsx');
@@ -296,7 +300,6 @@ test('Agent City adds the fourth Agents view, opens real work, reloads and falls
   await run(['plugin', 'dev', '--once']);
   await expect(city.getByRole('heading', { name: 'City reload verified' })).toBeVisible();
   await app.window.bringToFront();
-  await app.window.emulateMedia({ reducedMotion: 'reduce' });
   await app.window.reload();
   await expectCityAfterReload();
   await expect(city.getByRole('button', { name: 'Reduced motion' })).toBeDisabled();
