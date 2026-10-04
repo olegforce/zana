@@ -54,7 +54,7 @@ export function DownloadClient() {
         <div className="zcc-panel dl-primary" data-reveal>
           <h2>macOS</h2>
           <p>Apple Silicon or Intel · signed and notarized · .dmg</p>
-          <a className="zcc-btn zcc-btn-primary" href={`${site.releasesRepo}/releases/latest`}>
+          <a className="zcc-btn zcc-btn-primary" data-analytics="download" href={`${site.releasesRepo}/releases/latest`}>
             Download for macOS
           </a>
         </div>

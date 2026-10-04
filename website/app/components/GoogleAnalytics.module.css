@@ -1,0 +1,27 @@
+.choice {
+  position: fixed;
+  inset: auto 16px 16px;
+  z-index: 100;
+  max-width: 620px;
+  margin-inline: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 8px 32px #0003;
+}
+.choice p { margin: 0 0 16px; }
+.actions { display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
+.preferences {
+  display: block;
+  margin: 0 auto 16px;
+  border: 0;
+  padding: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}

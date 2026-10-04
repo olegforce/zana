@@ -52,6 +52,21 @@ build arguments rather than runtime environment variables. Set `PUBLIC_BASE_URL`
 in production so canonical URLs, `robots.txt`, and the sitemap use the real HTTPS
 origin.
 
+Website analytics is optional: set `NEXT_PUBLIC_GA_MEASUREMENT_ID` to the GA4
+web stream's `G-…` ID at build time (Docker `--build-arg`). Visitors can accept,
+decline, or revisit their choice through **Analytics cookies**. Public pages send
+`page_view` and the macOS download link sends `download_click`; account/pairing
+and publishing pages are excluded, and URL queries/fragments are removed.
+Disable enhanced measurement on this stream because page views and download
+clicks are sent explicitly; automatic history/form events can include private
+account URLs. Advertising signals are disabled and cookies stay on this hostname.
+
+Verify with the focused `analytics.test.ts` / `GoogleAnalytics.test.tsx` tests
+from the repository root. Against a production build containing a measurement
+ID, run `ANALYTICS_TEST_BASE_URL=http://127.0.0.1:4321 node scripts/verify-analytics.mjs`
+from `website/`. The browser verification intercepts Google's script and sends
+no real analytics events.
+
 Build and run locally:
 
 ```bash
@@ -73,6 +88,7 @@ heroku container:login
 # (`error from registry: unsupported`). Force Docker schema 2 + gzip:
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
   --build-arg PUBLIC_BASE_URL=https://zana-ide.com \
+  --build-arg NEXT_PUBLIC_GA_MEASUREMENT_ID=G-WFXR8G1EP8 \
   --output 'type=image,name=registry.heroku.com/zcc/web:latest,push=true,oci-mediatypes=false,compression=gzip,force-compression=true' .
 heroku container:release web -a zcc
 ```

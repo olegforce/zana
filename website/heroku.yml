@@ -16,6 +16,7 @@ build:
   config:
     NEXT_PUBLIC_APP_VERSION: "2.3.1"
     PUBLIC_BASE_URL: "https://zana-ide.com"
+    NEXT_PUBLIC_GA_MEASUREMENT_ID: "G-WFXR8G1EP8"
     # NEXT_PUBLIC_REGISTRY_URL: "https://<cdn>/extensions/index.json"
     # NEXT_PUBLIC_UPDATE_FEED_URL: "https://<cdn>/app-updates/"
 run:
