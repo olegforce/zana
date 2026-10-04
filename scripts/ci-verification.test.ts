@@ -13,6 +13,9 @@ it('selects required ownership boundaries, deduplicates specs and leaves docs al
   for (const path of ['apps/desktop/src/control/control-plane.ts', 'packages/cli/src/lib/control-client.ts']) {
     expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/plugin-authoring-live.spec.ts', 'e2e/job-team-launch-ui.spec.ts', 'e2e/cli-agent-job-team-run.spec.ts', 'e2e/modern-owner-job-team-run.spec.ts']));
   }
+  for (const path of ['packages/plugin-build/src/build-plugin-app.ts', 'packages/plugin-build/src/build-plugin-server.ts']) {
+    expect(boundarySpecs([path])).toContain('e2e/plugin-authoring-live.spec.ts');
+  }
   for (const path of ['packages/plugin-build/src/prepare-plugin-runtime.ts', 'scripts/before-pack-plugins.mjs', 'apps/server/src/plugins/plugin-host-artifact.ts', 'apps/server/src/plugins/plugin-service.ts', 'packages/plugin-build/src/build-plugin-host.ts', 'plugins/provider-claude-code/server.mjs', 'apps/desktop/electron-builder.yml', '.github/workflows/release.yml']) {
     expect(boundarySpecs([path])).toContain('e2e/packaged-provider-startup.spec.ts');
   }
