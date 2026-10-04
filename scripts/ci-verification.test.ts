@@ -98,4 +98,6 @@ it('keeps the existing required CI check as an always-running gate over both job
   expect(workflow).toContain('test "$BOUNDARY_RESULT" = success');
   expect(workflow).not.toContain('continue-on-error: true');
   expect(workflow).toContain('plugins/tasks/vitest.config.ts --coverage');
+  expect(workflow).toContain('pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage');
+  expect(workflow).toContain('coverage/tasks/coverage-final.json coverage/pi/coverage-final.json');
 });

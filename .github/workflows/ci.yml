@@ -62,8 +62,11 @@ jobs:
       - name: Tasks tests with package configuration and coverage
         run: pnpm exec vitest run --config plugins/tasks/vitest.config.ts --coverage --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/tasks"
 
+      - name: Pi provider tests with package configuration and coverage
+        run: pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/pi"
+
       - name: Enforce changed-code coverage
-        run: node scripts/ci-verification.mjs --coverage coverage/root/coverage-final.json coverage/tasks/coverage-final.json
+        run: node scripts/ci-verification.mjs --coverage coverage/root/coverage-final.json coverage/tasks/coverage-final.json coverage/pi/coverage-final.json
         env:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
 
