@@ -7,6 +7,22 @@ const workflow = load(readFileSync(new URL('../.github/workflows/release.yml', i
 const builder = load(readFileSync(new URL('../apps/desktop/electron-builder.yml', import.meta.url), 'utf8'));
 
 describe('Windows release pipeline', () => {
+  it('makes Windows opt-in for manual rebuilds while retaining both Mac architectures and release gates', () => {
+    expect(workflow.on.workflow_dispatch.inputs.build_windows).toMatchObject({
+      type: 'boolean',
+      default: false,
+    });
+    expect(workflow.jobs['build-windows'].if)
+      .toBe("github.event_name != 'workflow_dispatch' || inputs.build_windows");
+    expect(workflow.jobs.build.if).toBeUndefined();
+    expect(workflow.jobs.build.strategy.matrix.include).toEqual([
+      { os: 'macos-15', arch: 'arm64' },
+      { os: 'macos-15-intel', arch: 'x64' },
+    ]);
+    expect(workflow.jobs.build.needs).toEqual(['verify', 'smoke']);
+    expect(workflow.on.push.tags).toContain('v*');
+  });
+
   it('gates Mac and Windows artifact uploads on packaged plugin authoring', () => {
     for (const [job, gate] of [['build', 'Verify packaged plugin authoring'], ['build-windows', 'Verify packaged Windows plugin authoring']]) {
       const steps = workflow.jobs[job].steps;

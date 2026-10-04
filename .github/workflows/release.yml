@@ -25,8 +25,14 @@ on:
   push:
     tags:
       - 'v*'
-  # Allow a manual dry run (builds artifacts, does not create a Release).
+  # Manual dry runs build both Mac architectures, with Windows opt-in.
+  # They build artifacts without creating a Release.
   workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Also build Windows x64
+        type: boolean
+        default: false
 
 permissions:
   contents: write # needed to create the GitHub Release
@@ -267,6 +273,7 @@ jobs:
 
   build-windows:
     name: Build Windows (x64)
+    if: github.event_name != 'workflow_dispatch' || inputs.build_windows
     needs: [verify, smoke]
     runs-on: windows-2025
     timeout-minutes: 45
