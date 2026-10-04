@@ -340,6 +340,9 @@ export function createFakePluginHost(options?: FakePluginHostOptions): FakePlugi
       }
     },
     sdk: {
+      assistant: {
+        complete: async (args) => invokeSdk('assistant.complete', async () => { throw new Error('zcc.sdk is not available in this runtime'); }, args) as ReturnType<ZccPluginApi['sdk']['assistant']['complete']>
+      },
       system: { defaultHost: async () => invokeSdk('system.defaultHost', async () => null, undefined) as Promise<{ id: string } | null> },
       hosts: {
         async list(args) {
@@ -466,6 +469,8 @@ export function createFakePluginHost(options?: FakePluginHostOptions): FakePlugi
         }
       },
       inbox: {
+        search: async (args) => invokeSdk('inbox.search', async () => { throw new Error('zcc.sdk is not available in this runtime'); }, args) as ReturnType<ZccPluginApi['sdk']['inbox']['search']>,
+        read: async (args) => invokeSdk('inbox.read', async () => { throw new Error('zcc.sdk is not available in this runtime'); }, args) as ReturnType<ZccPluginApi['sdk']['inbox']['read']>,
         async push(args) {
           if (!options?.pushInbox) {
             throw new Error('zcc.sdk is not available in this runtime');

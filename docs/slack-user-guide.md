@@ -1,6 +1,6 @@
 # Using Zana in Slack
 
-Practical guide · Zana for Slack 0.14.2 · Updated 2 October 2026
+Practical guide · Zana for Slack 0.14.4 · Updated 4 October 2026
 
 Zana lets you start work on your connected computer from Slack, follow its progress, and continue the conversation where the task began. Use **Slackbot** for natural-language requests, **@Zana** in an internal channel where the app is invited, **/zana** for shortcuts, or **Zana Home** for buttons and a dashboard.
 
@@ -35,7 +35,7 @@ The Project selects the code/context and execution machine. The destination sele
 
 In a connected channel, a direct mention uses its saved defaults immediately. Use `/zana` when you want to choose the harness or model. In an unconnected channel, a task uses **Default Project for mentions** from the plugin settings, or the connected built-in Default Project. If no default is connected, it offers the Project/profile picker. A bare `@Zana` offers the task form; a bare mention in an existing Zana task shows status. Status messages are plain text; Stop, Mute and Open in Zana controls stay in Home. Starting another job creates a separate conversation. Slackbot can also honor a requested harness/model: it discovers available IDs with `zana_launch_options`, then includes them in `zana_launch_job`. Its destination remains an approved Project channel.
 
-**DM activation:** the implementation and gateway are ready; the live Slack app still needs the minimal DM manifest and a reinstall granting `im:read` and `im:history`. These permissions allow messages to the bot; they do not enable the separate native agent view or Canvas feature. See [the configuration guide](slack-configuration/README.md).
+**Private Slack agent:** activated in Internal-Sandbox on 4 October 2026. Zana now displays the **AGENT** badge and an editable Messages tab. In the desktop plugin, enable **Private agent chat** after Slack scope approval/reinstallation. Describe a task in Zana's Messages tab. The conversational integration infers a connected Project and asks one clarification when needed; saved agent settings apply, and plain threaded replies continue that agent. Mentions are optional. Launch and follow-up were verified against the connected computer. The conversational upgrade and native Stop have production-boundary tests; live deployment requires the updated Zana core. Until then, use `@Zana stop` in the task thread or Stop in Zana Home. Keep the connected Zana computer online. See [the configuration guide](slack-configuration/README.md).
 
 ### Use @Zana in an existing channel with Default Project
 
@@ -294,3 +294,5 @@ This exercises a new task, a returned answer, and a follow-up without requesting
 Maintainer references: [Slackbot integration](slackbot-app.md), [capability settings and plugin tools](slack-capabilities.md), and [Connect setup](slack-connect.md). This guide describes the current bridge; some older setup documents retain historical rollout notes.
 
 While a reply’s Mermaid image is rendering, uploading or waiting for Slack to process it, the existing working notice ends with **🎨 Formatting in process…**. It updates in place, survives bounded image retries and disappears when the answer is confirmed delivered. It adds no extra thread reply.
+
+Private chat can also search and summarize your report inbox without launching a worker. Enable **Read report inbox** in Plugins → Zana for Slack → Configuration, then ask “Show my unread reports,” “Find the Slack integration report,” or “Summarize the second report.” This includes registered Projects even when they have no Slack channel connection. Reports stay in your linked owner DM and remain unread until you mark them read in Zana. Attached text documents are read from their current saved contents; excerpts are bounded. Conversational inference requires an available, logged-in configured Claude CLI in the updated core; task workers still use their saved provider and model.

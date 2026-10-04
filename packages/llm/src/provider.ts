@@ -16,6 +16,8 @@ export interface LlmRunRequest {
   timeoutMs?: number;
   /** Optional cancellation. Providers that spawn/fetch should abort on this signal. */
   signal?: AbortSignal;
+  /** Text-only helpers must not inherit CLI tools or MCP servers. */
+  disableTools?: boolean;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { test, expect, launchApp } from './fixtures/app.js';
 import { createServer, request } from 'node:https';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, symlinkSync, chmodSync } from 'node:fs';
+import { cpSync, existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync, symlinkSync, chmodSync } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { createHmac } from 'node:crypto';
@@ -136,7 +136,7 @@ test('Slackbot selective imports and plugin capabilities work through the real C
     cpSync(source!, fixtureSource, { recursive: true, filter: p => !['node_modules', '.git', 'coverage'].includes(p.split('/').at(-1)!) });
     symlinkSync(join(source!, 'node_modules'), join(fixtureSource, 'node_modules'), 'dir');
     renameSync(join(fixtureSource, 'server.ts'), join(fixtureSource, 'real-server.ts'));
-    writeFileSync(join(fixtureSource, 'server.ts'), `import original from './real-server.ts';\nexport default async zcc => {\n  let ask, publish; const register = zcc.agents.registerTool.bind(zcc.agents);\n  const handlers = new Map(), on = zcc.events.on.bind(zcc.events);\n  zcc.events.on = (name, handler) => { handlers.set(name, handler); return on(name, handler); };\n  zcc.agents.registerTool = tool => { if (tool.name === 'slack_bridge_ask') ask = tool; if (tool.name === 'slack_bridge_publish') publish = tool; return register(tool); };\n  await original(zcc);\n  zcc.rpc.method('fixtureLifecycle', args => handlers.get(args.name)({ name: args.name, threadId: args.threadId }));\n  zcc.rpc.method('fixtureAsk', args => ask.execute({ questions: args.questions }, { threadId: args.threadId, projectId: args.projectId }));\n  zcc.rpc.method('fixturePublish', args => publish.execute({ text: args.text }, { threadId: args.threadId, projectId: args.projectId }));\n}\n`);
+    writeFileSync(join(fixtureSource, 'server.ts'), `import original from './real-server.ts';\nexport default async zcc => {\n  let ask, publish; const register = zcc.agents.registerTool.bind(zcc.agents);\n  const handlers = new Map(), on = zcc.events.on.bind(zcc.events);\n  zcc.events.on = (name, handler) => { handlers.set(name, handler); return on(name, handler); };\n  zcc.agents.registerTool = tool => { if (tool.name === 'slack_bridge_ask') ask = tool; if (tool.name === 'slack_bridge_publish') publish = tool; return register(tool); };\n  const conversationCalls = [];\n  for (const [group, methods] of [['assistant',['complete']],['inbox',['search','read']]]) for (const method of methods) { const call = zcc.sdk[group][method].bind(zcc.sdk[group]); zcc.sdk[group][method] = async args => { try { const result = await call(args); conversationCalls.push({group,method,args,result}); return result; } catch(error) { conversationCalls.push({group,method,error:String(error)}); throw error; } }; }\n  zcc.rpc.method('fixtureConversationCalls', () => conversationCalls);\n  await original(zcc);\n  zcc.rpc.method('fixtureAssistant', args => zcc.sdk.assistant.complete(args));\n  zcc.rpc.method('fixtureInboxSearch', args => zcc.sdk.inbox.search(args));\n  zcc.rpc.method('fixtureInboxRead', args => zcc.sdk.inbox.read(args));\n  zcc.rpc.method('fixtureLifecycle', args => handlers.get(args.name)({ name: args.name, threadId: args.threadId }));\n  zcc.rpc.method('fixtureAsk', args => ask.execute({ questions: args.questions }, { threadId: args.threadId, projectId: args.projectId }));\n  zcc.rpc.method('fixturePublish', args => publish.execute({ text: args.text }, { threadId: args.threadId, projectId: args.projectId }));\n}\n`);
     const pluginStore = join(home, '.zcc/plugins'); mkdirSync(pluginStore, { recursive: true });
     writeFileSync(join(pluginStore, 'installed.json'), JSON.stringify({ version: 1, plugins: [{ id: 'slack-bridge-2ff2', version: '0.14.2', name: 'Zana for Slack', enabled: true, status: 'running', provenance: 'direct', sourceKind: 'path', source: `path:${fixtureSource}`, rootDir: fixtureSource, serverEntry: './server.ts', appEntry: './app.js', installedAt: Date.now(), updatedAt: Date.now() }] }));
     const consumer = join(home, 'slack-capability-fixture'); mkdirSync(consumer);
@@ -178,7 +178,24 @@ ${hangBranch}`));
     const activityLauncher = join(activityBin, 'opencode');
     writeFileSync(activityLauncher, readFileSync(resolve('e2e/fixtures/bin/opencode'), 'utf8').replace("await import('../../../plugins/provider-acp/src/bridge/fake-acp-agent.mjs');", `await import(${JSON.stringify(activityAgent)});`));
     chmodSync(activityLauncher, 0o755);
-    app = await launchApp(home, { caCertPath: cert, env: { ...await phonePortEnv(), PATH: `${activityBin}${delimiter}${resolve('e2e/fixtures/bin')}${delimiter}${process.env.PATH}`, FAKE_ACP_MODEL_CONFIG: '1', FAKE_ACP_MODE_CONFIG: '1' }, initialConfig: { tmuxScope: 'off', harnessOpenCodeEnabled: true } });
+    const conversationCli = join(activityBin, 'zana-conversation-claude');
+    writeFileSync(conversationCli, `#!/usr/bin/env node
+      const args = process.argv.slice(2);
+      if (!args.includes('--strict-mcp-config') || !args.includes('--tools') || args[args.indexOf('--tools') + 1] !== '') process.exit(41);
+      const prompt = args.at(-1);
+      if (prompt === 'LONG_OUTPUT') { process.stdout.write('x'.repeat(26000)); }
+      else if (prompt === 'FAIL') { process.stderr.write('fixture failure'); process.exitCode = 42; }
+      else {
+        const c = JSON.parse(prompt), result = c.toolResults?.at(-1);
+        const decision = result?.kind === 'inbox_read' ? {kind:'answer',text:'Inbox summary: ' + result.content}
+          : result?.kind === 'inbox_search' ? (result.entries.length ? {kind:'inbox_read',entryId:result.entries[0].id} : {kind:'answer',text:'No reports'})
+          : c.request.includes('reports') ? {kind:'inbox_search',unreadOnly:true}
+          : c.currentProjectId || c.request === 'Use the connected Project' ? {kind:'launch',projectId:c.currentProjectId || c.connectedProjects[0].id}
+          : {kind:'clarify',text:'Which Project should I use?',intent:'task'};
+        process.stdout.write(JSON.stringify(decision));
+      }
+    `); chmodSync(conversationCli, 0o755);
+    app = await launchApp(home, { caCertPath: cert, env: { ...await phonePortEnv(), PATH: `${activityBin}${delimiter}${resolve('e2e/fixtures/bin')}${delimiter}${process.env.PATH}`, FAKE_ACP_MODEL_CONFIG: '1', FAKE_ACP_MODE_CONFIG: '1' }, initialConfig: { tmuxScope: 'off', harnessOpenCodeEnabled: true, claudeBinary: conversationCli } });
     await app.electron.evaluate(() => {
       const dns = process.getBuiltinModule('dns'), original = dns.lookup;
       dns.lookup = ((hostname: string, options: any, callback: any) => hostname.endsWith('.zana.test') ? callback(null, options?.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4) : original(hostname, options, callback)) as typeof dns.lookup;
@@ -594,23 +611,39 @@ ${hangBranch}`));
     });
 
     await test.step('Private agent chat, question forms and Canvas snapshots use the real plugin and signed Connect', async () => {
-      for (const label of ['Private agent chat', 'Question forms in Slack', 'Publish shared answers to Canvas']) {
+      for (const label of ['Private agent chat', 'Read report inbox', 'Question forms in Slack', 'Publish shared answers to Canvas']) {
         const box = win.getByLabel(label); await expect(box).not.toBeChecked(); await box.click(); await expect(box).toBeChecked();
       }
       const signedEvent = async (payload: any) => {
         const raw = JSON.stringify(payload), time = String(Math.floor(Date.now() / 1000));
         return post('/api/slack/events/', payload, { 'x-slack-request-timestamp': time, 'x-slack-signature': `v0=${createHmac('sha256', 'signing-secret').update(`v0:${time}:${raw}`).digest('hex')}` });
       };
-      const root = `${Math.floor(Date.now() / 1000)}.654321`;
-      const dm = { type: 'event_callback', team_id: identity.team, api_app_id: identity.app, event_id: 'EvPrivateChat', event: { type: 'message', user: 'U123456', channel: 'D123456', ts: root, text: 'hang until stopped' } };
-      expect((await signedEvent(dm)).status).toBe(200);
-      await expect.poll(() => posts.filter(p => p.channel === 'D123456' && p.blocks?.some((b: any) => b.elements?.some((e: any) => e.action_id === 'agent_project'))).length).toBe(1);
-      const welcome = (await rpc('snapshot')).surfaceLog.find((s: any) => s.title === 'Private agent chat');
-      expect(welcome.state).toBe('ready');
+      expect((await rpc('fixtureAssistant', {instructions:'Return text',prompt:'LONG_OUTPUT'})).text).toBe('x'.repeat(6000));
+      const inboxFile = join(home, '.zcc/inbox/entries.jsonl'); mkdirSync(join(home, '.zcc/inbox'), {recursive:true});
+      writeFileSync(join(projectDir, 'review.md'), 'Concrete private report findings.');
+      symlinkSync(join(home, '.zcc/config.json'), join(projectDir, 'escape.md'));
+      appendFileSync(inboxFile, JSON.stringify({id:'slack-report-e2e',ts:Date.now(),projectId,subject:'Private review report',report:true,docs:[{path:'review.md'}]}) + '\n');
+      await expect(rpc('fixtureInboxSearch', {projectIds:['unknown']})).rejects.toThrow('Unrecognized');
+      const reportRoot = `${Math.floor(Date.now()/1000)}.654300`;
+      const reportMessage = {type:'event_callback',team_id:identity.team,api_app_id:identity.app,event_id:'EvPrivateReport',event:{type:'message',user:'U123456',channel:'D123456',ts:reportRoot,text:'Summarize my unread reports'}};
+      expect((await signedEvent(reportMessage)).status).toBe(200);
+      try {
+      await expect.poll(() => posts.some(p => p.channel === 'D123456' && p.text === 'Inbox summary: Concrete private report findings.'), {timeout:30_000}).toBe(true);
+      } catch(error) { writeFileSync(testInfo.outputPath('conversation-debug.json'),JSON.stringify({snapshot:await rpc('snapshot'),calls:await rpc('fixtureConversationCalls'),posts:posts.filter(p=>p.channel==='D123456'),report:await rpc('fixtureInboxRead',{projectIds:[projectId],entryId:'slack-report-e2e'})},null,2));throw error; }
+      expect((await win.evaluate(() => window.cc.inbox.getReadState())).readIds['slack-report-e2e']).toBeUndefined();
+      appendFileSync(inboxFile, JSON.stringify({id:'slack-report-escape',ts:Date.now(),projectId,subject:'Escape fixture',report:true,docs:[{path:'escape.md'}]}) + '\n');
+      await expect(rpc('fixtureInboxRead', {projectIds:[projectId],entryId:'slack-report-escape'})).rejects.toThrow();
+
       expect((await rpc('snapshot')).bindings).toHaveLength(3);
-      const welcomeDelivery = (await db.query("SELECT id FROM slack_objects WHERE kind='message' AND id LIKE $1", [`${identity.team}:message:D123456:%`]))[0];
-      const welcomeTs = welcomeDelivery.id.split(':').at(-1);
-      expect((await signedEvent({ type: 'block_actions', team: { id: identity.team }, api_app_id: identity.app, user: { id: 'U123456' }, container: { channel_id: 'D123456', message_ts: welcomeTs }, message: { ts: welcomeTs, thread_ts: root }, actions: [{ action_id: 'agent_project', action_ts: `${Math.floor(Date.now() / 1000)}.000001`, selected_option: { value: imported.channel_id } }] })).status).toBe(200);
+      const root = `${Math.floor(Date.now() / 1000)}.654321`;
+      const dm = { type: 'event_callback', team_id: identity.team, api_app_id: identity.app, event_id: 'EvPrivateChat', event: { type: 'message', user: 'U123456', channel: 'D123456', ts: root, text: `<@${identity.bot}> hang until stopped` } };
+      expect((await signedEvent(dm)).status).toBe(200);
+      await expect.poll(() => posts.some(p => p.channel === 'D123456' && p.text === 'Which Project should I use?'), {timeout:30_000}).toBe(true);
+      expect(posts.filter(p => p.channel === 'D123456' && JSON.stringify(p.blocks || []).includes('agent_project'))).toHaveLength(0);
+      expect((await rpc('snapshot')).bindings).toHaveLength(3);
+      expect((await rpc('fixtureAssistant', {instructions:'Return text',prompt:'LONG_OUTPUT'})).text).toBe('x'.repeat(6000));
+      await expect(rpc('fixtureAssistant', {instructions:'Return text',prompt:'FAIL'})).rejects.toThrow('unavailable');
+      expect((await signedEvent({...dm,event_id:'EvPrivateClarify',event:{...dm.event,thread_ts:root,ts:`${Math.floor(Date.now()/1000)}.654322`,text:'Use the connected Project'}})).status).toBe(200);
       await expect.poll(async () => (await rpc('snapshot')).bindings.find((b: any) => b.channel === 'D123456')?.active, { timeout: 30_000 }).toBeTruthy();
       const privateBinding = (await rpc('snapshot')).bindings.find((b: any) => b.channel === 'D123456');
       expect(privateBinding).toMatchObject({ sourceChannel: imported.channel_id, projectId });
@@ -628,7 +661,7 @@ ${hangBranch}`));
       const questionView = modalViews.find(v => v.callback_id === 'zana_question_v1'), questionViewId = `VFORM${modalViews.indexOf(questionView) + 1}`;
       expect(JSON.stringify(questionView)).toContain('cannot approve tool execution');
       const stopTs = `${Math.floor(Date.now() / 1000)}.000002`;
-      expect((await signedEvent({ ...dm, event_id: 'EvNativeStop', event: { type: 'agent_session_stopped', channel: 'D123456', user: 'U123456', thread_ts: root, event_ts: stopTs } })).status).toBe(200);
+      expect((await signedEvent({ ...dm, team_id: 'TORIGIN', authorizations: [{ team_id: identity.team, user_id: identity.bot, is_bot: true }], event_id: 'EvNativeStop', event: { type: 'agent_session_stopped', channel: 'D123456', user: 'U123456', thread_ts: root, event_ts: stopTs } })).status).toBe(200);
       await expect.poll(async () => (await rpc('snapshot')).bindings.find((b: any) => b.key === privateBinding.key)?.active, { timeout: 20_000 }).toBeFalsy();
       expect((await signedEvent({ type: 'view_submission', team: { id: identity.team }, api_app_id: identity.app, user: { id: 'U123456' }, view: { id: questionViewId, callback_id: questionView.callback_id, private_metadata: questionView.private_metadata, state: { values: { q0: { choice: { selected_option: { value: '0' } } } } } } })).body).toEqual({ response_action: 'clear' });
       await expect.poll(async () => (await rpc('snapshot')).requests.some((r: any) => r.id.startsWith('form:') && r.state === 'settled'), { timeout: 30_000 }).toBe(true);
