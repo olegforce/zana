@@ -51,7 +51,7 @@ export const sessionReplacedNotificationSchema = z
  * Droppable diagnostics. The bridge classifies its provider's raw traffic
  * itself: "noise" is understood-and-intentionally-unrendered, "unknown" is
  * unrecognized (a translation gap worth surfacing in debug UI). Neither may
- * carry ids the runtime treats as bb identifiers, and the runtime may drop
+ * carry ids the runtime treats as zcc identifiers, and the runtime may drop
  * these at any pressure point — they must never block real events (#1320).
  */
 

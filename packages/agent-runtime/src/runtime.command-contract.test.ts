@@ -453,10 +453,10 @@ rl.on("line", (line) => {
         threadId: "t1",
       });
 
-      expect(readFileSync(renameLogPath, "utf8")).toBe("[bb] New Title");
+      expect(readFileSync(renameLogPath, "utf8")).toBe("[zcc] New Title");
       expect(events).not.toContainEqual(
         expect.objectContaining({
-          threadName: "[bb] New Title",
+          threadName: "[zcc] New Title",
           type: "thread/name/updated",
         }),
       );
@@ -537,7 +537,7 @@ rl.on("line", (line) => {
       await runtime.renameThread({ threadId: "t1", title: "New Title" });
 
       expect(readFileSync(renameAttemptsPath, "utf8")).toBe("2");
-      expect(readFileSync(renameTitlePath, "utf8")).toBe("[bb] New Title");
+      expect(readFileSync(renameTitlePath, "utf8")).toBe("[zcc] New Title");
     } finally {
       await runtime.shutdown();
     }
@@ -1024,7 +1024,7 @@ rl.on("line", (line) => {
   });
 
   // The fake keys its archived set on the exact provider thread id it was
-  // asked to unarchive, so a call that succeeds proves bb unarchived the
+  // asked to unarchive, so a call that succeeds proves zcc unarchived the
   // right session before it retried.
   it("unarchives Codex sessions before retrying a resume", async () => {
     const runtime = createArchivedSessionRuntime();
@@ -1079,7 +1079,7 @@ rl.on("line", (line) => {
     }
   });
 
-  // A provider that dies while bb recovers cannot be unarchived or retried.
+  // A provider that dies while zcc recovers cannot be unarchived or retried.
   // The caller must still get the archived-session error, because it names the
   // session and the CLI command that fixes it. A process-level error such as
   // `Provider "codex" has exited` tells the user nothing actionable.

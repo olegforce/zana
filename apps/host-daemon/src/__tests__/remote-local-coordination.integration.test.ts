@@ -95,6 +95,7 @@ const REMOTE_AGENT_SCRIPT = [
   "  if (chunk.includes('__WORK__')) process.stdout.write('\\u001b]2;\\u2839 Cooking\\u0007');",
   "  if (chunk.includes('__IDLE__')) process.stdout.write('\\u001b]2;\\u2733 ready\\u0007');",
   '});',
+  "process.stdout.write('remote-agent-ready\\n');",
   '// Stay alive at the "prompt" until the pty is killed in afterEach.',
   'setInterval(() => {}, 1 << 30);',
   ''
@@ -236,6 +237,7 @@ describe('local ↔ remote agent coordination (end-to-end, real pty + real MCP)'
     // ===== Phase A: remote is WORKING → coordination must QUEUE, not inject. =====
     // Drive the remote's REAL status to `working` by making it emit a real
     // working-spinner OSC title from its own stdout (what claude actually does).
+    await waitFor(() => remoteStdout.includes('remote-agent-ready'), 'remote process listening', 10_000);
     ptys.write(remoteSessionId, '__WORK__\n');
     await waitFor(() => status.get(remoteSessionId) === 'working', 'remote → working');
 

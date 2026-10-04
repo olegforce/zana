@@ -44,7 +44,7 @@ export const PLUGIN_CATALOG_CATEGORIES = [
   {
     id: "themes-and-appearance",
     displayName: "Themes & Appearance",
-    description: "Personalize how bb looks and feels.",
+    description: "Personalize how ZCC looks and feels.",
   },
   {
     id: "thread-management",
@@ -99,23 +99,23 @@ export const PLUGIN_CATALOG_CATEGORIES = [
     id: "cloud-and-remote",
     displayName: "Cloud & Remote",
     description:
-      "Run bb work in cloud environments or access bb from elsewhere.",
+      "Run ZCC work in cloud environments or access ZCC from elsewhere.",
   },
   {
     id: "command-line",
     displayName: "Command Line",
-    description: "Work with shells and command-line programs inside bb.",
+    description: "Work with shells and command-line programs inside ZCC.",
   },
   {
     id: "utilities",
     displayName: "Utilities",
-    description: "Inspect or control the computers bb runs on.",
+    description: "Inspect or control the computers ZCC runs on.",
   },
   {
     id: "plugin-development",
     displayName: "Plugin Development",
     description:
-      "Understand, inspect, build, or debug bb and its plugin surfaces.",
+      "Understand, inspect, build, or debug ZCC and its plugin surfaces.",
   },
   {
     id: "tasks-and-workflows",

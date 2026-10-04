@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createCityRenderer } from './scene.js';
 import type { CityBuilding } from './model.js';
+import type { InteriorModel } from './interior.js';
 /** One animation loop per mounted view. No work while hidden, offscreen or paused. */
-export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefObject<HTMLCanvasElement | null>, buildings: CityBuilding[], selected: string, paused: boolean, onSelect: (key: string) => void) {
-  const latest = useRef({ buildings, selected, paused, onSelect });
-  latest.current = { buildings, selected, paused, onSelect };
+export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefObject<HTMLCanvasElement | null>, buildings: CityBuilding[], selected: string, paused: boolean, onSelect: (key: string) => void, interior?: InteriorModel, onHover?: (key?: string) => void) {
+  const latest = useRef({ buildings, selected, paused, onSelect, interior, onHover });
+  latest.current = { buildings, selected, paused, onSelect, interior, onHover };
   const redraw = useRef<() => void>(() => { });
   const [viewport, setViewport] = useState({ width: 1120, height: 775 });
   const [available, setAvailable] = useState(true);
@@ -21,7 +22,7 @@ export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefOb
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
     let visible = true, frame = 0, last = 0, elapsed = 0, disposed = false;
     const moving = () => !latest.current.paused && !media.matches && visible && !document.hidden;
-    const draw = () => renderer.draw(latest.current.buildings, latest.current.selected, elapsed, moving());
+    const draw = () => renderer.draw(latest.current.buildings, latest.current.selected, elapsed, moving(), latest.current.interior);
     const tick = (now: number) => {
       frame = 0;
       if (disposed || !moving())
@@ -55,6 +56,11 @@ export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefOb
       if (key)
         latest.current.onSelect(key);
     };
+    const hover = (event: PointerEvent) => {
+      const bounds = el.getBoundingClientRect();
+      latest.current.onHover?.(renderer.hit((event.clientX - bounds.left) * el.clientWidth / (bounds.width || 1), (event.clientY - bounds.top) * el.clientHeight / (bounds.height || 1)));
+    };
+    const unhover = () => latest.current.onHover?.(undefined);
     const resize = new ResizeObserver(() => {
       if (disposed) return;
       const width = el.clientWidth || 1120, height = el.clientHeight || 775;
@@ -69,10 +75,13 @@ export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefOb
     document.addEventListener('visibilitychange', refresh);
     media.addEventListener('change', motion);
     el.addEventListener('click', click);
+    el.addEventListener('pointermove', hover);
+    el.addEventListener('pointerleave', unhover);
     redraw.current = refresh;
     motion();
     return () => {
       disposed = true;
+      renderer.dispose();
       cancelAnimationFrame(frame);
       redraw.current = () => { };
       resize.disconnect();
@@ -81,8 +90,10 @@ export function useCityCanvas(root: RefObject<HTMLElement | null>, canvas: RefOb
       document.removeEventListener('visibilitychange', refresh);
       media.removeEventListener('change', motion);
       el.removeEventListener('click', click);
+      el.removeEventListener('pointermove', hover);
+      el.removeEventListener('pointerleave', unhover);
     };
   }, [canvas, root]);
-  useEffect(() => { redraw.current(); }, [buildings, selected, paused]);
+  useEffect(() => { redraw.current(); }, [buildings, selected, paused, interior]);
   return { available, reduced, viewport };
 }

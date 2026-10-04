@@ -352,7 +352,7 @@ describe("translateEvent", () => {
     ).toMatchObject([{ type: "turn/started" }]);
   });
 
-  // The reaper's only view of provider work bb cannot see in the timeline.
+  // The reaper's only view of provider work zcc cannot see in the timeline.
   // Codex models native subagents as tool calls, so a thread with a live child
   // agent looks idle without this; a bridge that never reports reads as idle.
   it("tracks thread/openWork per thread without emitting a timeline event", () => {

@@ -3,7 +3,7 @@
  *
  * Translates pi bridge notifications (the `sdk/message` envelope around raw
  * Pi SDK `AgentSessionEvent`s plus the bridge's own runtime notifications)
- * into bb thread events, and owns the per-thread turn state that translation
+ * into zcc thread events, and owns the per-thread turn state that translation
  * accumulates. The adapter instantiates one translator per adapter instance;
  * the pi bridge (a separate process entry) instantiates the same translator
  * per canonical session.
@@ -97,7 +97,7 @@ interface PiContextWindowModel {
 }
 
 // Keep Pi's SDK-level turn_start/turn_end outside the translated event union
-// until replay proves they represent bb turn boundaries rather than internal
+// until replay proves they represent zcc turn boundaries rather than internal
 // provider subturns.
 const piEventTypeSchema = z
   .object({
@@ -129,7 +129,7 @@ const piPromptSettledEnvelopeSchema = z.object({
 // renders as "Unhandled Pi event" in the transcript.
 //
 // `agent_settled` fires after every agent run completes (Pi's
-// AgentSession._emitAgentSettled). BB already derives turn completion from
+// AgentSession._emitAgentSettled). ZCC already derives turn completion from
 // `agent_end` plus its `willRetry` flag, so the settle signal carries nothing
 // extra for us.
 const PI_IGNORED_EVENT_TYPES = new Set(["agent_settled"]);
@@ -449,10 +449,10 @@ function resetPiCommandOutputSnapshots(state: PiTurnState): void {
 export interface CreatePiEventTranslatorOptions {
   /** Provider id stamped onto unhandled-event envelopes. */
   providerId: string;
-  /** Prefix for bb-owned turn ids emitted by this translator instance. */
+  /** Prefix for zcc-owned turn ids emitted by this translator instance. */
   turnIdPrefix?: string;
   /**
-   * Prefix for bb-owned assistant/reasoning item ids. The bridge builds one
+   * Prefix for zcc-owned assistant/reasoning item ids. The bridge builds one
    * translator per session, which restarts the "pi-assistant-N" counters on
    * resume, so it injects per-session entropy here — a bare counter is the
    * #1224 cross-resume collision.

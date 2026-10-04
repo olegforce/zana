@@ -2,19 +2,19 @@
  * `@zana-ai/zcc-plugin-sdk/provider-bridge/acp` — the published ACP bridge kit.
  *
  * The Agent Client Protocol (https://agentclientprotocol.com) is one wire
- * protocol spoken by many agents, so bb runs all of them through one generic
+ * protocol spoken by many agents, so ZCC runs all of them through one generic
  * bridge: the agent to launch arrives per command in the provider options,
- * and nothing in the bridge is bb-first-party. A plugin that wants to add an
- * ACP agent re-exports the bridge from its `bb.host` artifact and registers
+ * and nothing in the bridge is ZCC-first-party. A plugin that wants to add an
+ * ACP agent re-exports the bridge from its `zcc.host` artifact and registers
  * its providers as any other plugin does:
  *
  * ```ts
- * // host.ts (the plugin's `bb.host` entry)
+ * // host.ts (the plugin's `zcc.host` entry)
  * export { experimental_acpProviderBridge as experimental_providerBridge }
  *   from "@zana-ai/zcc-plugin-sdk/provider-bridge/acp";
  *
  * // server.ts
- * bb.providers.register({
+ * zcc.providers.register({
  *   id: "amp",
  *   displayName: "Amp",
  *   experimental_bridgeOptions: {

@@ -239,7 +239,18 @@ jobs:
         run: |
           APP_PATH=$(node --input-type=module -e 'import { readdirSync } from "node:fs"; import { join, resolve } from "node:path"; for (const dir of readdirSync("dist")) { const path = join("dist", dir, "Zana.app", "Contents", "MacOS", "Zana"); try { const { existsSync } = await import("node:fs"); if (existsSync(path)) { console.log(resolve(path)); break; } } catch {} }')
           test -n "$APP_PATH"
-          ZCC_E2E_EXECUTABLE_PATH="$APP_PATH" pnpm test:e2e:only -- e2e/plugin-authoring-live.spec.ts
+          ZCC_E2E_EXECUTABLE_PATH="$APP_PATH" pnpm test:e2e:only -- e2e/smoke.spec.ts e2e/plugin-authoring-live.spec.ts e2e/packaged-provider-startup.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-${{ matrix.arch }}-packaged-playwright-report
+          path: |
+            playwright-report
+            e2e/.artifacts
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -312,7 +323,7 @@ jobs:
           ZCC_E2E_EXECUTABLE_PATH: ${{ github.workspace }}\dist\win-unpacked\Zana.exe
 
       - name: Verify packaged Windows plugin authoring
-        run: pnpm test:e2e:only -- e2e/plugin-authoring-live.spec.ts
+        run: pnpm test:e2e:only -- e2e/plugin-authoring-live.spec.ts e2e/packaged-provider-startup.spec.ts
         env:
           ZCC_E2E_EXECUTABLE_PATH: ${{ github.workspace }}\dist\win-unpacked\Zana.exe
 

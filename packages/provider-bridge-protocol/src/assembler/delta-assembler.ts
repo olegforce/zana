@@ -73,7 +73,7 @@ type UnstampedThreadId = string & {
 };
 
 /**
- * Assembled events are emitted before the runtime resolves the bb thread.
+ * Assembled events are emitted before the runtime resolves the zcc thread.
  * Runtime stamping must replace this before events leave agent-runtime.
  */
 const UNSTAMPED_THREAD_ID = "" as UnstampedThreadId;
@@ -212,10 +212,10 @@ interface ThreadAssemblyState {
   openItemsByKey: Map<string, OpenItemState>;
   /** Last cumulative command-output snapshot per item key. */
   commandSnapshotsByKey: Map<string, string>;
-  /** Both-way provider↔bb item id maps for command-plane reverse lookup. */
+  /** Both-way provider↔zcc item id maps for command-plane reverse lookup. */
   bbItemIdByProviderItemId: Map<string, string>;
   providerItemIdByBbItemId: Map<string, string>;
-  /** Both-way provider↔bb turn id maps (vouched provider-turn keys). */
+  /** Both-way provider↔zcc turn id maps (vouched provider-turn keys). */
   bbTurnIdByProviderTurnId: Map<string, string>;
   providerTurnIdByBbTurnId: Map<string, string>;
   /**
@@ -284,13 +284,13 @@ export interface AssembleDeltasArgs {
 
 export interface DeltaAssembler {
   assemble(args: AssembleDeltasArgs): ThreadEvent[];
-  /** bb item id minted for a provider item id (command-plane lookup). */
+  /** zcc item id minted for a provider item id (command-plane lookup). */
   getBbItemId(threadId: string, providerItemId: string): string | undefined;
-  /** Provider item id behind a bb item id (reverse command-plane lookup). */
+  /** Provider item id behind a zcc item id (reverse command-plane lookup). */
   getProviderItemId(threadId: string, bbItemId: string): string | undefined;
-  /** bb turn id minted for a vouched provider turn id. */
+  /** zcc turn id minted for a vouched provider turn id. */
   getBbTurnId(threadId: string, providerTurnId: string): string | undefined;
-  /** Provider turn id behind a bb turn id (steer/interrupt reverse lookup). */
+  /** Provider turn id behind a zcc turn id (steer/interrupt reverse lookup). */
   getProviderTurnId(threadId: string, bbTurnId: string): string | undefined;
   getOpenTurnId(threadId: string): string | undefined;
 }
@@ -314,7 +314,7 @@ function itemKeyString(key: DeltaItemKey): string {
 /**
  * Grammar v3 presentation rides the lifecycle delta, not the shape, and is
  * persisted on the canonical item so the row renders after the plugin is
- * gone. `userMessage` is bb-authored and carries none.
+ * gone. `userMessage` is zcc-authored and carries none.
  */
 function withPresentation<TItem extends ThreadEventItem>(
   item: TItem,
@@ -437,7 +437,7 @@ export function createDeltaAssembler(
   }
 
   /**
-   * The bb turn id for a provider-vouched turn key, minted on first sight.
+   * The zcc turn id for a provider-vouched turn key, minted on first sight.
    * Never emits `turn/started` — the provider named the turn, and the old
    * bridges' deterministic id stamping likewise scoped events to turns they
    * had not necessarily seen open.
@@ -593,9 +593,9 @@ export function createDeltaAssembler(
   }
 
   /**
-   * Provider-native parent ref → the bb id minted for that parent item. A
+   * Provider-native parent ref → the zcc id minted for that parent item. A
    * child-first arrival (the parent's own open has not been seen yet) mints
-   * the parent's bb id NOW and registers the mapping, so the emitted event
+   * the parent's zcc id NOW and registers the mapping, so the emitted event
    * never carries the raw provider id and the parent's later open/close
    * lands under this same minted id. This matches the old translators:
    * their parent ids were deterministic functions of the provider id (raw
@@ -1595,7 +1595,7 @@ export function createDeltaAssembler(
           // mint a fresh item instead of appending to pre-tool content.
           detachAssistantStreams(state, delta.key.parentRef);
         }
-        // … and a known provider id keeps its minted bb id, so the reopened
+        // … and a known provider id keeps its minted zcc id, so the reopened
         // incarnation updates the same timeline item.
         const bbItemId =
           (delta.key.providerItemId !== undefined

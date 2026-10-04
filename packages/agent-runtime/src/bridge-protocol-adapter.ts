@@ -222,7 +222,7 @@ export function createBridgeProtocolAdapter(
       ? handshake.fork
       : declaredFork;
   }
-  // Last `thread/openWork` value per bb thread. Level-triggered, so a missed
+  // Last `thread/openWork` value per zcc thread. Level-triggered, so a missed
   // intermediate notification cannot strand the runtime on a stale answer.
   const threadIdsWithOpenWork = new Set<string>();
 
@@ -523,7 +523,7 @@ export function createBridgeProtocolAdapter(
     prepareTurnStart: noPreparedProviderCommandDispatch,
 
     /**
-     * The bridge is the only side that knows about provider work bb models as
+     * The bridge is the only side that knows about provider work zcc models as
      * something other than a background task (codex's native subagents are
      * tool calls). It reports the current value with `thread/openWork`; a
      * bridge that never sends it reads as no open work.

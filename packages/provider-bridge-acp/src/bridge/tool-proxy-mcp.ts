@@ -5,14 +5,14 @@ import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 
-export const ACP_BRIDGE_MCP_SERVER_NAME = "bb-bridge";
+export const ACP_BRIDGE_MCP_SERVER_NAME = "zcc";
 
-const ENV_HOST = "BB_ACP_DYNAMIC_TOOL_HOST";
-const ENV_PORT = "BB_ACP_DYNAMIC_TOOL_PORT";
-const ENV_TOKEN = "BB_ACP_DYNAMIC_TOOL_TOKEN";
-const ENV_THREAD_ID = "BB_ACP_DYNAMIC_TOOL_THREAD_ID";
-const ENV_TOOLS = "BB_ACP_DYNAMIC_TOOLS";
-const ENV_PROGRESS_INTERVAL_MS = "BB_ACP_DYNAMIC_TOOL_PROGRESS_INTERVAL_MS";
+const ENV_HOST = "ZCC_ACP_DYNAMIC_TOOL_HOST";
+const ENV_PORT = "ZCC_ACP_DYNAMIC_TOOL_PORT";
+const ENV_TOKEN = "ZCC_ACP_DYNAMIC_TOOL_TOKEN";
+const ENV_THREAD_ID = "ZCC_ACP_DYNAMIC_TOOL_THREAD_ID";
+const ENV_TOOLS = "ZCC_ACP_DYNAMIC_TOOLS";
+const ENV_PROGRESS_INTERVAL_MS = "ZCC_ACP_DYNAMIC_TOOL_PROGRESS_INTERVAL_MS";
 
 export interface AcpMcpServerConfig {
   name: string;
@@ -110,21 +110,26 @@ export function buildAcpMcpServerConfig(
   };
 }
 
-function readEnvironment(): McpServerEnvironment {
-  const port = Number(process.env[ENV_PORT]);
+// Honor existing configured proxies during an upgrade; emit only ZCC keys.
+function bridgeEnv(key: string): string | undefined {
+  return process.env[key] ?? process.env[key.replace(/^ZCC_/, "BB_")];
+}
+
+export function readEnvironment(): McpServerEnvironment {
+  const port = Number(bridgeEnv(ENV_PORT));
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error(`${ENV_PORT} must be a positive integer`);
   }
-  const host = process.env[ENV_HOST];
-  const token = process.env[ENV_TOKEN];
-  const threadId = process.env[ENV_THREAD_ID];
-  const toolsJson = process.env[ENV_TOOLS];
+  const host = bridgeEnv(ENV_HOST);
+  const token = bridgeEnv(ENV_TOKEN);
+  const threadId = bridgeEnv(ENV_THREAD_ID);
+  const toolsJson = bridgeEnv(ENV_TOOLS);
   if (!host || !token || !threadId || !toolsJson) {
     throw new Error("Missing ACP dynamic tool MCP server environment");
   }
   const parsedTools = JSON.parse(toolsJson) as unknown;
   const tools = dynamicToolSchema.array().parse(parsedTools);
-  const rawProgressInterval = process.env[ENV_PROGRESS_INTERVAL_MS];
+  const rawProgressInterval = bridgeEnv(ENV_PROGRESS_INTERVAL_MS);
   const progressIntervalMs =
     rawProgressInterval !== undefined && Number(rawProgressInterval) > 0
       ? Number(rawProgressInterval)

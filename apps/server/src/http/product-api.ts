@@ -1168,6 +1168,8 @@ export async function handleProductHttp(
           id: provider.id,
           displayName: provider.displayName,
           pluginId: provider.pluginId,
+          available: !provider.unavailableReason,
+          unavailableReason: provider.unavailableReason ?? null,
           permissionModes: provider.capabilities.permissionModes,
           reasoningLevels: provider.capabilities.reasoningLevels ?? [],
           composerActions: provider.composerActions ?? [],

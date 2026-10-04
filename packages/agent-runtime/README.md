@@ -19,7 +19,7 @@ const runtime = createAgentRuntime({
   env: { OPENAI_API_KEY: "..." },       // passed to all provider processes
   bridgeBundleDir: "/path/to/bundled-bridges", // optional; used when bridges are packaged outside src/dist
   onEvent: (event) => {
-    // Every event has event.threadId (bb ID) and event.providerThreadId (provider's internal ID)
+    // Every event has event.threadId (zcc ID) and event.providerThreadId (provider's internal ID)
     // See ProviderThreadEvent in @zana-ai/zcc-domain/thread-runtime for the full type
   },
   onToolCall: async (req) => { /* ToolCallRequest → ToolCallResponse */ },
@@ -63,7 +63,7 @@ await runtime.shutdown();
 
 ### Event types
 
-Events from provider processes are `ProviderThreadEvent` — they carry both `threadId` (bb ID) and `providerThreadId` (provider's internal ID). Events from the server/system layer are `SystemThreadEvent` — they only have `threadId`. Both are part of the `ThreadEvent` union from `@zana-ai/zcc-domain/thread-runtime`.
+Events from provider processes are `ProviderThreadEvent` — they carry both `threadId` (zcc ID) and `providerThreadId` (provider's internal ID). Events from the server/system layer are `SystemThreadEvent` — they only have `threadId`. Both are part of the `ThreadEvent` union from `@zana-ai/zcc-domain/thread-runtime`.
 
 ### Fail-fast behavior
 
@@ -77,7 +77,7 @@ The runtime fails fast when providers crash or are unavailable:
 
 ### Multi-thread / multi-provider
 
-A single runtime can manage multiple threads across multiple providers simultaneously. Each provider process is spawned once and shared across threads. The runtime stamps every event with the correct bb `threadId` and `providerThreadId` regardless of how the provider internally identifies threads.
+A single runtime can manage multiple threads across multiple providers simultaneously. Each provider process is spawned once and shared across threads. The runtime stamps every event with the correct zcc `threadId` and `providerThreadId` regardless of how the provider internally identifies threads.
 
 ## Running Tests
 
@@ -112,7 +112,7 @@ grep -E "(✓|×|Test Files|Tests )" /tmp/integ-out.txt
 
 **Tests run concurrently within each scenario file.** All 3 provider variants in a file run in parallel via `describe.concurrent`. Scenario files run serially because Pi and other real providers share local auth state and external provider limits; running every scenario file at once has caused real-provider flakes where a turn completes without the expected tool execution.
 
-The root `test:integration --force` run also schedules `@bb/integration-tests#test:integration` after `@zana-ai/zcc-agent-runtime#test:integration`. Those two package-level suites both exercise real providers and can share local subscription auth/session state, so only the cross-package real-provider suites are ordered. Concurrency inside each suite remains covered, including multi-provider runtime tests and `real/provider-concurrency.test.ts`.
+The root `test:integration --force` run also schedules `@zcc/integration-tests#test:integration` after `@zana-ai/zcc-agent-runtime#test:integration`. Those two package-level suites both exercise real providers and can share local subscription auth/session state, so only the cross-package real-provider suites are ordered. Concurrency inside each suite remains covered, including multi-provider runtime tests and `real/provider-concurrency.test.ts`.
 
 **When a test hangs**, the provider is likely not responding to a JSON-RPC request. Common causes:
 
@@ -176,7 +176,7 @@ mapping, unhandled-event envelopes, command-output normalization) live in
 ## Dependencies
 
 - `@zana-ai/zcc-domain/thread-runtime` — shared types (ThreadEvent, ProviderThreadEvent, PromptInput, ToolCallRequest, etc.)
-- `@bb/templates` — markdown templates for provider instructions
+- `@zcc/templates` — markdown templates for provider instructions
 - `@anthropic-ai/claude-agent-sdk` — Claude Code
 - `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent` — Pi
 - `zod` — schema validation at provider boundaries

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ServerNotification as CodexServerNotification } from "./generated/codex-app-server/schema/ServerNotification.js";
 import {
+  macOsPermissionPresentation,
   collabAgentPresentation,
   commandPresentation,
   fileChangePresentation,
@@ -212,8 +213,8 @@ describe("every codex lifecycle delta carries a presentation", () => {
       item: {
         type: "webSearch",
         id: "ws1",
-        query: "bb",
-        action: { type: "search", query: "bb", queries: null },
+        query: "zcc",
+        action: { type: "search", query: "zcc", queries: null },
       },
     },
     {
@@ -283,4 +284,9 @@ describe("every codex lifecycle delta carries a presentation", () => {
       }
     },
   );
+});
+
+it("explains the scope of macOS command approval with and without requested capabilities", () => {
+  expect(macOsPermissionPresentation([]).detail).toContain("No macOS capability was requested.");
+  expect(macOsPermissionPresentation(["camera", "microphone"]).detail).toContain("Requested: camera, microphone. ZCC cannot grant macOS permissions");
 });

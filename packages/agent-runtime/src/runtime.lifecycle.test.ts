@@ -290,10 +290,10 @@ rl.on("line", (line) => {
         threadStorageRootPath,
         shellEnv: {
           PATH: "/tmp/bb-bin:/usr/bin",
-          BB_HOST_DAEMON_PORT: "3002",
-          BB_PROJECT_ID: "wrong-project",
-          BB_SERVER_URL: "http://127.0.0.1:3334",
-          BB_THREAD_ID: "wrong-thread",
+          ZCC_HOST_DAEMON_PORT: "3002",
+          ZCC_PROJECT_ID: "wrong-project",
+          ZCC_SERVER_URL: "http://127.0.0.1:3334",
+          ZCC_THREAD_ID: "wrong-thread",
         },
         onEvent: () => undefined,
         onToolCall: async () => ({
@@ -321,12 +321,12 @@ rl.on("line", (line) => {
       }
       expect(threadStart.options?.envVars).toEqual({
         PATH: "/tmp/bb-bin:/usr/bin",
-        BB_HOST_DAEMON_PORT: "3002",
-        BB_PROJECT_ID: "p1",
-        BB_SERVER_URL: "http://127.0.0.1:3334",
-        BB_THREAD_STORAGE: join(threadStorageRootPath, "t1"),
-        BB_THREAD_ID: "t1",
-        BB_ENVIRONMENT_ID: "env-1",
+        ZCC_HOST_DAEMON_PORT: "3002",
+        ZCC_PROJECT_ID: "p1",
+        ZCC_SERVER_URL: "http://127.0.0.1:3334",
+        ZCC_THREAD_STORAGE: join(threadStorageRootPath, "t1"),
+        ZCC_THREAD_ID: "t1",
+        ZCC_ENVIRONMENT_ID: "env-1",
       });
       expect(threadStart.cwd).toBe(tmpDir);
 
@@ -458,8 +458,8 @@ rl.on("line", (line) => {
         workspacePath: tmpDir,
         shellEnv: {
           PATH: "/tmp/bb-bin:/usr/bin",
-          BB_HOST_DAEMON_PORT: "3002",
-          BB_SERVER_URL: "http://127.0.0.1:3334",
+          ZCC_HOST_DAEMON_PORT: "3002",
+          ZCC_SERVER_URL: "http://127.0.0.1:3334",
         },
         onEvent: () => undefined,
         onToolCall: async () => ({
@@ -497,11 +497,11 @@ rl.on("line", (line) => {
       }
       expect(reconfigureCommand.options?.envVars).toEqual({
         PATH: "/tmp/bb-bin:/usr/bin",
-        BB_HOST_DAEMON_PORT: "3002",
-        BB_SERVER_URL: "http://127.0.0.1:3334",
-        BB_PROJECT_ID: "p1",
-        BB_THREAD_ID: "t1",
-        BB_ENVIRONMENT_ID: "env-1",
+        ZCC_HOST_DAEMON_PORT: "3002",
+        ZCC_SERVER_URL: "http://127.0.0.1:3334",
+        ZCC_PROJECT_ID: "p1",
+        ZCC_THREAD_ID: "t1",
+        ZCC_ENVIRONMENT_ID: "env-1",
       });
       expect(reconfigureCommand.cwd).toBe(tmpDir);
 
@@ -594,8 +594,8 @@ rl.on("line", (line) => {
         workspacePath: tmpDir,
         shellEnv: {
           PATH: "/tmp/bb-bin:/usr/bin",
-          BB_HOST_DAEMON_PORT: "3002",
-          BB_SERVER_URL: "http://127.0.0.1:3334",
+          ZCC_HOST_DAEMON_PORT: "3002",
+          ZCC_SERVER_URL: "http://127.0.0.1:3334",
         },
         onEvent: () => undefined,
         onToolCall: async () => ({
@@ -625,11 +625,11 @@ rl.on("line", (line) => {
       }
       expect(resumeCommand.options?.envVars).toEqual({
         PATH: "/tmp/bb-bin:/usr/bin",
-        BB_HOST_DAEMON_PORT: "3002",
-        BB_SERVER_URL: "http://127.0.0.1:3334",
-        BB_PROJECT_ID: "p1",
-        BB_THREAD_ID: "t1",
-        BB_ENVIRONMENT_ID: "env-1",
+        ZCC_HOST_DAEMON_PORT: "3002",
+        ZCC_SERVER_URL: "http://127.0.0.1:3334",
+        ZCC_PROJECT_ID: "p1",
+        ZCC_THREAD_ID: "t1",
+        ZCC_ENVIRONMENT_ID: "env-1",
       });
       expect(resumeCommand.cwd).toBe(tmpDir);
 

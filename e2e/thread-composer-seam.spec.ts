@@ -10,7 +10,7 @@ test.use({
   initialConfig: { sponsorPromptDismissed: true }
 });
 
-async function openComposer({ window, home }: { window: Page; home: string }): Promise<string> {
+async function openComposer({ window, home }: { window: Page; home: string }, worktree = false): Promise<string> {
   const projectPath = join(home, 'composer-seam-project');
   mkdirSync(projectPath);
   execFileSync('git', ['init', '--quiet'], { cwd: projectPath });
@@ -19,7 +19,7 @@ async function openComposer({ window, home }: { window: Page; home: string }): P
   execFileSync('git', ['-c', 'user.name=Composer E2E', '-c', 'user.email=composer@example.test', 'commit', '--quiet', '-m', 'Initial project'], { cwd: projectPath });
   writeFileSync(join(projectPath, 'README.md'), 'Composer seam fixture changed\n');
 
-  const threadId = await window.evaluate(async (path) => {
+  const threadId = await window.evaluate(async ({ path, worktree }) => {
     const project = await window.cc.projects.add(path);
     if (!project.ok) throw new Error('Project registration failed');
     const threadResponse = await fetch('/api/v1/threads', {
@@ -28,13 +28,14 @@ async function openComposer({ window, home }: { window: Page; home: string }): P
       body: JSON.stringify({
         projectId: project.value.id,
         providerId: 'fake',
-        input: 'Check composer layout'
+        input: 'Check composer layout',
+        ...(worktree ? { environment: { kind: 'worktree' } } : {})
       })
     });
     const thread = await threadResponse.json();
     if (!threadResponse.ok) throw new Error(JSON.stringify(thread));
     return (thread.thread ?? thread.value).id as string;
-  }, projectPath);
+  }, { path: projectPath, worktree });
 
   await window.evaluate((id) => {
     window.history.pushState({}, '', `/threads/${id}`);
@@ -43,6 +44,84 @@ async function openComposer({ window, home }: { window: Page; home: string }): P
   await expect(window.getByTestId('thread-command-input')).toBeVisible();
   return threadId;
 }
+
+test('composer terminal command executes in the thread checkout and reveals its terminal', async ({ app }) => {
+  const { window } = app;
+  const threadId = await openComposer(app, true);
+  const thread = await window.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/threads/${id}`);
+    const body = await response.json();
+    return body.thread;
+  }, threadId);
+  expect(thread.cwd).toBeTruthy();
+  expect(thread.cwd).not.toBe(join(app.home, 'composer-seam-project'));
+  let agentSends = 0;
+  window.on('request', request => { if (request.url().endsWith(`/threads/${threadId}/send`)) agentSends++; });
+  const input = window.getByTestId('thread-command-input');
+  await input.fill('/ter');
+  await expect(window.getByRole('option', { name: /terminal/ })).toBeVisible();
+  // Exercise the existing PTY through production Electron, including a payload
+  // larger than the 8192-byte truncation boundary and shell quoting/operators.
+  const command = 'pwd; printf "COMPOSER_BEGIN\\n"; printf "%12000s" x; printf "\\nCOMPOSER_END\\n"';
+  await input.fill(`/terminal ${command}`);
+  await window.getByTestId('thread-command-send').click();
+  await expect(window.getByTestId('thread-secondary-panel')).toBeVisible();
+  await expect(window.getByTestId('thread-terminal-tab')).toBeVisible();
+  await expect(input).toHaveText('');
+  await expect(window.locator('.thread-terminal-tab .xterm')).toBeVisible();
+  const terminal = await window.evaluate(async () => {
+    const response = await fetch('/api/v1/terminals');
+    const body = await response.json();
+    return body.sessions.find((session: { launchCommand?: string }) => session.launchCommand?.includes('COMPOSER_BEGIN'));
+  });
+  expect(terminal.cwd).toBe(thread.cwd);
+  await expect.poll(async () => window.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/terminals/${id}/output`);
+    return (await response.json()).text as string;
+  }, terminal.id)).toContain('COMPOSER_END');
+  const output = await window.evaluate(async (id) => (await (await fetch(`/api/v1/terminals/${id}/output`)).json()).text as string, terminal.id);
+  expect(output).toContain(thread.cwd);
+  expect(output).toContain('COMPOSER_BEGIN');
+  expect(output.length).toBeGreaterThan(12_000);
+  expect(agentSends).toBe(0);
+});
+
+test('composer terminal command opens an interactive shell without an agent message', async ({ app }) => {
+  const { window } = app;
+  const threadId = await openComposer(app);
+  let agentSends = 0;
+  window.on('request', request => { if (request.url().endsWith(`/threads/${threadId}/send`)) agentSends++; });
+  const input = window.getByTestId('thread-command-input');
+  await input.fill('/ter');
+  await window.getByRole('option', { name: /terminal/ }).click();
+  await window.getByTestId('thread-command-send').click();
+  await expect(window.getByTestId('thread-terminal-tab')).toBeVisible();
+  await expect(input).toHaveText('');
+  await expect(window.locator('.thread-terminal-tab .xterm')).toBeVisible();
+  const terminalInput = window.locator('.thread-terminal-tab .xterm-helper-textarea');
+  await terminalInput.pressSequentially('printf "INTERACTIVE_TERMINAL_OK\\n"');
+  await terminalInput.press('Enter');
+  await expect.poll(async () => window.evaluate(async () => {
+    const body = await (await fetch('/api/v1/terminals')).json();
+    const session = body.sessions.find((session: { status: string; title: string }) => session.status === 'running' && session.title === 'Terminal');
+    if (!session) return '';
+    return (await (await fetch(`/api/v1/terminals/${session.id}/output`)).json()).text as string;
+  })).toContain('\r\nINTERACTIVE_TERMINAL_OK\r\n');
+  expect(agentSends).toBe(0);
+});
+
+test('composer terminal launch failures preserve the command for retry', async ({ app }) => {
+  const { window } = app;
+  await openComposer(app);
+  await window.route('**/api/v1/terminals', route => route.fulfill({ status: 502, json: { ok: false, code: 'host_disconnected', message: 'Terminal host disconnected' } }));
+  const input = window.getByTestId('thread-command-input');
+  await input.fill('/terminal pwd');
+  await input.press('Enter');
+  await expect(window.getByTestId('thread-command-error')).toHaveText('Terminal host disconnected');
+  await expect(input).toHaveText('/terminal pwd');
+  await expect(window.getByTestId('thread-command-send')).toBeEnabled();
+  await expect(window.getByTestId('thread-terminal-tab')).toHaveCount(0);
+});
 
 test('the files bar joins the plugin-wrapped composer without a gap or shadow', async ({ app }) => {
   const { window } = app;

@@ -473,7 +473,7 @@ describe("acp configOptions model catalog", () => {
     });
   });
 
-  it("returns no reasoning control for declared values that bb cannot map", () => {
+  it("returns no reasoning control for declared values that ZCC cannot map", () => {
     expect(
       buildAcpNativeReasoningSupport({
         id: "mode",

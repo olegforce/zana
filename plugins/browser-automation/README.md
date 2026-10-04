@@ -1,4 +1,4 @@
-# Browser Automation for BB
+# Browser Automation for ZCC
 
 Thread-owned browser scripts, desktop attachment, and local headless Chrome
 on enrolled hosts. Requires the public
@@ -103,7 +103,7 @@ Desktop sessions attach to an existing browser and do not change its launch flag
 ## CLI and agent workflow
 
 Choose both the backend and its host explicitly. There is no silent fallback or
-profile migration. Find desktop instances through BB's core desktop-browser
+profile migration. Find desktop instances through ZCC's core desktop-browser
 CLI/SDK discovery. The selected instance's generation is resolved on opening.
 
 ```sh
@@ -234,7 +234,7 @@ as `{session, frame}` where `frame` has `sequence`, `mimeType`, `width`,
 
 ## Validation
 
-From the BB checkout, use Turbo:
+From the ZCC checkout, use Turbo:
 
 ```sh
 pnpm exec turbo run test typecheck build --filter=@zcc-ext/browser-automation
@@ -257,7 +257,7 @@ including a cross-origin iframe snapshot and a JPEG screenshot. It prints the
 binary path, its SHA-256, and timings.
 
 `smoke` takes an explicit binary and creates disposable directories and runs
-real Chrome, without starting a BB core or using an existing browser profile.
+real Chrome, without starting a ZCC core or using an existing browser profile.
 It verifies named pages, navigation, clicking, JPEG bytes, serialization,
 independent session cancellation, a synchronous infinite-loop timeout,
 reopening, stop, and preservation of an attached browser and its page state.
@@ -265,7 +265,7 @@ Both smokes link directly to Chrome and exercise the production launch flags
 without a wrapper. The attachment smoke also launches its separate browser
 fixture with `--no-sandbox` so it works on hosts with restricted user namespaces.
 
-Build with a current BB CLI: an older installed CLI can successfully bundle the
+Build with a current ZCC CLI: an older installed CLI can successfully bundle the
 sources while stamping old SDK metadata. Inspect `dist/*.meta.json` before any
 future installation or distribution. Generated bundles and declarations are
 ignored. No plugin installation or live core is needed for these checks.

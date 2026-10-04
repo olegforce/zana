@@ -9,8 +9,8 @@ import {
   assertValidPluginLogoSvg,
 } from "./svg-asset.js";
 
-const LABEL = 'bb.branding.experimental_icons["receipt"]';
-const LOGO = 'manifest bb.branding.logo.light ("./logo.svg")';
+const LABEL = 'zcc.branding.experimental_icons["receipt"]';
+const LOGO = 'manifest zcc.branding.logo.light ("./logo.svg")';
 const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -159,7 +159,7 @@ describe("assertValidPluginCompactIconSvg (bb.branding.icon, marketplace icons)"
 
   it("rejects bytes that are not UTF-8, naming bb.branding.icon by default", () => {
     expect(() => assertValidPluginCompactIconSvg(LATIN1_SVG)).toThrow(
-      "manifest bb.branding.icon must contain valid UTF-8 SVG bytes",
+      "manifest zcc.branding.icon must contain valid UTF-8 SVG bytes",
     );
   });
 });

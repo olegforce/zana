@@ -33,6 +33,9 @@ test.use({
     const fixture = fileURLToPath(new URL('../plugins/provider-codex/src/bridge/fake-codex-app-server.mjs', import.meta.url));
     const script = join(home, 'codex-framing-script.json');
     writeFileSync(script, JSON.stringify({
+      // Discovery and resumed turns can use separate app-server processes.
+      // This fixture tests framing, so keep its advertised model stable.
+      modelId: 'framing-fixture-model',
       requestLogPath: join(home, 'codex-framing-requests.log'), messageText: REPLY,
       processLogPath: join(home, 'codex-framing-process.log'),
     }));
@@ -89,9 +92,10 @@ test('recording preserves large UTF-8 provider output, resumed turns, and app sh
   const nativeInput = requests().find(row => row.method === 'turn/start').params.input;
   expect(nativeInput.some((item: { type: string; text?: string }) => item.type === 'text' && item.text?.includes(INPUT))).toBe(true);
 
-  // The fake app-server emits completion before its turn/start response. Stop
-  // through the product UI before resuming, as the writer-handoff fixture does.
-  await app.window.getByRole('button', { name: 'Stop', exact: true }).click();
+  // The fake app-server completes before acknowledging turn/start. Its late
+  // session acknowledgement must preserve idle, so follow up after settlement.
+  await expect.poll(() => app.window.evaluate(async id =>
+    (await (await fetch(`/api/v1/threads/${id}`)).json()).thread.status, threadId)).toBe('idle');
   await expect(app.window.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   const composer = app.window.getByTestId('thread-command-input');
   await composer.fill('Following framed turn');
@@ -177,7 +181,7 @@ test('built utility worker discards over-cap recording frames, recovers, and cle
   const buildRoot = process.env.ZCC_E2E_APP_ROOT ?? fileURLToPath(new URL('../', import.meta.url));
   // Snapshot the production bootstrap, rather than executing a TS source or
   // importing a mocked splitter. It runs as a real child of an Electron utility.
-  copyFileSync(join(buildRoot, 'apps/host-daemon/dist/bb-provider-bridge-worker.mjs'), worker);
+  copyFileSync(join(buildRoot, 'apps/host-daemon/dist/zcc-provider-bridge-worker.mjs'), worker);
   const bridge = join(root, 'probe-bridge.mjs');
   const contextFile = join(root, 'context.json');
   const marker = 'recovered-recording-é🙂';

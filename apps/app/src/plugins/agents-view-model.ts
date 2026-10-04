@@ -1,7 +1,7 @@
 import type { ExecutionBoardProjection } from '@zana-ai/zcc-domain/product';
 import type { PluginAgentsViewProps, PluginAgentsViewRegistration, PluginFleetMember } from '@zana-ai/zcc-plugin-sdk';
 import { visibleAgentLanes, executionNeedsAttention } from '../components/AgentBoard.js';
-import { threadRailStatus, type FleetItem } from '../components/fleet-item.js';
+import { threadRailStatus, threadHarnessLabel, cliHarnessLabel, type FleetItem } from '../components/fleet-item.js';
 export function agentsViewKey(slot: Pick<PluginAgentsViewRegistration, 'pluginId' | 'id'>): `plugin:${string}/${string}` {
   return `plugin:${slot.pluginId}/${slot.id}`;
 }
@@ -25,7 +25,7 @@ export function projectAgentsView(fleet: readonly FleetItem[], executions: reado
       const label = threadRailStatus(item.thread);
       const status = label === 'Needs you' ? 'needs-you' : label.toLowerCase() as PluginFleetMember['status'];
       members.push({ key: fleetKey(item), kind: item.kind, projectId: item.projectId, title: item.title,
-        status, detail: label, live: status !== 'error', scheduled: false });
+        status, detail: label, live: status !== 'error', scheduled: false, harness: threadHarnessLabel(item.thread.providerId ?? '') });
     }
     else {
       const { card } = item;
@@ -41,14 +41,14 @@ export function projectAgentsView(fleet: readonly FleetItem[], executions: reado
         : status === 'needs-you' ? 'Needs you' : card.state === 'blocked' ? 'Working · background agent blocked'
           : status === 'unknown' ? 'Status unknown' : status === 'working' ? 'Working' : 'Idle';
       members.push({ key: fleetKey(item), kind: item.kind, projectId: item.projectId, title: item.title,
-        status, detail, live, scheduled: !!card.session.scheduled,
+        status, detail, live, scheduled: !!card.session.scheduled, harness: cliHarnessLabel(card.session.profile ?? ''),
         ...(card.session.cohort ? { teamId: card.session.cohort.executionId ?? card.session.cohort.cohortId } : {}) });
     }
   }
   return {
     members,
     schedules: fleet.flatMap((item) => item.kind === 'schedule' ? [{
-        key: fleetKey(item), title: item.title, projectId: item.projectId, enabled: item.task.enabled,
+        key: fleetKey(item), title: item.title, projectId: item.projectId, enabled: item.task.enabled, harness: cliHarnessLabel(item.task.profile ?? ''),
         nextRunAt: item.task.enabled ? item.task.status?.nextRunAt ?? null : null,
         running: (item.task.status?.runs ?? []).some((run) => !!run.sessionId && liveSessionIds.has(run.sessionId) && !run.finishedAt && run.durationMs === undefined)
           || (!!item.task.status?.lastRunSessionId && liveSessionIds.has(item.task.status.lastRunSessionId)

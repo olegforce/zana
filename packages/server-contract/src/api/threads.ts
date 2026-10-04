@@ -807,7 +807,7 @@ export const threadTimelineQuerySchema = z
      * `rows: []` with the tail-only fields (`activeThinking`,
      * `activeWorkflows`, `pendingTodos`, `contextWindowUsage`) populated
      * normally. Used by the CLI to read tail state without paying for the full
-     * row payload on every `bb status` invocation. Implies `latest` page
+     * row payload on every `zcc status` invocation. Implies `latest` page
      * semantics.
      */
     summaryOnly: z.enum(["true", "false"]),

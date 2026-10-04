@@ -73,13 +73,13 @@ export const bridgeCapabilitiesSchema = z
      */
     sessionRestore: z.boolean().default(false),
     /**
-     * The bridge mirrors bb archive state into the provider's own session
+     * The bridge mirrors zcc archive state into the provider's own session
      * list. When false the runtime never sends thread/archive or
      * thread/unarchive.
      */
     threadArchive: z.boolean().default(false),
     /**
-     * The bridge pushes bb thread titles to the provider. When false the
+     * The bridge pushes zcc thread titles to the provider. When false the
      * runtime never sends thread/name/set.
      */
     threadRename: z.boolean().default(false),
@@ -130,7 +130,7 @@ export const bridgeCapabilitiesSchema = z
     steerMode: bridgeSteerModeSchema.default("queue"),
     /**
      * Which optional requests the bridge handles. `skills.configure`: the
-     * bridge accepts `skills/configure` (bb's injected skill roots). When
+     * bridge accepts `skills/configure` (zcc's injected skill roots). When
      * false the runtime never sends it, so a bridge that answers unknown
      * methods with METHOD_NOT_FOUND — as the protocol instructs — still
      * starts threads; it simply runs without injected skills. A bridge that

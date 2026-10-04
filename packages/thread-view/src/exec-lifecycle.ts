@@ -353,7 +353,10 @@ export function parseToolCallLifecycleEvent(
     const callId = decoded.item.id;
     if (!callId) return null;
     const toolName = decoded.item.tool ?? "tool";
-    const serverPrefix = decoded.item.server ? `${decoded.item.server}:` : "";
+    // Read historical host-tool events with the current product name, without
+    // rewriting stored events or changing the tool's execution identity.
+    const server = decoded.item.server === "bb" ? "zcc" : decoded.item.server;
+    const serverPrefix = server ? `${server}:` : "";
     const fullToolName = `${serverPrefix}${toolName}`;
     const parsedArgs = decoded.item.arguments ?? null;
 

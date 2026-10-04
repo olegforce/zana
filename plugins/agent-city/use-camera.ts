@@ -7,8 +7,8 @@ export function clampCamera(camera: Camera): Camera {
   return { zoom, x: Math.max(-limit, Math.min(limit, camera.x)), y: Math.max(-limit, Math.min(limit, camera.y)) };
 }
 /** Percent coordinates keep the camera usable when the inspector or viewport resizes. */
-export function useCityCamera() {
-  const [camera, setCamera] = useState(FIT_CAMERA), [dragging, setDragging] = useState(false);
+export function useCityCamera(initial: Camera = FIT_CAMERA) {
+  const [camera, setCamera] = useState(() => clampCamera(initial)), [dragging, setDragging] = useState(false);
   const drag = useRef<{ id: number; x: number; y: number; camera: Camera } | null>(null);
   const moved = useRef(false);
   const zoomBy = (factor: number) => setCamera((c) => clampCamera({ ...c, zoom: c.zoom * factor }));

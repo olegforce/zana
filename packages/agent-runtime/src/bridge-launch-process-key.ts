@@ -55,5 +55,6 @@ export function bridgeLaunchProcessKey(
   return `${source}.${fingerprintStableJson({
     capabilities: bridgeLaunch.capabilities,
     providerOptions: bridgeLaunch.providerOptions,
+    envPassthrough: [...(bridgeLaunch.envPassthrough ?? [])].sort(),
   })}`;
 }

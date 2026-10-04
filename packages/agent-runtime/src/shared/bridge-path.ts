@@ -5,7 +5,17 @@ import { fileURLToPath } from "node:url";
 export type BridgeProcessArgs = string[];
 
 /** The bootstrap bundle's name inside a packaged daemon's bridge bundle dir. */
-const BRIDGE_WORKER_BUNDLE_FILE_NAME = "bb-provider-bridge-worker.mjs";
+const BRIDGE_WORKER_BUNDLE_FILE_NAME = "zcc-provider-bridge-worker.mjs";
+
+function bundledBridgePath(dir: string, name: string): string {
+  const canonical = resolve(dir, name);
+  if (existsSync(canonical)) return canonical;
+  // Only these known historical names are eligible for compatibility fallback.
+  const legacyName = name === "zcc-provider-bridge-worker.mjs" ? "bb-provider-bridge-worker.mjs"
+    : name === "zcc-pi-bridge.mjs" ? "bb-pi-bridge.mjs" : undefined;
+  const legacy = legacyName && resolve(dir, legacyName);
+  return legacy && existsSync(legacy) ? legacy : canonical;
+}
 
 function resolveTsxLoaderSpecifier(): string {
   return import.meta.resolve("tsx");
@@ -37,7 +47,7 @@ export function resolveBridgeWorkerProcessArgs(args: {
   bridgeBundleDir?: string;
 }): BridgeProcessArgs {
   if (args.bridgeBundleDir) {
-    return [resolve(args.bridgeBundleDir, BRIDGE_WORKER_BUNDLE_FILE_NAME)];
+    return [bundledBridgePath(args.bridgeBundleDir, BRIDGE_WORKER_BUNDLE_FILE_NAME)];
   }
   const sourceEntry = fileURLToPath(
     import.meta.resolve("@zana-ai/zcc-provider-bridge-protocol/bridge-worker-entry"),
@@ -63,7 +73,7 @@ export function resolveBundledBridgeModulePath(
   args: ResolveBundledBridgeModuleArgs,
 ): string {
   if (args.bridgeBundleDir && args.bundleFileName) {
-    return resolve(args.bridgeBundleDir, args.bundleFileName);
+    return bundledBridgePath(args.bridgeBundleDir, args.bundleFileName);
   }
 
   const moduleDir = dirname(fileURLToPath(args.importMetaUrl));

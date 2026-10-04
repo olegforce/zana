@@ -252,7 +252,7 @@ afterEach(() => {
   bridgeStderr = "";
 });
 
-describe("bb-bridge MCP server entry point (#1918)", () => {
+describe("zcc MCP server entry point (#1918)", () => {
   it("advertises an MCP server command that answers MCP initialize when the bridge runs under the bootstrap", async () => {
     const dataDir = makeTempDir("bb-acp-mcp-entry-data-");
     const workspaceDir = makeTempDir("bb-acp-mcp-entry-ws-");

@@ -182,8 +182,9 @@ In Slack, open the **Zana** app and select **Home**.
 - Review running tasks, tasks needing attention, and recent conversations.
 - Choose **Open conversation** to return to a task's Slack thread.
 - Use **Stop**, **Mute updates**, or **Unmute** for a particular task.
+- With Zana Connect, see your account’s **Machines**, their online/offline status, and which computer is **Linked to Slack**. **Manage machines** opens the account dashboard; **Refresh** updates this private Home view without posting channel messages.
 
-The dashboard depends on your current capability settings and an online connection. A previously loaded Home view may be stale while Zana is offline.
+Task controls depend on your current capability settings and an online connection. Machine status uses the same recent connection heartbeat as the account dashboard and includes a checked timestamp. If the linked computer is offline, opening Home or choosing Refresh still shows your account’s machines. A previously loaded Home view is a saved snapshot until refreshed.
 
 ## 7. Decide what Slack is allowed to do
 
@@ -225,6 +226,12 @@ For app maintainers: enable Work Object Previews with the `slack#/entities/file`
 
 **Answers:** Slack receives a status card and, when enabled and supplied by the agent, a concise answer. It is not a live copy of the entire terminal or conversation transcript. Published agent answers currently have a 2,000-character limit. Ask for a short summary and open Zana for longer results or files.
 
+**Progress:** Working, thinking and attention updates revise one temporary message in place. Zana checks the current thread before treating an idle event as completion, and restores the same status if an unanswered turn resumes. After the turn ends and an answer is confirmed delivered, the temporary status is removed. A turn that really ends without sharing an answer has an attention notice instead of a success checkmark.
+
+**Formatting:** Shared answer text and rich-report text accept standard Markdown. Headings, emphasis, lists, inline code and fenced code are converted to native Slack rich text. Mentions, links and image references remain literal. Markdown files are not uploaded automatically. Mermaid fences can render as images in the same reply when diagram uploads are activated (`files:write` and the gateway update). Up to two diagrams are rendered locally; answer revisions reuse the uploads. Rendering or upload failures retain labelled source. Ask for a readable text overview alongside diagrams. Optional Canvas export reuses the image.
+
+Slack may take a few seconds to process a new diagram. Zana keeps the working notice while waiting and delivers the formatted answer and image together. If Slack rejects the richer layout, Zana preserves readable text and the diagram where possible, with a diagram link as the final fallback.
+
 **Desktop panels:** Slack-controlled agents are told that you cannot see Zana's side panels. Builds with [remote presentation support](remote-conversation-presentation.md) also block agent calls that open file previews, presentation terminals or browser panels. Background browsing and execution remain available. The current Slack task panel shows shared answers; it does not display arbitrary project files. Requested web previews may use an authenticated, reachable preview link. Simply viewing the conversation in Zana does not transfer control away from Slack.
 
 **Code:** You can ask for a short code example and have it shared in the thread:
@@ -233,7 +240,7 @@ For app maintainers: enable Work Object Previews with the `slack#/entities/file`
 @Zana Show a tiny JavaScript add function in a code block and share it here. Do not modify files or run commands.
 ```
 
-A live test in BT Internal Sandbox confirmed a code block with a Copy button, preserved indentation, and an inline example. There is a known formatting issue: a fence language label such as `typescript` appears as the first code line, with no syntax highlighting. For a clean basic snippet, ask for a code block **without a language label**. The custom task panel separates fence language labels from the code. Syntax highlighting and downloadable code attachments are not implemented.
+A live test in BT Internal Sandbox confirmed a code block with a Copy button, preserved indentation, and an inline example. The bridge now removes language fences when producing Slack's native code blocks, so `typescript` or `python` no longer appears as a stray first code line. The custom task panel separates fence language labels from the code. Syntax highlighting and downloadable code attachments are not implemented.
 
 **Visibility:** Channel members can see posted task prompts and shared answers. Only the linked owner can control their bridge conversations. Permissions and agent questions stay in Zana; open Zana when a task needs your input.
 
@@ -285,3 +292,5 @@ This exercises a new task, a returned answer, and a follow-up without requesting
 ---
 
 Maintainer references: [Slackbot integration](slackbot-app.md), [capability settings and plugin tools](slack-capabilities.md), and [Connect setup](slack-connect.md). This guide describes the current bridge; some older setup documents retain historical rollout notes.
+
+While a reply’s Mermaid image is rendering, uploading or waiting for Slack to process it, the existing working notice ends with **🎨 Formatting in process…**. It updates in place, survives bounded image retries and disappears when the answer is confirmed delivered. It adds no extra thread reply.

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readLegacyCustomAcpAgents } from "./legacy-config.js";
+import { readLegacyCustomAcpAgents, legacyAgentDeprecationMessage } from "./legacy-config.js";
 
 const dirs: string[] = [];
 
@@ -69,3 +69,10 @@ describe("readLegacyCustomAcpAgents", () => {
     expect(result.problem).toContain("is not valid JSON");
   });
 });
+
+ it("reports malformed config and gives actionable migration guidance", async () => {
+   const dir = await dataDir({ customAcpAgents: "invalid" });
+   expect(await readLegacyCustomAcpAgents(dir)).toEqual({ entries: [], problem: `${dir}/config.json is not a ZCC config file` });
+   expect(legacyAgentDeprecationMessage({ id: "amp", displayName: "Amp", command: "amp" })).toContain('ZCC reads it until');
+   expect(legacyAgentDeprecationMessage({ id: "amp", displayName: "Amp", command: "amp" })).toContain('"customAgents" setting');
+ });

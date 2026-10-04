@@ -13,7 +13,7 @@
  *
  * This launcher file is the Claude CLI / PTY path. Conversation threads do
  * not read it: plugin tools there come from `zcc.agents.registerTool` via
- * the bb-bridge DynamicTools MCP. A plugin that must work on both surfaces
+ * the zcc DynamicTools MCP. A plugin that must work on both surfaces
  * declares `zcc.mcpServers` (PTY) and `registerTool` (conversation threads).
  * There is no runtime `registerMcpServer`.
  */

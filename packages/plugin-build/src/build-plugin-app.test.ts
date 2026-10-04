@@ -447,3 +447,18 @@ describe("plugin app runtime shim", () => {
     },
   );
 });
+
+ describe("app entry failure paths", () => {
+   it.each([
+     [undefined, 'no frontend entry'],
+     ['/outside.ts', 'zcc.app must be relative'],
+     ['../outside.ts', 'zcc.app escapes the plugin directory'],
+     ['./missing.ts', 'zcc.app points at a missing file'],
+   ] as const)("rejects an invalid entry %s with actionable diagnostics", async (entry, message) => {
+     const dir = await mkdtemp(join(tmpdir(), 'zcc-app-invalid-'));
+     try {
+       await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'test-plugin', version: '1.0.0', bb: { name: 'Test', description: 'Test failure paths', branding: { icon: 'Zap' }, server: './server.ts', ...(entry ? { app: entry } : {}) } }));
+       await expect(buildPluginApp(dir, '0.0.0-test', await testToolchain())).rejects.toThrow(message);
+     } finally { await rm(dir, { recursive: true, force: true }); }
+   });
+ });

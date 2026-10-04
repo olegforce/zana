@@ -105,7 +105,7 @@ this list fails CI):
   use that to give workers a different tool set than authors. Tool names may
   also be `{ name, parameters }` to override the JSON Schema for that session.
   `parameters` on `registerTool` is a Zod schema or JSON-schema object.
-  Conversation threads inject these tools via bb-bridge; CLI Agent / PTY
+  Conversation threads inject these tools via zcc; CLI Agent / PTY
   needs `zcc.mcpServers` instead.
 - `zcc.events` — `events.on(name, handler)` for thread lifecycle.
   Names: `"thread.created"`, `"thread.active"`, `"thread.idle"`,

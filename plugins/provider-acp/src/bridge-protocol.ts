@@ -145,7 +145,7 @@ export type AcpBridgeCommand = z.infer<typeof acpBridgeCommandSchema>;
 export const ACP_TURN_STARTED_METHOD = "acp/turn/started";
 export const ACP_TURN_COMPLETED_METHOD = "acp/turn/completed";
 /**
- * Manual compaction's own turn envelope. bb requests compaction as a
+ * Manual compaction's own turn envelope. zcc requests compaction as a
  * standalone builtin `/compact` mention on the turn path; the bridge runs it
  * as a provider-local maintenance prompt and reports it with these two
  * envelopes so the translator can emit a `contextCompaction` turn instead of

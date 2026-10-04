@@ -46,14 +46,14 @@ import type {
 } from "./host-contract.js";
 
 /**
- * The backend plugin API contract — the `bb` object handed to a plugin's
- * `server.ts` factory (`export default function plugin(bb: ZccPluginApi)`).
+ * The backend plugin API contract — the `ZCC` object handed to a plugin's
+ * `server.ts` factory (`export default function plugin(zcc: ZccPluginApi)`).
  *
- * Types only: the implementation lives in the BB server
+ * Types only: the implementation lives in the ZCC server
  * (apps/server/src/services/plugins/plugin-api.ts), which imports these
  * shapes so the contract and the implementation cannot drift. Plugin authors
  * import them type-only (`import type { ZccPluginApi } from
- * "@zana-ai/zcc-plugin-sdk"`); the import is erased when BB loads the file.
+ * "@zana-ai/zcc-plugin-sdk"`); the import is erased when ZCC loads the file.
  *
  * Runtime classes stay host-side. NeedsConfigurationError in particular is
  * matched by NAME, so plugin code needs no runtime import:
@@ -182,7 +182,7 @@ export interface PluginKvStorage {
 }
 
 export interface PluginStorage {
-  /** Namespaced JSON key-value rows in bb.db; values ≤256KB each. */
+  /** Namespaced JSON key-value rows in zcc.db; values ≤256KB each. */
   kv: PluginKvStorage;
   /**
    * The plugin's own SQLite database at <dataDir>/plugins/<id>/data.db — the
@@ -212,8 +212,8 @@ export interface PluginStorage {
  *
  * Ids and failure facts only. There is no thread DTO and no copy of the
  * message that failed: a retry re-submits the turn BY REFERENCE
- * (`bb.sdk.threads.retry`), so the id is the whole of what a policy needs, and
- * anything else about the thread is one `bb.sdk.threads.get` away and fresher
+ * (`zcc.sdk.threads.retry`), so the id is the whole of what a policy needs, and
+ * anything else about the thread is one `zcc.sdk.threads.get` away and fresher
  * for being read when it is used.
  */
 export interface PluginTurnFailedEvent {
@@ -221,7 +221,7 @@ export interface PluginTurnFailedEvent {
   threadId: string;
   /**
    * The failed turn's `client/turn/requested` id — what
-   * `bb.sdk.threads.retry` takes as `turnRequestId`. On a retry's failure this
+   * `zcc.sdk.threads.retry` takes as `turnRequestId`. On a retry's failure this
    * is the RETRY's id; core walks back to the request the chain started from
    * when it queues the next attempt.
    */
@@ -257,12 +257,12 @@ export interface PluginTurnFailedEvent {
 }
 
 /**
- * Lifecycle events a plugin can observe with `bb.events.on` (design §4.5).
+ * Lifecycle events a plugin can observe with `zcc.events.on` (design §4.5).
  *
  * **Events are announcements core makes.** Something already happened; a
  * handler is told about it and whatever it returns is IGNORED. Handlers run
  * fire-and-forget after the change is applied and can never block or veto it.
- * The surface that *can* is `bb.experimental_hooks`, where core asks a
+ * The surface that *can* is `zcc.experimental_hooks`, where core asks a
  * question and acts on the answer — the same split git draws between its
  * post-commit and pre-commit hooks.
  *
@@ -297,7 +297,7 @@ export interface PluginThreadEventPayloads {
    *
    * Every listener sees every queued row, not just the ones it is holding: an
    * observer that only wants its own filters on
-   * `entry.waitingOn?.kind === "plugin" && entry.waitingOn.pluginId === bb.pluginId`.
+   * `entry.waitingOn?.kind === "plugin" && entry.waitingOn.pluginId === zcc.pluginId`.
    *
    * A re-queue fires this again with the new wait, because a row that moved
    * from one wait to another is news to whoever was waiting on the old one.
@@ -313,7 +313,7 @@ export interface PluginThreadEventPayloads {
    *
    * An announcement, not a question: the failure stands exactly as core
    * applied it, and a listener that wants another attempt asks for one with
-   * `bb.sdk.threads.retry({ threadId, turnRequestId, sendAt })`. That retry is
+   * `zcc.sdk.threads.retry({ threadId, turnRequestId, sendAt })`. That retry is
    * an ordinary dispatch attempt, so it still passes the `message.dispatch`
    * hook — a retry coming back after a rate-limit window respects a limiter
    * that is at capacity instead of jumping the queue.
@@ -489,7 +489,7 @@ export interface PluginHooks {
    *
    * **Hooks are questions core asks.** Core stops at a checkpoint, hands the
    * handler a context, and ACTS ON what it returns — the opposite of
-   * `bb.events`, whose handlers are told what already happened and whose
+   * `zcc.events`, whose handlers are told what already happened and whose
    * return value is ignored. It is the same split git draws between its
    * pre-commit and post-commit hooks, and the reason the two live in separate
    * namespaces rather than behind one `on`.
@@ -592,9 +592,9 @@ export interface PluginHttp {
   /**
    * Register an HTTP route, mounted at
    * `/api/v1/plugins/<id>/http/<path>`. Auth modes (default "local"):
-   * - "local": Origin/Host must be a local BB app origin; non-GET requires
+   * - "local": Origin/Host must be a local ZCC app origin; non-GET requires
    *   content-type application/json (forces a CORS preflight).
-   * - "token": requires the per-plugin token (`bb plugin token <id>`) via
+   * - "token": requires the per-plugin token (`zcc plugin token <id>`) via
    *   the x-bb-plugin-token header or ?token=.
    * - "none": no checks — only for signature-verified webhooks.
    */
@@ -666,7 +666,7 @@ export interface PluginBackground {
    * durable row keyed (pluginId, name) is upserted at load; the periodic
    * sweep claims due rows with a CAS on next_run_at, but only while this
    * plugin is loaded. Failures land in last_status/last_error, visible in
-   * `bb plugin list`.
+   * `zcc plugin list`.
    */
   schedule(name: string, cron: string, fn: () => void | Promise<void>): void;
 }
@@ -742,9 +742,9 @@ export interface PluginCliExecutionResult {
 }
 
 export interface PluginCliRegistration {
-  /** Preferred top-level command name (`bb <name> …`): lowercase [a-z0-9-]+.
+  /** Preferred top-level command name (`zcc <name> …`): lowercase [a-z0-9-]+.
    * A core collision logs an activation warning and remains available through
-   * `bb plugin run <plugin-id>`. */
+   * `zcc plugin run <plugin-id>`. */
   name: string;
   summary: string;
   /** Subcommand metadata rendered in help and the plugin-commands skill
@@ -758,8 +758,8 @@ export interface PluginCliRegistration {
 
 export interface PluginCli {
   /**
-   * Register this plugin's `bb` subcommand. One registration per factory
-   * execution; a repeated call is rejected. Core bb commands always win
+   * Register this plugin's `ZCC` subcommand. One registration per factory
+   * execution; a repeated call is rejected. Core ZCC commands always win
    * name collisions; the plugin is warned and remains explicitly callable by id.
    */
   register(registration: PluginCliRegistration): void;
@@ -769,7 +769,7 @@ export interface PluginCli {
 // Agent surfaces: per-turn context and native tools (design §4.4).
 // ---------------------------------------------------------------------------
 
-/** Per-turn context handed to bb.agents context providers (design §4.4). */
+/** Per-turn context handed to zcc.agents context providers (design §4.4). */
 /** MCP-style content parts a native tool may return (design §4.4). */
 export type PluginAgentToolContentPart =
   | { type: "text"; text: string }
@@ -814,7 +814,7 @@ export interface PluginAgentToolPresentation {
   /**
    * A named host glyph (`{ glyph: "Workflow" }`), or one of this plugin's
    * own declared icons by its namespaced glyph (`{ glyph: "<pluginId>/<name>" }`,
-   * an entry of the manifest's `bb.branding.experimental_icons` map). A
+   * an entry of the manifest's `zcc.branding.experimental_icons` map). A
    * namespaced glyph that names another plugin or an undeclared name rejects
    * the tool registration.
    */
@@ -842,9 +842,9 @@ export interface PluginAgentToolRegistrationBase {
   instructions?: string;
   /**
    * How calls to this tool read as a timeline row (grammar v3). When omitted,
-   * BB shows the standard tool name (`Running <name>` / `Ran <name>`) and the
+   * ZCC shows the standard tool name (`Running <name>` / `Ran <name>`) and the
    * plugin's branding glyph. Approval, error, and interruption states keep
-   * BB's standard rendering. See docs/api_to_audit.md.
+   * ZCC's standard rendering. See docs/api_to_audit.md.
    */
   presentation?: PluginAgentToolPresentation;
 }
@@ -884,7 +884,7 @@ export interface PluginAgentConfigurationContext {
      */
     capabilities: {
       /**
-       * The provider ships its own user-question affordance and bb routes it
+       * The provider ships its own user-question affordance and ZCC routes it
        * into the pending-interaction path. A plugin offering the same thing
        * should withhold it here, or the model gets two ways to ask once.
        */
@@ -932,7 +932,7 @@ export interface PluginAgentConfiguration {
 // ---------------------------------------------------------------------------
 
 /**
- * Permission modes a provider can run a session in — BB's own permission
+ * Permission modes a provider can run a session in — ZCC's own permission
  * vocabulary, ordered least ("accept-edits") to most ("full") privileged.
  */
 export type PluginProviderPermissionMode = "accept-edits" | "auto" | "full";
@@ -954,7 +954,7 @@ export type PluginProviderReasoningLevel =
 
 /**
  * Composer actions a provider supports, by name only. The skills
- * slash-command typeahead is universal — BB injects skills into every
+ * slash-command typeahead is universal — ZCC injects skills into every
  * provider — so it is implicit and never declared, and the composer owns the
  * trigger syntax (`/plan `, `/goal `) rather than each declaration repeating
  * it.
@@ -992,10 +992,10 @@ export interface PluginProviderCapabilities {
   /** The provider accepts an explicit context-compaction request — gates the
    * compact affordance. */
   supportsManualCompaction: boolean;
-  /** The provider keeps its own thread archive, so BB mirrors archive and
-   * unarchive onto it instead of tracking the state only in bb's own rows. */
+  /** The provider keeps its own thread archive, so ZCC mirrors archive and
+   * unarchive onto it instead of tracking the state only in ZCC's own rows. */
   supportsThreadArchive: boolean;
-  /** The provider stores a thread name of its own, so BB forwards renames to
+  /** The provider stores a thread name of its own, so ZCC forwards renames to
    * it. */
   supportsThreadRename: boolean;
   /** Permission modes the provider can actually run in. Non-empty, no
@@ -1063,17 +1063,17 @@ export interface PluginProviderOptionsContext {
   projectId: string;
   /** The resolved model id for this command. */
   model: string;
-  /** BB's permission mode for this command (already clamped to the host). */
+  /** ZCC's permission mode for this command (already clamped to the host). */
   permissionMode: PluginProviderPermissionMode;
   /**
    * `"plan"` when the prompt entered plan mode through this provider's
    * declared `plan` composer action. Absent for an ordinary prompt — plan
-   * mode is a BB prompt mode, so the bridge maps it onto whatever the agent
+   * mode is a ZCC prompt mode, so the bridge maps it onto whatever the agent
    * calls it natively.
    */
   promptMode?: "plan";
   /**
-   * This plugin's own settings values (`bb.settings.define`), read at call
+   * This plugin's own settings values (`zcc.settings.define`), read at call
    * time. Secret settings are omitted — provider options ride the daemon
    * wire and are persisted with the session, so a secret must never be
    * derived into them.
@@ -1130,7 +1130,7 @@ export type PluginProviderNativeRootEntry = ProviderNativeRootInput;
 export type PluginProviderNativeRoots = ProviderNativeRootsInputLike;
 
 /**
- * One provider this plugin contributes to BB's provider registry.
+ * One provider this plugin contributes to ZCC's provider registry.
  *
  * Ids are stable public identifiers — thread rows and routes reference them —
  * and are collision-rejected: a declaration whose id matches another plugin's
@@ -1140,11 +1140,11 @@ export type PluginProviderNativeRoots = ProviderNativeRootsInputLike;
  *
  * A declaration owns the provider's static metadata and bridge options. The
  * executable implementation is the plugin's own provider bridge: the
- * `experimental_providerBridge` export of the `bb.host` artifact the manifest
+ * `experimental_providerBridge` export of the `zcc.host` artifact the manifest
  * names (`PROVIDER_BRIDGE_EXPORT_NAME` in the bridge kit), built into the
- * artifact BB ships to hosts. Declaring a provider in a plugin with no
- * `bb.host` entry is refused, because the picker entry would exist and no
- * turn on it could ever run; a `bb.host` entry whose artifact failed to
+ * artifact ZCC ships to hosts. Declaring a provider in a plugin with no
+ * `zcc.host` entry is refused, because the picker entry would exist and no
+ * turn on it could ever run; a `zcc.host` entry whose artifact failed to
  * build still stages the declaration so the provider is listed as
  * unavailable.
  */
@@ -1164,9 +1164,9 @@ export interface PluginProviderDeclaration {
   /**
    * Optional picker icon: a named host glyph (`"Zap"`) or a plugin-relative
    * path starting with `"./"` (`"./icons/agent.svg"`) — the two forms
-   * `bb.branding.icon` takes — or, unlike `bb.branding.icon`, one of this
+   * `zcc.branding.icon` takes — or, unlike `zcc.branding.icon`, one of this
    * plugin's declared icons by its namespaced glyph (`"<pluginId>/<name>"`,
-   * an entry of the manifest's `bb.branding.experimental_icons` map; the
+   * an entry of the manifest's `zcc.branding.experimental_icons` map; the
    * plugin id must be this plugin's and the name must be declared, else the
    * plugin fails to load). Paths follow the manifest entry-path escape rules
    * — no leading "/", no ".." segments, no backslashes.
@@ -1233,9 +1233,9 @@ export interface PluginProviderDeclaration {
     /**
      * How far one `model/list` answer travels. `"host"` means the catalog is
      * the same everywhere on a machine — the bridge answers from account or
-     * agent state and ignores the workspace path — so bb probes once per host
+     * agent state and ignores the workspace path — so ZCC probes once per host
      * and reuses the answer for every environment on it. `"workspace"` (the
-     * default) means project configuration can change the answer, so bb
+     * default) means project configuration can change the answer, so ZCC
      * probes per workspace and sends the path.
      *
      * Declaring `"host"` wrongly is a stale catalog in a workspace that
@@ -1258,7 +1258,7 @@ export interface PluginProviderDeclaration {
    * Directories this provider's agent reads its own skills from, relative to
    * the target host's home directory (`user`) or to the workspace
    * (`project`). An agent with skills of its own — an ACP agent pointed at
-   * `.cursor/skills`, say — names them here so bb can list them beside its
+   * `.cursor/skills`, say — names them here so ZCC can list them beside its
    * own; core never guesses a provider's skill layout. Paths are relative
    * and may not contain dot segments; each side holds at most 32 roots. One
    * declaration is global, so a directory only one host can name (an agent's
@@ -1269,12 +1269,12 @@ export interface PluginProviderDeclaration {
   /**
    * Directories this provider's agent reads its own slash commands from —
    * flat directories of `*.md` prompt files (`.claude/commands`, say) — in
-   * the same two-sided shape as `experimental_nativeSkillRoots`. bb offers
+   * the same two-sided shape as `experimental_nativeSkillRoots`. ZCC offers
    * them in the composer beside the agent's skills.
    */
   experimental_nativeCommandRoots?: PluginProviderNativeRoots;
   /**
-   * This plugin's `bb.host` entry implements
+   * This plugin's `zcc.host` entry implements
    * `experimental_nativeRootsHostContract` (`@zana-ai/zcc-plugin-sdk/host`): core
    * calls `resolveNativeRoots({ cwd })` on the workspace host when it lists
    * commands or skills, and scans what comes back beside the declared roots.
@@ -1313,7 +1313,7 @@ export interface PluginAgents {
    * an already-running session is not hot-mutated. Instructions follow the
    * same boundary: a live provider session keeps the instructions it was
    * constructed with, and a changed selection applies when the session is
-   * next constructed. Skill changes follow BB's environment runtime policy:
+   * next constructed. Skill changes follow ZCC's environment runtime policy:
    * a busy runtime keeps its current catalog until a safe relaunch. Side chats
    * are ordinary plugin-owned forks here — read `origin` to detect them — and
    * their returned tool, skill, and dynamic-instruction selections apply at the
@@ -1377,7 +1377,7 @@ export interface PluginAgents {
 
 /**
  * Provider registration (docs/provider-plugin-api.md §1). Owns only
- * registration; `bb.agents` keeps `configure`, `registerTool`, and
+ * registration; `zcc.agents` keeps `configure`, `registerTool`, and
  * `contributeInstructions`.
  */
 export interface PluginProviders {
@@ -1525,28 +1525,28 @@ export interface PluginEvents {
 
 export interface PluginServerApi {
   /**
-   * The operator-configured public app URL from `BB_APP_URL`, or `null` when
+   * The operator-configured public app URL from `ZCC_APP_URL`, or `null` when
    * the operator has not configured one. This value is not bind-gated.
    */
   readonly experimental_appUrl: string | null;
 
   /**
-   * This BB server's own loopback base URL (e.g. "http://127.0.0.1:38886"),
+   * This ZCC server's own loopback base URL (e.g. "http://127.0.0.1:38886"),
    * which serves the SPA + /api + /ws. For plugins that proxy or relay
    * traffic back to the server itself (e.g. a tunnel). Bind-gated like
-   * `bb.sdk`: reading it before the server is listening throws, so prefer
+   * `zcc.sdk`: reading it before the server is listening throws, so prefer
    * reading it from handlers, services, and timers.
    */
   readonly loopbackBaseUrl: string;
 
   /**
-   * This server's data directory — the one holding `config.json`, `bb.db` and
+   * This server's data directory — the one holding `config.json`, `zcc.db` and
    * `plugins/<id>/`. A plugin cannot compute it: a dev server derives it from
-   * its repo root and instance id, so a plugin that guesses `~/.bb` reads the
+   * its repo root and instance id, so a plugin that guesses `~/.ZCC` reads the
    * production file while the dev server reads another one.
    *
-   * For reading bb-managed files a plugin is migrating away from. A plugin's
-   * OWN storage is `bb.storage`, which is scoped for it; this is deliberately
+   * For reading ZCC-managed files a plugin is migrating away from. A plugin's
+   * OWN storage is `zcc.storage`, which is scoped for it; this is deliberately
    * not a place to write.
    */
   readonly experimental_dataDir: string;
@@ -1557,16 +1557,16 @@ export interface PluginServerApi {
 // ---------------------------------------------------------------------------
 
 /**
- * What a plugin's AI service does. `inference` answers bb's server-side helper
+ * What a plugin's AI service does. `inference` answers ZCC's server-side helper
  * completions (thread titles, commit messages: a prompt and a JSON Schema in,
  * a structured value out); `voice` transcribes recorded speech.
  */
 export type PluginAiServiceKind = "inference" | "voice";
 
 /**
- * An AI service a plugin offers from its `bb.host` entry, which implements
+ * An AI service a plugin offers from its `zcc.host` entry, which implements
  * `experimental_aiServicesHostContract` (`@zana-ai/zcc-plugin-sdk/ai-services`).
- * The user selects it with `BB_INFERENCE` / `BB_TRANSCRIPTION` set to
+ * The user selects it with `ZCC_INFERENCE` / `ZCC_TRANSCRIPTION` set to
  * `<id>/<model>`; core calls the plugin's host entry on the primary host with
  * the `id` on every request, so one entry can serve several services.
  */
@@ -1583,7 +1583,7 @@ export interface PluginAiServices {
   /**
    * Register an AI service. Call during the factory; the registration lands
    * when the plugin load commits and is removed on reload or disable. The
-   * plugin must declare a `bb.host` entry; registering without one fails the
+   * plugin must declare a `zcc.host` entry; registering without one fails the
    * load. A declared entry that fails to build fails the load on the build
    * error after the factory, with any provider the factory declared listed
    * as unavailable. Throws on an id another live plugin already serves.
@@ -1603,7 +1603,7 @@ export interface PluginSharedPortTunnelIdentity {
 }
 
 export interface PluginHosts {
-  /** Create the owning plugin's typed client for its singular `bb.host` entry. */
+  /** Create the owning plugin's typed client for its singular `zcc.host` entry. */
   experimental_client<
     Contract extends PluginRpcContract,
     Signals extends ExperimentalHostSignals = {},
@@ -1640,17 +1640,17 @@ export interface PluginHosts {
 export interface PluginStatusApi {
   /**
    * Mark this plugin `needs-configuration` (with a message shown in
-   * `bb plugin list` and the UI) instead of failing — e.g. a factory or
+   * `zcc plugin list` and the UI) instead of failing — e.g. a factory or
    * service that finds no API key configured. Cleared on the next load;
    * saving settings does not auto-reload in V1, so ask the user to
-   * `bb plugin reload <id>` after configuring.
+   * `zcc plugin reload <id>` after configuring.
    */
   needsConfiguration(message: string): void;
 }
 
 /**
  * The API object handed to a plugin's factory (design §4). Implemented by
- * the BB server; this contract is what plugin `server.ts` files compile
+ * the ZCC server; this contract is what plugin `server.ts` files compile
  * against.
  */
 export interface ZccPluginApi {
@@ -1670,7 +1670,7 @@ export interface ZccPluginApi {
   readonly realtime: PluginRealtime;
   /** Long-lived services + cron schedules (design §4.8). */
   readonly background: PluginBackground;
-  /** Agent-facing `bb` CLI subcommand (design §4.4). */
+  /** Agent-facing `zcc` CLI subcommand (design §4.4). */
   readonly cli: PluginCli;
   /** Per-turn agent context contributions (design §4.4). */
   readonly agents: PluginAgents;
@@ -1697,12 +1697,12 @@ export interface ZccPluginApi {
   /** Server-to-daemon host control-plane declarations. */
   readonly hosts: PluginHosts;
   /**
-   * AI services this plugin serves from its `bb.host` entry (helper
+   * AI services this plugin serves from its `zcc.host` entry (helper
    * inference, voice transcription). See `@zana-ai/zcc-plugin-sdk/ai-services`.
    */
   readonly experimental_aiServices: PluginAiServices;
   /**
-   * The full BB SDK, bound to this server over loopback (design §4.1).
+   * The full ZCC SDK, bound to this server over loopback (design §4.1).
    * Bind-gated: reading this before the host binds the SDK throws. The real
    * server binds it before loading plugins, so it is available from the
    * moment factories run there — but isolated harnesses may not, so prefer

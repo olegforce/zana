@@ -6,7 +6,7 @@
  * This entry owns everything outside the protocol: argv, the plugin-scoped
  * directories, the bounded stdin framing, the signal handling, and the
  * record-mode tee of the runtime wire (`ZCC_PROVIDER_BRIDGE_RECORD_DIR`). It is the
- * bridge-side twin of the daemon's `plugin-host-worker.ts` — same `bb.host`
+ * bridge-side twin of the daemon's `plugin-host-worker.ts` — same `zcc.host`
  * artifact, a different consumer, its own process lifecycle. It lives beside
  * the protocol rather than in the daemon because the runtime, not the daemon,
  * spawns bridges, and the conformance and integration harnesses spawn them the

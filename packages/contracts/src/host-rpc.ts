@@ -81,7 +81,8 @@ import {
 // 38: enrolled CLI engine with per-session callback grants and host-owned binaries.
 // 39: acknowledged heartbeats, two-phase readiness and runtime inventory on reconnect.
 // 40: expiring preview declarations, bound to an acknowledged owner session.
-export const HOST_RPC_PROTOCOL_VERSION = 40;
+// 41: provider-declared host environment passthrough on bridge launches.
+export const HOST_RPC_PROTOCOL_VERSION = 41;
 export const HOST_HEARTBEAT_INTERVAL_MS = 5_000;
 export const HOST_LEASE_TIMEOUT_MS = 30_000;
 const ProtocolVersionSchema = z.literal(HOST_RPC_PROTOCOL_VERSION);
@@ -283,6 +284,7 @@ const threadLaunchCohortSchema = z.object({
 
 export const HostBridgeLaunchSchema = z.object({
   pluginId: z.string().min(1),
+  envPassthrough: z.array(z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).max(32).optional(),
   source: z.discriminatedUnion('kind', [
     z.object({
       kind: z.literal('artifact'),
@@ -365,7 +367,7 @@ export const ThreadStartCommandSchema = z.object({
   providerThreadId: z.string().min(1).optional(),
   /** Correlates turn/input/accepted with the server's client/turn/requested. */
   clientRequestId: clientTurnRequestIdSchema.optional(),
-  /** Plugin-registered ACP tools attached via bb-bridge for this session. */
+  /** Plugin-registered ACP tools attached via zcc for this session. */
   dynamicTools: z.array(dynamicToolSchema).max(128).optional(),
   instructions: z.string().max(100_000).optional(),
   providerCheckpointId: z.string().min(1).max(200).optional()

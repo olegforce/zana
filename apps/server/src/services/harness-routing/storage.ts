@@ -9,6 +9,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { fsyncDirectory } from '../../fsync-directory.js';
 
 export interface DurableWriteFileSystem {
   readFile(path: string): Buffer;
@@ -49,15 +50,6 @@ function currentHash(fs: DurableWriteFileSystem, target: string): string | null 
       return null;
     }
     throw error;
-  }
-}
-
-function fsyncDirectory(fs: DurableWriteFileSystem, path: string): void {
-  const fd = fs.open(path, 'r');
-  try {
-    fs.fsync(fd);
-  } finally {
-    fs.close(fd);
   }
 }
 

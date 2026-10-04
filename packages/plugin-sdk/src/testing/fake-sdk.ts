@@ -3,13 +3,13 @@ import type { ZccPluginApi } from "@zana-ai/zcc-plugin-sdk";
 type BbSdk = ZccPluginApi["sdk"];
 
 /**
- * Recordable `bb.sdk` stand-in for {@link createFakePluginHost}. Every call
+ * Recordable `zcc.sdk` stand-in for {@link createFakePluginHost}. Every call
  * through the fake is recorded (post plugin-attribution defaulting, so
  * assertions see what the server would receive); calls without a stubbed
  * implementation throw with a message naming the exact path to stub.
  */
 
-/** One recorded `bb.sdk` call. `path` is dot-joined, e.g. "threads.spawn". */
+/** One recorded `zcc.sdk` call. `path` is dot-joined, e.g. "threads.spawn". */
 export interface FakeSdkCall {
   path: string;
   args: unknown[];
@@ -37,7 +37,7 @@ type FakeSdkOverrideTree<T> = {
 export type FakeSdkOverrides = FakeSdkOverrideTree<BbSdk>;
 
 export interface FakeSdkHarness {
-  /** Every `bb.sdk` call in order, including ones whose stub threw. */
+  /** Every `zcc.sdk` call in order, including ones whose stub threw. */
   readonly calls: FakeSdkCall[];
   /** Argument lists of the calls to one dot-joined path. */
   callsTo(path: string): unknown[][];
@@ -95,7 +95,7 @@ export function createFakeSdk(options: {
     const stub = stubs.get(path);
     if (!stub) {
       throw new Error(
-        `bb.sdk.${path} is not stubbed — pass an implementation via ` +
+        `zcc.sdk.${path} is not stubbed — pass an implementation via ` +
           `createFakePluginHost({ sdk: { ... } }) or harness.sdk.stub("${path}", fn)`,
       );
     }

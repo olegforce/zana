@@ -250,7 +250,7 @@ export type SystemAttentionResponse = z.infer<
 
 /**
  * Theme catalog: the on-disk custom-theme directory plus the discovered custom
- * themes and the active palette. Drives `bb theme list` / `bb theme dir`.
+ * themes and the active palette. Drives `zcc theme list` / `zcc theme dir`.
  */
 export const themeCatalogResponseSchema = z.object({
   /** Absolute path of the custom-theme root: `<data-dir>/theme`. */

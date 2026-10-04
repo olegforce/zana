@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { constants } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CLAUDE_PLAN_CHECKLIST_TOOLS,
   CLAUDE_TODO_TOOLS_ENV_VAR,
   mergeClaudePlanChecklistAllowedTools,
   withClaudeTodoToolsEnv,
+  resolveClaudeCodeExecutable,
 } from "../session-options.js";
+
+it("reads legacy Claude executable settings and prioritizes canonical overrides", () => {
+  const root = mkdtempSync(join(tmpdir(), "zcc-claude-override-"));
+  try {
+    const executable = join(root, "claude");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, constants.S_IRUSR | constants.S_IWUSR | constants.S_IXUSR);
+    expect(resolveClaudeCodeExecutable({ env: { BB_CLAUDE_CODE_EXECUTABLE: executable } })).toBe(executable);
+    expect(() => resolveClaudeCodeExecutable({ env: { BB_CLAUDE_CODE_EXECUTABLE: executable, ZCC_CLAUDE_CODE_EXECUTABLE: join(root, "missing") } })).toThrow("ZCC_CLAUDE_CODE_EXECUTABLE");
+  } finally { rmSync(root, { force: true, recursive: true }); }
+});
 
 describe("withClaudeTodoToolsEnv", () => {
   it("enables checklist tools by default so newer Claude models emit planSteps", () => {

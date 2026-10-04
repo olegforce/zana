@@ -269,7 +269,9 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
       )
     : fleet;
   const visibleCards = fleetAgentCards(visibleFleet);
-  const visibleExecutions = executions.filter((e) => !q || e.jobTitle.toLowerCase().includes(q)
+  const scopedExecutions = executions.filter((e) => projects.some((p) => p.id === e.projectId) && (!scopedProject || e.projectId === scopedProject.id));
+  const pluginPopulation = useMemo(() => pluginView ? projectAgentsView(fleet, scopedExecutions, sensitivity) : undefined, [pluginView, fleet, executions, projects, scopedProject, sensitivity]);
+  const visibleExecutions = scopedExecutions.filter((e) => !q || e.jobTitle.toLowerCase().includes(q)
     || projects.find((p) => p.id === e.projectId)?.name.toLowerCase().includes(q));
 
   const reclaimableAgents = useMemo(
@@ -438,12 +440,13 @@ export function AgentsBoard({ scope }: { scope: AgentsBoardScope }) {
           projectId={scopedProject?.id ?? null}
           projects={(scopedProject ? [scopedProject] : projects).map(({ id, name, color }) => ({ id, name, color }))}
           {...projectAgentsView(visibleFleet, visibleExecutions, sensitivity)}
+          population={pluginPopulation}
           includeScheduled={includeScheduled}
           searchQuery={q}
           onInspect={(key) => {
-            const item = visibleFleet.find((item) => fleetKey(item) === key);
+            const item = fleet.find((item) => fleetKey(item) === key);
             if (item) { inspect(item); return; }
-            const execution = visibleExecutions.find((e) => executionKey(e) === key);
+            const execution = scopedExecutions.find((e) => executionKey(e) === key);
             if (execution) setSelectedExecution({ projectId: execution.projectId, executionId: execution.executionId });
           }}
         />

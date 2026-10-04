@@ -2,7 +2,7 @@
  * Packaging-size guard — root production deps and electron-builder filters
  * decide what lands in app.asar / extraResources. Renderer-only libraries
  * (monaco, mermaid, lucide, xterm, …) and the Pi LLM SDK are bundled into
- * `out/renderer` or `host-bridge/bb-pi-bridge.mjs`; they must not reappear as
+ * `out/renderer` or `host-bridge/zcc-pi-bridge.mjs`; they must not reappear as
  * root `dependencies` or they pack ~150–250 MB of unused node_modules.
  */
 
@@ -69,8 +69,8 @@ const ASAR_EXCLUDES = [
 
 describe('packaged app size policy', () => {
   it('ships every join companion needed by enrolled machines', () => {
-    const bridge = builderYml.slice(builderYml.indexOf('to: host-bridge'), builderYml.indexOf('- from: plugins'));
-    for (const file of ['join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']) expect(bridge).toContain(`- ${file}`);
+    const bridge = builderYml.slice(builderYml.indexOf('to: host-bridge'), builderYml.indexOf('- from: out/packaged-plugins'));
+    for (const file of ['join.mjs', 'zcc-provider-bridge-worker.mjs', 'zcc-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']) expect(bridge).toContain(`- ${file}`);
   });
   it('keeps the main-process production deps on the root package', () => {
     for (const name of MAIN_PRODUCTION_DEPS) {
@@ -105,12 +105,9 @@ describe('packaged app size policy', () => {
     expect((builderYml.match(/"!\*\*\/\*\.map"/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('does not pack plugin playground sources or build junk', () => {
-    expect(builderYml).toContain('"!**/playground/src/**"');
-    expect(builderYml).toContain('"!**/vitest.config.ts"');
-    expect(builderYml).toContain('"!**/vite.config.ts"');
-    expect(builderYml).toContain('"!**/tsconfig.json"');
-    expect(builderYml).toContain('"!**/.turbo/**"');
+  it('packs only prepared plugin runtimes, without duplicating them in asar', () => {
+    expect(builderYml).toContain('from: out/packaged-plugins');
+    expect(builderYml).toContain('"!out/packaged-plugins/**"');
   });
 
   it('wipes previous dist output before packaging', () => {

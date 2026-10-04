@@ -13,13 +13,13 @@ async function fixture() {
   await mkdir(source); await mkdir(join(dataDir, 'runtime'), { recursive: true });
   await writeFile(join(dataDir, 'runtime/join.mjs'), '// old executable');
   await writeFile(join(source, 'package.json'), '{"type":"module"}');
-  await writeFile(join(source, 'join.mjs'), `import './bb-provider-bridge-worker.mjs'; process.exit(Number(process.argv[3]) === ${protocol + 1} ? 0 : 1);`);
-  await writeFile(join(source, 'bb-provider-bridge-worker.mjs'), 'export const worker = true;');
-  await writeFile(join(source, 'bb-pi-bridge.mjs'), 'export const pi = true;');
+  await writeFile(join(source, 'join.mjs'), `import './zcc-provider-bridge-worker.mjs'; process.exit(Number(process.argv[3]) === ${protocol + 1} ? 0 : 1);`);
+  await writeFile(join(source, 'zcc-provider-bridge-worker.mjs'), 'export const worker = true;');
+  await writeFile(join(source, 'zcc-pi-bridge.mjs'), 'export const pi = true;');
   await writeFile(join(source, 'zcc-plugin-host-worker.mjs'), 'export const worker = true;');
   const pack = async (extra: string[] = []) => {
     const file = join(root, 'update.tgz');
-    await create({ file, cwd: source, gzip: true, portable: true }, ['package.json', 'join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs', ...extra]);
+    await create({ file, cwd: source, gzip: true, portable: true }, ['package.json', 'join.mjs', 'zcc-provider-bridge-worker.mjs', 'zcc-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs', ...extra]);
     return readFile(file);
   };
   const archive = await pack();
@@ -28,6 +28,22 @@ async function fixture() {
   return { root, source, dataDir, pack, fetchFn, options: { dataDir, serverUrl: 'http://127.0.0.1:8780/', enabled: true, now: 10_000, fetchFn } };
 }
 describe('protocol self-update', () => {
+  it('accepts a complete older generation but rejects mixed companion names', async () => {
+    const f = await fixture();
+    await writeFile(join(f.source, 'join.mjs'), `import './bb-provider-bridge-worker.mjs'; process.exit(Number(process.argv[3]) === ${protocol + 1} ? 0 : 1);`);
+    await writeFile(join(f.source, 'bb-provider-bridge-worker.mjs'), 'export const worker = true;');
+    await writeFile(join(f.source, 'bb-pi-bridge.mjs'), 'export const pi = true;');
+    const archive = join(f.root, 'legacy.tgz');
+    await create({ file: archive, cwd: f.source, gzip: true, portable: true }, ['package.json', 'join.mjs', 'bb-provider-bridge-worker.mjs', 'bb-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']);
+    const bytes = await readFile(archive);
+    f.fetchFn.mockImplementation(async input => new Response(String(input).endsWith('/version') ? JSON.stringify({ protocolVersion: protocol + 1 }) : bytes));
+    expect(await handleProtocolMismatch(f.options)).toBe('updated');
+    expect(await rollbackHostUpdate(f.dataDir)).toBe(true);
+    await create({ file: archive, cwd: f.source, gzip: true, portable: true }, ['package.json', 'join.mjs', 'bb-provider-bridge-worker.mjs', 'zcc-pi-bridge.mjs', 'zcc-plugin-host-worker.mjs']);
+    const mixed = await readFile(archive);
+    f.fetchFn.mockImplementation(async input => new Response(String(input).endsWith('/version') ? JSON.stringify({ protocolVersion: protocol + 1 }) : mixed));
+    expect(await handleProtocolMismatch({ ...f.options, now: 20_000 })).toBe('failed');
+  });
   it('promotes a complete validated generation and confirms after handshake', async () => {
     const f = await fixture();
     expect(await handleProtocolMismatch(f.options)).toBe('updated');

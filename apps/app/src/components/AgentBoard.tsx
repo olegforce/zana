@@ -6,7 +6,7 @@ import type { AgentState, ExecutionBoardProjection, IdleResolution, IdleTriageRe
 import { scheduleSummary } from '@zana-ai/zcc-domain/schedule-spec';
 import { profileIcon, personaIcon } from '../lib/profileIcon.js';
 import { isRecentlyFinished } from '../lib/sessionBuckets.js';
-import { usePersonas, useData, useScheduler, useUi } from '../store.js';
+import { sortProjectsForDisplay, usePersonas, useData, useScheduler, useUi } from '../store.js';
 import { useSessionGit } from '../lib/gitInfo.js';
 import { useAgentCardActions, AgentCardMenu, clampMenuAnchor } from './agentCardActions.js';
 import { useThreadCardActions, ThreadCardMenu, openThreadMenu } from './threadCardActions.js';
@@ -731,6 +731,7 @@ export function AgentBoardLanes({ cards, activeId, onInspect, showProject, execu
   const sensitivity = useData((s) => s.idleAttentionSensitivity);
   const includeScheduled = useData((s) => s.includeScheduledAgentsInAgentView);
   const projects = useData((s) => s.projects);
+  const projectOrder = useMemo(() => sortProjectsForDisplay(projects).map((project) => project.id), [projects]);
   // Schedules, indexed by the session ids they've fired, so a scheduled card
   // can surface its next-run countdown. Memoized off the raw list so the 1s
   // tick below doesn't re-invert it every second.
@@ -1321,7 +1322,7 @@ export function AgentBoardLanes({ cards, activeId, onInspect, showProject, execu
     if (!lane) return null;
     if (lane.cards.length === 0) return <div className="agents-lane-empty" aria-hidden="true" />;
     if (!showProject) return lane.cards.map((item) => renderItem(item, lane.key));
-    return groupFleetByProject(lane.cards).map((group) => (
+    return groupFleetByProject(lane.cards, projectOrder).map((group) => (
       <div key={group.projectId} className="agents-lane-group">
         <div className="agents-lane-group-head" title={group.projectName}>
           <span className="agents-lane-group-dot" style={group.projectColor ? { background: group.projectColor } : undefined} aria-hidden="true" />

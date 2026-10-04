@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { derivePluginId } from "@zana-ai/zcc-domain/thread-runtime";
 import type { Metafile, Plugin } from "esbuild";
 import {
@@ -103,7 +103,7 @@ async function shimModuleSource(
     `const runtime = globalThis.__bbPluginRuntime;`,
     `if (runtime == null || runtime.${slot} == null) {`,
     `  throw new Error(${JSON.stringify(
-      `Cannot load "${specifier}": this bundle must be loaded by the BB app, which provides the shared plugin runtime (globalThis.__bbPluginRuntime).`,
+      `Cannot load "${specifier}": this bundle must be loaded by the Zana app, which provides the shared plugin runtime (globalThis.__bbPluginRuntime).`,
     )});`,
     `}`,
     `const mod = runtime.${slot};`,
@@ -214,7 +214,7 @@ function readTailwindContentPatterns(
     !patterns.every((pattern) => typeof pattern === "string")
   ) {
     throw new Error(
-      `bb.pluginTailwindContent must be an array of strings in ${packageJsonPath}`,
+      `zcc.pluginTailwindContent must be an array of strings in ${packageJsonPath}`,
     );
   }
   return patterns;
@@ -277,20 +277,20 @@ async function readPluginAppConfig(rootDir: string): Promise<PluginAppConfig> {
   const app = manifest.bb.app;
   if (app === undefined) {
     throw new Error(
-      `no frontend entry: ${packageJsonPath} has no "bb": { "app": "./app.tsx" } field (only plugins with an app entry can be built)`,
+      `no frontend entry: ${packageJsonPath} has no "zcc": { "app": "./app.tsx" } field (only plugins with an app entry can be built)`,
     );
   }
   if (isAbsolute(app)) {
-    throw new Error(`manifest bb.app must be relative, got "${app}"`);
+    throw new Error(`manifest zcc.app must be relative, got "${app}"`);
   }
   const appEntry = resolve(rootDir, app);
-  if (appEntry !== rootDir && !appEntry.startsWith(rootDir + "/")) {
-    throw new Error(`manifest bb.app escapes the plugin directory: "${app}"`);
+  if (appEntry !== rootDir && !appEntry.startsWith(rootDir + sep)) {
+    throw new Error(`manifest zcc.app escapes the plugin directory: "${app}"`);
   }
   try {
     await stat(appEntry);
   } catch {
-    throw new Error(`manifest bb.app points at a missing file: ${app}`);
+    throw new Error(`manifest zcc.app points at a missing file: ${app}`);
   }
   return {
     appEntry,

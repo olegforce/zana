@@ -164,8 +164,8 @@ function createChatGptHeaders(auth: CodexChatGptAuthCredentials): Headers {
   const headers = new Headers();
   headers.set("Authorization", `Bearer ${auth.accessToken}`);
   headers.set("chatgpt-account-id", auth.accountId);
-  headers.set("originator", "bb");
-  headers.set("User-Agent", "bb-host-daemon");
+  headers.set("originator", "zcc");
+  headers.set("User-Agent", "zcc-host-daemon");
   if (auth.isFedrampAccount) {
     headers.set("X-OpenAI-Fedramp", "true");
   }
@@ -175,7 +175,7 @@ function createChatGptHeaders(auth: CodexChatGptAuthCredentials): Headers {
 function createOpenAiHeaders(auth: CodexOpenAiApiKeyCredentials): Headers {
   const headers = new Headers();
   headers.set("Authorization", `Bearer ${auth.apiKey}`);
-  headers.set("User-Agent", "bb-host-daemon");
+  headers.set("User-Agent", "zcc-host-daemon");
   return headers;
 }
 
@@ -428,8 +428,8 @@ function isHtmlResponse(response: Response): boolean {
 }
 
 const CODEX_API_KEY_ROUTE_HINT: Record<CodexRequestOperation, string> = {
-  inference: "BB_INFERENCE",
-  transcription: "BB_TRANSCRIPTION",
+  inference: "ZCC_INFERENCE",
+  transcription: "ZCC_TRANSCRIPTION",
 };
 
 async function createCodexHttpError({
@@ -442,7 +442,7 @@ async function createCodexHttpError({
     return new AiServiceFailure(
       "service_unavailable",
       "codex_service_unavailable",
-      `${prefix}: chatgpt.com answered with a Cloudflare challenge that bb cannot solve. Retry, or set ${CODEX_API_KEY_ROUTE_HINT[operation]} to an openai/ model with OPENAI_API_KEY.`,
+      `${prefix}: chatgpt.com answered with a Cloudflare challenge that ZCC cannot solve. Retry, or set ${CODEX_API_KEY_ROUTE_HINT[operation]} to an openai/ model with OPENAI_API_KEY.`,
     );
   }
   const providerMessage = isHtmlResponse(response)

@@ -2205,7 +2205,7 @@ describe("acp delta translation (raw payloads and real results)", () => {
 
     const bound = harness.translator.notePermissionToolCall(THREAD_ID, {
       toolCallId: "call-mcp",
-      title: "bb-bridge-AskUserQuestion: AskUserQuestion",
+      title: "zcc-AskUserQuestion: AskUserQuestion",
       kind: "other",
       rawInput: { question: "Which one?" },
     });
@@ -2226,7 +2226,7 @@ describe("acp delta translation (raw payloads and real results)", () => {
         type: "toolCall",
         tool: "other",
         arguments: { question: "Which one?" },
-        presentation: { title: "bb-bridge-AskUserQuestion: AskUserQuestion" },
+        presentation: { title: "zcc-AskUserQuestion: AskUserQuestion" },
       },
     });
   });
@@ -2588,7 +2588,7 @@ describe("acp delta translation (dialects)", () => {
       )[0],
     ).toMatchObject({
       type: "item/started",
-      item: { type: "toolCall", tool: "AskUserQuestion", server: "bb" },
+      item: { type: "toolCall", tool: "AskUserQuestion", server: "zcc" },
     });
   });
 });
@@ -2646,7 +2646,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(completed).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "ask_user_question",
       status: "completed",
       presentation: ASK_PRESENTATION,
@@ -2670,7 +2670,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(first[0]).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "bb_workflow_run",
       presentation: {
         label: {
@@ -2693,7 +2693,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(second[0]).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "not_configured",
     });
   });
@@ -2714,14 +2714,14 @@ describe("acp delta translation (bb-injected tools)", () => {
       updateEvent({
         sessionUpdate: "tool_call",
         toolCallId: "mcp-4",
-        title: "ask_user_question (bb-bridge MCP Server)",
+        title: "ask_user_question (zcc MCP Server)",
         kind: "other",
         status: "pending",
       }),
     );
     expect(named).toMatchObject({
       type: "item/started",
-      item: { type: "toolCall", server: "bb", tool: "ask_user_question" },
+      item: { type: "toolCall", server: "zcc", tool: "ask_user_question" },
     });
 
     translator.noteInjectedToolCall(THREAD_ID, "bb_workflow_run");

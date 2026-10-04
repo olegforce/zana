@@ -7,6 +7,7 @@ import { createInboxStore } from '../services/inbox/inbox-store.js';
 import { createProjectStore } from '../project-store.js';
 import { startProductServer, type ProductServer } from './product-server.js';
 import { getThreadProvider } from '../services/threads/thread-provider-catalog.js';
+import { buildPluginHost } from '@zana-ai/zcc-plugin-build';
 
 let server: ProductServer | null = null;
 const dirs: string[] = [];
@@ -29,7 +30,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function writeProviderPlugin(dir: string): void {
+async function writeProviderPlugin(dir: string): Promise<void> {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'package.json'),
@@ -65,6 +66,8 @@ function writeProviderPlugin(dir: string): void {
       });
     }\n`
   );
+  // Bundled installs ship prebuilt artifacts and never compile on startup.
+  await buildPluginHost(dir, '2.3.1');
 }
 
 function writeAppPlugin(dir: string): void {
@@ -90,7 +93,7 @@ describe('attachProductPluginService', () => {
   it('starts bundled plugins so thread create can resolve acp-opencode', async () => {
     const dataDir = tempDir();
     const bundled = tempDir();
-    writeProviderPlugin(join(bundled, 'provider-acp'));
+    await writeProviderPlugin(join(bundled, 'provider-acp'));
     server = await startProductServer({
       dataDir,
       origins: { serverPort: 0, devAppPort: 5173 }

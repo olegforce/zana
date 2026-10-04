@@ -153,7 +153,7 @@ export function macOsPermissionPresentation(
   const detail =
     requested.length === 0
       ? "No macOS capability was requested."
-      : `Requested: ${requested.join(", ")}. bb cannot grant macOS permissions; the approval covers the command only.`;
+      : `Requested: ${requested.join(", ")}. ZCC cannot grant macOS permissions; the approval covers the command only.`;
   return { ...presentation, detail: presentationDetail(detail) };
 }
 

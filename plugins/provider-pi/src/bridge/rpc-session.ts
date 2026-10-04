@@ -80,7 +80,7 @@ interface ChannelReply {
 const PI_TRANSIENT_AUTH_RETRY_DELAY_MS = 250;
 const PI_TRANSIENT_AUTH_MAX_RETRIES = 8;
 function readinessTimeoutMs(): number {
-  const configured = Number(process.env.BB_PI_BRIDGE_READINESS_TIMEOUT_MS);
+  const configured = Number(process.env.ZCC_PI_BRIDGE_READINESS_TIMEOUT_MS ?? process.env.BB_PI_BRIDGE_READINESS_TIMEOUT_MS);
   return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
 }
 const CHANNEL_REQUEST_TIMEOUT_MS = 30_000;
@@ -243,7 +243,7 @@ export class PiRpcSession {
       cwd: this.options.cwd,
       env: buildPiChildEnv({
         ...(this.options.shellEnvOverrides ?? {}),
-        PI_BB_TOOLS_FILE: toolsFilePath,
+        PI_ZCC_TOOLS_FILE: toolsFilePath,
       }),
       args,
       onEvent: (event) => {

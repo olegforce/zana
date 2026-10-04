@@ -33,7 +33,7 @@ function resolveProjectTrusted(
   }
 
   // The bridge has no trust prompt. Pi treats an unresolved `ask` decision as
-  // untrusted in every non-interactive mode, so BB must do the same.
+  // untrusted in every non-interactive mode, so ZCC must do the same.
   return settingsManager.getDefaultProjectTrust() === "always";
 }
 

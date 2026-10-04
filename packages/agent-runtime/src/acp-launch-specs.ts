@@ -1,7 +1,7 @@
 import type { HostDaemonAcpLaunchSpec } from "@zana-ai/zcc-host-daemon-contract";
 
 /**
- * Launch specs for the ACP providers bb bundles itself.
+ * Launch specs for the ACP providers zcc bundles itself.
  *
  * Configured ACP agents (`customAcpAgents`) and known ACP agents both arrive
  * with a launch spec on the command; the bundled providers have no server-side

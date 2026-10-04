@@ -165,7 +165,7 @@ export function overlayCustomModels(
   config: Pick<AppConfig, 'customModels'>,
   provider: ThreadProviderRecord | undefined
 ): Pick<ThreadExecutionOptionsResponse, 'models' | 'selectedOnlyModels'> {
-  if (!provider || !Array.isArray(config.customModels)) return listed;
+  if (!provider || provider.unavailableReason || !Array.isArray(config.customModels)) return listed;
   const levels = (provider.capabilities.reasoningLevels ?? []).flatMap((value) => {
     const parsed = reasoningLevelSchema.safeParse(value);
     return parsed.success ? [parsed.data] : [];
@@ -219,21 +219,23 @@ export function buildThreadExecutionOptions(input: {
   listErrorDetail?: string | null;
 }): ThreadExecutionOptionsResponse {
   const catalog = listThreadProviders();
-  const offered = catalog.filter((provider) => isThreadProviderOffered(provider, input.availability, input.extraInstalled));
-  const requested = input.providerId ? catalog.find((provider) => provider.id === input.providerId) ?? offered[0] : offered[0];
+  const offered = catalog.filter((provider) => provider.unavailableReason || isThreadProviderOffered(provider, input.availability, input.extraInstalled));
+  const requested = input.providerId ? getThreadProvider(input.providerId) : offered.find((provider) => !provider.unavailableReason);
   const staticModels = requested ? modelsForThreadProvider(requested.id, requested.capabilities.reasoningLevels ?? []) : [];
   const useListed = Boolean(input.listed && input.listed.models.length > 0);
-  const modelLoadError = !requested && input.providerId
+  const modelLoadError = requested?.unavailableReason
+    ? { providerId: requested.id, code: 'provider_unavailable' as const, detail: `${requested.displayName} could not load. Open Plugins to reload or update ${requested.pluginId}. ${requested.unavailableReason}` }
+    : !requested && input.providerId
     ? { providerId: input.providerId, code: 'provider_unavailable' as const, detail: null }
     : requested && input.listError
       ? { providerId: requested.id, code: input.listError, detail: input.listErrorDetail ?? null }
       : null;
   return {
-    providers: offered.map((provider) => toProviderInfo(provider, true)),
+    providers: offered.map((provider) => toProviderInfo(provider, !provider.unavailableReason)),
     permissionCeiling: 'full',
-    models: useListed ? input.listed!.models : staticModels,
-    selectedOnlyModels: useListed ? input.listed!.selectedOnlyModels : [],
+    models: modelLoadError?.code === 'provider_unavailable' ? [] : useListed ? input.listed!.models : staticModels,
+    selectedOnlyModels: modelLoadError?.code === 'provider_unavailable' ? [] : useListed ? input.listed!.selectedOnlyModels : [],
     modelLoadError,
-    ...(input.listed?.acpMode ? { acpMode: input.listed.acpMode } : {})
+    ...(input.listed?.acpMode && !requested?.unavailableReason ? { acpMode: input.listed.acpMode } : {})
   };
 }

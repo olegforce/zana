@@ -183,13 +183,14 @@ export interface PluginBundleOptions {
   toolchain?: PluginBuildToolchain;
 }
 
-async function bundle(opts: {
+export async function bundlePluginEntry(opts: {
   entry: string;
   outfile: string;
   platform: 'node' | 'browser';
   minify?: boolean;
   sourcemap?: boolean;
   toolchain?: PluginBuildToolchain;
+  bundleSdk?: boolean;
 }): Promise<void> {
   const toolchain = opts.toolchain ?? await getPluginBuildToolchain();
   const esbuild = await import(toolchain.esbuild) as typeof import('esbuild');
@@ -213,7 +214,7 @@ async function bundle(opts: {
       plugins: opts.platform === 'browser' ? [hostReactPlugin(), hostPluginSdkPlugin()] : undefined,
       banner: opts.platform === 'node' ? { js: NODE_ESM_REQUIRE_BANNER } : undefined,
       external:
-        opts.platform === 'node'
+        opts.bundleSdk ? [] : opts.platform === 'node'
           ? ['@zana-ai/zcc-plugin-sdk', '@zana-ai/zcc-plugin-sdk/server']
           : ['@zana-ai/zcc-plugin-sdk/server']
     });
@@ -266,7 +267,7 @@ export async function buildPluginServer(
   // Published backends without editable siblings are already the output.
   // Rebundling them into themselves accumulates banners on every build.
   if (entry === join(realpathSync(rootDir), 'server.mjs')) return null;
-  await bundle({
+  await bundlePluginEntry({
     entry,
     outfile: jsPath,
     platform: 'node',
@@ -297,7 +298,7 @@ export async function buildPluginApp(
   const entry = resolveSource(rootDir, source ?? declared, ['app.tsx', 'app.jsx', 'app.ts', 'src/app.tsx']);
   if (!entry) return null;
   const jsPath = pkg.zcc?.app ? join(rootDir, pkg.zcc.app.replace(/\.[cm]?[jt]sx?$/, '.js')) : join(rootDir, 'app.js');
-  await bundle({
+  await bundlePluginEntry({
     entry,
     outfile: jsPath,
     platform: 'browser',

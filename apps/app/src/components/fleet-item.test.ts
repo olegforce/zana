@@ -9,6 +9,7 @@ import {
   fleetKindLabel,
   fleetMatchesLane,
   fleetThreadLane,
+  groupFleetByProject,
   resolveMonitorSelection,
   scheduleFleetItem,
   scheduleNextRunAt,
@@ -52,6 +53,39 @@ function card(): AgentCard {
 }
 
 describe('fleet items', () => {
+  it('keeps project order when the leading card closes, without changing within-project recency', () => {
+    const items = [
+      threadFleetItem(thread({ id: 'a-new', projectId: 'a', status: 'idle', createdAt: 5 }), { name: 'Alpha', color: '#abc' }),
+      threadFleetItem(thread({ id: 'b-new', projectId: 'b', status: 'idle', createdAt: 4 }), { name: 'Beta' }),
+      threadFleetItem(thread({ id: 'c', projectId: 'c', status: 'idle', createdAt: 3 }), { name: 'Gamma' }),
+      threadFleetItem(thread({ id: 'b-old', projectId: 'b', status: 'idle', createdAt: 2 }), { name: 'Beta' }),
+      threadFleetItem(thread({ id: 'a-old', projectId: 'a', status: 'idle', createdAt: 1 }), { name: 'Alpha', color: '#abc' })
+    ];
+    const order = ['a', 'b', 'c'];
+    const groups = groupFleetByProject(items, order);
+    expect(groups.map((group) => group.projectId)).toEqual(order);
+    expect(groups[0]).toMatchObject({ projectName: 'Alpha', projectColor: '#abc' });
+    expect(groups[0].cards.map((item) => item.id)).toEqual(['a-new', 'a-old']);
+    expect(groupFleetByProject(items.filter((item) => item.id !== 'a-new'), order)
+      .map((group) => group.projectId)).toEqual(order);
+    expect(groupFleetByProject(items.filter((item) => item.projectId !== 'b'), order)
+      .map((group) => group.projectId)).toEqual(['a', 'c']);
+    expect(groupFleetByProject(items, ['c', 'b', 'a']).map((group) => group.projectId)).toEqual(['c', 'b', 'a']);
+    expect(items.map((item) => item.id)).toEqual(['a-new', 'b-new', 'c', 'b-old', 'a-old']);
+  });
+
+  it('groups mixed kinds and gives missing projects a deterministic position after registered projects', () => {
+    const cli = agentFleetItem(card());
+    const job = scheduleFleetItem({ id: 'job', projectId: 'p1', name: 'Nightly', enabled: true } as import('@zana-ai/zcc-domain/product').ScheduledTask);
+    const a = threadFleetItem(thread({ id: 'a', projectId: 'a', status: 'idle' }));
+    const z = threadFleetItem(thread({ id: 'z', projectId: 'z', status: 'idle' }));
+    const groups = groupFleetByProject([z, cli, a, job], ['empty-project', 'p1']);
+    expect(groups.map((group) => group.projectId)).toEqual(['p1', 'a', 'z']);
+    expect(groups[0].cards).toEqual([cli, job]);
+    expect(groupFleetByProject([z, a], []).map((group) => group.projectId)).toEqual(['a', 'z']);
+    expect(groupFleetByProject([], ['p1'])).toEqual([]);
+  });
+
   it('maps an armed schedule into the Scheduled lane and hides it when the setting is off', () => {
     const task = {
       id: 'job-1',

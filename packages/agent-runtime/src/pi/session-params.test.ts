@@ -23,7 +23,7 @@ describe("buildPiSessionParams", () => {
         },
       }).shellEnvOverrides,
     ).toEqual({
-      BB_THREAD_ID: "bb-thread-1",
+      ZCC_THREAD_ID: "bb-thread-1",
       TEST_VAR: "123",
     });
   });
@@ -37,7 +37,7 @@ describe("buildPiSessionParams", () => {
         options: { reasoningLevel },
       });
 
-    // bb's "none" is Pi's "off"; levels Pi has no name for are dropped rather
+    // zcc's "none" is Pi's "off"; levels Pi has no name for are dropped rather
     // than sent as a value the bridge schema would reject.
     expect(params("none").thinkingLevel).toBe("off");
     expect(params("high").thinkingLevel).toBe("high");

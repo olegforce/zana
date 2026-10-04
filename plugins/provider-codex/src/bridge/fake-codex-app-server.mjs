@@ -388,8 +388,8 @@ async function handleRequest(message) {
       respond(id, {
         data: [
           {
-            id: `fake-model-${processInstanceId}`,
-            model: `fake-model-${processInstanceId}`,
+            id: script?.modelId ?? `fake-model-${processInstanceId}`,
+            model: script?.modelId ?? `fake-model-${processInstanceId}`,
             displayName: "Fake model",
             description: "Hermetic bridge fixture model",
             supportedReasoningEfforts: [
@@ -482,7 +482,7 @@ async function handleRequest(message) {
     case "turn/start": {
       // A prompt the provider handles locally: accepted and answered, but with
       // no turn/started and no turn/completed, so nothing in the child's
-      // output can open or settle a bb turn (#1431).
+      // output can open or settle a zcc turn (#1431).
       if (firstInputText(params.input) === ZERO_WORK_PROMPT_TEXT) {
         respond(id, {});
         return;

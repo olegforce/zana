@@ -1,5 +1,5 @@
 /**
- * Presentation building blocks every bb-authored bridge shares (grammar v3,
+ * Presentation building blocks every zcc-authored bridge shares (grammar v3,
  * docs/provider-plugin-api.md §3): the headline and detail truncators, the
  * two core-kind rows whose wording is the same for every provider
  * (compaction, reasoning), the builders for the core shapes whose label and
@@ -14,7 +14,7 @@
  *
  * Icons are names: host glyphs from the shared icon registry
  * (`@zana-ai/zcc-shared-ui/icon`), or a plugin's own declared icon as
- * `"<pluginId>/<name>"` (`bb.branding.experimental_icons`); the persisted
+ * `"<pluginId>/<name>"` (`zcc.branding.experimental_icons`); the persisted
  * form is a name, never bytes or a path.
  */
 import { THREAD_EVENT_ITEM_PRESENTATION_DETAIL_MAX_LENGTH } from "@zana-ai/zcc-domain/thread-runtime";
@@ -152,8 +152,8 @@ export function planStepsPresentation(
 
 /**
  * A tool with no core kind and no presentation of its own — a provider's
- * own dynamic tool, an unknown built-in, or a bb-injected tool whose
- * definition predates the field: a generic label under bb's own glyph.
+ * own dynamic tool, an unknown built-in, or a zcc-injected tool whose
+ * definition predates the field: a generic label under zcc's own glyph.
  */
 export function toolPresentation(tool: string): DeltaPresentation {
   return {

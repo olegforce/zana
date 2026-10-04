@@ -43,7 +43,6 @@ jobs:
       ASC_APP_ID: ${{ vars.ASC_APP_ID }}
       ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
       ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
-      ASC_API_KEY_PATH: ${{ runner.temp }}/zana-asc-invitation-key.p8
       BETA_GROUP_ID: ${{ vars.ASC_BETA_GROUP_ID }}
       INVITATION_ACTION: ${{ inputs.action }}
       BUILD_ID: ${{ inputs.build_id }}
@@ -61,6 +60,8 @@ jobs:
         env:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
         run: |
+          ASC_API_KEY_PATH="$RUNNER_TEMP/zana-asc-invitation-key.p8"
+          printf 'ASC_API_KEY_PATH=%s\n' "$ASC_API_KEY_PATH" >> "$GITHUB_ENV"
           test -n "$ASC_API_KEY_P8"
           umask 077
           printf '%s\n' "$ASC_API_KEY_P8" > "$ASC_API_KEY_PATH"
@@ -85,4 +86,4 @@ jobs:
           if-no-files-found: ignore
       - name: Remove temporary Apple key
         if: ${{ always() }}
-        run: rm -f -- "$ASC_API_KEY_PATH"
+        run: rm -f -- "$RUNNER_TEMP/zana-asc-invitation-key.p8"

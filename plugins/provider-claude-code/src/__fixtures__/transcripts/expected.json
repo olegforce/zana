@@ -26,7 +26,7 @@
       "toolCall": 3
     },
     "tools": {
-      "bb:bb_workflow_run": 1,
+      "zcc:bb_workflow_run": 1,
       "Skill": 1,
       "ToolSearch": 1
     },

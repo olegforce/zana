@@ -247,7 +247,7 @@ export interface ProviderAdapter {
 
   /**
    * Whether this thread owns provider work that can outlive its turn. Some
-   * providers track that work by BB thread and others by provider session, so
+   * providers track that work by ZCC thread and others by provider session, so
    * both identifiers are given.
    */
   hasOpenThreadWork?(args: {
@@ -301,7 +301,7 @@ export interface ProviderAdapter {
    * Called when a thread detaches because its provider process exited or the
    * runtime is shutting down. Returns events reconciling adapter state that
    * cannot survive the process — e.g. open background tasks settled as
-   * interrupted. Events must carry the real bb threadId; the runtime emits
+   * interrupted. Events must carry the real zcc threadId; the runtime emits
    * them before clearing the thread's runtime state.
    */
   buildThreadDetachedEvents?(args: { threadId: string }): ThreadEvent[];

@@ -38,6 +38,13 @@ describe('Agents plugin view registration', () => {
 });
 
 describe('Live fleet projection', () => {
+  it('projects the real harness consistently for threads, CLI profiles and scheduled plans', () => {
+    const thread = threadFleetItem({ id: 'thread', projectId: 'p', providerId: 'acp-opencode', status: 'idle' } as ThreadListItem);
+    const schedule = scheduleFleetItem({ id: 's', name: 'Plan', projectId: 'p', profile: 'cursor-yolo', enabled: true } as ScheduledTask);
+    const result = projectAgentsView([thread, card('cli', 'idle', { profile: 'codex-yolo' }), schedule], [], 'medium');
+    expect(result.members.map((m) => m.harness)).toEqual(['OpenCode', 'Codex']);
+    expect(result.schedules[0].harness).toBe('Cursor');
+  });
   it('keeps unknown, idle, exited and failed distinct; background blockers never nag the user', () => {
     const result = projectAgentsView([
       card('work'), card('ask', 'blocked'), card('background', 'blocked', { headless: true }),

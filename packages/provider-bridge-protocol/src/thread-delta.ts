@@ -7,7 +7,7 @@
  * correlation, item pairing and settlement, text and usage accumulation, and
  * every canonical event construction. Deltas carry provider-native join keys
  * (tool-call ids, stream keys, parent refs, provider turn ids) so the
- * assembler can hold the bidirectional provider↔bb id maps.
+ * assembler can hold the bidirectional provider↔zcc id maps.
  *
  * Grammar v3 (docs/provider-plugin-api.md §3): the core vocabulary has
  * `fileRead`, `search`, `delegation`, `planSteps` and the open `extension`
@@ -92,7 +92,7 @@ const deltaKeyPartSchema = z
  * own id (a tool-call id); `channel` distinguishes provider-anonymous item
  * families (e.g. compaction); `parentRef` is the provider-native id of the
  * parent tool call for nested items. The assembler translates all of these to
- * bb-minted ids.
+ * zcc-minted ids.
  */
 export const deltaItemKeySchema = z.object({
   providerItemId: deltaKeyPartSchema.optional(),
@@ -103,7 +103,7 @@ export type DeltaItemKey = z.infer<typeof deltaItemKeySchema>;
 
 /**
  * Provider-vouched turn key. When present on a delta, the assembler scopes
- * the produced events to the bb turn id mapped for this provider turn id —
+ * the produced events to the zcc turn id mapped for this provider turn id —
  * minting the mapping on first sight, exactly as the codex bridge's
  * deterministic id stamping did — and the delta bypasses the current-turn
  * guard entirely (the only-caller-vouched-turn-ids rule: the provider named
@@ -416,13 +416,13 @@ export const threadDeltaSchema = z.discriminatedUnion("kind", [
   }),
 
   /**
-   * Input the provider itself injected into the conversation, with no bb
+   * Input the provider itself injected into the conversation, with no zcc
    * client request behind it (a pi extension's `sendMessage` custom message
    * that triggered or steered a turn). The assembler records it as a
    * `userMessage` item in the open turn so the transcript shows what the
    * model was answering. Dropped silently when no turn is open: the provider
    * appended it to its own context without running the agent, so there is no
-   * bb turn to attach it to.
+   * zcc turn to attach it to.
    */
   z.object({
     kind: z.literal("input.provider"),
@@ -464,7 +464,7 @@ export const threadDeltaSchema = z.discriminatedUnion("kind", [
    * A parsed item opened. `attach: "currentOrLast"` pins the item to the turn
    * that is open or just closed without opening a new one (pi threshold
    * compaction); the default attaches to the open turn only. A known
-   * `providerItemId` reuses its minted bb id (an explicit open reopens the
+   * `providerItemId` reuses its minted zcc id (an explicit open reopens the
    * same item, codex's settle/reopen rule).
    */
   z

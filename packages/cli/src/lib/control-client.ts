@@ -1,5 +1,5 @@
 /**
- * Client for the running app's control plane (the UDS at ~/.zcc/control.sock).
+ * Client for the running app's control plane (Unix socket or Windows pipe).
  *
  * Unlike the file-store readers (which work whether the app is up or down), the
  * control plane only exists while the desktop app runs — so every call here can
@@ -63,10 +63,15 @@ export function readControlToken(dataDir: string): TokenFile | null {
   }
 }
 
-/** True when the control plane appears to be up (socket + readable token). */
+/** Pipes have no filesystem entry; the actual connect establishes availability. */
+function hasControlEndpoint(socket: string): boolean {
+  return socket.startsWith('\\\\.\\pipe\\') || existsSync(socket);
+}
+
+/** True when the control plane appears to be up (endpoint + readable token). */
 export function isAppRunning(dataDir: string): boolean {
   const tok = readControlToken(dataDir);
-  return !!tok && existsSync(tok.socket);
+  return !!tok && hasControlEndpoint(tok.socket);
 }
 
 /**
@@ -76,7 +81,7 @@ export function isAppRunning(dataDir: string): boolean {
 export function callControlPlane(opts: ControlCallOpts): Promise<ControlClientResult> {
   return new Promise((resolve) => {
     const tok = readControlToken(opts.dataDir);
-    if (!tok || !existsSync(tok.socket)) {
+    if (!tok || !hasControlEndpoint(tok.socket)) {
       resolve({
         ok: false,
         code: 'APP_NOT_RUNNING',

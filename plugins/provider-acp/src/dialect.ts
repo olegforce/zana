@@ -104,7 +104,7 @@ export interface AcpClientRequestOutcome {
   delegation?: AcpDelegationReport;
 }
 
-/** The dialect of an agent with no side channels bb reads. */
+/** The dialect of an agent with no side channels zcc reads. */
 export const GENERIC_ACP_DIALECT: AcpDialect = { id: "acp" };
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ function cursorClassifyToolCall(
 }
 
 /**
- * `cursor/task` is Cursor's sub-agent report. bb answered it `-32601`
+ * `cursor/task` is Cursor's sub-agent report. zcc answered it `-32601`
  * ("unsupported method"), which is a protocol error for a request the agent
  * is entitled to send; an empty result acknowledges it. Cursor sends it once
  * the sub-agent has finished, so the report names the child and what it was
@@ -562,7 +562,7 @@ const DIALECT_IDS_BY_COMMAND: Readonly<Record<string, string>> = {
  * `grok` instance gets grok's dialect without declaring anything. Everything
  * else is generic, which answers nothing.
  *
- * Keying on the registration rather than on a bb provider id is deliberate:
+ * Keying on the registration rather than on a zcc provider id is deliberate:
  * the ACP plugin owns several providers and the same agent can be registered
  * under any id, so the dialect must not be a provider-id table.
  */

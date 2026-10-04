@@ -1,4 +1,6 @@
 import { floors, buildingHeight as heightForCount, cityLayout, projectPoint, BLOCK } from './model.js';
+import { cityCommuters, commuterPosition, commuterBus, busStop, harnessStyle } from './commuters.js';
+import { drawInterior } from './interior-scene.js';
 /** Canvas-only artwork; all meaning and keyboard interaction are supplied by React. */
 export function createCityRenderer(canvas, root) {
   const ctx = canvas.getContext('2d');
@@ -6,7 +8,11 @@ export function createCityRenderer(canvas, root) {
     return null;
   let projects = [], selected = '', width = 1120, height = 775, scale = 1, time = 0, motion = true, hitAreas = [], colors = {}, dpr = 1;
   let layout = cityLayout([]), originU = 0, originV = 0;
+  let commuterBuildings, commuters = [];
+  let interiorKey = '', enteredAt = 0, roomEnteredAt = 0, inside = false;
+  let backdrop, backdropCanvas;
   function refreshPalette() {
+    backdrop = undefined;
     const probe = document.createElement('span');
     root.appendChild(probe);
     for (const k of ['ground', 'groundside', 'groundfront', 'grass', 'lawn', 'path', 'curb', 'road', 'roadedge', 'stripe', 'tree', 'treebright', 'treedark', 'bark', 'water', 'waterdeep', 'sand', 'facade', 'facadelight', 'facadeside', 'roof', 'trim', 'glass', 'glassdark', 'glasslight', 'warm', 'warmbright', 'purple', 'blue', 'coral', 'mint', 'black', 'white', 'skin', 'shadow']) {
@@ -41,7 +47,17 @@ export function createCityRenderer(canvas, root) {
     const p = P(u + 5 + i * w / 3, v + d / 2, z + 8);
     ellipse(p[0], p[1], 7, 7, i % 2 ? 'tree' : 'treedark');
   } }
-  function person(u, v, c = 'purple', walk = false, z = 0) { const [x, y] = P(u, v, z), step = walk ? Math.sin(time * 8 + u) * 1.4 : 0; ellipse(x, y + 1, 5, 2, alpha('shadow', .18)); round(x - 3, y - 4 + step, 2.7, 6, 1, 'black'); round(x + 1, y - 4 - step, 2.7, 6, 1, 'black'); round(x - 5, y - 14, 10, 11, 3, c); round(x - 6, y - 12 + step, 2.5, 7, 1, 'skin'); round(x + 4, y - 12 - step, 2.5, 7, 1, 'skin'); round(x - 3.7, y - 21, 7.5, 8, 3, 'skin'); round(x - 4, y - 22, 8, 4, 2, 'black'); }
+  function person(u, v, c = 'purple', walk = false, z = 0, size = 1) {
+    const [x, y] = P(u, v, z), step = walk ? Math.sin(time * 8 + u) * 1.4 : 0;
+    ctx.save(); ctx.translate(x, y); ctx.scale(size, size);
+    ellipse(0, 1, 5, 2, alpha('shadow', .18));
+    round(-3, -4 + step, 2.7, 6, 1, 'black'); round(1, -4 - step, 2.7, 6, 1, 'black');
+    round(-5, -14, 10, 11, 3, c);
+    round(-6, -12 + step, 2.5, 7, 1, 'skin'); round(4, -12 - step, 2.5, 7, 1, 'skin');
+    round(-3.7, -21, 7.5, 8, 3, 'skin'); round(-4, -22, 8, 4, 2, 'black');
+    round(-2, -12, 4, 6, 1, 'glassdark');
+    ctx.restore();
+  }
   function lamp(u, v) { const [x, y] = P(u, v); ellipse(x + 3, y + 1, 5, 2, alpha('shadow', .14)); path([[x, y], [x, y - 34], [x + 7, y - 37]], 'black', 2); ellipse(x + 8, y - 36, 4, 2, 'warmbright'); const glow = ctx.createRadialGradient(x + 8, y - 32, 0, x + 8, y - 32, 16); glow.addColorStop(0, alpha('warm', .17)); glow.addColorStop(1, alpha('warm', 0)); ellipse(x + 8, y - 32, 16, 16, glow); }
   function bench(u, v) { prism(u, v, 29, 10, 4, 3, 'bark', 'bark', 'black'); prism(u, v + 8, 29, 3, 10, 6, 'bark', 'bark', 'bark'); prism(u + 3, v + 1, 3, 6, 5, 0, 'black', 'black', 'black'); prism(u + 23, v + 1, 3, 6, 5, 0, 'black', 'black', 'black'); }
   function faceWindow(u, v, w, z, h, lit, needs = false, side = false) {
@@ -60,12 +76,35 @@ export function createCityRenderer(canvas, root) {
     }
   }
   const buildingHeight = p => heightForCount(p.count);
+  function projectHouse(p) {
+    const { u, v, w, d } = p, home = 88, wall = 48, ridge = 70;
+    // A pitched-roof starter house, with a lower attached garage and driveway.
+    prism(u, v, home, d, 42, 6, 'sand', 'facade', 'facadeside');
+    polygon([P(u, v + d, wall), P(u + home, v + d, wall), P(u + home / 2, v + d, ridge)], 'sand');
+    polygon([P(u + home, v, wall), P(u + home, v + d, wall), P(u + home / 2, v + d, ridge), P(u + home / 2, v, ridge)], p.color);
+    polygon([P(u, v, wall), P(u, v + d, wall), P(u + home / 2, v + d, ridge), P(u + home / 2, v, ridge)], 'roof');
+    path([P(u + home / 2, v, ridge), P(u + home / 2, v + d, ridge)], 'trim', 2);
+    prism(u + 17, v + 19, 12, 13, 17, 59, 'bark', 'coral', 'bark');
+    faceWindow(u + 14, v + d + .2, 24, 20, 19, p.working > 0 || p.needs > 0, p.needs > 0);
+    const door = u + w * .42 + 15;
+    faceWindow(door - 10, v + d + .3, 20, 6, 29, false);
+    prism(door - 14, v + d, 28, 13, 3, 2, 'path', 'curb', 'curb');
+    prism(u + home, v + 28, w - home, d - 28, 30, 6, 'roof', 'sand', 'facadeside');
+    prism(u + home - 2, v + 26, w - home + 4, d - 26, 4, 36, p.color, 'trim', p.color);
+    faceWindow(u + home + 7, v + d + .3, w - home - 14, 6, 24, false);
+    for (let z = 10; z < 30; z += 5) path([P(u + home + 8, v + d + .5, z), P(u + w - 8, v + d + .5, z)], 'trim', 1);
+    plane(u + home + 4, v + d + 1, w - home - 8, 54, 4, 'path');
+    bush(u + 4, v + d + 6, 22, 12);
+    const pts = [P(u, v, 92), P(u + w, v, 42), P(u + w, v + d, 0), P(u, v + d, 0)];
+    hitAreas.push({ id: p.id, x: Math.min(...pts.map(p => p[0])), y: Math.min(...pts.map(p => p[1])), w: Math.max(...pts.map(p => p[0])) - Math.min(...pts.map(p => p[0])), h: Math.max(...pts.map(p => p[1])) - Math.min(...pts.map(p => p[1])) });
+  }
   function projectBuilding(p) {
     const { u, v, w, d } = p, f = floors(p.count), h = buildingHeight(p);
     groundShadow(u, v, w, d);
     if (selected === p.id)
       plane(u - 9, v - 9, w + 18, d + 18, 1, alpha(p.color, .20), alpha(p.color, .75), 2);
     prism(u - 2, v - 2, w + 4, d + 4, 6, 0, 'path', 'curb', 'curb');
+    if (p.form === 'house') { projectHouse(p); return; }
     prism(u, v, w, d, h, 6, 'roof', p.variant === 2 ? 'sand' : 'facade', p.variant === 1 ? 'glasslight' : 'facadeside');
     for (let n = 0; n < f; n++) {
       const z = 40 + n * 24;
@@ -207,6 +246,15 @@ export function createCityRenderer(canvas, root) {
       plane(p.u - 10, p.v - 10, 218, 211, 1, 'path');
       plane(p.u - 5, p.v - 5, 208, 201, 2, p.lot % 2 ? 'lawn' : 'grass');
     }
+    // Footpaths connect the transit frontage, each bus stop and each office entrance.
+    plane(146, layout.frontage + 47, 22, 122, 4, 'path');
+    for (const p of projects) {
+      const [door, stop] = busStop(p);
+      const sidewalk = Math.floor(p.u / BLOCK) * BLOCK + 49;
+      plane(sidewalk, p.v + p.d + 28, door - sidewalk + 7, 14, 4, 'path');
+      plane(door - 7, p.v + p.d + 14, 14, stop - p.v - p.d - 14, 4, 'path');
+      plane(door - 28, stop - 3, 55, 12, 5, 'sand');
+    }
     const objects = [];
     for (const p of projects)
       objects.push({ depth: p.u + p.v + (p.w + p.d) * .5, fn: () => projectBuilding(p) });
@@ -231,7 +279,7 @@ export function createCityRenderer(canvas, root) {
         const walking = member.status === 'working';
         const uu = u + (walking ? Math.sin(time * .65 + i) * 9 : 0);
         objects.push({ depth: uu + v, fn: () => {
-            person(uu, v, member.status === 'needs-you' || member.status === 'error' ? 'coral' : done ? 'mint' : p.color, walking && motion);
+            person(uu, v, harnessStyle(member.harness).color, walking && motion, 0, .9);
             const q = P(uu, v);
             if (member.status === 'needs-you') {
               round(q[0] - 4, q[1] - 35, 8, 10, 3, 'warm');
@@ -241,9 +289,26 @@ export function createCityRenderer(canvas, root) {
           } });
       });
     }
+    for (const c of commuters) {
+      const { point: [u, v], walking } = commuterPosition(c, time);
+      objects.push({ depth: u + v, fn: () => person(u, v, c.color, walking && motion, 4, .68) });
+    }
+    for (const p of projects) {
+      const [u, v] = busStop(p);
+      objects.push({ depth: u + v, fn: () => {
+        const q = P(u + 24, v, 4);
+        path([q, [q[0], q[1] - 24]], 'black', 1.5);
+        round(q[0] - 5, q[1] - 30, 10, 8, 2, 'blue');
+      } });
+      const bus = commuterBus(p, layout, time);
+      objects.push({ depth: bus.u + bus.v + 25, fn: () => {
+        car(bus.u, bus.v, 'blue', true);
+        if (bus.stopped) plane(bus.u + 20, bus.v + 23, 11, 6, 5, 'warm');
+      } });
+    }
     for (let row = 0; row <= layout.rows; row++) {
       const span = layout.width - 90, u = 10 + (time * 24 + row * 217) % span, v = row * BLOCK + 17;
-      objects.push({ depth: u + v + 25, fn: () => car(u, v, row % 2 ? 'blue' : 'coral', row === layout.rows) });
+      objects.push({ depth: u + v + 25, fn: () => car(u, v, row % 2 ? 'mint' : 'coral') });
     }
     objects.sort((a, b) => a.depth - b.depth);
     for (const o of objects)
@@ -257,7 +322,8 @@ export function createCityRenderer(canvas, root) {
   refreshPalette();
   return {
     refreshPalette,
-    draw(buildings, selection, elapsed, animate) {
+    dispose() { if (backdropCanvas) backdropCanvas.width = backdropCanvas.height = 0; backdropCanvas = undefined; backdrop = undefined; },
+    draw(buildings, selection, elapsed, animate, interior) {
       projects = buildings;
       selected = selection;
       time = elapsed;
@@ -266,15 +332,41 @@ export function createCityRenderer(canvas, root) {
       height = canvas.clientHeight || width * 775 / 1120;
       scale = 1;
       layout = cityLayout(buildings, width, height);
+      if (commuterBuildings !== buildings) {
+        commuters = cityCommuters(buildings, layout);
+        commuterBuildings = buildings;
+      }
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
         canvas.width = Math.round(width * dpr);
         canvas.height = Math.round(height * dpr);
       }
-      renderCity();
+      // The exterior is a still backdrop indoors, not a second animated city.
+      if (interior && backdrop?.buildings === buildings && backdrop.selection === selection && backdrop.width === width && backdrop.height === height && backdrop.dpr === dpr) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(backdropCanvas, 0, 0, width, height);
+      } else {
+        renderCity();
+        if (interior) {
+          backdropCanvas ??= document.createElement('canvas');
+          backdropCanvas.width = canvas.width; backdropCanvas.height = canvas.height;
+          const copy = backdropCanvas.getContext('2d');
+          if (copy) { copy.drawImage(canvas, 0, 0); backdrop = { buildings, selection, width, height, dpr }; }
+        } else {
+          backdrop = undefined;
+          if (backdropCanvas) { backdropCanvas.width = backdropCanvas.height = 0; backdropCanvas = undefined; }
+        }
+      }
+      inside = !!interior;
+      if (interior) {
+        if (interiorKey !== interior.building.id) { enteredAt = elapsed; roomEnteredAt = elapsed; interiorKey = interior.building.id; }
+        if (!animate) enteredAt = elapsed - .75;
+        const entrance = animate ? Math.min(1, Math.max(0, (elapsed - enteredAt) / .75)) : 1;
+        hitAreas = drawInterior(ctx, interior, width, height, elapsed - roomEnteredAt, animate, colors, entrance);
+      } else interiorKey = '';
     },
     hit(x, y) {
-      const worldX = (x / scale - layout.x) / layout.scale, worldY = (y / scale - layout.y) / layout.scale;
+      const worldX = inside ? x : (x / scale - layout.x) / layout.scale, worldY = inside ? y : (y / scale - layout.y) / layout.scale;
       const a = [...hitAreas].reverse().find((a) => worldX >= a.x && worldX <= a.x + a.w && worldY >= a.y && worldY <= a.y + a.h);
       return a?.id;
     }

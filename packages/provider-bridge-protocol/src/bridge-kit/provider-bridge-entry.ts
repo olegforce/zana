@@ -1,7 +1,7 @@
 /**
  * The bridge export shape.
  *
- * A provider bridge is a module inside its plugin's `bb.host` artifact that
+ * A provider bridge is a module inside its plugin's `zcc.host` artifact that
  * *exports* its surface instead of starting itself: the daemon-side bootstrap
  * imports the artifact, finds this export, and owns the process boundary
  * (argv, plugin-scoped directories, stdin framing, signals). That inversion is

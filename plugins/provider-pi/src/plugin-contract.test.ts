@@ -15,7 +15,7 @@ describe('provider-pi plugin', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
     const manifest = readPluginManifest(pkg);
     expect(derivePluginId(pkg.name)).toBe('provider-pi');
-    expect(manifest.serverEntry).toBe('./server.mjs');
+    expect(manifest.serverEntry).toBe('./server.ts');
     expect(manifest.appEntry).toBe('./app.tsx');
     expect(manifest.extra.threadProvider).toBe(true);
   });

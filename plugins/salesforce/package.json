@@ -20,6 +20,7 @@
       "icon": "Cloud"
     },
     "server": "./server.ts",
+    "extra": { "runtimeAssets": ["playground/dist"] },
     "app": "./app.js",
     "skills": [
       "skills"

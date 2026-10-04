@@ -174,7 +174,7 @@ async function waitForTransientAuthRetry(): Promise<void> {
 
 /**
  * Wraps the Pi programmatic SDK (`@earendil-works/pi-coding-agent`) in a
- * session object that bridges between the BB JSON-RPC protocol and
+ * session object that bridges between the ZCC JSON-RPC protocol and
  * the Pi agent's event-driven API.
  */
 export class PiSdkSession {
@@ -491,7 +491,7 @@ export class PiSdkSession {
 
     for (const queuedText of addedQueuedTexts) {
       // Pi queue_update exposes SDK-transformed text, so correlate by FIFO queue
-      // additions rather than by the raw BB steer text.
+      // additions rather than by the raw ZCC steer text.
       const pending = this.pendingSteerConsumptions.find(
         (entry) => entry.queuedText === null,
       );
@@ -696,7 +696,7 @@ type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
  *
  * A bare provider-native model id (`deepseek/deepseek-v4-flash-0731`) resolves
  * only when the first segment names no provider that serves the rest. CLI and
- * SDK callers type that form, and selections stored before bb applied the
+ * SDK callers type that form, and selections stored before zcc applied the
  * provider prefix to aggregator models still use it. Two providers can list the
  * same id. When exactly one matching provider has configured credentials, that
  * provider is the only usable match. Otherwise, nothing in the string says

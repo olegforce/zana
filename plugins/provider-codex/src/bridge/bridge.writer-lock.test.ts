@@ -21,8 +21,8 @@ const FULL_ACCESS_SESSION_OPTIONS = {
   permissionMode: "full", permissionScope: "full", approvalReviewer: null, permissionEscalation: null
 } as const;
 function stubFakeCodexAppServer(scriptPath: string): void {
-  vi.stubEnv("BB_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
-  vi.stubEnv("BB_CODEX_BRIDGE_APP_SERVER_ARGS", JSON.stringify([
+  vi.stubEnv("ZCC_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
+  vi.stubEnv("ZCC_CODEX_BRIDGE_APP_SERVER_ARGS", JSON.stringify([
     fileURLToPath(new URL("./fake-codex-app-server.mjs", import.meta.url)), scriptPath
   ]));
 }

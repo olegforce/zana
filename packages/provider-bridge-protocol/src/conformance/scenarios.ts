@@ -33,7 +33,7 @@ export interface ConformanceSessionFixture {
   promptInput: PromptInput[];
   /**
    * A prompt this provider accepts and completes locally, without producing
-   * any of the activity that opens a bb turn — Claude Code's `/clear` is the
+   * any of the activity that opens a zcc turn — Claude Code's `/clear` is the
    * canonical example (#1431). Opting in enables
    * `turn/settles-without-activity`.
    *
@@ -54,12 +54,12 @@ export interface ConformanceSessionFixture {
   /** Execution options for the session; the kit defaults to full mode. */
   options?: Record<string, unknown>;
   /**
-   * The plugin's declared icons (`bb.branding.experimental_icons`): its
+   * The plugin's declared icons (`zcc.branding.experimental_icons`): its
    * plugin id and the declared names. Opting in enables
    * `presentation/icon-namespaced-declared`, which fails when any item's
    * `presentation.icon.glyph` is a namespaced glyph (`"<pluginId>/<name>"`)
    * that names another plugin or an undeclared name — what the server
-   * would refuse at ingest with `provider/unhandled`. A `server: "bb"` tool
+   * would refuse at ingest with `provider/unhandled`. A `server: "zcc"` tool
    * row is not inspected: its presentation came from the plugin that
    * registered the tool, and the server checks it against that plugin. A
    * fixture that omits `icons` produces no result for the rule, like the
@@ -73,7 +73,7 @@ interface ScenarioContext {
   client: ConformanceClient;
   fixture: ConformanceSessionFixture;
   /**
-   * The provider-native turn id behind an assembled bb turn id, for the
+   * The provider-native turn id behind an assembled zcc turn id, for the
    * command-plane requests that name a turn (`thread/stop { interrupt }`):
    * the kit's own assembler answers from its reverse map.
    */
@@ -211,14 +211,14 @@ const PRESENTATION_ICONS_DECLARED_TITLE =
 /**
  * presentation/icon-namespaced-declared: an item's `presentation.icon.glyph`
  * of the form `"<pluginId>/<name>"` must name one of the emitting plugin's
- * own declared icons (`bb.branding.experimental_icons`); the server refuses
+ * own declared icons (`zcc.branding.experimental_icons`); the server refuses
  * any other at ingest and persists the item as `provider/unhandled`. Host
- * glyphs (no "/") are not checked here. Neither is a `server: "bb"` tool
+ * glyphs (no "/") are not checked here. Neither is a `server: "zcc"` tool
  * row (a call to a tool another plugin registered through
- * `bb.agents.registerTool`): the bridge stamps the presentation the server
+ * `zcc.agents.registerTool`): the bridge stamps the presentation the server
  * handed it for that tool, and the server checks that glyph against the
  * tool's own plugin rather than this one, so such a row is exempt here too
- * (the kit never injects bb tools in any case). Every event carrying a full
+ * (the kit never injects zcc tools in any case). Every event carrying a full
  * item is inspected — the thread-scoped `item/delegation/*` and
  * `item/backgroundTask/*` snapshots as much as the turn-scoped open/close
  * pair — since a background item's terminal presentation travels only on
@@ -237,7 +237,7 @@ export function checkPresentationIconsDeclared(
     if (!isThreadEventWithItem(event)) {
       continue;
     }
-    if (event.item.type === "toolCall" && event.item.server === "bb") {
+    if (event.item.type === "toolCall" && (event.item.server === "zcc" || event.item.server === "bb")) {
       continue;
     }
     const glyph =
@@ -1067,7 +1067,7 @@ const INTERRUPT_SETTLES_TITLE =
  * is released; `runtime.codex-topology.test.ts` pins that half for codex).
  *
  * Runs last, before the run's closing release. Only when the fixture names
- * an interruptible prompt; the kit reverse-maps the bb turn id through its
+ * an interruptible prompt; the kit reverse-maps the zcc turn id through its
  * own assembler.
  */
 async function runInterruptStopScenario(
@@ -1124,7 +1124,7 @@ async function runInterruptStopScenario(
   }
   const bbTurnId = started.scope.turnId;
   // The same reverse mapping the runtime applies: a bridge whose turns carry
-  // no provider id (pi opens a turn on agent_start) gets the bb id back.
+  // no provider id (pi opens a turn on agent_start) gets the zcc id back.
   const providerTurnId =
     context.resolveProviderTurnId(threadId, bbTurnId) ?? bbTurnId;
 
@@ -1329,10 +1329,10 @@ const SETTLES_WITHOUT_ACTIVITY_TITLE =
 
 /**
  * turn/settles-without-activity: a provider may accept a prompt and finish it
- * without emitting any of the ordinary activity that opens a bb turn — Claude
+ * without emitting any of the ordinary activity that opens a zcc turn — Claude
  * Code answers `/clear` locally with a bare success result (#1431). The turn
  * must still reach a terminal `turn/completed`. Without one the thread stays
- * active forever: `bb thread wait --status idle` hangs and accepted input
+ * active forever: `zcc thread wait --status idle` hangs and accepted input
  * queued behind the abandoned turn never drains.
  *
  * Runs last so the turn it adds cannot perturb the ordinal expectations of the

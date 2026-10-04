@@ -843,7 +843,7 @@ function createRuntimeProcessEnv(
     return undefined;
   }
 
-  const sessionDir = join(args.tmpDir, ".bb-pi-bridge-sessions");
+  const sessionDir = join(args.tmpDir, ".zcc-pi-bridge-sessions");
   mkdirSync(sessionDir, { recursive: true });
   return {
     [PI_BRIDGE_SESSION_DIR_ENV]: sessionDir,

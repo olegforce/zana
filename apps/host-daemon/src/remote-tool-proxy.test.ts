@@ -59,13 +59,13 @@ describe('remote tool proxy helpers', () => {
   });
 
   it('tells Claude Code the MCP-prefixed remote tool names', () => {
-    expect(REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__bb-bridge__remote_read/);
-    expect(REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__bb-bridge__remote_exec/);
+    expect(REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__zcc__remote_read/);
+    expect(REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__zcc__remote_exec/);
   });
 
   it('tells a local CLI the zcc-inbox remote tool names', () => {
     expect(CLI_REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__zcc-inbox__remote_read/);
     expect(CLI_REMOTE_TOOL_PROXY_INSTRUCTIONS).toMatch(/mcp__zcc-inbox__remote_exec/);
-    expect(CLI_REMOTE_TOOL_PROXY_INSTRUCTIONS).not.toMatch(/mcp__bb-bridge__/);
+    expect(CLI_REMOTE_TOOL_PROXY_INSTRUCTIONS).not.toMatch(/mcp__zcc__/);
   });
 });

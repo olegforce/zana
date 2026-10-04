@@ -267,13 +267,13 @@ function sendRuntimeRequest(
   return responsePromise;
 }
 
-const CODEX_APP_SERVER_COMMAND_ENV = "BB_CODEX_BRIDGE_APP_SERVER_COMMAND";
-const CODEX_APP_SERVER_ARGS_ENV = "BB_CODEX_BRIDGE_APP_SERVER_ARGS";
+const CODEX_APP_SERVER_COMMAND_ENV = "ZCC_CODEX_BRIDGE_APP_SERVER_COMMAND";
+const CODEX_APP_SERVER_ARGS_ENV = "ZCC_CODEX_BRIDGE_APP_SERVER_ARGS";
 const CODEX_POOL_BASE_URL_ENV = "CODEX_OPENAI_BASE_URL";
 const CODEX_POOL_AUTH_TOKEN_ENV = "CODEX_POOL_AUTH_TOKEN";
 
 const CODEX_INITIALIZE_PARAMS = {
-  clientInfo: { name: "bb", version: "1.0.0", title: null },
+  clientInfo: { name: "zcc", version: "1.0.0", title: null },
   capabilities: { experimentalApi: true },
 };
 
@@ -332,14 +332,14 @@ async function delay(ms: number): Promise<void> {
   });
 }
 const MISSING_CODEX_CLI_GUIDANCE =
-  "bb could not find the Codex CLI on this machine. Install Codex (https://developers.openai.com/codex/cli) or put `codex` on PATH, then retry.";
+  "ZCC could not find the Codex CLI on this machine. Install Codex (https://developers.openai.com/codex/cli) or put `codex` on PATH, then retry.";
 
 export function resolveAppServerLaunch(env: NodeJS.ProcessEnv = process.env): {
   command: string;
   args: string[];
 } {
-  const command = env[CODEX_APP_SERVER_COMMAND_ENV];
-  const rawArgs = env[CODEX_APP_SERVER_ARGS_ENV];
+  const command = env[CODEX_APP_SERVER_COMMAND_ENV] ?? env.BB_CODEX_BRIDGE_APP_SERVER_COMMAND;
+  const rawArgs = env[CODEX_APP_SERVER_ARGS_ENV] ?? env.BB_CODEX_BRIDGE_APP_SERVER_ARGS;
   const args = command
     ? rawArgs
       ? z.array(z.string()).parse(JSON.parse(rawArgs))
@@ -355,19 +355,19 @@ export function resolveAppServerLaunch(env: NodeJS.ProcessEnv = process.env): {
       "-c",
       `openai_base_url=${JSON.stringify(poolBaseUrl)}`,
       "-c",
-      'model_provider="bb-account-pool"',
+      'model_provider="zcc-account-pool"',
       "-c",
-      'model_providers.bb-account-pool.name="OpenAI"',
+      'model_providers.zcc-account-pool.name="OpenAI"',
       "-c",
-      `model_providers.bb-account-pool.base_url=${JSON.stringify(poolBaseUrl)}`,
+      `model_providers.zcc-account-pool.base_url=${JSON.stringify(poolBaseUrl)}`,
       "-c",
-      'model_providers.bb-account-pool.wire_api="responses"',
+      'model_providers.zcc-account-pool.wire_api="responses"',
       "-c",
-      "model_providers.bb-account-pool.requires_openai_auth=true",
+      "model_providers.zcc-account-pool.requires_openai_auth=true",
       "-c",
-      "model_providers.bb-account-pool.supports_websockets=false",
+      "model_providers.zcc-account-pool.supports_websockets=false",
       "-c",
-      'model_providers.bb-account-pool.env_http_headers.x-bb-account-pool-token="CODEX_POOL_AUTH_TOKEN"',
+      'model_providers.zcc-account-pool.env_http_headers.x-bb-account-pool-token="CODEX_POOL_AUTH_TOKEN"',
     ],
   };
 }

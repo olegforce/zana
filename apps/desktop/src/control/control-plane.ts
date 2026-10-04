@@ -848,13 +848,22 @@ export async function dispatchOp(
   }
 }
 
+/** Select the OS transport while keeping each data directory isolated. */
+export function controlSocketAddress(socketPath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return socketPath;
+  // Pipes have no filesystem entry. Hash the isolated data-dir path so two
+  // desktop instances never share an endpoint; token + nonce still authorize.
+  return `\\\\.\\pipe\\zcc-control-${createHash('sha256').update(socketPath).digest('hex')}`;
+}
+
 /**
- * Start the control plane. Mints a fresh token + nonce, writes the token
- * `0600`, unlinks any stale socket, and binds. The nonce is returned (and held
- * in-memory) — the token file carries it too so the CLI sends both back.
+ * Start the control plane with a private token file and fresh nonce. The file
+ * publishes the bound Unix socket or Windows pipe address to local clients.
  */
 export async function startControlPlane(opts: ControlPlaneOptions): Promise<ControlPlaneHandle> {
   const log = opts.log ?? (() => {});
+  const socketPath = controlSocketAddress(opts.socketPath);
+  const socketIsFile = process.platform !== 'win32';
   const token = randomBytes(32).toString('hex');
   const nonce = randomBytes(16).toString('hex');
 
@@ -867,7 +876,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
   const dir = dirname(opts.tokenPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmpToken = `${opts.tokenPath}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  writeFileSync(tmpToken, JSON.stringify({ token, nonce, socket: opts.socketPath }), {
+  writeFileSync(tmpToken, JSON.stringify({ token, nonce, socket: socketPath }), {
     mode: 0o600
   });
   chmodSync(tmpToken, 0o600);
@@ -875,7 +884,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
 
   // A stale socket from an unclean shutdown would make listen() EADDRINUSE.
   try {
-    if (existsSync(opts.socketPath)) rmSync(opts.socketPath);
+    if (socketIsFile && existsSync(socketPath)) rmSync(socketPath);
   } catch {
     /* best-effort */
   }
@@ -905,11 +914,11 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(opts.socketPath, () => {
+    server.listen(socketPath, () => {
       server.off('error', reject);
       // Defense in depth: socket file owner-only.
       try {
-        chmodSync(opts.socketPath, 0o600);
+        if (socketIsFile) chmodSync(socketPath, 0o600);
       } catch {
         /* not all platforms honor socket perms; dir 0700 still gates */
       }
@@ -917,7 +926,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     });
   });
 
-  log(`[control] listening on ${opts.socketPath}`);
+  log(`[control] listening on ${socketPath}`);
 
   return {
     nonce,
@@ -933,7 +942,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
       }
       liveSockets.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      for (const p of [opts.socketPath, opts.tokenPath]) {
+      for (const p of [...(socketIsFile ? [socketPath] : []), opts.tokenPath]) {
         try {
           if (existsSync(p)) rmSync(p);
         } catch {

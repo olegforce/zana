@@ -143,7 +143,7 @@ for (const providerId of providers) {
       const workspacePath = mkdtempSync(
         join(tmpdir(), `bb-integ-skill-${providerId}-`),
       );
-      const token = `BB_SKILL_TOKEN_${randomUUID()
+      const token = `ZCC_SKILL_TOKEN_${randomUUID()
         .replaceAll("-", "")
         .toUpperCase()}`;
       const skillRoot = createProviderSkillRoot({

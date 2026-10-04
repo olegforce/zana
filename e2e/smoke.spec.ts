@@ -49,14 +49,25 @@ test('app boots: renderer mounts and the IPC bridge is live', async ({ app }) =>
   expect(Array.isArray(projects), 'projects.list() must round-trip via the server runtime').toBe(true);
 });
 
+test('native modules resolve from Electron ESM main', async ({ app }) => {
+  const native = await app.electron.evaluate(({ app }) => {
+    const { join } = process.getBuiltinModule('node:path');
+    const { createRequire } = process.getBuiltinModule('node:module');
+    const { execFileSync } = process.getBuiltinModule('node:child_process');
+    const appRequire = createRequire(join(app.getAppPath(), 'package.json'));
+    return { spawn: typeof appRequire('node-pty').spawn, execFileSync: typeof execFileSync };
+  });
+  expect(native).toEqual({ spawn: 'function', execFileSync: 'function' });
+});
+
 test.describe('Windows package native binaries', () => {
   test.skip(process.platform !== 'win32' || !process.env.ZCC_E2E_EXECUTABLE_PATH,
     'Runs against the Windows release package');
   test('packaged Windows app ships working OpenCode and ConPTY binaries', async ({ app }) => {
     const result = await app.electron.evaluate(async ({ app }) => {
-      const { join } = require('node:path');
-      const { createRequire } = require('node:module');
-      const { execFileSync } = require('node:child_process');
+      const { join } = process.getBuiltinModule('node:path');
+      const { createRequire } = process.getBuiltinModule('node:module');
+      const { execFileSync } = process.getBuiltinModule('node:child_process');
       const packagedRequire = createRequire(join(app.getAppPath(), 'package.json'));
       const version = execFileSync(join(process.resourcesPath, 'opencode', process.arch, 'opencode.exe'),
         ['--version'], { encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024, windowsHide: true }).trim();

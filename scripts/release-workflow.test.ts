@@ -11,16 +11,29 @@ describe('Windows release pipeline', () => {
     for (const [job, gate] of [['build', 'Verify packaged plugin authoring'], ['build-windows', 'Verify packaged Windows plugin authoring']]) {
       const steps = workflow.jobs[job].steps;
       const gateIndex = steps.findIndex((step: any) => step.name === gate);
-      const uploadIndex = steps.findIndex((step: any) => step.uses?.startsWith('actions/upload-artifact@'));
+      const uploadIndex = steps.findIndex((step: any) => step.name === (job === 'build' ? 'Upload artifact' : 'Upload Windows artifacts'));
       expect(gateIndex).toBeGreaterThan(0);
       expect(gateIndex).toBeLessThan(uploadIndex);
       expect(steps[gateIndex].run).toContain('e2e/plugin-authoring-live.spec.ts');
+      expect(steps[gateIndex].run).toContain('e2e/packaged-provider-startup.spec.ts');
       expect(steps[gateIndex]['continue-on-error']).toBeUndefined();
     }
     const mac = workflow.jobs.build.steps.find((step: any) => step.name === 'Verify packaged plugin authoring');
     expect(mac.run).toContain('ZCC_E2E_EXECUTABLE_PATH="$APP_PATH"');
+    expect(mac.run).toContain('e2e/smoke.spec.ts');
     const windows = workflow.jobs['build-windows'].steps.find((step: any) => step.name === 'Verify packaged Windows plugin authoring');
     expect(windows.env.ZCC_E2E_EXECUTABLE_PATH).toContain('win-unpacked');
+  });
+
+  it('retains packaged test diagnostics for each Mac architecture without uploading release assets on failure', () => {
+    const steps = workflow.jobs.build.steps;
+    const report = steps.find((step: any) => step.name === 'Upload Playwright report on failure');
+    expect(report.if).toBe('failure()');
+    expect(report.with.name).toBe('mac-${{ matrix.arch }}-packaged-playwright-report');
+    expect(report.with.path.split('\n')).toContain('e2e/.artifacts');
+    const artifacts = steps.find((step: any) => step.name === 'Upload artifact');
+    expect(artifacts.if).toBeUndefined();
+    expect(artifacts['continue-on-error']).toBeUndefined();
   });
   it('gates draft publication on both Mac and Windows builds', () => {
     expect(workflow.jobs.release.needs).toEqual(['build', 'build-windows']);

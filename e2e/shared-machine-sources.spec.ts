@@ -221,21 +221,26 @@ test('one built Zana shares a project across two real daemon processes and two c
     const removed = await app.window.evaluate(() => window.cc.pluginApps.remove('machine-proof'));
     expect(removed, JSON.stringify(removed) + appStderr).toMatchObject({ ok: true });
     await expect.poll(() => [home, machineHome].every(root => existsSync(join(root, 'plugin-disposed')))).toBe(true);
-    // Drive the real browser Explorer, including Monaco and the save boundary.
+    // The project fixes Explorer's target, even with extra backend sources.
     const heading = browser.getByTestId('sidebar-projects-heading');
     if (await heading.getAttribute('aria-expanded') === 'false') await heading.click();
     await browser.getByRole('button', { name: 'Open checkout-a', exact: true }).click();
     await browser.getByTestId('project-nav-explorer').click();
-    await browser.getByRole('combobox', { name: 'Explorer machine' }).selectOption(grant.hostId);
+    await expect(browser.getByRole('combobox', { name: 'Explorer machine' })).toHaveCount(0);
+    await expect.poll(() => browser.locator('.explorer-view').evaluate(surface => {
+      const body = surface.parentElement!.getBoundingClientRect();
+      const explorer = surface.getBoundingClientRect();
+      return Math.abs(body.width - explorer.width);
+    })).toBeLessThanOrEqual(2);
     await browser.locator('.tree-row.file').filter({ hasText: 'owner.txt' }).click();
     const editor = browser.locator('.explorer-viewer-monaco .monaco-editor');
-    await expect(editor).toContainText('machine-b-edited');
+    await expect(editor).toContainText('machine-a-edited');
     const textbox = editor.getByRole('textbox');
     await textbox.focus(); await textbox.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-    await browser.keyboard.insertText('machine-b-ui');
+    await browser.keyboard.insertText('machine-a-ui');
     await browser.getByTitle('Save (⌘S)', { exact: true }).click();
-    await expect.poll(() => readFileSync(join(rootB, 'owner.txt'), 'utf8')).toBe('machine-b-ui');
-    expect(readFileSync(join(rootA, 'owner.txt'), 'utf8')).toBe('machine-a-edited');
+    await expect.poll(() => readFileSync(join(rootA, 'owner.txt'), 'utf8')).toBe('machine-a-ui');
+    expect(readFileSync(join(rootB, 'owner.txt'), 'utf8')).toBe('machine-b-edited');
     await expect(browser.locator('.explorer-viewer .opener-bar')).toHaveCount(0);
     const library = await request(browser, '/library');
     expect(library.status).toBe(200);
@@ -252,12 +257,12 @@ test('one built Zana shares a project across two real daemon processes and two c
     const pluginFile = { path: 'owner.txt', source: { kind: 'workspace', projectId, hostId: grant.hostId, environmentId: null, threadId: null } };
     const pluginRead = await request(browser, '/plugin-apps/monaco-editor/rpc', { method: 'read', args: pluginFile });
     expect(pluginRead.status, JSON.stringify(pluginRead.body)).toBe(200);
-    expect(pluginRead.body.value).toMatchObject({ kind: 'text', content: 'machine-b-ui' });
+    expect(pluginRead.body.value).toMatchObject({ kind: 'text', content: 'machine-b-edited' });
     const pluginSave = { method: 'write', args: { ...pluginFile, content: 'machine-b-plugin', expectedSha256: pluginRead.body.value.sha256 } };
     expect((await request(browser, '/plugin-apps/monaco-editor/rpc', pluginSave)).body.value).toMatchObject({ outcome: 'written' });
     expect((await request(browser, '/plugin-apps/monaco-editor/rpc', pluginSave)).body.value).toMatchObject({ outcome: 'conflict' });
     expect(readFileSync(join(rootB, 'owner.txt'), 'utf8')).toBe('machine-b-plugin');
-    expect(readFileSync(join(rootA, 'owner.txt'), 'utf8')).toBe('machine-a-edited');
+    expect(readFileSync(join(rootA, 'owner.txt'), 'utf8')).toBe('machine-a-ui');
     symlinkSync(rootA, join(rootB, 'escape'));
     const escaped = await request(browser, '/fs/read', { path: join(realpathSync(rootB), 'escape/owner.txt'), scope: { projectId, hostId: grant.hostId } });
     expect(escaped.body.ok).not.toBe(true);
@@ -280,9 +285,26 @@ test('one built Zana shares a project across two real daemon processes and two c
       mkdirSync(join(rootB, '.zcc', kind), { recursive: true });
       writeFileSync(join(rootB, '.zcc', kind, 'fixture.json'), JSON.stringify(value));
     }
-    const foreign = await request(browser, '/projects', { path: rootB, hostId: grant.hostId });
+    // The directory picker returns a canonical host path. Match that contract
+    // instead of registering macOS's /var alias for its /private/var directory.
+    const foreign = await request(browser, '/projects', { path: realpathSync(rootB), hostId: grant.hostId });
     expect(foreign.status, JSON.stringify(foreign.body)).toBe(200);
     const foreignId = foreign.body.project.id;
+    // A separately registered remote project browses its own checkout without
+    // asking the user to select a machine inside Explorer.
+    await browser.evaluate(id => {
+      history.pushState({}, '', `/projects/${encodeURIComponent(id)}/explorer`);
+      dispatchEvent(new PopStateEvent('popstate'));
+    }, foreignId);
+    await expect(browser.getByRole('combobox', { name: 'Explorer machine' })).toHaveCount(0);
+    await browser.locator('.tree-row.file').filter({ hasText: 'owner.txt' }).click();
+    await expect(editor).toContainText('machine-b-plugin');
+    await editor.getByRole('textbox').focus();
+    await editor.getByRole('textbox').press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    await browser.keyboard.insertText('machine-b-ui');
+    await browser.getByTitle('Save (⌘S)', { exact: true }).click();
+    await expect.poll(() => readFileSync(join(rootB, 'owner.txt'), 'utf8')).toBe('machine-b-ui');
+    expect(readFileSync(join(rootA, 'owner.txt'), 'utf8')).toBe('machine-a-ui');
     // Deferred Team execution must reject before reading goal sources or
     // reserving workers, even when the foreign path exists on this desktop.
     await app.window.evaluate(async () => {

@@ -62,7 +62,7 @@ async function listenFakeBridge(args: {
   return { port: address.port, server, requests };
 }
 
-async function connectLikeOpenCode(port: number): Promise<Client> {
+async function connectLikeOpenCode(port: number, legacy = false): Promise<Client> {
   const config = buildAcpMcpServerConfig({
     bridgeArgs: [
       "--conditions=source",
@@ -89,8 +89,11 @@ async function connectLikeOpenCode(port: number): Promise<Client> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
-  for (const { name, value } of config.env) env[name] = value;
-  env.BB_ACP_DYNAMIC_TOOL_PROGRESS_INTERVAL_MS = "200";
+  for (const { name, value } of config.env) {
+    env[legacy ? name.replace(/^ZCC_/, "BB_") : name] = value;
+    if (legacy) delete env[name];
+  }
+  env.ZCC_ACP_DYNAMIC_TOOL_PROGRESS_INTERVAL_MS = "200";
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
@@ -100,13 +103,21 @@ async function connectLikeOpenCode(port: number): Promise<Client> {
   const client = new Client({ name: "opencode-like", version: "0" });
   await client.connect(transport);
   transport.stderr?.on("data", (chunk: Buffer) => {
-    process.stderr.write(`[bb-bridge mcp] ${chunk.toString()}`);
+    process.stderr.write(`[zcc mcp] ${chunk.toString()}`);
   });
   cleanups.push(() => client.close());
   return client;
 }
 
-describe("bb-bridge MCP server keeps long tool calls alive", () => {
+describe("zcc MCP server keeps long tool calls alive", () => {
+  it("accepts an existing proxy's legacy environment without exposing an old server name", async () => {
+    const fakeBridge = await listenFakeBridge({ responseDelayMs: 0 });
+    const client = await connectLikeOpenCode(fakeBridge.port, true);
+    expect(client.getServerVersion()?.name).toBe("zcc");
+    const result = await client.callTool({ name: "AskUserQuestion", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(fakeBridge.requests).toEqual([expect.objectContaining({ token: "secret-token", threadId: "thread-ask", tool: "AskUserQuestion" })]);
+  }, 20_000);
   it("sends progress notifications so an OpenCode-style client does not time out while the user answers", async () => {
     const fakeBridge = await listenFakeBridge({ responseDelayMs: 2_500 });
     const client = await connectLikeOpenCode(fakeBridge.port);

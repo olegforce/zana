@@ -37,7 +37,7 @@ export interface BuiltInThemeMeta {
  * is just the id/name/description list the server validates against.
  */
 export const builtInThemes: readonly BuiltInThemeMeta[] = [
-  { id: "default", name: "Default", description: "The standard bb look" },
+  { id: "default", name: "Default", description: "The standard ZCC look" },
   { id: "nord", name: "Nord", description: "Cool, muted arctic blues" },
   {
     id: "dracula",

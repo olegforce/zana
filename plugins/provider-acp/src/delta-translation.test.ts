@@ -123,7 +123,7 @@ function completedItems(events: ThreadEvent[]) {
 
 describe("acp delta translation (bridge-shared invariants)", () => {
   // Historical fix 0c2f4cc9a: an update arriving after turn completion must
-  // not fabricate a fresh bb turn. A synthetic turn/started here would open a
+  // not fabricate a fresh zcc turn. A synthetic turn/started here would open a
   // turn that never completes, wedging the thread.
   it("does not synthesize a turn for updates that arrive after turn completion", () => {
     const harness = createHarness();
@@ -1836,7 +1836,7 @@ describe("acp delta translation (native kinds → core kinds)", () => {
 });
 
 /**
- * Q31: a call to a bb-injected tool reads as that tool (`server: "bb"`, the
+ * Q31: a call to a zcc-injected tool reads as that tool (`server: "zcc"`, the
  * definition's presentation). ACP gives the bridge no id linking the MCP
  * proxy's call to the agent's own tool_call, so the binding is positional.
  */
@@ -1963,7 +1963,7 @@ describe("acp delta translation (raw payloads and real results)", () => {
     expect(streamed).toEqual([]);
   });
 
-  // A bare string rawOutput IS the output. No agent bb has read the wire for
+  // A bare string rawOutput IS the output. No agent zcc has read the wire for
   // sends one, which is why refusing it would narrow generality for free.
   it("streams a running command's bare-string rawOutput", () => {
     const harness = startedHarness();
@@ -2387,7 +2387,7 @@ describe("acp delta translation (raw payloads and real results)", () => {
 
     const bound = harness.translator.notePermissionToolCall(THREAD_ID, {
       toolCallId: "call-mcp",
-      title: "bb-bridge-AskUserQuestion: AskUserQuestion",
+      title: "zcc-AskUserQuestion: AskUserQuestion",
       kind: "other",
       rawInput: { question: "Which one?" },
     });
@@ -2408,7 +2408,7 @@ describe("acp delta translation (raw payloads and real results)", () => {
         type: "toolCall",
         tool: "other",
         arguments: { question: "Which one?" },
-        presentation: { title: "bb-bridge-AskUserQuestion: AskUserQuestion" },
+        presentation: { title: "zcc-AskUserQuestion: AskUserQuestion" },
       },
     });
   });
@@ -2792,7 +2792,7 @@ describe("acp delta translation (dialects)", () => {
     });
   });
 
-  // A bb-injected tool call is bb's own, whatever the dialect thinks.
+  // A zcc-injected tool call is zcc's own, whatever the dialect thinks.
   it("keeps a bb-injected tool binding ahead of the dialect", () => {
     const harness = dialectHarness("cursor");
     harness.translator.configureInjectedTools([{ name: "AskUserQuestion" }]);
@@ -2810,7 +2810,7 @@ describe("acp delta translation (dialects)", () => {
       )[0],
     ).toMatchObject({
       type: "item/started",
-      item: { type: "toolCall", tool: "AskUserQuestion", server: "bb" },
+      item: { type: "toolCall", tool: "AskUserQuestion", server: "zcc" },
     });
   });
 });
@@ -2870,7 +2870,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(completed).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "ask_user_question",
       status: "completed",
       presentation: ASK_PRESENTATION,
@@ -2894,7 +2894,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(first[0]).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "bb_workflow_run",
       presentation: {
         label: {
@@ -2917,7 +2917,7 @@ describe("acp delta translation (bb-injected tools)", () => {
     );
     expect(second[0]).toMatchObject({
       type: "toolCall",
-      server: "bb",
+      server: "zcc",
       tool: "not_configured",
     });
   });
@@ -2938,14 +2938,14 @@ describe("acp delta translation (bb-injected tools)", () => {
       updateEvent({
         sessionUpdate: "tool_call",
         toolCallId: "mcp-4",
-        title: "ask_user_question (bb-bridge MCP Server)",
+        title: "ask_user_question (zcc MCP Server)",
         kind: "other",
         status: "pending",
       }),
     );
     expect(named).toMatchObject({
       type: "item/started",
-      item: { type: "toolCall", server: "bb", tool: "ask_user_question" },
+      item: { type: "toolCall", server: "zcc", tool: "ask_user_question" },
     });
 
     // A proxied call with only a command open waits; it never rebinds the

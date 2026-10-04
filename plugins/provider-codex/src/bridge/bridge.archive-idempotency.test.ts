@@ -36,9 +36,9 @@ beforeEach(() => {
       sigtermDelayMs: 250,
     }),
   );
-  vi.stubEnv("BB_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
+  vi.stubEnv("ZCC_CODEX_BRIDGE_APP_SERVER_COMMAND", process.execPath);
   vi.stubEnv(
-    "BB_CODEX_BRIDGE_APP_SERVER_ARGS",
+    "ZCC_CODEX_BRIDGE_APP_SERVER_ARGS",
     JSON.stringify([fakeAppServerPath, fakeScriptPath]),
   );
   harness = createBridgeJsonRpcTestHarness(handleLine);

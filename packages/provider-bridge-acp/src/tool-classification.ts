@@ -38,7 +38,7 @@ export interface AcpInjectedTool {
   presentation?: DeltaPresentation;
 }
 
-const BB_TOOL_SERVER = "bb";
+const ZCC_TOOL_SERVER = "zcc";
 
 export function isInjectedToolCandidate(
   event: AcpToolCallUpdateEvent,
@@ -474,7 +474,7 @@ function bbToolItem(
     item: {
       type: "tool",
       tool: injected.name,
-      server: BB_TOOL_SERVER,
+      server: ZCC_TOOL_SERVER,
       ...genericToolFields(event),
     },
     presentation: injected.presentation ?? toolPresentation(injected.name),

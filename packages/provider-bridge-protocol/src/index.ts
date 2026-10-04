@@ -1,5 +1,5 @@
 /**
- * The bb Provider Bridge Protocol: the one JSON-RPC contract between the
+ * The zcc Provider Bridge Protocol: the one JSON-RPC contract between the
  * agent runtime and every provider bridge process. Schemas here are the
  * source of truth for both sides; the event grammar (turn lifecycle, item
  * lifecycle, id minting, ordering guarantees) is documented in

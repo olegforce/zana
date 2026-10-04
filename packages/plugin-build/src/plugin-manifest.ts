@@ -40,7 +40,7 @@ export async function validatePluginBuildManifest(
   const parsed = pluginPackageJsonSchema.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    const path = issue?.path.join(".") ?? "";
+    const path = issue?.path.map((part, index) => index === 0 && part === "bb" ? "zcc" : part).join(".") ?? "";
     throw new Error(
       `invalid plugin package.json${path ? ` (${path})` : ""} at ${packageJsonPath}: ${issue?.message ?? "unknown error"}`,
     );
@@ -52,9 +52,9 @@ export async function validatePluginBuildManifest(
       ? parsed.data.bb.branding.icon
       : undefined;
   for (const [label, entry] of [
-    ["bb.branding.icon", compactIcon],
-    ["bb.branding.logo.light", logo?.light],
-    ["bb.branding.logo.dark", logo?.dark],
+    ["zcc.branding.icon", compactIcon],
+    ["zcc.branding.logo.light", logo?.light],
+    ["zcc.branding.logo.dark", logo?.dark],
   ] as const) {
     if (entry === undefined) continue;
     if (!/\.(svg|png|webp)$/i.test(entry)) {
@@ -81,7 +81,7 @@ export async function validatePluginBuildManifest(
         `manifest ${label} escapes the plugin directory through a symlink`,
       );
     }
-    if (label === "bb.branding.icon") {
+    if (label === "zcc.branding.icon") {
       assertValidPluginCompactIconSvg(await readFile(realAsset), label);
     } else if (/\.svg$/iu.test(entry)) {
       assertValidPluginLogoSvg(
@@ -93,7 +93,7 @@ export async function validatePluginBuildManifest(
   for (const [name, entry] of Object.entries(
     parsed.data.bb.branding.experimental_icons ?? {},
   )) {
-    const label = `bb.branding.experimental_icons["${name}"]`;
+    const label = `zcc.branding.experimental_icons["${name}"]`;
     const assetPath = resolveManifestPath(rootDir, entry, label);
     let assetStat;
     try {

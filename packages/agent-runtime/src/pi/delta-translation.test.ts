@@ -378,7 +378,7 @@ describe("pi delta translation equivalence", () => {
     const harness = createHarness();
 
     // Idle `attention: context` notes: Pi appends them without running the
-    // agent, so there is no bb turn to record them in.
+    // agent, so there is no zcc turn to record them in.
     const idleMessage = createPiCustomMessage({ content: "idle context note" });
     expect(
       harness.translate(
@@ -874,7 +874,7 @@ describe("pi delta translation equivalence", () => {
     );
   });
 
-  // Design §4: bb fabricates no `commandExecution { cwd: "" }`. A bash call
+  // Design §4: zcc fabricates no `commandExecution { cwd: "" }`. A bash call
   // runs in the session's cwd unless its args name one; with neither known
   // the call is a generic tool item.
   it("gives a bash call without cwd args the session's working directory", () => {
@@ -970,7 +970,7 @@ describe("pi delta translation equivalence", () => {
       throw new Error("expected a commandExecution item/started");
     }
     // The raw pi parent id never leaks onto emitted events; the assembler
-    // mints the parent's bb id and keeps parent and children consistent.
+    // mints the parent's zcc id and keeps parent and children consistent.
     expect(started.item.parentToolCallId).toBeDefined();
     expect(started.item.parentToolCallId).not.toBe("agent-parent-1");
     // The parent's own tool_execution_start lands under that same minted id.

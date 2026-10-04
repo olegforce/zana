@@ -106,10 +106,10 @@ describe("plugin server build", () => {
       const dir = await mkdtemp(join(tmpdir(), "bb-plugin-server-subpath-"));
       tempDirs.push(dir);
       await writeFixture(dir);
-      await mkdir(join(dir, "node_modules", "@get-bb"), { recursive: true });
+      await mkdir(join(dir, "node_modules", "@zana-ai"), { recursive: true });
       await symlink(
         resolve(import.meta.dirname, "../../plugin-sdk"),
-        join(dir, "node_modules", "@get-bb", "plugin-sdk"),
+        join(dir, "node_modules", "@zana-ai", "zcc-plugin-sdk"),
         "dir",
       );
 
@@ -133,7 +133,7 @@ describe("plugin server build", () => {
       await expect(
         buildPluginServer(dir, "0.0.0-test", await testToolchain()),
       ).rejects.toThrow(
-        '"@zana-ai/zcc-plugin-sdk/host" is not installed for this plugin (no node_modules/@zana-ai/zcc-plugin-sdk); a server entry\'s "@zana-ai/zcc-plugin-sdk/host" import is bundled from the plugin\'s own SDK install (bb serves only the bare "@zana-ai/zcc-plugin-sdk" at load time), so the plugin needs the SDK as a dependency',
+        '"@zana-ai/zcc-plugin-sdk/host" is not installed for this plugin (no node_modules/@zana-ai/zcc-plugin-sdk); a server entry\'s "@zana-ai/zcc-plugin-sdk/host" import is bundled from the plugin\'s own SDK install (ZCC serves only the bare "@zana-ai/zcc-plugin-sdk" at load time), so the plugin needs the SDK as a dependency',
       );
     });
 
@@ -143,7 +143,7 @@ describe("plugin server build", () => {
       );
       tempDirs.push(dir);
       await writeFixture(dir);
-      const sdkDir = join(dir, "node_modules", "@get-bb", "plugin-sdk");
+      const sdkDir = join(dir, "node_modules", "@zana-ai", "zcc-plugin-sdk");
       await mkdir(sdkDir, { recursive: true });
       await writeFile(
         join(sdkDir, "package.json"),
@@ -161,8 +161,23 @@ describe("plugin server build", () => {
       await expect(
         buildPluginServer(dir, "0.0.0-test", await testToolchain()),
       ).rejects.toThrow(
-        `"@zana-ai/zcc-plugin-sdk/host" is installed for this plugin but its dist is not built: run the SDK build (${join(sdkDir, "dist", "host.js")} is missing)`,
+        '"@zana-ai/zcc-plugin-sdk/host" is installed for this plugin but its dist is not built: run the SDK build',
       );
     });
   });
 });
+
+ describe("server entry failure paths", () => {
+   it.each([
+     [undefined, 'no server entry'],
+     ['/outside.ts', 'zcc.server must be relative'],
+     ['../outside.ts', 'zcc.server escapes the plugin directory'],
+     ['./missing.ts', 'zcc.server points at a missing file'],
+   ] as const)("rejects an invalid entry %s with actionable diagnostics", async (entry, message) => {
+     const dir = await mkdtemp(join(tmpdir(), 'zcc-server-invalid-'));
+     try {
+       await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'test-plugin', version: '1.0.0', bb: { name: 'Test', description: 'Test failure paths', branding: { icon: 'Zap' }, ...(entry ? { server: entry } : {}) } }));
+       await expect(buildPluginServer(dir, '0.0.0-test', await testToolchain())).rejects.toThrow(message);
+     } finally { await rm(dir, { recursive: true, force: true }); }
+   });
+ });

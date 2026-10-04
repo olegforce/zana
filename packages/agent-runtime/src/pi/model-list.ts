@@ -115,7 +115,7 @@ export function buildPiAvailableModels(
 }
 
 /**
- * bb identifies a Pi model by `<provider>/<model id>`.
+ * zcc identifies a Pi model by `<provider>/<model id>`.
  *
  * Aggregator providers such as OpenRouter and the Vercel AI Gateway use model
  * ids that already contain a slash (`deepseek/deepseek-v4-flash`), so the

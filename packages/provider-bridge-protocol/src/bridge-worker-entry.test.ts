@@ -29,7 +29,7 @@ async function createFixture(bridgeSource: string): Promise<{
   bridgeModulePath: string;
   dataDir: string;
 }> {
-  const dir = await mkdtemp(join(tmpdir(), "bb-bridge-bootstrap-"));
+  const dir = await mkdtemp(join(tmpdir(), "zcc-bootstrap-"));
   tempDirs.push(dir);
   const bridgeModulePath = join(dir, "artifact.mjs");
   await writeFile(bridgeModulePath, bridgeSource);

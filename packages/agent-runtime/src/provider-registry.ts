@@ -80,9 +80,13 @@ function createBridgeProtocolAdapterForId(
         bridgeLaunch.pluginId,
         bridgeLaunch.dataDir,
       ],
-      ...(options.bridgeNodeEnv !== undefined
-        ? { env: options.bridgeNodeEnv }
-        : {}),
+      // Restore only host values named by the installed provider declaration;
+      // inherited runtime variables are otherwise scrubbed before spawn.
+      env: {
+        ...Object.fromEntries((bridgeLaunch.envPassthrough ?? []).flatMap(name =>
+          process.env[name] === undefined ? [] : [[name, process.env[name]!]])),
+        ...options.bridgeNodeEnv,
+      },
     },
     ...buildPluginStaticProviderOptions(providerId, options),
   });
@@ -90,15 +94,15 @@ function createBridgeProtocolAdapterForId(
 
 /**
  * Where each daemon-bundled bridge's entry lives, both in a packaged daemon
- * (`bridgeBundleDir`) and when running from source. Only Pi is bundled: its
- * agent tree cannot be inlined into a relocatable artifact.
+ * (`bridgeBundleDir`) and when running from source. The Pi bridge delegates to the installed
+ * CLI; its agent tree is never inlined into the daemon bundle.
  */
 const DAEMON_BUNDLED_BRIDGE_ENTRIES: Readonly<
   Record<string, { bundleFileName: string; bridgeRelativePath: string }>
 > = {
   pi: {
-    bundleFileName: "bb-pi-bridge.mjs",
-    bridgeRelativePath: "pi/bridge/bridge.js",
+    bundleFileName: "zcc-pi-bridge.mjs",
+    bridgeRelativePath: "../../../plugins/provider-pi/src/bridge/bridge.js",
   },
 };
 
@@ -176,7 +180,7 @@ function buildPluginStaticProviderOptions(
 
 /**
  * The launch spec the ACP bridge constructs the agent from. Configured and
- * known agents arrive with one on the command; bb's own bundled ACP providers
+ * known agents arrive with one on the command; zcc's own bundled ACP providers
  * have no server-side entry, so their spec comes from the built-in table.
  */
 function resolveAcpLaunchSpec(
@@ -205,4 +209,3 @@ export function createProviderForId(
     `Unsupported provider "${providerId}": no provider bridge launch was supplied.`,
   );
 }
-

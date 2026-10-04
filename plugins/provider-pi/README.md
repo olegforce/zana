@@ -1,60 +1,23 @@
 # Pi provider
 
-First-party plugin for the [Pi coding agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent).
-Pi is user-installed (`npm install -g @earendil-works/pi-coding-agent`, 0.84.0
-or newer); the plugin ships no agent tree.
+Zana launches the machine's installed [Pi coding agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) with `pi --mode rpc`. Pi 0.84.0 or newer is required. Native Pi packages and extensions load through that installed runtime, including extensions that register tools during `session_start`. Each package can require a newer Pi version independently; Zana does not implement package-specific tools.
 
-What lives here:
+The plugin manifest uses `server.ts` for the provider declaration. The historical `server.mjs` entry delegates to it. The daemon bundles `src/bridge/bridge.ts` into `zcc-pi-bridge.mjs`; the source checkout resolves the same bridge. The older embedded SDK bridge is no longer a launch entry. This plugin currently has no `zcc.host` artifact.
 
-- `server.ts` — the plugin's runtime: one `bb.providers.register` for `pi`
-  (`src/declaration.ts`).
-- `src/host.ts` — the `bb.host` artifact, two surfaces in one file: the
-  provider bridge (`src/bridge/`, a thin bridge over `pi --mode rpc` plus the
-  bb extension pi loads) and the host entry that answers `resolveNativeRoots`
-  (`src/native-roots.ts`).
-- `src/delta-translation.ts` — pi's session events become bb's thread deltas.
-- `src/bridge/provider-maintenance.ts` — the install gate (`pi --version`
-  ≥ 0.84.0) and the npm install/update actions.
+The bridge injects a small ZCC extension for Zana's dynamic tools and lifecycle channel. It merges those tools into Pi's active tool set, preserving native tools. Pi owns its user/project settings, package loading, authentication, and model inventory. Additional Zana skill roots are passed with `--skill`.
 
-## Skills
+`src/delta-translation.ts` maps Pi events into Zana's thread timeline. Native extension tools use that same event path. Extension requests for select, confirm, input, and editor are forwarded as answerable pending interactions; noninteractive helper sessions cancel requests that have no UI handler.
 
-Pi's skill layout is the plugin's fact, so bb lists pi's skills beside its
-own and core holds no pi policy. The registration declares the documented
-directories (`experimental_nativeSkillRoots`):
-
-- `user`: `.pi/agent/skills` and `.agents/skills` under the host's home.
-- `project`: `.pi/skills` and `.agents/skills` under the workspace.
-
-The directories only a host knows are the host entry's answer
-(`experimental_resolvesNativeRoots`): when ZCC lists skills on a host it asks
-the plugin's host entry there, which reads `<agentDir>/settings.json`'s
-`skills` entries (absolute, `~`-relative, or relative to the agent dir) and
-adds `<agentDir>/skills` when `PI_CODING_AGENT_DIR` moves the agent dir. Each
-host answers for itself, from its own files, at listing time. A settings entry
-that names a declared directory is listed once.
-
-Pi extensions that call `ctx.ui.select` / `confirm` / `input` / `editor` over
-RPC are forwarded as answerable pending interactions (`provider-pi/extension-ui`).
-Fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`,
-`set_editor_text`) are dropped. Without a UI handler the bridge still
-auto-cancels, so helper sessions stay non-blocking.
-
-Not listed, by design:
-
-- Skills pi loads through `packages` (npm/git installs pi manages itself) and
-  `!pattern` disable entries: pi still applies them, bb does not show them.
-- A settings entry naming a single `.md` file (`SKILL.md` or any other
-  markdown file pi loads as one skill): it has no directory root to scan.
-- The trusted project's `.pi/settings.json` `skills` entries: the host entry
-  reads the user settings only.
-- `.agents/skills` in ancestor directories of the workspace (pi walks up to
-  the git root): the declared `project` roots resolve against the workspace
-  only.
+`src/bridge/provider-maintenance.ts` probes `pi --version` and supports installation and update actions. A missing or unsupported CLI fails before model resolution with installation guidance.
 
 ## Environment
 
-`BB_PI_BRIDGE_COMMAND` and `BB_PI_BRIDGE_ARGS` point the bridge (and its
-version probe) at a pi executable other than the `pi` on `PATH` — a pinned
-install in a temporary prefix, say. The plugin declares them as environment
-passthrough, so a value set on the host daemon's environment reaches the
-bridge process; bb strips every other inherited `BB_*` variable.
+By default, the bridge launches `pi` from the host's `PATH`. `ZCC_PI_BRIDGE_COMMAND` selects another executable and `ZCC_PI_BRIDGE_ARGS` supplies a JSON array of initial arguments. The version probe uses the same executable. Historical `BB_PI_BRIDGE_COMMAND` / `BB_PI_BRIDGE_ARGS` remain compatibility inputs; canonical values take precedence.
+
+The declaration names these variables for host environment passthrough. Names travel through the server and daemon contracts; values are read on the execution host and restored only for that bridge process. Other inherited `ZCC_*` and `BB_*` variables remain scrubbed. Explicit bridge environment values take priority.
+
+## Verification
+
+Run the plugin's Vitest suite and TypeScript check, then `pnpm test:e2e -- e2e/pi-extension-loading.spec.ts`. The Electron test launches the pinned Pi CLI outside the fixture's isolated home, executes a native extension tool alongside injected Zana tools, checks a complete 36 KB Unicode result through the UI, and verifies missing-CLI errors.
+
+To test an installed newer CLI and native SF-pi, set `ZCC_E2E_PI_CLI` to its `dist/cli.js` and `ZCC_E2E_SF_PI_DIR` to the package directory. The fixture loads that package into isolated settings and calls native `sf_apex author.plan` without org access or deployment. `ZCC_E2E_EXECUTABLE_PATH` can select a packaged Zana executable for the same tests.

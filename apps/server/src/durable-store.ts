@@ -9,17 +9,16 @@ import {
   writeFileSync
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { fsyncDirectory } from './fsync-directory.js';
 
 /**
  * Server-owned durable persistence primitive (Runtime Migration Backlog,
  * Durable Foundation #1). Every product store the server takes ownership of
  * must route its writes through this module: a same-directory UUID temp file,
  * fsynced then renamed over the target, with the parent directory fsynced
- * afterward, plus one serialized queue per logical store so a
- * read-modify-write never races itself. This mirrors
- * `src/main/harness-routing-migration/storage.ts` byte-for-byte so a later
- * capability migration can swap the Electron-main import for this package
- * without changing on-disk semantics.
+ * afterward on POSIX, plus one serialized queue per logical store so a
+ * read-modify-write never races itself. Startup migration storage uses the same
+ * directory-flush helper so both persistence paths behave identically on Windows.
  */
 export interface DurableWriteFileSystem {
   readFile(path: string): Buffer;
@@ -60,15 +59,6 @@ function currentHash(fs: DurableWriteFileSystem, target: string): string | null 
       return null;
     }
     throw error;
-  }
-}
-
-function fsyncDirectory(fs: DurableWriteFileSystem, path: string): void {
-  const fd = fs.open(path, 'r');
-  try {
-    fs.fsync(fd);
-  } finally {
-    fs.close(fd);
   }
 }
 

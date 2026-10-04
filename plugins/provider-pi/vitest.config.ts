@@ -1,15 +1,16 @@
-import {
-  defineWorkspaceTestConfig,
-  sharedWorkerProjects,
-} from "../../vitest.shared.js";
+import { fileURLToPath } from "node:url";
+import { defineWorkspaceTestConfig } from "../../vitest.shared.js";
 
 export default defineWorkspaceTestConfig({
+  resolve: { alias: [
+    { find: /^@zana-ai\/zcc-domain\/thread-runtime$/, replacement: fileURLToPath(new URL("../../packages/domain/src/thread-runtime.ts", import.meta.url)) },
+    { find: /^@zana-ai\/zcc-domain$/, replacement: fileURLToPath(new URL("../../packages/domain/src/index.ts", import.meta.url)) },
+    { find: /^@zana-ai\/zcc-provider-bridge-protocol\/assembler$/, replacement: fileURLToPath(new URL("../../packages/provider-bridge-protocol/src/assembler/index.ts", import.meta.url)) },
+  ] },
   test: {
     silent: "passed-only",
-    projects: sharedWorkerProjects({
-      pkgDir: __dirname,
-      name: "bb-plugin-provider-pi",
-      include: ["*.test.ts", "*.test.tsx", "src/**/*.test.ts"],
-    }),
+    name: "zcc-plugin-provider-pi",
+    include: ["*.test.ts", "*.test.tsx", "src/**/*.test.ts"],
+    exclude: ["node_modules/**", "dist/**", "src/bridge/bridge.recorded-conformance.test.ts"],
   },
 });

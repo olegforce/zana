@@ -1,6 +1,6 @@
 /**
- * Version of the BB plugin SDK surface (`@zana-ai/zcc-plugin-sdk`). Single source of
- * truth shared by the CLI and the server: `bb plugin build` stamps it into a
+ * Version of the ZCC plugin SDK surface (`@zana-ai/zcc-plugin-sdk`). Single source of
+ * truth shared by the CLI and the server: `zcc plugin build` stamps it into a
  * plugin's `dist/app.meta.json` sidecar, and the host compares majors before
  * loading a bundle (design §7 — a stale bundle is skipped legibly, never a
  * TypeError).

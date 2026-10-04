@@ -581,6 +581,23 @@ describe('thread model catalog', () => {
 });
 
 describe('automatic catalog recovery', () => {
+  it('clears cached models and modes when the provider plugin becomes unavailable', async () => {
+    let unavailable = false;
+    resetThreadModelCatalog(async () => unavailable
+      ? { ...optionsBody(['codex'], 'stale'), models: [], selectedOnlyModels: [], modelLoadError: { providerId: 'codex', code: 'provider_unavailable', detail: 'Open Plugins to reload' } }
+      : optionsBody(['codex'], 'working'));
+    const catalog = threadModelCatalogForHost();
+    await catalog.ensure();
+    expect(catalog.getSnapshot().byProvider.codex.models).not.toEqual([]);
+    unavailable = true;
+    await catalog.reloadProvider('codex');
+    expect(catalog.getSnapshot().byProvider.codex).toMatchObject({ models: [], selectedOnlyModels: [], modelLoadError: 'provider_unavailable' });
+    expect(catalog.getSnapshot().byProvider.codex.lastSuccessAt).toBeUndefined();
+    unavailable = false;
+    await catalog.reloadProvider('codex');
+    expect(catalog.getSnapshot().byProvider.codex.models).not.toEqual([]);
+  });
+
   it('retries temporary provider failures, keeps successful rows and clears the error on recovery', async () => {
     vi.useFakeTimers();
     let failed = false;

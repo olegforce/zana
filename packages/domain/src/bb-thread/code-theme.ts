@@ -60,15 +60,15 @@ export type UiCodeThemeDeclaration = z.infer<
  * Code-theme pair that follows each built-in appearance palette. Custom and
  * plugin palettes use their declared Pierre / VS Code files when present.
  * Palettes Shiki only ships as dark (Nord, Dracula) use a first-party light
- * file under `bb:<id>:light`; the rest use the bundled light/dark names.
+ * file under `zcc:<id>:light`; the rest use the bundled light/dark names.
  */
 export const builtInPaletteCodeThemes = {
   default: {
     dark: DEFAULT_CODE_THEME_DARK,
     light: DEFAULT_CODE_THEME_LIGHT,
   },
-  nord: { dark: "nord", light: "bb:nord:light" },
-  dracula: { dark: "dracula", light: "bb:dracula:light" },
+  nord: { dark: "nord", light: "zcc:nord:light" },
+  dracula: { dark: "dracula", light: "zcc:dracula:light" },
   solarized: { dark: "solarized-dark", light: "solarized-light" },
   gruvbox: { dark: "gruvbox-dark-medium", light: "gruvbox-light-medium" },
   catppuccin: { dark: "catppuccin-mocha", light: "catppuccin-latte" },
@@ -95,7 +95,7 @@ export function formatRegisteredCodeThemeName(
   sourceId: string,
   side: "dark" | "light",
 ): string {
-  return `bb:${sourceId}:${side}`;
+  return `zcc:${sourceId}:${side}`;
 }
 
 const VSCODE_THEME_JSON_MAX_DEPTH = 32;
@@ -135,8 +135,8 @@ export function paletteCodeThemeFallback(paletteId: string): CodeThemePair {
 const builtInPaletteCodeThemeFiles: Partial<
   Record<keyof typeof builtInPaletteCodeThemes, Record<string, JsonObject>>
 > = {
-  nord: { "bb:nord:light": nordLightCodeTheme },
-  dracula: { "bb:dracula:light": draculaLightCodeTheme },
+  nord: { "zcc:nord:light": nordLightCodeTheme },
+  dracula: { "zcc:dracula:light": draculaLightCodeTheme },
 };
 
 /**

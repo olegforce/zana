@@ -64,7 +64,7 @@ async function waitFor<T>(
   }
 }
 
-async function waitForFileWithRealTimer(path: string, expectedContent?: string): Promise<void> {
+async function waitForFileWithRealTimer(path: string, expectedContent?: string | ((content: string) => boolean)): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     // The client fs/write is not atomic: the file exists before its content is
     // fully flushed. Existence alone races an empty read under load, so when a
@@ -72,7 +72,8 @@ async function waitForFileWithRealTimer(path: string, expectedContent?: string):
     if (existsSync(path)) {
       if (expectedContent === undefined) return;
       try {
-        if (readFileSync(path, "utf8") === expectedContent) return;
+        const content = readFileSync(path, "utf8");
+        if (typeof expectedContent === "function" ? expectedContent(content) : content === expectedContent) return;
       } catch {
         // transient read during the write — keep polling
       }
@@ -114,7 +115,7 @@ function threadEventsOfType(type: string): Record<string, unknown>[] {
   return threadEvents().filter((event) => event.type === type);
 }
 
-/** The bb thread id a provider session id belongs to. */
+/** The zcc thread id a provider session id belongs to. */
 const bbThreadIdByProviderThreadId = new Map<string, string>();
 
 function bbThreadIdFor(providerThreadId: string): string {
@@ -369,7 +370,7 @@ function sendTurnRequest(
 
 /**
  * The composer's standalone builtin `/compact` mention, as a turn/start input:
- * bb's manual-compaction request rides the ordinary turn path.
+ * zcc's manual-compaction request rides the ordinary turn path.
  */
 function compactCommandInput(): unknown[] {
   return JSON.parse(
@@ -1806,10 +1807,10 @@ describe("acp bridge", () => {
     const env = new Map(
       mcpServerConfig.env.map(({ name, value }) => [name, value]),
     );
-    const host = env.get("BB_ACP_DYNAMIC_TOOL_HOST");
-    const port = Number(env.get("BB_ACP_DYNAMIC_TOOL_PORT"));
-    const threadId = env.get("BB_ACP_DYNAMIC_TOOL_THREAD_ID");
-    const token = env.get("BB_ACP_DYNAMIC_TOOL_TOKEN");
+    const host = env.get("ZCC_ACP_DYNAMIC_TOOL_HOST");
+    const port = Number(env.get("ZCC_ACP_DYNAMIC_TOOL_PORT"));
+    const threadId = env.get("ZCC_ACP_DYNAMIC_TOOL_THREAD_ID");
+    const token = env.get("ZCC_ACP_DYNAMIC_TOOL_TOKEN");
     if (!host || !Number.isInteger(port) || !threadId || !token) {
       throw new Error("MCP server config is missing dynamic tool bridge env");
     }
@@ -1942,7 +1943,7 @@ describe("acp bridge", () => {
       "bound execution tool completion",
     );
     expect(completed.item).toMatchObject({
-      server: "bb",
+      server: "zcc",
       tool: "execution_start",
     });
     startedProviderThreadIds.pop();
@@ -1963,6 +1964,7 @@ describe("acp bridge", () => {
     });
     expect((await waitForResponse(configureId)).error).toBeUndefined();
 
+    try {
     const promptLog = join(workspaceDir, "canonical-skills-prompt-log.jsonl");
     const threadId = "thread-canonical-skills";
     const startId = sendRequest("thread/start", {
@@ -2010,17 +2012,19 @@ describe("acp bridge", () => {
       },
     });
     await waitForResponse(turnId);
-    await waitForFileWithRealTimer(promptLog);
+    await waitForFileWithRealTimer(promptLog, content => content.endsWith("\n") && typeof JSON.parse(content.trim().split("\n")[0] ?? "null") === "string");
 
     const prompt: unknown = JSON.parse(
       readFileSync(promptLog, "utf8").trim().split("\n")[0] ?? "null",
     );
-    expect(prompt).toContain("Available bb skills:");
+    expect(prompt).toContain("Available ZCC skills:");
     expect(prompt).toContain(
       "- deploy: Ship the app. (SKILL.md: /staged/acp-skills/deploy/SKILL.md)",
     );
-    // The latch is process-scoped; clear it so later tests see no skills.
-    await waitForResponse(sendRequest("skills/configure", { roots: [] }));
+    } finally {
+      // The latch is process-scoped; clear it even if an assertion fails.
+      await waitForResponse(sendRequest("skills/configure", { roots: [] }));
+    }
   });
 
   it("prepends instructions to the first prompt only", async () => {

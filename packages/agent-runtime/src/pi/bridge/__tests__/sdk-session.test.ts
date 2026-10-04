@@ -422,7 +422,7 @@ describe("PiSdkSession", () => {
   });
 
   it("resolves a bare model id that names no provider", async () => {
-    // Selections stored before bb prefixed aggregator models keep this shape.
+    // Selections stored before zcc prefixed aggregator models keep this shape.
     mockGetModel.mockReturnValue(undefined);
     mockGetModels.mockReturnValue([
       { id: "deepseek/deepseek-v4-flash-0731", provider: "openrouter" },
@@ -565,8 +565,8 @@ describe("PiSdkSession", () => {
   });
 
   it("scopes shell env overrides to the bash spawn hook without mutating process.env", async () => {
-    const sessionEnvKey = "BB_PI_UNIT_SESSION_ENV";
-    const processOnlyEnvKey = "BB_PI_UNIT_PROCESS_ONLY_ENV";
+    const sessionEnvKey = "ZCC_PI_UNIT_SESSION_ENV";
+    const processOnlyEnvKey = "ZCC_PI_UNIT_PROCESS_ONLY_ENV";
     const previousSessionEnvValue = process.env[sessionEnvKey];
     const previousProcessOnlyEnvValue = process.env[processOnlyEnvKey];
     delete process.env[sessionEnvKey];
@@ -579,7 +579,7 @@ describe("PiSdkSession", () => {
         {
           cwd: "/tmp/project",
           shellEnvOverrides: {
-            BB_THREAD_ID: "t1",
+            ZCC_THREAD_ID: "t1",
             [sessionEnvKey]: "thread-a",
           },
         },
@@ -615,7 +615,7 @@ describe("PiSdkSession", () => {
         cwd: "/tmp/project",
         env: {
           PATH: "/bin",
-          BB_THREAD_ID: "base-thread",
+          ZCC_THREAD_ID: "base-thread",
         },
       };
 
@@ -624,7 +624,7 @@ describe("PiSdkSession", () => {
         cwd: "/tmp/project",
         env: {
           PATH: "/bin",
-          BB_THREAD_ID: "t1",
+          ZCC_THREAD_ID: "t1",
           [sessionEnvKey]: "thread-a",
         },
       });

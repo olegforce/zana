@@ -82,6 +82,14 @@ function stdout(result: {
 }
 
 describe("zcc tasks CLI", () => {
+  it("presents linked ZCC projects in the human-readable project table", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    await plugin(bb);
+    stdout(await harness.runCli(["project", "create", "--name", "Release", "--prefix", "REL"]));
+    expect(stdout(await harness.runCli(["project", "list"]))).toContain("ZCC PROJECT");
+    expect(stdout(await harness.runCli(["project", "list"]))).toContain("Release");
+    await harness.dispose();
+  });
   it("lists seed-demo in help while retaining the explicit confirmation guard", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     await plugin(bb);

@@ -61,8 +61,8 @@ const JOIN_REPO_SOURCE_FILES = [
 
 const PREBUILT_JOIN_FILES = [
   'join.mjs',
-  'bb-provider-bridge-worker.mjs',
-  'bb-pi-bridge.mjs',
+  'zcc-provider-bridge-worker.mjs',
+  'zcc-pi-bridge.mjs',
   'zcc-plugin-host-worker.mjs'
 ] as const;
 
@@ -343,8 +343,8 @@ async function packJoinArtifact(version: string, bundleScript: string): Promise<
       encoding: 'utf8', timeout: 120_000, maxBuffer: 1024 * 1024,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
     });
-    const worker = join(dir, 'bb-provider-bridge-worker.mjs');
-    const piBridge = join(dir, 'bb-pi-bridge.mjs');
+    const worker = join(dir, 'zcc-provider-bridge-worker.mjs');
+    const piBridge = join(dir, 'zcc-pi-bridge.mjs');
     if (!existsSync(outfile) || !existsSync(worker) || !existsSync(piBridge) || !existsSync(join(dir, 'zcc-plugin-host-worker.mjs'))) {
       throw new Error('failed to bundle zcc-host join.mjs');
     }

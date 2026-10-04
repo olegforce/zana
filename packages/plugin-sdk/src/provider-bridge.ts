@@ -2,15 +2,15 @@
  * `@zana-ai/zcc-plugin-sdk/provider-bridge` — the published authoring surface for a provider
  * bridge.
  *
- * A provider bridge ships inside its plugin's `bb.host` artifact, and a host
+ * A provider bridge ships inside its plugin's `zcc.host` artifact, and a host
  * artifact may not import private `@bb/*` workspace packages: an external
  * plugin cannot resolve them. Everything a bridge needs therefore has to be
  * reachable through this package, which is why this module exists — it is the
  * bridge half of the same facade the root export already is for
  * `ZccPluginApi`/`@zana-ai/zcc-domain/thread-runtime` types.
  *
- * Curated by hand, never `export *`. The list below is the surface bb promises
- * bridge authors; a name that is not here is bb-internal and may move. It is
+ * Curated by hand, never `export *`. The list below is the surface ZCC promises
+ * bridge authors; a name that is not here is ZCC-internal and may move. It is
  * grouped the way a bridge consumes it:
  *
  *   1. the bridge entry contract (how a module declares itself a bridge),
@@ -19,7 +19,7 @@
  *      interaction codecs, id scoping, visibility, translation helpers),
  *   4. the event vocabulary the protocol's payloads are made of.
  *
- * On (4): those shapes live in `@zana-ai/zcc-domain/thread-runtime`, which is bb's persisted-thread
+ * On (4): those shapes live in `@zana-ai/zcc-domain/thread-runtime`, which is ZCC's persisted-thread
  * vocabulary shared by the server, the app and the runtime — moving it into
  * this package would invert the dependency and make the plugin SDK own the
  * product's core domain. So the SDK names them here instead, and the published

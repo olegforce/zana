@@ -44,7 +44,7 @@ export async function probeAcpAgent(
       recordThreadId: null,
       onNotification: () => {},
       onRequest: (_method, _params, responder) => {
-        responder.error(-32601, "bb is probing this agent's capabilities");
+        responder.error(-32601, "ZCC is probing this agent's capabilities");
       },
       onExit: () => {},
     });
@@ -71,7 +71,7 @@ export async function probeAcpAgent(
         method: "initialize",
         params: {
           protocolVersion: ACP_PROTOCOL_VERSION,
-          clientInfo: { name: "bb", version: "1.0.0" },
+          clientInfo: { name: "zcc", version: "1.0.0" },
           clientCapabilities: {
             fs: { readTextFile: true, writeTextFile: true },
             terminal: false,

@@ -17,7 +17,7 @@ const EXECUTION_CONTEXT = {
   memoryEnabled: false,
   providerSubagentsEnabled: false,
   instructions: "Session instructions",
-  envVars: { BB_TEST: "1" },
+  envVars: { ZCC_TEST: "1" },
   permissionMode: "accept-edits",
   permissionScope: "workspace",
   approvalReviewer: "user",
@@ -93,7 +93,7 @@ describe("buildClaudeSessionParams", () => {
       model: "claude-sonnet-5",
       reasoningLevel: "high",
       disallowedTools: ["WebSearch"],
-      config: { envVars: { BB_TEST: "1" } },
+      config: { envVars: { ZCC_TEST: "1" } },
     });
     expect(params.baseInstructions).toContain("Session instructions");
   });

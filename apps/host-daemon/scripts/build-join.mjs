@@ -14,7 +14,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { packedPtyFiles } from './packed-pty-files.mjs';
-import { piExtensionLoaderPlugin } from './pi-extension-loader.mjs';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '../..');
@@ -29,9 +28,9 @@ if (!outfile) {
 }
 
 /** Keep in lockstep with packages/agent-runtime/src/shared/bridge-path.ts */
-const BRIDGE_WORKER_FILE = 'bb-provider-bridge-worker.mjs';
+const BRIDGE_WORKER_FILE = 'zcc-provider-bridge-worker.mjs';
 /** Keep in lockstep with packages/agent-runtime/src/provider-registry.ts */
-const PI_BRIDGE_FILE = 'bb-pi-bridge.mjs';
+const PI_BRIDGE_FILE = 'zcc-pi-bridge.mjs';
 const PLUGIN_WORKER_FILE = 'zcc-plugin-host-worker.mjs';
 
 const outDir = dirname(outfile);
@@ -69,8 +68,9 @@ await build({
 });
 await build({
   ...shared,
-  entryPoints: [join(repoRoot, 'packages/agent-runtime/src/pi/bridge/bridge.ts')],
-  plugins: [piExtensionLoaderPlugin],
+  // Launch the host's Pi CLI so its native packages and extension API stay
+  // aligned with the runtime the user installed. Never inline an older SDK.
+  entryPoints: [join(repoRoot, 'plugins/provider-pi/src/bridge/bridge.ts')],
   outfile: join(outDir, PI_BRIDGE_FILE)
 });
 

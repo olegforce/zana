@@ -59,4 +59,11 @@ describe("bridgeLaunchProcessKey", () => {
       ),
     ).toHaveLength(3);
   });
+
+  it("changes when passthrough changes and ignores declaration order", () => {
+    const declared = { ...base, envPassthrough: ["ZCC_SECOND", "ZCC_FIRST"] };
+    expect(bridgeLaunchProcessKey(declared)).not.toBe(bridgeLaunchProcessKey(base));
+    expect(bridgeLaunchProcessKey(declared)).toBe(bridgeLaunchProcessKey({ ...declared, envPassthrough: ["ZCC_FIRST", "ZCC_SECOND"] }));
+    expect(bridgeLaunchProcessKey(base)).toBe(bridgeLaunchProcessKey({ ...base, envPassthrough: undefined }));
+  });
 });

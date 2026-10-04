@@ -1,4 +1,4 @@
-// The one list of modules `bb plugin build` swaps for host-runtime shims.
+// The one list of modules `zcc plugin build` swaps for host-runtime shims.
 //
 // Plain ESM on purpose: the build engine (build-plugin-app.ts) imports it as
 // a module, and two generator scripts that run under bare `node` before any
@@ -123,7 +123,7 @@ export const RUNTIME_SHIM_NPM_SPECIFIERS = Object.freeze(
  * The npm packages a plugin must declare as type-only devDependencies (at the
  * host's version) for its shimmed imports to typecheck: every shimmed npm
  * package except React, whose declarations ship separately as `@types/react`
- * and `@types/react-dom` and which the scaffold pins on its own. `bb plugin
+ * and `@types/react-dom` and which the scaffold pins on its own. `zcc plugin
  * build` never bundles any of these, so none belongs in `dependencies`.
  */
 export const SHIMMED_TYPE_PACKAGES = Object.freeze(

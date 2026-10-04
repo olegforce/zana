@@ -2,15 +2,14 @@
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { create } from 'zustand';
-const mocks = vi.hoisted(() => ({ read: vi.fn(), list: vi.fn(), write: vi.fn(), toast: vi.fn(), hosts: [] as any[] }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), list: vi.fn(), write: vi.fn(), toast: vi.fn(), remoteRoot: vi.fn(), listRemote: vi.fn(), readRemote: vi.fn(), hosts: [] as any[] }));
 vi.mock('@/lib/monacoSetup', () => ({}));
 vi.mock('../../hooks/useHosts.js', () => ({ useHosts: () => mocks.hosts }));
 vi.mock('@/hooks/useMonacoTheme', () => ({ useMonacoTheme: () => 'dark' }));
 vi.mock('@/hooks/useFileDrop', () => ({ useFileDrop: () => ({ dropOver: false, dropHandlers: {} }) }));
 vi.mock('@/components/AiEnhanceSelection', () => ({ useAiEnhanceSelection: () => ({ registerEditor: vi.fn(), modal: null }) }));
 vi.mock('../../lib/product-client.js', () => ({ product: {
-  fs: { listDir: mocks.list, readFile: mocks.read, writeFile: mocks.write },
+  fs: { listDir: mocks.list, readFile: mocks.read, writeFile: mocks.write, remoteRoot: mocks.remoteRoot, listDirRemote: mocks.listRemote, readFileRemote: mocks.readRemote },
   git: { status: async () => null, listWorktrees: async () => [], listBranches: async () => [] },
   environments: { list: async () => [] }
 } }));
@@ -42,29 +41,33 @@ beforeEach(() => {
   mocks.list.mockImplementation(async (path: string) => [{ name: 'owner.txt', path: `${path}/owner.txt`, kind: 'file' }]);
   mocks.read.mockImplementation(async (_path: string, scope: any) => ({ ok: true, content: `machine-${scope.hostId}`, sha256: 'revision' }));
   mocks.write.mockResolvedValue({ ok: true, sha256: 'next', bytes: 4 });
+  mocks.remoteRoot.mockResolvedValue({ ok: true, root: '/remote' });
+  mocks.listRemote.mockResolvedValue([{ name: 'owner.txt', path: '/remote/owner.txt', kind: 'file' }]);
+  mocks.readRemote.mockResolvedValue({ ok: true, content: 'ssh-remote' });
   window.confirm = vi.fn().mockReturnValue(false);
   Element.prototype.scrollIntoView = vi.fn();
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-it('switches machine and edits only that source with its read revision', async () => {
-  render(<ExplorerView project={project} />);
-  await screen.findByRole('button', { name: 'owner.txt' });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Explorer machine' }), { target: { value: 'b' } });
+it('edits only the thread-pinned checkout with its read revision, without a machine selector', async () => {
+  render(<ExplorerView project={project} embedded scope={{ projectId: 'p', hostId: 'b' }} />);
   fireEvent.click(await screen.findByRole('button', { name: 'owner.txt' }));
   expect(await screen.findByDisplayValue('machine-b')).toBeTruthy();
   fireEvent.change(screen.getByLabelText('File contents'), { target: { value: 'edit-b' } });
   fireEvent.click(screen.getByText('Save fixture'));
   await waitFor(() => expect(mocks.write).toHaveBeenCalledWith('/b/owner.txt', 'edit-b', { projectId: 'p', hostId: 'b' }, 'revision'));
   expect(screen.getByText('no native openers')).toBeTruthy();
+  expect(screen.queryByRole('combobox')).toBeNull();
 });
-it('keeps unsaved contents if switching machines is cancelled', async () => {
-  render(<ExplorerView project={project} />);
+it('keeps the project target and dirty buffer when the machine roster changes', async () => {
+  const view = render(<ExplorerView project={project} />);
   fireEvent.click(await screen.findByRole('button', { name: 'owner.txt' }));
   await screen.findByDisplayValue('machine-a');
   fireEvent.change(screen.getByLabelText('File contents'), { target: { value: 'unsaved' } });
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'b' } });
-  expect(window.confirm).toHaveBeenCalled(); expect(screen.getByDisplayValue('unsaved')).toBeTruthy();
-  expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('a');
+  mocks.hosts.reverse();
+  view.rerender(<ExplorerView project={project} />);
+  expect(screen.getByDisplayValue('unsaved')).toBeTruthy();
+  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(mocks.list.mock.calls.every(([path]) => path === '/a')).toBe(true);
 });
 it('keeps existing project navigation working on the original source', async () => {
   render(<ExplorerView project={project} />);
@@ -74,7 +77,7 @@ it('keeps existing project navigation working on the original source', async () 
 it('pins a thread to its historical environment even after its source is removed', async () => {
   render(<ExplorerView project={{ ...project, sources: [] }} scope={{ projectId: 'p', hostId: 'b', environmentId: 'historical' }} checkoutPath="/old" />);
   await waitFor(() => expect(mocks.list).toHaveBeenCalledWith('/old', { projectId: 'p', hostId: 'b', environmentId: 'historical' }));
-  expect((screen.getByRole('combobox') as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.queryByRole('combobox')).toBeNull();
 });
 it('shows offline read failure without using the primary filesystem', async () => {
   mocks.hosts[1].status = 'disconnected'; mocks.list.mockRejectedValue(new Error('Machine unavailable'));
@@ -111,7 +114,7 @@ it('does not erase keystrokes entered while a save is pending', async () => {
 it('does not select a sole connected foreign machine when primary identity is absent', () => {
   mocks.hosts = [{ id: 'b', name: 'Secondary', status: 'connected' }];
   render(<ExplorerView project={{ ...project, hostId: undefined }} />);
-  expect(screen.getByText('Choose a machine with a registered checkout for this project.')).toBeTruthy();
+  expect(screen.getByRole('alert').textContent).toBe('Project checkout is unavailable.');
   expect(mocks.list).not.toHaveBeenCalled();
 });
 it('remounts the explorer when a source path changes on the same host', async () => {
@@ -120,4 +123,51 @@ it('remounts the explorer when a source path changes on the same host', async ()
   await waitFor(() => expect(mocks.list).toHaveBeenCalledWith('/b', scope));
   view.rerender(<ExplorerView project={{ ...project, sources: [{ ...project.sources[0], path: '/replacement' }] }} scope={scope} />);
   await waitFor(() => expect(mocks.list).toHaveBeenCalledWith('/replacement', scope));
+});
+it('shows no machine selector for local projects, including embedded explorers', async () => {
+  const local = { ...project, sources: [] };
+  const view = render(<ExplorerView project={local} />);
+  await screen.findByRole('button', { name: 'owner.txt' });
+  expect(screen.queryByRole('combobox', { name: 'Explorer machine' })).toBeNull();
+  view.rerender(<ExplorerView project={local} embedded scope={{ projectId: 'p', hostId: 'a' }} />);
+  expect(screen.queryByRole('combobox', { name: 'Explorer machine' })).toBeNull();
+  expect(view.container.querySelector('.explorer-view.is-embedded')).toBeTruthy();
+});
+it('uses a remote-host project target without a machine selector', async () => {
+  render(<ExplorerView project={{ ...project, hostId: 'b', path: '/b', sources: [] }} />);
+  await screen.findByRole('button', { name: 'owner.txt' });
+  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(mocks.list).toHaveBeenCalledWith('/b', { projectId: 'p', hostId: 'b' });
+});
+it('shows an offline project error without adding a machine selector', async () => {
+  mocks.hosts[0].status = 'disconnected';
+  mocks.list.mockRejectedValueOnce(new Error('Project is offline'));
+  render(<ExplorerView project={{ ...project, sources: [] }} />);
+  expect((await screen.findByRole('alert')).textContent).toBe('Project is offline');
+  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(mocks.list).toHaveBeenCalledWith('/a', { projectId: 'p', hostId: 'a' });
+});
+it('retains the registered target when its host is absent from the roster', async () => {
+  mocks.hosts = [mocks.hosts[1]];
+  render(<ExplorerView project={{ ...project, sources: [] }} />);
+  await screen.findByRole('button', { name: 'owner.txt' });
+  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(mocks.list).toHaveBeenCalledWith('/a', { projectId: 'p', hostId: 'a' });
+});
+it('uses the primary target for legacy local projects without a recorded host', async () => {
+  render(<ExplorerView project={{ ...project, hostId: undefined }} />);
+  await screen.findByRole('button', { name: 'owner.txt' });
+  expect(mocks.list).toHaveBeenCalledWith('/a', { projectId: 'p', hostId: 'a' });
+  expect(screen.queryByRole('combobox')).toBeNull();
+});
+it('keeps an SSH project on its remote filesystem without a machine selector', async () => {
+  render(<ExplorerView project={{ ...project, path: '/placeholder', remote: { host: 'ssh-host', remotePath: '/remote' } }} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'owner.txt' }));
+  await screen.findByDisplayValue('ssh-remote');
+  expect(mocks.remoteRoot).toHaveBeenCalledWith('p');
+  expect(mocks.listRemote).toHaveBeenCalledWith('p', '/remote');
+  expect(mocks.readRemote).toHaveBeenCalledWith('p', '/remote/owner.txt');
+  expect(mocks.list).not.toHaveBeenCalled();
+  expect(mocks.read).not.toHaveBeenCalled();
+  expect(screen.queryByRole('combobox')).toBeNull();
 });

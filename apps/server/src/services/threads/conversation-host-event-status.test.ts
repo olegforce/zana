@@ -52,7 +52,7 @@ describe('conversationLifecycleEventForHostEvent', () => {
       kind: 'thread.event',
       payload: { type: 'turn/started' }
     })).toEqual({ type: 'run.started' });
-    expect(conversationLifecycleEventForHostEvent({ kind: 'thread.started' })).toEqual({ type: 'run.started' });
+    expect(conversationLifecycleEventForHostEvent({ kind: 'thread.started', threadStatus: 'starting' })).toEqual({ type: 'run.started' });
     expect(conversationLifecycleEventForHostEvent({
       kind: 'thread.event',
       payload: { type: 'turn/completed' }
@@ -75,6 +75,15 @@ describe('conversationLifecycleEventForHostEvent', () => {
       kind: 'thread.event',
       payload: { type: 'turn/started', parentToolCallId: 'tool-1' }
     })).toBeNull();
+  });
+
+  it.each(['pending', 'starting'] as const)('settles a session acknowledgement during %s', threadStatus => {
+    expect(conversationLifecycleEventForHostEvent({ kind: 'thread.started', threadStatus })).toEqual({ type: 'run.started' });
+  });
+
+  it.each(['idle', 'error', 'stopping', 'active', undefined] as const)('does not restart a run on a late session acknowledgement in %s', threadStatus => {
+    expect(conversationLifecycleEventForHostEvent({ kind: 'thread.started', threadStatus })).toBeNull();
+    expect(conversationLifecycleEventForHostEvent({ kind: 'thread.event', payload: { type: 'turn/started' }, threadStatus })).toEqual({ type: 'run.started' });
   });
 
   it('ignores ordinary in-turn events', () => {

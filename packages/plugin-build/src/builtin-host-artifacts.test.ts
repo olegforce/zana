@@ -159,5 +159,9 @@ describe('builtin host artifacts', () => {
       await readFile(join(repositoryRoot, 'plugins', 'provider-pi', 'package.json'), 'utf8')
     ) as { zcc?: { host?: unknown } };
     expect(pkg.zcc?.host).toBeUndefined();
+    const daemonBuild = await readFile(join(repositoryRoot, 'apps/host-daemon/scripts/build-join.mjs'), 'utf8');
+    expect(daemonBuild).toContain("plugins/provider-pi/src/bridge/bridge.ts");
+    expect(daemonBuild).not.toContain("packages/agent-runtime/src/pi/bridge/bridge.ts");
+    expect(daemonBuild).not.toContain('piExtensionLoaderPlugin');
   });
 });
