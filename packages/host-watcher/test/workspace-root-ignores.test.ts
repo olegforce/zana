@@ -237,11 +237,16 @@ describe("workspace root watch events inside nested heavy directories (#1779)", 
         expect(changedPaths).toContain(visibleFile);
         expect(changedPaths).not.toContain(nestedPackageFile);
         expect(changedPaths).not.toContain(nestedGitFile);
+        // Root Git metadata is watched for status updates. Only nested heavy
+        // directories are excluded, including delayed native watcher events.
+        const nestedRoot = path.join(realRoot, "apps", "child-0") + path.sep;
         expect(
           changedPaths.filter(
             (changedPath) =>
-              changedPath.includes(`${path.sep}node_modules${path.sep}`) ||
-              changedPath.includes(`${path.sep}.git${path.sep}`),
+              changedPath.startsWith(nestedRoot) && (
+                changedPath.includes(`${path.sep}node_modules${path.sep}`) ||
+                changedPath.includes(`${path.sep}.git${path.sep}`)
+              ),
           ),
         ).toEqual([]);
       } finally {
