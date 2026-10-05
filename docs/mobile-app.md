@@ -134,7 +134,7 @@ These smoke checks verify the online entry point and that an old QR deep link ca
 
 For full native acceptance, approve a dedicated test phone through GitHub and select an enrolled test computer through the real HTTPS service. `online-thread.yaml` accepts a `THREAD_LINK` for a seeded test conversation and checks sending, keyboard visibility, scrolling and device settings. Its fixture requirements are listed in that flow. It does not bypass authentication or create a local port reverse. After deployment, verify Wi-Fi-to-cellular switching and account revocation on a physical phone. Source tests and bundle exports alone cannot establish that result.
 
-The standard CI job typechecks the native package and exports both bundles. `mobile-android.yml` builds a standalone Android test APK and retains it for seven days; no signing credentials or iOS simulator are required.
+Native mobile builds and distribution are outside GitHub CI. Run the mobile package's typecheck, bundle exports, and native acceptance checks locally when working on the native app. Android, iOS, and TestFlight workflows have been removed.
 
 ## Installable builds
 
