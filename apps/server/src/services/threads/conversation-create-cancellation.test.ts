@@ -8,8 +8,8 @@ import {
 } from '@zana-ai/zcc-db';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { createConversationFromRequest } from './conversation-create.js';
-import { stopConversation } from './conversation-lifecycle.js';
-import { registerThreadProvider } from './thread-provider-catalog.js';
+import { sendConversationTurn, stopConversation } from './conversation-lifecycle.js';
+import { getThreadProvider, registerThreadProvider } from './thread-provider-catalog.js';
 import { PluginHostArtifactRegistry } from '../../plugins/plugin-host-artifact-registry.js';
 
 let db: ZccDatabase;
@@ -59,6 +59,31 @@ beforeEach(() => {
 afterEach(() => { unregister(); db.close(); rmSync(dir, { recursive: true, force: true }); });
 
 describe('initial thread cancellation', () => {
+  it.each(['create', 'send'])('does not dispatch after Stop while worker provider options are pending (%s)', async phase => {
+    const input = [{ type: 'text' as const, text: 'do work', mentions: [] }];
+    if (phase === 'send') {
+      await createConversationFromRequest(ctx, { id: threadId, projectId: 'p', providerId: 'test-provider', input: ['do work'], promptInput: input });
+      await vi.waitFor(() => expect(getConversationThread(db, threadId)?.providerThreadId).toBe('provider-created'));
+      await stopConversation(ctx, threadId);
+    }
+    const count = () => listConversationThreadEvents(db, threadId).filter(event => event.type === 'client/turn/requested').length;
+    const before = phase === 'send' ? count() : 0;
+    const pending = Promise.withResolvers<Record<string, unknown>>(), hook = vi.fn(() => pending.promise);
+    const provider = registerThreadProvider('test', { ...getThreadProvider('test-provider')!, deriveProviderOptions: hook as never });
+    const previous = unregister; unregister = () => { provider.unregister(); previous(); };
+    ctx.plugins!.getSettings = () => ({ descriptors: {}, values: {} });
+    commands.length = 0;
+    const work = phase === 'create'
+      ? createConversationFromRequest(ctx, { id: threadId, projectId: 'p', providerId: 'test-provider', input: ['do work'], promptInput: input })
+      : sendConversationTurn(ctx, threadId, input);
+    const cancelled = work.catch(error => error);
+    await vi.waitFor(() => expect(hook).toHaveBeenCalledOnce());
+    await stopConversation(ctx, threadId); pending.resolve({ resolved: true });
+    expect(await cancelled).toMatchObject({ code: 'send_cancelled' });
+    expect(commands.filter(type => ['thread.start', 'thread.resume', 'thread.submit'].includes(type))).toEqual([]);
+    expect(count()).toBe(before); expect(getConversationThread(db, threadId)?.status).toBe('idle');
+  });
+
   it.each([false, true])('does not start after Stop during environment provisioning (reuse=%s)', async reuse => {
     const environment = reuse ? createEnvironment(db, { projectId: 'p', hostId, path: dir, status: 'ready', workspaceProvisionType: 'unmanaged' }) : null;
     let release!: () => void;

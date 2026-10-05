@@ -196,7 +196,7 @@ async function startConversationOnHost(
   });
   const requestedPermissionMode = args.input.permissionMode ?? permissionModeForLaunchProfile(args.input.providerId);
   const permissionMode = clampPermissionModeToHost(ctx.db, args.hostId, requestedPermissionMode) ?? requestedPermissionMode;
-  const providerOptions = derivedProviderOptionsForCommand({
+  const providerOptions = await derivedProviderOptionsForCommand({
     providerId,
     threadId: args.thread.id,
     projectId: args.project.id,
@@ -205,6 +205,7 @@ async function startConversationOnHost(
     promptMode: requestedMode === 'plan' ? 'plan' : undefined,
     plugins: ctx.plugins
   });
+  args.lease.assertCurrent();
   const clientRequestId = appendClientTurnRequested(ctx, {
     threadId: args.thread.id,
     prompt: args.prompt,
