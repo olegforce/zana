@@ -20,10 +20,16 @@ function assertPlainJsonData(value: unknown, seen: Set<object>): void {
   if (value === null || typeof value !== "object") return;
   if (seen.has(value)) throw new Error("pluginMetadata contains a cycle");
   const array = Array.isArray(value);
-  if (
-    Object.getPrototypeOf(value) !==
-    (array ? Array.prototype : Object.prototype)
-  ) {
+  const prototype = Object.getPrototypeOf(value);
+  const builtin = array ? Array : Object;
+  // Plugin factories run in a VM context, whose built-in prototypes have
+  // different identities. Accept those built-ins while rejecting custom classes.
+  const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+  const builtinPrototype = prototype === builtin.prototype || (
+    typeof constructor === "function" && constructor.prototype === prototype &&
+    Function.prototype.toString.call(constructor) === Function.prototype.toString.call(builtin)
+  );
+  if (!builtinPrototype) {
     throw new Error("pluginMetadata must contain plain JSON data");
   }
   seen.add(value);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
 import {
   PLUGIN_METADATA_MAX_BYTES,
   deepFreezePluginMetadata,
@@ -14,6 +15,33 @@ describe("plugin metadata", () => {
       nested: { ok: true },
     });
     expect(exceedsPluginMetadataLimit("{}")).toBe(false);
+  });
+
+  it("accepts nested objects and arrays created by a plugin VM context", () => {
+    const metadata = runInNewContext(`({
+      slackConversation: 'conversation',
+      interactionSurface: { kind: 'remote', label: 'Slack' },
+      values: [{ ok: true }, ['nested', null, 1]]
+    })`);
+    expect(validatePluginMetadata(metadata)).toEqual({
+      slackConversation: "conversation",
+      interactionSurface: { kind: "remote", label: "Slack" },
+      values: [{ ok: true }, ["nested", null, 1]],
+    });
+  });
+
+  it("rejects custom prototypes and classes even when they resemble VM built-ins", () => {
+    for (const value of [
+      Object.create(null),
+      Object.create({ constructor: Object }),
+      Object.create({ constructor: "Object" }),
+      runInNewContext('new (class Metadata { constructor() { this.ok = true; } })()'),
+      { nested: runInNewContext('new (class Values extends Array {})(1, 2)') },
+      { nested: new Date() },
+    ]) expect(() => validatePluginMetadata(value)).toThrow(/plain JSON data/);
+    const cyclic = runInNewContext('const data = {}; data.self = data; data');
+    expect(() => validatePluginMetadata(cyclic)).toThrow(/cycle/);
+    expect(() => validatePluginMetadata(runInNewContext('({ callback() {} })'))).toThrow();
   });
 
   it("rejects arrays, custom prototypes, cycles, and oversized payloads", () => {
