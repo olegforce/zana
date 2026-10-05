@@ -201,3 +201,15 @@ describe('product plugin sdk confinement', () => {
     expect(bundledPluginsRootFromDataDir('/tmp/zcc-data/product', '/opt/plugins')).toBe('/opt/plugins');
   });
 });
+
+it('awaits the shared queue store through the live plugin SDK callback', async () => {
+  const dataDir = tempDir(), pluginRoot = tempDir(), bundledRoot = tempDir();
+  writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ name: 'queue-reader', version: '0.1.0', engines: { zcc: '>=1.0.0', zccPluginSdk: '>=0.1.0' }, zcc: { name: 'Queue reader', description: 'Queue SDK regression', branding: { icon: 'Puzzle' }, server: './server.mjs' } }));
+  writeFileSync(join(pluginRoot, 'server.mjs'), `export default api => { api.rpc.method('queue', args => api.sdk.threads.queuedMessages.list({ threadId: args.threadId })); };`);
+  server = await startProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+  const { createQueuedMessage } = await import('../services/threads/queued-messages.js');
+  const queued = await createQueuedMessage(dataDir, 'thread', [{ type: 'text', text: 'queued', mentions: [] }]);
+  const plugins = await attachProductPluginService(server.ctx, { bundledRoot });
+  await plugins.install(pluginRoot);
+  await expect(plugins.callRpc('queue-reader', 'queue', { threadId: 'thread' })).resolves.toEqual([{ id: queued.id }]);
+});

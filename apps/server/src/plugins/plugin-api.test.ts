@@ -948,3 +948,70 @@ describe('machine plugin host API', () => {
     } finally { await handle.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('responsiveness lifecycle contracts', () => {
+  it('retains a live service cleanup and accepts services without cleanup', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'plugin-live-service-'));
+    const handle = createPluginApi('fixture', dir), stop = vi.fn();
+    try {
+      handle.api.background.service('live', () => stop);
+      handle.api.background.service('empty', () => undefined);
+      await Promise.resolve();
+      expect(stop).not.toHaveBeenCalled();
+      await handle.dispose();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally { await handle.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('lists and deletes persisted keys and delivers settings changes despite a rejected listener', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'plugin-storage-lifecycle-'));
+    const handle = createPluginApi('fixture', dir);
+    try {
+      await handle.api.storage.kv.set('a', 1); await handle.api.storage.kv.set('b', 2);
+      expect(await handle.api.storage.kv.list()).toEqual(['a', 'b']);
+      await handle.api.storage.kv.delete('a'); expect(await handle.api.storage.kv.list('b')).toEqual(['b']);
+      const settings = handle.api.settings.define({ flag: { type: 'boolean', label: 'Flag', default: false } });
+      const changed = vi.fn();
+      settings.onChange(() => { throw Error('broken listener'); }); settings.onChange(changed);
+      await handle.setSettings({ flag: true }); expect(changed).toHaveBeenCalledWith({ flag: true });
+    } finally { await handle.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('stops a background service that settles after disposal and contains startup failures', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'plugin-late-service-'));
+    const handle = createPluginApi('fixture', dir), late = Promise.withResolvers<() => void>(), stop = vi.fn();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      handle.api.background.service('late', () => late.promise);
+      handle.api.background.service('failed', async () => { throw Error('startup failed'); });
+      await Promise.resolve(); await Promise.resolve();
+      await handle.dispose(); late.resolve(stop); await Promise.resolve();
+      expect(stop).toHaveBeenCalledOnce(); expect(log).toHaveBeenCalled();
+    } finally { await handle.dispose(); log.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('serializes scheduled jobs and suppresses duplicate named runs within a minute', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'plugin-serial-schedule-'));
+    const handle = createPluginApi('fixture', dir), pending = Promise.withResolvers<void>();
+    const callbacks: Array<() => void> = [];
+    const interval = vi.spyOn(globalThis, 'setInterval').mockImplementation(((fn: () => void) => { callbacks.push(fn); return 1 as never; }) as never);
+    const clear = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {});
+    const job = vi.fn(() => pending.promise), named = vi.fn(async () => {});
+    try {
+      handle.api.background.schedule('* * * * *', job);
+      handle.api.background.schedule('named', '* * * * *', named);
+      callbacks[0](); callbacks[0](); expect(job).toHaveBeenCalledOnce();
+      pending.resolve(); await Promise.resolve(); await Promise.resolve();
+      callbacks[1](); await vi.waitFor(() => expect(named).toHaveBeenCalledOnce());
+      await vi.waitFor(() => { callbacks[1](); expect(named).toHaveBeenCalledOnce(); });
+      await handle.dispose(); callbacks[0](); expect(job).toHaveBeenCalledOnce();
+    } finally { await handle.dispose(); interval.mockRestore(); clear.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('bounds synchronous factory loops and asynchronous factory startup', async () => {
+    const { runFactoryTimeBoxed } = await import('./plugin-api.js');
+    await runFactoryTimeBoxed(() => undefined, {} as never, 50);
+    await expect(runFactoryTimeBoxed(() => { while (true) {} }, {} as never, 10)).rejects.toThrow(/timed out/);
+    await expect(runFactoryTimeBoxed(() => new Promise(() => {}), {} as never, 10)).rejects.toThrow(/timed out/);
+  });
+});

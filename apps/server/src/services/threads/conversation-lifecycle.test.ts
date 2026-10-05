@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerThreadProvider } from './thread-provider-catalog.js';
+import { getThreadProvider, registerThreadProvider } from './thread-provider-catalog.js';
 import { PluginHostArtifactRegistry } from '../../plugins/plugin-host-artifact-registry.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
@@ -322,6 +322,32 @@ describe('thread permission persistence', () => {
 });
 
 describe('conversation lifecycle', () => {
+  it('submits manual compaction without deriving ordinary turn options', async () => {
+    const deriveProviderOptions = vi.fn(() => ({ fixtureOption: true }));
+    providerHandles.push(registerThreadProvider('test', {
+      ...getThreadProvider(thread.providerId)!,
+      deriveProviderOptions
+    }));
+    const callHostOnlineRpc = vi.fn(async () => ({ threadId: thread.id, accepted: true }));
+    const context = ctx(callHostOnlineRpc);
+    context.plugins.getSettings = vi.fn(() => ({ descriptors: {}, values: {} }));
+    await sendConversationTurn(context, thread.id, '/compact', 'auto', undefined, { compact: true });
+
+    expect(callHostOnlineRpc).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        type: 'turn.submit',
+        input: [{ type: 'text', text: '/compact', mentions: [] }]
+      })
+    }));
+    const command = callHostOnlineRpc.mock.calls[0][0] as { command: Record<string, unknown> };
+    expect(command.command).not.toHaveProperty('providerOptions');
+    expect(command.command).not.toHaveProperty('claudeCodePermissionMode');
+    // Resume still carries startup options; the compaction prompt gets no
+    // ordinary turn derivation that could override the active session's mode.
+    expect(command.command.resume).toEqual(expect.objectContaining({ providerOptions: { fixtureOption: true } }));
+    expect(deriveProviderOptions).toHaveBeenCalledTimes(1);
+  });
+
   it.each([8, 20])('starts an idle follow-up with %i unrelated active threads', async (activeCount) => {
     vi.mocked(countActiveConversationTurns).mockReturnValue(activeCount);
     const callHostOnlineRpc = vi.fn(async () => ({ threadId: thread.id, accepted: true }));

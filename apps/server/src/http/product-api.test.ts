@@ -2980,3 +2980,40 @@ describe('product HTTP thread tabs', () => {
     expect(stopped.status).toBe(200);
   });
 });
+
+describe('async history and queue HTTP responsiveness', () => {
+  it('serves asynchronous history filters and queue reads and rejects a missing queued send', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'async-queue-http-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    for (const query of ['', '?projectId=p&q=needle&archived=active&offset=0', '?archived=archived']) {
+      const read = await fetch(`${server.url}api/v1/threads/history${query}`);
+      expect(read.status).toBe(200); expect(await read.json()).toHaveProperty('rows');
+    }
+    const queue = `${server.url}api/v1/threads/thread/queued-messages`;
+    expect(await (await fetch(queue)).json()).toEqual([]);
+    const created = await fetch(queue, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'queued' }) });
+    expect(created.status).toBe(201);
+    expect(await (await fetch(queue)).json()).toHaveLength(1);
+    const missing = await fetch(`${queue}/missing/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(missing.status).toBe(404);
+  });
+  it('returns a retryable HTTP status for SQLite contention', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'sqlite-busy-http-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    const read = vi.spyOn(server.ctx.config, 'getConfig').mockImplementation(() => { throw Object.assign(Error('database locked'), { code: 'SQLITE_BUSY' }); });
+    try {
+      const response = await fetch(`${server.url}api/v1/config`);
+      expect(response.status).toBe(503); expect(response.headers.get('Retry-After')).toBe('1');
+      expect(await response.json()).toMatchObject({ error: 'database-busy' });
+    } finally { read.mockRestore(); }
+  });
+  it('uses an isolated environment data directory when no explicit directory is supplied', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'default-data-http-'));
+    vi.stubEnv('ZCC_DATA_DIR', dataDir);
+    try {
+      server = await startTestProductServer({ origins: { serverPort: 0, devAppPort: 5173 } });
+      expect(server.ctx.dataDir).toBe(dataDir);
+      expect((await fetch(`${server.url}api/v1/health`)).status).toBe(200);
+    } finally { vi.unstubAllEnvs(); }
+  });
+});

@@ -34,9 +34,9 @@ function settingsWithoutSecrets(
   return next;
 }
 
-export function derivedProviderOptionsForCommand(
+export async function derivedProviderOptionsForCommand(
   args: DerivedProviderOptionsArgs
-): Record<string, unknown> | undefined {
+): Promise<Record<string, unknown> | undefined> {
   const provider = getThreadProvider(args.providerId);
   if (!provider?.deriveProviderOptions) return undefined;
   const context: PluginProviderOptionsContext = {
@@ -47,7 +47,8 @@ export function derivedProviderOptionsForCommand(
     ...(args.model ? { model: args.model } : {}),
     ...(args.promptMode ? { promptMode: args.promptMode } : {})
   };
-  const derived = provider.deriveProviderOptions(context);
+  // A synchronous plugin hook still crosses an asynchronous worker transport.
+  const derived = await provider.deriveProviderOptions(context);
   if (!derived || typeof derived !== 'object' || Array.isArray(derived)) return undefined;
   return derived;
 }

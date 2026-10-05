@@ -39,7 +39,7 @@ export async function threadResumeFields(
   const claudeCodePermissionMode = requestedMode
     ? claudeCodePermissionModeForTurn(thread.providerId, requestedMode)
     : undefined;
-  const providerOptions = derivedProviderOptionsForCommand({
+  const providerOptions = await derivedProviderOptionsForCommand({
     providerId: thread.providerId,
     threadId: thread.id,
     projectId: thread.projectId,

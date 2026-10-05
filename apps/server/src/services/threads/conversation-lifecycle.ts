@@ -153,7 +153,7 @@ async function sendConversationTurnWithLease(
   const requestedMode = requestedExecutionModeFromTurn({ acpMode: execution?.acpMode, input });
   if (options.compact !== true) {
     const claudeCodePermissionMode = claudeCodePermissionModeForTurn(live.providerId, requestedMode);
-    const providerOptions = derivedProviderOptionsForCommand({
+    const providerOptions = await derivedProviderOptionsForCommand({
       providerId: live.providerId,
       threadId: live.id,
       projectId: live.projectId,
@@ -162,6 +162,7 @@ async function sendConversationTurnWithLease(
       promptMode: requestedMode === 'plan' ? 'plan' : undefined,
       plugins: ctx.plugins
     });
+    lease.assertCurrent();
     packedExecution = {
       ...execution,
       permissionMode,

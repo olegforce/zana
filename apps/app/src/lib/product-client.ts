@@ -105,7 +105,8 @@ function httpProduct(): Pick<
     if (!terminalRosterRead) {
       const read = apiJson<{ sessions: TerminalSession[] }>('/terminals');
       terminalRosterRead = read;
-      void read.finally(() => { if (terminalRosterRead === read) terminalRosterRead = undefined; }).catch(() => {});
+      // A pending roster is shared until it settles; no newer read can replace it.
+      void read.finally(() => { terminalRosterRead = undefined; }).catch(() => {});
     }
     return terminalRosterRead;
   };

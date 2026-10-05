@@ -17,6 +17,17 @@ class Socket {
 let stops: Array<() => void>;
 beforeEach(() => { vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('WebSocket', Socket); Socket.instances = []; Socket.failConstruct = false; stops = []; });
 afterEach(() => { stops.forEach(stop => stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('keeps other typed subscribers alive and closes the last typed subscription', async () => {
+  const { subscribeProductEvent } = await import('./product-ws.js');
+  const first = vi.fn(), second = vi.fn();
+  const a = subscribeProductEvent('changed', first), b = subscribeProductEvent('changed', second);
+  const other = subscribeProductEvent('other', vi.fn());
+  const socket = Socket.instances[0]!; socket.open();
+  a(); socket.message({ type: 'changed', payload: 1 });
+  expect(first).not.toHaveBeenCalled(); expect(second).toHaveBeenCalledWith(1);
+  b(); expect(socket.close).not.toHaveBeenCalled(); other();
+  expect(socket.close).toHaveBeenCalledOnce();
+});
 it('acknowledges renderer readiness only after the current product socket opens', async () => {
   const { subscribeProductWs, waitForProductWsOpen } = await import('./product-ws.js');
   stops.push(subscribeProductWs(() => {}));
