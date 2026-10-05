@@ -22,10 +22,10 @@ function assertPlainJsonData(value: unknown, seen: Set<object>): void {
   const array = Array.isArray(value);
   const prototype = Object.getPrototypeOf(value);
   const builtin = array ? Array : Object;
-  // Plugin factories run in a VM context, whose built-in prototypes have
-  // different identities. Accept those built-ins while rejecting custom classes.
+  // Worker RPC reconstructs JSON dictionaries without prototypes; VM contexts
+  // also have distinct built-ins. Both are plain data, unlike custom classes.
   const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
-  const builtinPrototype = prototype === builtin.prototype || (
+  const builtinPrototype = (!array && prototype === null) || prototype === builtin.prototype || (
     typeof constructor === "function" && constructor.prototype === prototype &&
     Function.prototype.toString.call(constructor) === Function.prototype.toString.call(builtin)
   );

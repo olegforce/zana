@@ -30,9 +30,22 @@ describe("plugin metadata", () => {
     });
   });
 
+  it("accepts dictionaries reconstructed by worker RPC without prototypes", () => {
+    const metadata = Object.assign(Object.create(null), {
+      slackConversation: "conversation",
+      interactionSurface: Object.assign(Object.create(null), { kind: "remote", label: "Slack" }),
+      values: [Object.assign(Object.create(null), { ok: true })],
+    });
+    expect(validatePluginMetadata(metadata)).toEqual({
+      slackConversation: "conversation",
+      interactionSurface: { kind: "remote", label: "Slack" },
+      values: [{ ok: true }],
+    });
+  });
+
   it("rejects custom prototypes and classes even when they resemble VM built-ins", () => {
     for (const value of [
-      Object.create(null),
+      Object.create(Object.create(null)),
       Object.create({ constructor: Object }),
       Object.create({ constructor: "Object" }),
       runInNewContext('new (class Metadata { constructor() { this.ok = true; } })()'),
