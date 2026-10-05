@@ -19,7 +19,11 @@ test('search edits do not execute a regex against retained renderer previews', a
     dispatchEvent(new PopStateEvent('popstate'));
   }, id);
   await expect(page.getByText('regex-highlight-audit', { exact: true }).first()).toBeVisible();
-  await page.keyboard.press('ControlOrMeta+Shift+f');
+  // Enter through the project control so keyboard actions have selected scope;
+  // a URL change alone can render the project before selection is established.
+  await page.getByRole('button', { name: 'Open regex-highlight-audit', exact: true }).click();
+  const modifier = await page.evaluate(() => navigator.platform.toUpperCase().includes('MAC') ? 'Meta' : 'Control');
+  await page.keyboard.press(`${modifier}+Shift+f`);
   const input = page.locator('.search-panel input');
   await expect(input).toBeVisible();
   await input.fill('!');
