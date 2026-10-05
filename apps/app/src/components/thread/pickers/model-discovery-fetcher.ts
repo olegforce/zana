@@ -57,7 +57,16 @@ export function createModelDiscoveryFetcher(single: ThreadExecutionOptionsFetche
       await scheduleBatch(async () => {
         const response = await fetchWithAppSurface(`/api/v1/system/execution-options?${params}`, { signal: controller.signal });
         if (!response.ok) {
-          throw Object.assign(new Error(`Model discovery failed (${response.status})`), { status: response.status });
+          let detail = `Model discovery failed (${response.status})`;
+          let code: string | undefined;
+          try {
+            const body = await response.json() as { message?: unknown; code?: unknown; error?: unknown };
+            if (typeof body.message === 'string') detail = body.message;
+            else if (typeof body.error === 'string') detail = body.error;
+            if (typeof body.code === 'string') code = body.code;
+            else if (typeof body.error === 'string') code = body.error;
+          } catch { /* Keep the HTTP diagnostic for non-JSON errors. */ }
+          throw Object.assign(new Error(detail), { status: response.status, code });
         }
         await readNdjsonEvents<{ providerId: string; options: Options }>(response, (event) => {
           for (const job of pending) {

@@ -73,6 +73,20 @@ it.each([
   expect(results[1]).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining(message) }) });
 });
 
+it.each([
+  [{ code: 'host-unavailable', message: 'Remote host is offline' }, 'host-unavailable', 'Remote host is offline'],
+  [{ error: 'path-unavailable' }, 'path-unavailable', 'path-unavailable'],
+  [{ message: 123, code: false }, undefined, 'Model discovery failed (503)'],
+  [null, undefined, 'Model discovery failed (503)']
+])('preserves structured HTTP diagnostics for every batched provider', async (body, code, message) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 503 })));
+  const fetcher = createModelDiscoveryFetcher(vi.fn());
+  const results = await Promise.allSettled([fetcher({ providerId: 'a' }), fetcher({ providerId: 'b' })]);
+  for (const result of results) {
+    expect(result).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ status: 503, code, message }) });
+  }
+});
+
 it('splits exceptionally large catalogues at the server batch bound', async () => {
   const transport = vi.fn(async (input: string) => {
     const ids = new URL(input, 'http://localhost').searchParams.getAll('providerId');

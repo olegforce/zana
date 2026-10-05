@@ -23,6 +23,18 @@ const threadId = randomUUID();
 const environmentId = randomUUID();
 
 describe('host-rpc contract', () => {
+  it('keeps Connect and legacy peer installation as separate strict request shapes', () => {
+    const command = { type: 'peer_daemon.install', remote: { host: 'devbox' }, connect: {
+      accountUrl: 'https://account.example', serverId: randomUUID(), code: 'ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD'
+    } };
+    expect(HostRpcCommandSchema.parse(command)).toEqual(command);
+    for (const invalid of [
+      { ...command, joinCode: 'zcde_legacy' },
+      { ...command, connect: { ...command.connect, code: 'zcde_legacy' } },
+      { ...command, connect: { ...command.connect, serverId: 'not-a-uuid' } },
+      { ...command, connect: { ...command.connect, credential: 'hidden' } }
+    ]) expect(HostRpcCommandSchema.safeParse(invalid).success).toBe(false);
+  });
   it('requires a bounded runtime inventory before readiness and binds the acknowledgement to the lifetime', () => {
     const ready = { type: 'host.ready', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId, instanceId,
       runtime: { threads: [{ threadId, status: 'active' }], loadedEnvironments: [environmentId] } };

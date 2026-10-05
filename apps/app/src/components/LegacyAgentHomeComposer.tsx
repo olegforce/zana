@@ -93,6 +93,7 @@ import {
 } from './thread/pickers/composer-selection-preference.js';
 import { threadModelCatalogForHost } from './thread/pickers/thread-model-catalog.js';
 import { defaultHostId, useHosts } from '../hooks/useHosts.js';
+import { RemoteComposerConnection } from './RemoteComposerConnection.js';
 
 const EMPTY_MODELS: readonly HarnessModelTarget[] = [];
 const CLI_WORK_MODE_ENTRIES = composerModeEntries({
@@ -818,6 +819,7 @@ export function LegacyAgentHomeComposer({
                       ? catalogEntry?.modelLoadError ?? null
                       : null
                   }
+                  modelLoadErrorDetail={catalogEntry?.modelLoadErrorDetail ?? null}
                   onModelChange={(value) => {
                     setModelId(value);
                     if (selectedProviderId && value) {
@@ -893,12 +895,15 @@ export function LegacyAgentHomeComposer({
             />
           </div>
           {project?.remote ? (
-            <span className="thread-command-chip" data-testid="composer-remote-host-mark">
-              {agentCardRuntimeLabel({
-                profile: cliRuntimeProfile,
-                remote: true
-              })}
-            </span>
+            <>
+              <span className="thread-command-chip" data-testid="composer-remote-host-mark">
+                {agentCardRuntimeLabel({
+                  profile: cliRuntimeProfile,
+                  remote: true
+                })}
+              </span>
+              <RemoteComposerConnection project={project} hosts={hosts} onConnected={loadProjects} onError={setError} />
+            </>
           ) : project ? (
             <EnvironmentPicker
               hostId={executionHostId}

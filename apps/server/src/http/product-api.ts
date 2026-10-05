@@ -374,7 +374,10 @@ async function resolveExecutionOptionsScope(args: {
       }
     });
     return { ok: true, hostId: project.hostId, cwd };
-  } catch {
+  } catch (error) {
+    if (error instanceof HostUnavailableError) {
+      return { ok: false, status: 503, code: error.code, message: error.message };
+    }
     return { ok: false, status: 409, code: 'path-unavailable', message: 'remote project path is unavailable' };
   }
 }
