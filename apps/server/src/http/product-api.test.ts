@@ -435,6 +435,23 @@ describe('product HTTP', () => {
       command: expect.objectContaining({ type: 'provider.list_models', cwd: '/srv/project' })
     }));
     expect(rpc.mock.calls.every(([input]) => input.hostId === 'remote-host')).toBe(true);
+
+    rpc.mockClear();
+    server.ctx.hostHub.resolveHostId = () => { throw new HostUnavailableError('Remote host is disconnected'); };
+    const offline = await fetch(
+      `${server.url}api/v1/system/execution-options?providerId=acp-opencode&projectId=remote-options`
+    );
+    expect(offline.status).toBe(503);
+    await expect(offline.json()).resolves.toMatchObject({ code: 'host-unavailable', message: 'Remote host is disconnected' });
+    expect(rpc).not.toHaveBeenCalled();
+
+    server.ctx.hostHub.resolveHostId = () => 'remote-host';
+    server.ctx.hostHub.ensureHostSessionReady = () => { throw new Error('bad remote path'); };
+    const invalidPath = await fetch(
+      `${server.url}api/v1/system/execution-options?providerId=acp-opencode&projectId=remote-options`
+    );
+    expect(invalidPath.status).toBe(409);
+    await expect(invalidPath.json()).resolves.toMatchObject({ code: 'path-unavailable' });
   });
 
   it('still offers OpenCode when health is a noop and that host reports the CLI installed', async () => {

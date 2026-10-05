@@ -7,6 +7,7 @@ import {
   createSystemPeerDaemonSsh,
   parsePeerDaemonStatusOutput,
   peerDaemonInstall,
+  peerDaemonConnectInstall,
   peerDaemonLogs,
   peerDaemonRestart,
   peerDaemonStatus,
@@ -38,6 +39,25 @@ function mockSsh(handler: (cmd: string) => { code: number; stdout?: string; stde
 }
 
 describe('peer-daemon commands', () => {
+  it('runs the HTTPS account installer for a Connect code and redacts it from success and failure logs', async () => {
+    const connect = { accountUrl: 'https://account.example', serverId: '11111111-1111-4111-8111-111111111111', code: 'ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD' };
+    const remote = { host: 'devbox' };
+    const ssh = mockSsh(cmd => {
+      expect(cmd).toContain("--proto '=https'");
+      expect(cmd).toContain('/api/connect/host-installer');
+      expect(cmd).toContain('umask 077');
+      expect(cmd).toContain('trap');
+      expect(cmd).not.toContain('--join-code');
+      return { code: 0, stdout: 'Installed ' + connect.code };
+    });
+    await expect(peerDaemonConnectInstall(ssh, { remote, connect })).resolves.toEqual({ ok: true, log: 'Installed [redacted]' });
+    const failed = mockSsh(() => ({ code: 35, stderr: 'failed ' + connect.code }));
+    await expect(peerDaemonConnectInstall(failed, { remote, connect })).rejects.toThrow('failed [redacted]');
+    await expect(peerDaemonConnectInstall(mockSsh(() => ({ code: 1 })), { remote, connect })).rejects.toThrow('Connect machine installation failed');
+    for (const patch of [{ accountUrl: 'http://account.example' }, { accountUrl: 'https://account.example/path' }, { accountUrl: 'https://user@account.example' }, { serverId: '-flag' }, { code: 'zcde_legacy' }]) {
+      await expect(peerDaemonConnectInstall(ssh, { remote, connect: { ...connect, ...patch } })).rejects.toThrow('Invalid Connect');
+    }
+  });
   it('refuses a flag-shaped or invalid server host', () => {
     expect(() => peerStatusCommand('-oProxyCommand=x')).toThrow(/valid hostname/);
     expect(() => peerRestartCommand('box;rm')).toThrow(/valid hostname/);

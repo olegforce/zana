@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createCommandRuntime, dispatchHostCommand } from './command-dispatch.js';
 import { HostCommandError } from './host-command-error.js';
 import { handleHostRpcRequest } from './command-router.js';
@@ -1031,6 +1031,16 @@ describe('host command dispatch', () => {
       remote: { host: 'devbox' },
       serverHost: 'machine.example.com'
     })).resolves.toEqual({ state: 'connected' });
+  });
+
+  it('dispatches Connect installation without sending the code to legacy enrollment', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: 'Connected', stderr: '' }));
+    const runtime = createCommandRuntime({ peerSsh: { run, pipeFile: vi.fn() } });
+    await expect(dispatchHostCommand(runtime, {
+      type: 'peer_daemon.install', remote: { host: 'devbox' },
+      connect: { accountUrl: 'https://account.example', serverId: '11111111-1111-4111-8111-111111111111', code: 'ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD' }
+    })).resolves.toEqual({ ok: true, log: 'Connected' });
+    expect(run).toHaveBeenCalledWith({ host: 'devbox' }, expect.stringContaining('/api/connect/host-installer'), expect.any(Number));
   });
 
   it('dispatches peer_daemon.logs through injectable SSH', async () => {

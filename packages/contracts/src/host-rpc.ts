@@ -811,14 +811,22 @@ export const PeerDaemonRestartCommandSchema = z.object({
 }).strict();
 export type PeerDaemonRestartCommand = z.infer<typeof PeerDaemonRestartCommandSchema>;
 
-export const PeerDaemonInstallCommandSchema = z.object({
+export const PeerDaemonInstallCommandSchema = z.union([z.object({
   type: z.literal('peer_daemon.install'),
   remote: PeerDaemonRemoteSchema,
   joinCode: z.string().min(1).max(200),
   hostId: UuidSchema,
   serverUrl: z.string().url().max(512),
   artifactPath: PathSchema
-}).strict();
+}).strict(), z.object({
+  type: z.literal('peer_daemon.install'),
+  remote: PeerDaemonRemoteSchema,
+  connect: z.object({
+    accountUrl: z.string().url().max(2048),
+    serverId: UuidSchema,
+    code: z.string().regex(/^(?:[A-F0-9]{4}-){7}[A-F0-9]{4}$/)
+  }).strict()
+}).strict()]);
 export type PeerDaemonInstallCommand = z.infer<typeof PeerDaemonInstallCommandSchema>;
 
 export const PeerDaemonLogsCommandSchema = z.object({

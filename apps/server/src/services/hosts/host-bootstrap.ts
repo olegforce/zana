@@ -16,6 +16,7 @@ import { serverPortFromEnv } from '../../http/ports.js';
 import { resolveHostArtifact } from './host-artifact.js';
 import type { ProjectRecord } from '../../project-store.js';
 import type { PeerDaemonStatusResult } from '@zana-ai/zcc-contracts/host-rpc';
+import { connectInstallCommand, issueConnectHostCode, usesConnect } from './connect-enrollment.js';
 
 const PEER_HOST_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -443,6 +444,31 @@ async function bindRemoteProject(
   input.emit({ type: 'done', hostId: input.hostId });
 }
 
+async function installConnectPeer(ctx: ProductHttpContext, remote: ProjectRemote, emit: HostBootstrapListener, hostId?: string): Promise<string> {
+  const primary = requirePrimaryHost(ctx);
+  const issued = await issueConnectHostCode(ctx, { name: remote.host.slice(0, 80), ...(hostId ? { hostId } : {}) });
+  emit({ type: 'log', text: 'Installing the machine through Zana Connect…' });
+  try {
+    const result = await ctx.hostHub.callHostOnlineRpc<{ ok: true; log: string }>({
+      hostId: primary.id,
+      timeoutMs: PEER_RPC_TIMEOUT_MS,
+      command: {
+        type: 'peer_daemon.install',
+        remote: { host: remote.host, ...(remote.user ? { user: remote.user } : {}), ...(remote.proxyJump ? { proxyJump: remote.proxyJump } : {}) },
+        connect: { accountUrl: issued.accountUrl, serverId: issued.serverId, code: issued.code }
+      }
+    });
+    if (result.log.trim()) emitLogLines(emit, result.log.trim());
+    await waitForPeerConnect(timeoutMs => ctx.hostHub.waitUntilConnected(issued.hostId, timeoutMs), emit);
+    updateHostSshIdentity(ctx.db, issued.hostId, { host: remote.host, user: remote.user, proxyJump: remote.proxyJump });
+    ctx.hub.emit('hosts:changed', undefined);
+    return issued.hostId;
+  } catch (error) {
+    const classified = classifyInstallFailure(error);
+    throw new HostBootstrapError(classified.code, classified.message, connectInstallCommand(issued));
+  }
+}
+
 function pairingCommandForFailure(code: string, command: string): string | undefined {
   return code === 'daemon_unresponsive' ? undefined : command;
 }
@@ -491,6 +517,11 @@ export async function bootstrapHostForProject(
       if (events.some((event) => event.type === 'error')) return events;
       emit({ type: 'log', text: 'Binding this project to the enrolled machine…' });
       await bindRemoteProject(ctx, { projectId: project.id, remote, hostId: plan.hostId, emit });
+      return events;
+    }
+    if (usesConnect(ctx)) {
+      const hostId = await installConnectPeer(ctx, remote, emit);
+      await bindRemoteProject(ctx, { projectId: project.id, remote, hostId, emit });
       return events;
     }
     const serverUrl = await requirePublicAppUrl(ctx);
@@ -548,6 +579,11 @@ export async function repairHost(
         'ssh_identity_required',
         'Pick an SSH host so Zana can reconnect this machine.'
       );
+    }
+    if (usesConnect(ctx)) {
+      await installConnectPeer(ctx, remote, emit, hostId);
+      emit({ type: 'done', hostId });
+      return events;
     }
     const serverUrl = await requirePublicAppUrl(ctx);
     const serverHost = new URL(serverUrl).hostname;
