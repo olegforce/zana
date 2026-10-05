@@ -1,0 +1,17 @@
+node_modules/
+coverage/
+.zcc/
+*.log
+
+# Generated plugin bundles and build metadata.
+/app.js
+/app.js.map
+/app.meta.json
+/server.mjs
+/server.mjs.map
+/server.meta.json
+.DS_Store
+.env
+.env.*
+
+/assets/

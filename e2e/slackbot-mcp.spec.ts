@@ -1,3 +1,5 @@
+import { preparePluginRuntime } from '../packages/plugin-build/src/prepare-plugin-runtime.js';
+import { fileURLToPath } from 'node:url';
 import { test, expect, launchApp } from './fixtures/app.js';
 import { createServer, request } from 'node:https';
 import { execFileSync } from 'node:child_process';
@@ -12,9 +14,9 @@ import { createConnectGateway } from '../website/connect/gateway.mjs';
 import { createSlackService } from '../website/slack/service.mjs';
 import { phonePortEnv } from './fixtures/phone-port.js';
 
-// Zana for Slack is an independently installed local plugin, outside core's checkout.
-const source = process.env.ZCC_SLACK_BRIDGE_DIR;
-test.skip(!source || !existsSync(join(source, 'src/slackbot.ts')), 'Set ZCC_SLACK_BRIDGE_DIR to the Zana for Slack 0.14.3 source project.');
+// Exercise the bundled source by default; allow an explicit development override.
+const source = process.env.ZCC_SLACK_BRIDGE_DIR ?? fileURLToPath(new URL('../plugins/slack-bridge-2ff2', import.meta.url));
+test.skip(!source || !existsSync(join(source, 'src/slackbot.ts')), 'The bundled Zana for Slack source must be present.');
 test('Slackbot selective imports and plugin capabilities work through the real Connect tunnel and built desktop', async ({ home }, testInfo) => {
   test.setTimeout(180_000);
   const cert = join(home, 'slack-cert.pem'), key = join(home, 'slack-key.pem');
@@ -137,8 +139,12 @@ test('Slackbot selective imports and plugin capabilities work through the real C
     symlinkSync(join(source!, 'node_modules'), join(fixtureSource, 'node_modules'), 'dir');
     renameSync(join(fixtureSource, 'server.ts'), join(fixtureSource, 'real-server.ts'));
     writeFileSync(join(fixtureSource, 'server.ts'), `import original from './real-server.ts';\nexport default async zcc => {\n  let ask, publish; const register = zcc.agents.registerTool.bind(zcc.agents);\n  const handlers = new Map(), on = zcc.events.on.bind(zcc.events);\n  zcc.events.on = (name, handler) => { handlers.set(name, handler); return on(name, handler); };\n  zcc.agents.registerTool = tool => { if (tool.name === 'slack_bridge_ask') ask = tool; if (tool.name === 'slack_bridge_publish') publish = tool; return register(tool); };\n  const conversationCalls = [];\n  for (const [group, methods] of [['assistant',['complete']],['inbox',['search','read']]]) for (const method of methods) { const call = zcc.sdk[group][method].bind(zcc.sdk[group]); zcc.sdk[group][method] = async args => { try { const result = await call(args); conversationCalls.push({group,method,args,result}); return result; } catch(error) { conversationCalls.push({group,method,error:String(error)}); throw error; } }; }\n  zcc.rpc.method('fixtureConversationCalls', () => conversationCalls);\n  await original(zcc);\n  zcc.rpc.method('fixtureAssistant', args => zcc.sdk.assistant.complete(args));\n  zcc.rpc.method('fixtureInboxSearch', args => zcc.sdk.inbox.search(args));\n  zcc.rpc.method('fixtureInboxRead', args => zcc.sdk.inbox.read(args));\n  zcc.rpc.method('fixtureLifecycle', args => handlers.get(args.name)({ name: args.name, threadId: args.threadId }));\n  zcc.rpc.method('fixtureAsk', args => ask.execute({ questions: args.questions }, { threadId: args.threadId, projectId: args.projectId }));\n  zcc.rpc.method('fixturePublish', args => publish.execute({ text: args.text }, { threadId: args.threadId, projectId: args.projectId }));\n}\n`);
+    const runtimeSource = join(home, 'slack-runtime');
+    await preparePluginRuntime(fixtureSource, runtimeSource, '2.3.1');
+    expect(existsSync(join(runtimeSource, 'node_modules'))).toBe(false);
+    expect(existsSync(join(runtimeSource, 'server.ts'))).toBe(false);
     const pluginStore = join(home, '.zcc/plugins'); mkdirSync(pluginStore, { recursive: true });
-    writeFileSync(join(pluginStore, 'installed.json'), JSON.stringify({ version: 1, plugins: [{ id: 'slack-bridge-2ff2', version: '0.14.2', name: 'Zana for Slack', enabled: true, status: 'running', provenance: 'direct', sourceKind: 'path', source: `path:${fixtureSource}`, rootDir: fixtureSource, serverEntry: './server.ts', appEntry: './app.js', installedAt: Date.now(), updatedAt: Date.now() }] }));
+    writeFileSync(join(pluginStore, 'installed.json'), JSON.stringify({ version: 1, plugins: [{ id: 'slack-bridge-2ff2', version: '0.15.0', name: 'Zana for Slack', enabled: true, status: 'running', provenance: 'direct', sourceKind: 'path', source: `path:${runtimeSource}`, rootDir: runtimeSource, serverEntry: './server.mjs', appEntry: './app.js', installedAt: Date.now(), updatedAt: Date.now() }] }));
     const consumer = join(home, 'slack-capability-fixture'); mkdirSync(consumer);
     writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'slack-capability-fixture', version: '1.0.0', zcc: { name: 'Slack capability fixture', description: 'Read-only fixture capability', branding: { icon: 'MessageSquare' }, server: './server.mjs', requires: ['slack-bridge-2ff2'] } }));
     writeFileSync(join(consumer, 'server.mjs'), `export default function(zcc) {

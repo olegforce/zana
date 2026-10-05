@@ -1,0 +1,56 @@
+{
+  "name": "zcc-plugin-slack-bridge-2ff2",
+  "version": "0.15.0",
+  "type": "module",
+  "engines": {
+    "zcc": ">=1.0.0",
+    "zccPluginSdk": ">=0.1.0"
+  },
+  "zcc": {
+    "name": "Zana for Slack",
+    "description": "Connect your Projects to Slack. Start agents, follow their progress, and choose which answers and plugin tools to share.",
+    "branding": {
+      "icon": "MessageSquare"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": [
+      "skills"
+    ],
+    "extra": {
+      "runtimeAssets": [
+        "src/capability-catalog.json",
+        "assets/mermaid.min.js"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:coverage": "vitest run --coverage",
+    "build": "node scripts/prepare-assets.mjs && node --import tsx ../../packages/plugin-build/scripts/build-app.mjs .",
+    "package": "node scripts/prepare-assets.mjs"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "@zana-ai/zcc-plugin-sdk": "workspace:*",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.9",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@slack/socket-mode": "^2.0.5",
+    "@slack/web-api": "^7.16.0",
+    "marked": "^18.0.14",
+    "mermaid": "^11.17.2",
+    "puppeteer": "^24.43.1"
+  },
+  "private": true
+}

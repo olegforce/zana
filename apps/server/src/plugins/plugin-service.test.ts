@@ -1071,6 +1071,37 @@ describe('PluginService', () => {
     expect(service.get('provider-claude-code')?.description).toBe('provider-claude-code plugin');
   });
 
+  it('pre-installs Slack and preserves disable and uninstall choices on reconciliation', async () => {
+    const dataDir = root(), bundled = root();
+    writePlugin(join(bundled, 'slack-bridge-2ff2'), 'slack-bridge-2ff2');
+    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    const installed = await service.reconcileBuiltins();
+    expect(installed.map(row => row.id)).toEqual(['slack-bridge-2ff2']);
+    expect(service.get('slack-bridge-2ff2')).toMatchObject({ sourceKind: 'builtin', provenance: 'builtin', enabled: true });
+    await service.disable('slack-bridge-2ff2');
+    expect(await service.reconcileBuiltins()).toEqual([]);
+    expect(service.get('slack-bridge-2ff2')).toMatchObject({ enabled: false, status: 'disabled' });
+    await service.remove('slack-bridge-2ff2');
+    expect(await service.reconcileBuiltins()).toEqual([]);
+    expect(service.get('slack-bridge-2ff2')).toBeUndefined();
+  });
+
+  it('keeps an existing Slack path installation and its stored account settings', async () => {
+    const dataDir = root(), bundled = root();
+    writePlugin(join(bundled, 'slack-bridge-2ff2'), 'slack-bridge-2ff2');
+    const devDir = writePlugin(join(root(), 'slack-dev'), 'slack-bridge-2ff2', `export default function plugin(zcc) {
+      zcc.rpc.method('save', () => zcc.storage.kv.set('link', { owner: 'fixture-owner', inbox: false }));
+      zcc.rpc.method('load', () => zcc.storage.kv.get('link'));
+    }`);
+    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    await service.install(devDir);
+    await service.callRpc('slack-bridge-2ff2', 'save', {});
+    expect(await service.reconcileBuiltins()).toEqual([]);
+    expect(service.get('slack-bridge-2ff2')).toMatchObject({ sourceKind: 'path', rootDir: devDir });
+    expect(service.snapshot().filter(row => row.id === 'slack-bridge-2ff2')).toHaveLength(1);
+    await expect(service.callRpc('slack-bridge-2ff2', 'load', {})).resolves.toEqual({ owner: 'fixture-owner', inbox: false });
+  });
+
   it('reconcileBuiltins auto-installs docs from bundledRoot/docs', async () => {
     const dataDir = root();
     const bundled = root();
