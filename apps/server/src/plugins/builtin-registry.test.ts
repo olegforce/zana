@@ -28,6 +28,7 @@ it('accepts the engine requirements of every automatically installed bundled plu
 /** Definition completeness only. Official plugins stay installable; feature depth is per plugin. */
 
 const EXPECTED_CATEGORIES: Record<string, (typeof PLUGIN_CATALOG_CATEGORIES)[number]> = {
+  'slack-bridge-2ff2': 'Agent interaction',
   'ask-user-question': 'Agent interaction',
   automations: 'Workflow management',
   connect: 'Host access',
@@ -65,6 +66,7 @@ const EXPECTED_CATEGORIES: Record<string, (typeof PLUGIN_CATALOG_CATEGORIES)[num
 };
 
 const EXPECTED_ICONS: Record<string, string> = {
+  'slack-bridge-2ff2': 'MessageSquare',
   'ask-user-question': 'CircleHelp',
   automations: 'Workflow',
   connect: 'Cable',

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@zana-ai/zcc-plugin-sdk/app": [
+        "../../packages/plugin-sdk/src/app.ts"
+      ]
+    },
+    "customConditions": [
+      "source"
+    ]
+  },
+  "include": [
+    "server.ts",
+    "app.tsx",
+    "src/**/*.ts"
+  ]
+}

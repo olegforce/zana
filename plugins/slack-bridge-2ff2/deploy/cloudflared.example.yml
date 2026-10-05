@@ -1,0 +1,8 @@
+# Copy outside the plugin directory, replace all placeholders, then validate.
+# This publishes ONLY the task-view listener; never point it at Zana's product port.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /absolute/private/path/REPLACE_WITH_TUNNEL_UUID.json
+ingress:
+  - hostname: tasks.example.com
+    service: http://127.0.0.1:8792
+  - service: http_status:404
