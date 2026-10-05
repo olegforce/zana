@@ -4,7 +4,7 @@ import { test, expect } from './fixtures/app.js';
 
 test.use({ launchEnv: { ZCC_FAKE_PROVIDER: '1' }, initialConfig: { sponsorPromptDismissed: true } });
 
-test('PDF preview renders and downloads original bytes in Electron', async ({ app }, testInfo) => {
+test('PDF preview renders and downloads original bytes in Electron', async ({ app }) => {
   const { window, home, electron } = app;
   expect(await window.evaluate(() => window.cc.extensions.install({ kind: 'bundled', id: 'pdf-preview' }))).toMatchObject({ ok: true });
   await expect.poll(() => window.evaluate(async () => (await window.cc.pluginApps.list()).find(row => row.id === 'pdf-preview')?.status)).toBe('running');
@@ -78,7 +78,6 @@ test('PDF preview renders and downloads original bytes in Electron', async ({ ap
   await download.click();
   await expect.poll(() => existsSync(target)).toBe(true);
   await expect.poll(() => readFileSync(target).equals(bytes)).toBe(true);
-  await window.screenshot({ path: testInfo.outputPath('pdf-preview.png') });
 
   const storageRoot = join(home, '.zcc', 'thread-storage', threadId);
   mkdirSync(storageRoot, { recursive: true });
