@@ -24,7 +24,7 @@ test.use({
   }
 });
 
-test('Slack is pre-installed and its compiled Configuration works without a source checkout', async ({ app }, info) => {
+test('Slack is pre-installed and its compiled Configuration works without a source checkout', async ({ app }) => {
   const win = app.window;
   const row = () => win.evaluate(async id => (await window.cc.pluginApps.list()).find(p => p.id === id), id);
   await expect.poll(row).toMatchObject({ id, enabled: true, status: 'running', sourceKind: 'builtin' });
@@ -42,7 +42,6 @@ test('Slack is pre-installed and its compiled Configuration works without a sour
   await expect(win.getByLabel('Read report inbox')).toHaveCount(0);
   await win.getByText('Diagnostics · Requests and delivery', { exact: true }).click();
   await expect(win.getByText('No requests received yet.', { exact: true })).toBeVisible();
-  await win.screenshot({ path: info.outputPath('slack-preinstalled-configuration.png'), fullPage: true });
   await win.evaluate(id => window.cc.pluginApps.callRpc(id, 'setSurface', { surface: 'inboxEnabled', enabled: true }), id);
   expect((await snapshot()).config.inboxEnabled).toBe(true);
   expect(await win.evaluate(id => window.cc.pluginApps.reload(id), id)).toEqual({ ok: true, value: true });
