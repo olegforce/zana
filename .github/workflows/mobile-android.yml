@@ -1,21 +1,14 @@
 name: Mobile Android
 
 on:
-  pull_request:
-    paths:
-      - 'apps/mobile/**'
-      - 'packages/mobile-bridge/**'
-      - 'patches/**'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.github/workflows/mobile-android.yml'
+  # Android builds are available on demand, outside automatic PR CI.
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: mobile-android-${{ github.event.pull_request.number || github.ref }}
+  group: mobile-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
