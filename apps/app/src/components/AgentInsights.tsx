@@ -1,4 +1,5 @@
 import { product } from '../lib/product-client.js';
+import { startSerialPoll } from '../lib/serial-poll.js';
 import { useEffect, useState } from 'react';
 import { FileText, FileCode, FileJson, FilePlus } from 'lucide-react';
 import type { SessionStats } from '@zana-ai/zcc-domain/product';
@@ -54,20 +55,19 @@ export function useSessionStats(
     setStats(null);
     if (!enabled) return;
     let alive = true;
-    const pull = () => {
-      void product.terminals
+    const pull = async () => {
+      await product.terminals
         .sessionStats(projectId, sessionId)
         .then((s) => {
           if (alive) setStats(s);
         })
         .catch(() => {});
+      return !exited;
     };
-    pull();
-    if (exited) return () => { alive = false; };
-    const timer = setInterval(pull, 4_000);
+    const stop = startSerialPoll(pull, 4_000);
     return () => {
       alive = false;
-      clearInterval(timer);
+      stop();
     };
   }, [sessionId, projectId, exited, enabled]);
   return stats;

@@ -2931,6 +2931,8 @@ export interface ProjectSettings {
 
 export interface CreateTerminalRequest {
   projectId: string;
+  /** Agent shell intent. Main validates this owner against its session/thread registry. */
+  agentOwnerId?: string;
   profile: LaunchProfileId;
   /** Distinguishes an operator profile pick from a renderer-seeded default. */
   profileSource?: LaunchProfileSource;

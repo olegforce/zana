@@ -103,7 +103,7 @@ describe('registerInboxPushTool', () => {
     const store = createMemoryInboxStore();
     // Simulate the resolver rewriting a subdir-relative path to its real
     // project-root-relative location.
-    const normalizeDocPath = (p: string) =>
+    const normalizeDocPath = async (p: string) =>
       p === 'CMUX.md' ? 'create-a-project/CMUX.md' : p;
     await register(store, { normalizeDocPath })({
       comments: 'report attached',

@@ -149,3 +149,16 @@ describe('ExecutionJobDetails copy job details', () => {
     expect(text).toContain('HUMAN_BLOCKER · unit unit-1 · stateOrClaimGeneration gen-2');
   });
 });
+
+describe('ExecutionJobDetails request lifecycle', () => {
+  it('drops a late response after switching jobs or unmounting', async () => {
+    let resolveOld!: (snapshot: ExecutionBoardSnapshot) => void;
+    const read = vi.mocked(window.cc.executionBoard.snapshot);
+    read.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const view = render(<ExecutionJobDetails projectId="project-1" executionId="old" onClose={() => {}} />);
+    view.rerender(<ExecutionJobDetails projectId="project-1" executionId="new" onClose={() => {}} />);
+    expect(await screen.findByText('Ship')).toBeTruthy();
+    resolveOld({ ...structuredClone(baseSnapshot), execution: { ...baseSnapshot.execution, jobTitle: 'Stale job' } });
+    await Promise.resolve(); expect(screen.queryByText('Stale job')).toBeNull(); view.unmount();
+  });
+});

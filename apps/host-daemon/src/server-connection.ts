@@ -66,6 +66,8 @@ export function startEnrolledHostConnection(options: {
   let desktopBrowserBroker: DesktopBrowserBroker | null = null;
   const sink: EventSink = createEventSink({
     isSessionOpen: () => socket?.connected === true,
+    onPressure: paused => enrolledPty?.setOutputPaused(paused),
+    onTerminalOverflow: id => enrolledPty?.stopOverflowedTerminal(id),
     onOverflow: (error) => {
       console.error('[host-events]', error.message);
       void stopConnection().catch(() => undefined);

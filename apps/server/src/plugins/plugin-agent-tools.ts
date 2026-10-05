@@ -18,7 +18,7 @@ export interface PluginAgentToolSource {
     ) => PluginAgentConfigureResult | void | Promise<PluginAgentConfigureResult | void>
   >;
   extraInstructions?: readonly string[];
-  extraInstructionProviders?: ReadonlyArray<(ctx: { threadId: string; projectId: string }) => string | null>;
+  extraInstructionProviders?: ReadonlyArray<(ctx: { threadId: string; projectId: string }) => string | null | Promise<string | null>>;
   pluginMetadata?: import('@zana-ai/zcc-domain/thread-runtime').JsonObject;
 }
 
@@ -100,7 +100,7 @@ export async function resolvePluginSessionTools(
     instructionParts.push(...extra);
     for (const provider of source.extraInstructionProviders ?? []) {
       try {
-        const raw = provider({
+        const raw = await provider({
           threadId: ctx.threadId ?? '',
           projectId: ctx.projectId ?? ''
         });

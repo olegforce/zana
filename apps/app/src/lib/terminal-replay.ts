@@ -1,3 +1,4 @@
+import { readTerminalSnapshot } from './terminal-read-queue.js';
 export interface TerminalOutputCursor { startOffset: number; endOffset: number }
 type Snapshot = string | (TerminalOutputCursor & { text: string });
 type Chunk = { data: string; cursor?: TerminalOutputCursor };
@@ -13,7 +14,7 @@ function validCursor(cursor: TerminalOutputCursor, length: number): boolean {
  * persisted server cursor makes overlapping HTTP snapshots / WS events exact.
  * Local legacy PTYs keep the original string-only contract.
  */
-export function createTerminalReplay(read: () => Promise<Snapshot>, display: {
+export function createTerminalReplay(read: (signal?: AbortSignal) => Promise<Snapshot>, display: {
   reset(): void; write(text: string): void; follow(): void;
 }, maxPendingChars = 512 * 1024) {
   let stopped = false, ready = false, running: Promise<void> | undefined;
@@ -58,12 +59,13 @@ export function createTerminalReplay(read: () => Promise<Snapshot>, display: {
       do {
         refreshAgain = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
+        const controller = new AbortController();
         const deadline = new Promise<never>((_, reject) => {
-          cancelDeadline = () => { clearTimeout(timer); reject(new Error('terminal replay cancelled')); };
-          timer = setTimeout(() => reject(new Error('terminal replay timed out')), 10_000);
+          cancelDeadline = () => { clearTimeout(timer); controller.abort(); reject(new Error('terminal replay cancelled')); };
+          timer = setTimeout(() => { controller.abort(); reject(new Error('terminal replay timed out')); }, 10_000);
         });
         try {
-          const snapshot = await Promise.race([read(), deadline]);
+          const snapshot = await Promise.race([readTerminalSnapshot(() => read(controller.signal), controller.signal), deadline]);
           if (stopped) return;
           if (typeof snapshot !== 'string' && !validCursor(snapshot, snapshot.text.length)) throw new Error('Invalid terminal snapshot cursor');
           if (reset) display.reset();

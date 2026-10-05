@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
 import { fileURLToPath } from 'node:url';
+import { scanPluginFiles } from './plugin-file-scan.js';
+import { createIsolatedPluginRuntime } from './isolated-plugin-runtime.js';
 import { marketplaceInstallSpec, type MarketplaceEntry } from './marketplace.js';
 import {
   createMarketplaceStore,
@@ -45,10 +47,8 @@ import {
   HOST_ZCC_VERSION,
   containsNativeAddon,
   createPluginApi,
-  importServerFactory,
   mentionTriggersOf,
   resolveContainedEntry,
-  runFactoryTimeBoxed,
   runPluginCli
 } from './plugin-api.js';
 import {
@@ -398,23 +398,6 @@ interface LivePlugin {
   rpc: Map<string, (args: unknown) => unknown | Promise<unknown>>;
 }
 
-const NATIVE_ADDON_SKIP_DIRS = new Set(['node_modules', '.git']);
-
-function listFiles(root: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string): void => {
-    for (const name of readdirSync(dir)) {
-      if (NATIVE_ADDON_SKIP_DIRS.has(name)) continue;
-      const full = join(dir, name);
-      const st = statSync(full);
-      if (st.isDirectory()) walk(full);
-      else out.push(full.slice(root.length + 1).split(sep).join('/'));
-    }
-  };
-  walk(root);
-  return out;
-}
-
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown;
 }
@@ -489,6 +472,7 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     file: marketplaceStorePath(opts.dataDir)
   });
   const live = new Map<string, LivePlugin>();
+  const serverRuntimes = new Set<ReturnType<typeof createIsolatedPluginRuntime>>();
   const availableUpdates = new Map<string, string>();
   const hostVersion = opts.hostVersion ?? HOST_ZCC_VERSION;
   const sdkVersion = opts.pluginSdkVersion ?? HOST_PLUGIN_SDK_VERSION;
@@ -883,7 +867,16 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       await store.upsert(degraded);
       return;
     }
-    const files = listFiles(row.rootDir);
+    let files: string[];
+    try { files = await scanPluginFiles(row.rootDir); }
+    catch (error) {
+      if (previous?.handle && previous.row.status === 'running') throw error;
+      await disposeOne(row.id);
+      const degraded = { ...row, status: 'degraded' as const, statusDetail: error instanceof Error ? error.message : String(error) };
+      live.set(row.id, { row: degraded, handle: null, rpc: new Map() });
+      await store.upsert(degraded);
+      return;
+    }
     if (containsNativeAddon(row.rootDir, files)) {
       if (previous?.handle && previous.row.status === 'running') {
         throw new Error('native addons are not allowed');
@@ -996,10 +989,22 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     try {
       if (serverEntry) {
         const entry = resolveContainedEntry(row.rootDir, serverEntry);
-        const factory = await importServerFactory(entry, row.updatedAt, {
-          fromSource: row.sourceKind === 'path'
+        const runtime = createIsolatedPluginRuntime({
+          api: handle.api, entry, generation: row.updatedAt,
+          databasePath: join(kvRoot, row.id, 'data.db'),
+          onFailure: error => {
+            if (live.get(row.id)?.handle !== handle) return;
+            void (async () => {
+              await disposeOne(row.id);
+              const degraded = { ...row, status: 'degraded' as const, statusDetail: error.message };
+              live.set(row.id, { row: degraded, handle: null, rpc: new Map() });
+              await store.upsert(degraded); await emitCapabilities(); await emitAppsChanged();
+            })().catch(error => console.error('Plugin failure cleanup failed', error));
+          }
         });
-        await runFactoryTimeBoxed(factory, handle.api);
+        serverRuntimes.add(runtime);
+        handle.api.onDispose(() => { runtime.dispose(); serverRuntimes.delete(runtime); });
+        await runtime.started;
       }
       if (hostArtifactProblem) throw new Error(hostArtifactProblem);
       const running = {
@@ -1690,6 +1695,9 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       startBuiltinSourceWatchers();
     },
     stop() {
+      for (const runtime of serverRuntimes) runtime.dispose();
+      serverRuntimes.clear();
+      for (const current of live.values()) void current.handle?.dispose().catch(() => {});
       for (const watcher of builtinWatchers.splice(0)) watcher.close();
       updateSweep?.stop();
       updateSweep = null;

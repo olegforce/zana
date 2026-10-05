@@ -6,6 +6,16 @@ import {
 } from './plugin-services.js';
 
 describe('plugin services registry', () => {
+  it('preserves worker return-kind observation when wrapping a live method', async () => {
+    const registry = createPluginServicesRegistry();
+    const ping = () => Promise.resolve('ready');
+    const observed = () => ({ asynchronous: true, value: ping });
+    Object.defineProperty(ping, '__zccPluginInvokeObserved', { value: observed });
+    registry.provide('alpha', { ping });
+    const handle = registry.use<{ ping: () => Promise<string> }>('alpha');
+    expect(Reflect.get(handle.ping, '__zccPluginInvokeObserved')).toBe(observed);
+    expect(await handle.ping()).toBe('ready');
+  });
   it('provides by plugin id and dispatches through a live proxy', () => {
     const registry = createPluginServicesRegistry();
     const sdk = { n: 1, ping: () => 'one' };

@@ -267,6 +267,7 @@ describe('ExtensionProcessHost', () => {
     // Child sets a key — host stores it under 'alpha' (the bound id).
     ep.emit({ type: 'broker', reqId: 1, method: 'storage.set', args: ['k', 'v'] });
     expect(data.get('alpha:k')).toBe('v');
+    await Promise.resolve();
     const setReply = ep.sent.find(
       (m) => m.type === 'broker-result'
     ) as Extract<HostToChild, { type: 'broker-result' }>;
@@ -274,6 +275,7 @@ describe('ExtensionProcessHost', () => {
 
     // Child reads it back — host serves from 'alpha' namespace.
     ep.emit({ type: 'broker', reqId: 2, method: 'storage.get', args: ['k'] });
+    await Promise.resolve();
     const getReply = ep.sent
       .filter((m) => m.type === 'broker-result')
       .find((m) => (m as { reqId: number }).reqId === 2) as Extract<

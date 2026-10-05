@@ -35,6 +35,7 @@ allowBuilds:
 blockExoticSubdeps: false
 patchedDependencies:
   '@react-native-cookies/cookies@6.2.1': patches/@react-native-cookies__cookies@6.2.1.patch
+  '@xterm/xterm@6.0.0': patches/@xterm__xterm@6.0.0.patch
   decode-uri-component@0.2.2: patches/decode-uri-component@0.2.2.patch
 
 # Patched compatible releases for transitive editor and Expo tooling dependencies.

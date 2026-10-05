@@ -56,7 +56,10 @@ export function createLiveServiceProxy<T extends object>(
       if (!implementation) throw new PluginServiceUnavailableError(serviceId);
       const value = Reflect.get(implementation, prop, implementation);
       if (typeof value === 'function') {
-        return (...args: unknown[]) => Reflect.apply(value, implementation, args);
+        const method = (...args: unknown[]) => Reflect.apply(value, implementation, args);
+        const observed = Reflect.get(value, '__zccPluginInvokeObserved');
+        if (typeof observed === 'function') Object.defineProperty(method, '__zccPluginInvokeObserved', { value: observed });
+        return method;
       }
       return value;
     },

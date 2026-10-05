@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { languageForPath, highlightForPath } from '../highlightCode.js';
+import { describe, it, expect, vi } from 'vitest';
+import hljs from 'highlight.js/lib/common';
+import { languageForPath, highlightForPath, highlightDiff } from '../highlightCode.js';
 
 describe('languageForPath', () => {
   it('maps common code extensions to highlight.js languages', () => {
@@ -43,6 +44,30 @@ describe('languageForPath', () => {
 });
 
 describe('highlightForPath', () => {
+  it('avoids grammar execution above the content budget', () => {
+    const spy = vi.spyOn(hljs, 'highlight');
+    try {
+      expect(highlightForPath('a.ts', 'x'.repeat(16_001))).toBeNull();
+      expect(highlightDiff('+x'.repeat(16_001))).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  it('returns plain text when a grammar throws or is unavailable', () => {
+    const spy = vi.spyOn(hljs, 'highlight').mockImplementation(() => { throw Error('grammar failure'); });
+    try {
+      expect(highlightForPath('a.ts', 'const x = 1;')).toBeNull();
+      expect(highlightDiff('+const x = 1;')).toBeNull();
+    } finally { spy.mockRestore(); }
+    const missing = vi.spyOn(hljs, 'getLanguage').mockReturnValue(undefined);
+    try { expect(highlightDiff('+x')).toBeNull(); } finally { missing.mockRestore(); }
+  });
+
+  it('highlights a bounded unified diff with escaped source', () => {
+    const html = highlightDiff('@@ -1 +1 @@\n-old\n+<new>\n');
+    expect(html).toContain('hljs-addition');
+    expect(html).toContain('&lt;new&gt;');
+  });
   it('returns language-tagged HTML for a known language', () => {
     const out = highlightForPath('a.ts', 'const x: number = 1;');
     expect(out).not.toBeNull();

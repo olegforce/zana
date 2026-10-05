@@ -1,5 +1,6 @@
 export { openDatabase, type ZccDatabase, type SqliteDatabase } from './connection.js';
-export { createSqliteDatabase } from './sqlite.js';
+export { SQLITE_LOCK_WAIT_MS, isSqliteBusy, retrySqliteTransaction } from './contention.js';
+export { createSqliteDatabase, sqliteWorkerConfiguration } from './sqlite.js';
 export { migrate } from './migrate.js';
 export {
   getProviderModelCatalog,

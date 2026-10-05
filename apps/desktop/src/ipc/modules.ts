@@ -29,7 +29,7 @@ export function registerModulesIpc(): void {
   ctx.safeHandle(
     IPC.modules.storageSet,
     (moduleId: string, key: string, value: unknown) => {
-      ctx.moduleRouter.storageSet(moduleId, key, value);
+      return ctx.moduleRouter.storageSet(moduleId, key, value);
     },
     () => undefined
   );

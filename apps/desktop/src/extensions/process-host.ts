@@ -52,7 +52,7 @@ type LogFn = (message: string, err?: unknown) => void;
 /** Host-side per-extension storage (the namespaced KV the broker serves). */
 export interface HostStorage {
   get(moduleId: string, key: string): unknown;
-  set(moduleId: string, key: string, value: unknown): void;
+  set(moduleId: string, key: string, value: unknown): void | Promise<void>;
 }
 
 /**
@@ -606,11 +606,10 @@ export class ExtensionProcessHost {
     try {
       switch (method) {
         case 'storage.get':
-          reply(true, this.opts.storage.get(id, String(args[0])));
+          Promise.resolve(this.opts.storage.get(id, String(args[0]))).then(value => reply(true, value), error => reply(false, undefined, errToString(error)));
           break;
         case 'storage.set':
-          this.opts.storage.set(id, String(args[0]), args[1]);
-          reply(true);
+          Promise.resolve(this.opts.storage.set(id, String(args[0]), args[1])).then(() => reply(true), error => reply(false, undefined, errToString(error)));
           break;
         case 'extensions.listInstalled':
           reply(true, this.opts.listInstalledExtensions?.() ?? []);

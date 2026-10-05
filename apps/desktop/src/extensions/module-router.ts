@@ -57,8 +57,8 @@ export class ModuleRouter {
     return this.builtins.storageGet(moduleId, key);
   }
 
-  storageSet(moduleId: string, key: string, value: unknown): void {
-    this.builtins.storageSet(moduleId, key, value);
+  storageSet(moduleId: string, key: string, value: unknown): Promise<void> {
+    return this.builtins.storageSet(moduleId, key, value);
   }
 
   /**
@@ -67,8 +67,8 @@ export class ModuleRouter {
    * routes there regardless of tier. Called on UNINSTALL so a reinstall of the
    * same id starts clean (a disk ext's storage would otherwise outlive its dir).
    */
-  storageClear(moduleId: string): void {
-    this.builtins.storageClear(moduleId);
+  storageClear(moduleId: string): Promise<void> {
+    return this.builtins.storageClear(moduleId);
   }
 
   /** Tear down a module on either host (disable/uninstall). */

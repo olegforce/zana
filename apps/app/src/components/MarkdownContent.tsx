@@ -35,6 +35,7 @@ import {
   highlightMarkdownCode,
   languageFromMarkdownClassName
 } from './markdown-code-highlight.js';
+import { boundedText, LargeTextPreview } from './LargeTextPreview.js';
 
 /**
  * Shared markdown / doc rendering for the inbox.
@@ -71,6 +72,7 @@ export function DocContent({
   projectId?: string | null;
   storage?: boolean;
 }) {
+  if (boundedText(content).length < content.length) return <LargeTextPreview text={content} />;
   const lower = path.toLowerCase();
   if (lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.mdx')) {
     // Library docs carry a `---`…`---` metadata header. react-markdown has no
@@ -177,7 +179,8 @@ export const MarkdownContent = memo(function MarkdownContent({
   filePathHints?: readonly string[];
   lightboxItems?: readonly { src: string; alt: string }[];
 }) {
-  const body = unwrapBareFence(text);
+  const preview = boundedText(text);
+  const body = unwrapBareFence(preview);
   const [rewriteLocalhost] = useBooleanPreference(
     REWRITE_LOCALHOST_LINKS_STORAGE_KEY,
     REWRITE_LOCALHOST_LINKS_DEFAULT
@@ -235,6 +238,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         onOpen={exportable ? undefined : () => setLightbox({ src, alt })} />
     );
   }, [documentPath, threadId, storage, projectId, exportable]);
+  if (preview.length < text.length) return <LargeTextPreview text={text} />;
   return (
     <>
       <div className="inbox-md">

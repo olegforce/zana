@@ -1,4 +1,4 @@
-import { createSqliteDatabase } from '@zana-ai/zcc-db';
+import { createSqliteDatabase, SQLITE_LOCK_WAIT_MS } from '@zana-ai/zcc-db';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { TerminalHostBinding, TerminalHostEvent } from '@zana-ai/zcc-contracts/terminal-execution';
@@ -50,7 +50,7 @@ export function createRuntimeDatabase(file: string): TerminalSessionRepository {
   chmodSync(file, 0o600);
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');
-  database.pragma('busy_timeout = 5000');
+  database.pragma(`busy_timeout = ${SQLITE_LOCK_WAIT_MS}`);
 
   database.exec(`
     CREATE TABLE IF NOT EXISTS runtime_schema_migrations (

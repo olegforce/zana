@@ -1,7 +1,7 @@
 import { discoverCliOnHost } from './cli-discovery.js';
 import type { CliTerminalStartCommand } from '@zana-ai/zcc-contracts/cli-terminal';
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { realpath, stat as asyncStat, opendir, open } from 'node:fs/promises';
 import { extname, join, relative, sep } from 'node:path';
 import { resolveZccDataDir } from './host-config.js';
 import { isWithin, resolveContainedReal } from '@zana-ai/zcc-path-confine';
@@ -499,92 +499,58 @@ function requireTerminal(runtime: CommandRuntime, sessionId: string): { cwd: str
   return session;
 }
 
-function listRoot(root: string): HostListedFile[] {
-  let realRoot: string;
-  try {
-    realRoot = realpathSync(root);
-    if (!statSync(realRoot).isDirectory()) return [];
-  } catch {
-    return [];
-  }
+async function listRoot(root: string): Promise<HostListedFile[]> {
+  let base: string;
+  try { base = await realpath(root); if (!(await asyncStat(base)).isDirectory()) return []; } catch { return []; }
   const files: HostListedFile[] = [];
-  const stack = [realRoot];
-  while (stack.length > 0 && files.length < MAX_LISTED_FILES) {
-    const dir = stack.pop()!;
-    let names: string[];
+  const stack = [{ path: base, depth: 0 }];
+  const seen = new Set<string>();
+  let inspected = 0;
+  while (stack.length && files.length < MAX_LISTED_FILES && inspected < 4000) {
+    const next = stack.pop()!;
+    if (seen.has(next.path) || next.depth > 32) continue;
+    seen.add(next.path);
     try {
-      names = readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (files.length >= MAX_LISTED_FILES) break;
-      const abs = join(dir, name);
-      let real: string;
-      let stat;
-      try {
-        real = realpathSync(abs);
-        stat = statSync(real);
-      } catch {
-        continue;
+      const dir = await opendir(next.path);
+      for await (const entry of dir) {
+        if (++inspected > 4000 || files.length >= MAX_LISTED_FILES) break;
+        const full = join(next.path, entry.name);
+        let canonical: string, info;
+        try { canonical = await realpath(full); info = await asyncStat(canonical); } catch { continue; }
+        if (!isWithin(canonical, base)) continue;
+        const relPath = relative(base, canonical).split(sep).join('/');
+        if (!relPath || relPath === 'index.json') continue;
+        files.push({ root, relPath, bytes: info.isFile() ? info.size : 0, kind: info.isDirectory() ? 'dir' : 'file' });
+        if (info.isDirectory()) stack.push({ path: canonical, depth: next.depth + 1 });
       }
-      if (!isWithin(real, realRoot)) continue;
-      const relPath = relative(realRoot, real).split(sep).join('/');
-      if (!relPath || relPath === 'index.json') continue;
-      files.push({
-        root,
-        relPath,
-        bytes: stat.isFile() ? stat.size : 0,
-        kind: stat.isDirectory() ? 'dir' : 'file'
-      });
-      if (stat.isDirectory()) stack.push(real);
-    }
+    } catch { continue; }
   }
   return files;
 }
 
 async function resolveListDirTarget(root: string, relPath: string): Promise<string | null> {
-  const trimmed = relPath.trim();
-  if (!trimmed || trimmed === '.') {
-    try {
-      const realRoot = realpathSync(root);
-      return statSync(realRoot).isDirectory() ? realRoot : null;
-    } catch {
-      return null;
-    }
+  if (!relPath.trim() || relPath.trim() === '.') {
+    try { const base = await realpath(root); return (await asyncStat(base)).isDirectory() ? base : null; } catch { return null; }
   }
-  return resolveContainedReal(root, trimmed);
+  return resolveContainedReal(root, relPath);
 }
 
-function listDirShallow(absDir: string): HostDirEntry[] {
-  let dirents;
-  try {
-    dirents = readdirSync(absDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+async function listDirShallow(absDir: string): Promise<HostDirEntry[]> {
   const out: HostDirEntry[] = [];
-  for (const entry of dirents) {
-    if (LIST_DIR_DENY.has(entry.name)) continue;
-    const full = join(absDir, entry.name);
-    let kind: 'file' | 'dir';
-    if (entry.isSymbolicLink()) {
-      try {
-        kind = statSync(full).isDirectory() ? 'dir' : 'file';
-      } catch {
-        continue;
+  try {
+    const dir = await opendir(absDir);
+    for await (const entry of dir) {
+      if (LIST_DIR_DENY.has(entry.name)) continue;
+      const full = join(absDir, entry.name);
+      let kind: 'file' | 'dir' = entry.isDirectory() ? 'dir' : 'file';
+      if (entry.isSymbolicLink()) {
+        try { kind = (await asyncStat(full)).isDirectory() ? 'dir' : 'file'; } catch { continue; }
       }
-    } else {
-      kind = entry.isDirectory() ? 'dir' : 'file';
+      out.push({ name: entry.name, kind, path: full });
+      if (out.length >= MAX_DIR_ENTRIES) break;
     }
-    out.push({ name: entry.name, kind, path: full });
-    if (out.length >= MAX_DIR_ENTRIES) break;
-  }
-  out.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
-  return out;
+  } catch { return []; }
+  return out.sort((a, b) => a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : a.name.localeCompare(b.name));
 }
 
 async function requestDesktopBrowser(
@@ -648,7 +614,7 @@ export async function dispatchHostCommand(
       if (command.cwd !== undefined) {
         try {
           cwd = await realpath(command.cwd);
-          if (!(await stat(cwd)).isDirectory()) throw new Error('not a directory');
+          if (!(await asyncStat(cwd)).isDirectory()) throw new Error('not a directory');
         } catch {
           throw new HostCommandError('invalid_request', 'model discovery cwd is unavailable');
         }
@@ -987,7 +953,7 @@ export async function dispatchHostCommand(
       return { sessionId: command.sessionId, stopped: true as const };
     }
     case 'host.list_files':
-      return { files: command.roots.flatMap(listRoot) };
+      return { files: (await Promise.all(command.roots.map(listRoot))).flat() };
     case 'host.list_dir': {
       const boundary = command.boundaryPath === undefined ? null : await resolveHostFsRoot(command.root, command.boundaryPath);
       const contained = await resolveListDirTarget(command.root, command.relPath);
@@ -997,14 +963,14 @@ export async function dispatchHostCommand(
       if (boundary && !isWithin(contained, boundary)) throw new HostCommandError('invalid_path', 'Directory escapes nested boundary');
       let stat;
       try {
-        stat = statSync(contained);
+        stat = await asyncStat(contained);
       } catch {
         throw new HostCommandError('path_not_found', 'directory not found');
       }
       if (!stat.isDirectory()) {
         throw new HostCommandError('path_not_found', 'not a directory');
       }
-      return { entries: listDirShallow(contained) };
+      return { entries: await listDirShallow(contained) };
     }
     case 'host.read_file': {
       if (command.byteRange) {
@@ -1020,7 +986,7 @@ export async function dispatchHostCommand(
       }
       let stat;
       try {
-        stat = statSync(contained);
+        stat = await asyncStat(contained);
       } catch {
         throw new HostCommandError('path_not_found', 'file not found');
       }
@@ -1030,10 +996,21 @@ export async function dispatchHostCommand(
       if (stat.size > cap) {
         throw new HostCommandError('too_large', 'file exceeds the read cap');
       }
-      if (image) {
-        return { content: readFileSync(contained).toString('base64'), encoding: 'base64' as const };
-      }
-      return { content: readFileSync(contained, 'utf8'), encoding: 'utf8' as const };
+      let file: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        file = await open(contained, 'r');
+        const current = await file.stat();
+        if (!current.isFile() || current.size > cap) throw new HostCommandError('too_large', 'file exceeds the read cap');
+        const buffer = Buffer.alloc(current.size);
+        let size = 0;
+        while (size < buffer.length) {
+          const chunk = await file.read(buffer, size, buffer.length - size, size);
+          if (!chunk.bytesRead) break;
+          size += chunk.bytesRead;
+        }
+        const body = buffer.subarray(0, size);
+        return { content: body.toString(image ? 'base64' : 'utf8'), encoding: image ? 'base64' as const : 'utf8' as const };
+      } finally { await file?.close().catch(() => {}); }
     }
     case 'host.write_file':
       return writeHostFile(command);

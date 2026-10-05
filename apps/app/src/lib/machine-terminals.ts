@@ -11,10 +11,10 @@ export function machineTerminals(owner: CcApi['terminals'], hosts: CcApi['termin
     set.delete(id); set.add(id);
     if (set.size > 2048) set.delete(set.values().next().value!);
   }
-  async function transport(id: string) {
+  async function transport(id: string, signal?: AbortSignal) {
     if (hostSessions.has(id)) return hosts;
     if (ownerSessions.has(id)) return owner;
-    const response = await fetchWithAppSurface(`/api/v1/terminals/${encodeURIComponent(id)}`);
+    const response = await fetchWithAppSurface(`/api/v1/terminals/${encodeURIComponent(id)}`, { signal });
     if (response.ok) { remember(hostSessions, id); return hosts; }
     if (response.status !== 404) throw new Error('Cannot determine the terminal’s machine. Reconnect before trying again.');
     remember(ownerSessions, id); return owner;
@@ -40,9 +40,9 @@ export function machineTerminals(owner: CcApi['terminals'], hosts: CcApi['termin
           remote.forEach(session => remember(hostSessions, session.id));
           return [...new Map([...local, ...remote].map(session => [session.id, session])).values()];
         };
-        case 'backlogSnapshot': return async (id: string) => {
-          const selected = await transport(id);
-          return selected.backlogSnapshot ? selected.backlogSnapshot(id) : selected.backlog(id);
+        case 'backlogSnapshot': return async (id: string, signal?: AbortSignal) => {
+          const selected = await transport(id, signal);
+          return selected.backlogSnapshot ? selected.backlogSnapshot(id, ...(selected === hosts ? [signal] : [])) : selected.backlog(id);
         };
         case 'write': case 'reply': case 'resize': case 'close': case 'backlog':
           return async (id: string, ...args: unknown[]) => {

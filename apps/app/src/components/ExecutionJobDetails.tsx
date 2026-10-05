@@ -1,7 +1,10 @@
+import { boundedText, LargeTextPreview } from './LargeTextPreview.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExecutionBoardSnapshot } from '@zana-ai/zcc-domain/product';
 import { useUi } from '../store';
 import { copyText } from '../lib/copy-text.js';
+import { startSerialPoll } from '../lib/serial-poll.js';
+import { mergeExecutionEvents } from './execution-event-tail.js';
 
 interface Props {
   projectId: string;
@@ -207,14 +210,19 @@ export function ExecutionJobDetails({ projectId, executionId, onClose }: Props) 
   const [loaded, setLoaded] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const snapshotRef = useRef<ExecutionBoardSnapshot | null>(null);
+  const scopeRef = useRef({ key: '', live: false, inFlight: false });
   const [busy, setBusy] = useState(false);
   const [replyDraft, setReplyDraft] = useState('');
   const requestIdentityRef = useRef<{ blockerId: string; text: string; id: string } | undefined>(undefined);
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   const [artifactContent, setArtifactContent] = useState<Record<string, string>>({});
   const refresh = useCallback(async (after = 0) => {
+    const scope = scopeRef.current;
+    if (!scope.live || scope.key !== `${projectId}:${executionId}` || scope.inFlight) return;
+    scope.inFlight = true;
     try {
       const next = await window.cc.executionBoard.snapshot(projectId, executionId, after);
+      if (!scope.live) return;
       setLoaded(true);
       if (!next) {
         if (!snapshotRef.current) setUnavailable(true);
@@ -222,22 +230,28 @@ export function ExecutionJobDetails({ projectId, executionId, onClose }: Props) 
       }
       setUnavailable(false);
       const current = snapshotRef.current;
-      const updated = after > 0 && current
-        ? { ...next, events: [...current.events, ...next.events.filter((event) => !current.events.some((existing) => existing.id === event.id))] }
-        : next;
+      const updated = mergeExecutionEvents(current, next, after);
       snapshotRef.current = updated;
       setSnapshot(updated);
     } catch {
+      if (!scope.live) return;
       setLoaded(true);
       if (!snapshotRef.current) setUnavailable(true);
-    }
+    } finally { scope.inFlight = false; }
   }, [projectId, executionId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const scope = { key: `${projectId}:${executionId}`, live: true, inFlight: false };
+    scopeRef.current = scope;
+    snapshotRef.current = null;
+    setSnapshot(null); setLoaded(false); setUnavailable(false);
+    setArtifactContent({});
+    void refresh();
+    return () => { scope.live = false; };
+  }, [refresh, projectId, executionId]);
   useEffect(() => {
     if (!snapshot || terminal.has(snapshot.execution.state)) return;
-    const timer = window.setInterval(() => { void refresh(snapshot.nextAfter); }, 2_000);
-    return () => window.clearInterval(timer);
+    return startSerialPoll(() => refresh(snapshotRef.current?.nextAfter ?? 0), 2_000, false);
   }, [refresh, snapshot?.execution.state, snapshot?.nextAfter]);
   if (!snapshot) return (
     <section className="execution-details" aria-label="Squad details">
@@ -371,7 +385,9 @@ export function ExecutionJobDetails({ projectId, executionId, onClose }: Props) 
       <h4>Artifacts</h4>
       {snapshot.artifacts.map((artifact) => <details key={artifact.id} onToggle={(event) => {
         if (!event.currentTarget.open || artifactContent[artifact.id] !== undefined) return;
+        const scope = scopeRef.current;
         void window.cc.executionBoard.readArtifact(projectId, executionId, artifact.id).then((result) => {
+          if (!scope.live) return;
           if (result.ok) setArtifactContent((current) => ({ ...current, [artifact.id]: result.value.content }));
           else {
             console.error(`[ExecutionJobDetails] artifact read failed (execution ${executionId}, artifact ${artifact.id}): ${result.message}`);
@@ -381,12 +397,13 @@ export function ExecutionJobDetails({ projectId, executionId, onClose }: Props) 
             setArtifactContent((current) => ({ ...current, [artifact.id]: `Error: ${result.message ?? 'read failed'}` }));
           }
         }).catch((err) => {
+          if (!scope.live) return;
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[ExecutionJobDetails] artifact read rejected (execution ${executionId}, artifact ${artifact.id})`, err);
           useUi.getState().pushToast(`Artifact read failed: ${message}`, 'error');
           setArtifactContent((current) => ({ ...current, [artifact.id]: `Error: ${message}` }));
         });
-      }}><summary>{artifact.name} · {artifact.mediaType} · {artifact.contentDigest}</summary><pre>{artifactContent[artifact.id] ?? 'Loading…'}</pre></details>)}
+      }}><summary>{artifact.name} · {artifact.mediaType} · {artifact.contentDigest}</summary>{artifactContent[artifact.id] && boundedText(artifactContent[artifact.id]).length < artifactContent[artifact.id].length ? <LargeTextPreview text={artifactContent[artifact.id]} /> : <pre>{artifactContent[artifact.id] ?? 'Loading…'}</pre>}</details>)}
       <h4>Usage</h4>
       <p>Attribution: {execution.usage?.completeness ?? 'unavailable'} · Observations {execution.usage?.observationCount ?? 0} · Gaps {execution.usage?.gapCount ?? 0}</p>
       {execution.usage?.byRole.map((usage) => <p key={usage.role}>{usage.role}: input {usage.inputTokens ?? 'unknown'} · output {usage.outputTokens ?? 'unknown'} · cache read {usage.cacheReadTokens ?? 'unknown'} · cache write {usage.cacheWriteTokens ?? 'unknown'} · provider cost {usage.providerCostUsd === undefined ? 'unknown' : `$${usage.providerCostUsd.toFixed(4)}`}</p>)}

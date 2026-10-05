@@ -192,7 +192,8 @@ import {
   type IAgentRegistryStore
 } from '@zana-ai/zcc-server';
 import { createAgentMessageLog, type IAgentMessageLog } from '@zana-ai/zcc-server/services/agents/agent-message-log';
-import { killLocalTmuxSession, listLocalTmuxSessionIds, reapOrphanTmuxSessions, verifyTmux } from '@zana-ai/zcc-host-daemon/tmux';
+import { killLocalTmuxSession, listLocalTmuxSessionIds, reapOrphanTmuxSessions, prepareTmuxAvailability, verifyTmux } from '@zana-ai/zcc-host-daemon/tmux';
+import { createAgentTerminalBudget } from './runtime/agent-terminal-budget.js';
 import { workerRecoveryEvidence, type InspectWorkerLaunch } from '@zana-ai/zcc-server/services/launch/worker-recovery';
 import { exportInboxPdf } from './native/inbox-pdf.js';
 import { createSavedStore, type ISavedStore } from '@zana-ai/zcc-server';
@@ -4167,6 +4168,7 @@ async function launchAuthorizedTerminal(
       selection.personaId ? resolvedPersonas.find((candidate) => candidate.id === selection.personaId) : undefined
     ),
     spawn: async (authorizedPlan) => {
+      if (authorizedPlan.resolved.config.tmuxScope === 'all') await prepareTmuxAvailability();
       const request = await withPreparedNativeSession(
         authorizedPlan.request,
         authorizedPlan.resolved.effectiveLaunch.cwd,
@@ -4291,7 +4293,30 @@ async function launchAuthorizedTerminal(
 }
 
 /** Interactive renderer launch: main derives identity, authorizes once, then commits. */
+const agentTerminalBudget = createAgentTerminalBudget(id => {
+  const session = ptys.getSession(id);
+  return !!session && session.status !== 'exited';
+});
+
 async function createInteractiveTerminal(req: CreateTerminalRequest): Promise<Result<TerminalSession>> {
+  if (req.agentOwnerId !== undefined) {
+    const ownerId = req.agentOwnerId;
+    if (typeof ownerId !== 'string' || req.profile !== 'shell') return { ok: false, code: 'DENIED', message: 'Invalid agent shell owner' };
+    return agentTerminalBudget.launch(ownerId, async () => {
+      const local = ptys.getSession(ownerId);
+      if (local) return local.projectId === req.projectId && local.status !== 'exited';
+      try {
+        const response = await fetch(new URL(`api/v1/threads/${encodeURIComponent(ownerId)}`, productServerUrl()), { signal: AbortSignal.timeout(2000) });
+        if (!response.ok) return false;
+        const body = await response.json() as { thread?: { id?: string; projectId?: string } };
+        return body.thread?.id === ownerId && body.thread.projectId === req.projectId;
+      } catch { return false; }
+    }, () => createInteractiveTerminalUnbudgeted(req));
+  }
+  return createInteractiveTerminalUnbudgeted(req);
+}
+
+async function createInteractiveTerminalUnbudgeted(req: CreateTerminalRequest): Promise<Result<TerminalSession>> {
   const release = req.worktreeInfo ? reserveWorktree(req.worktreeInfo.path) : undefined;
   try {
     const launched = await launchAuthorizedTerminal(req, { kind: 'interactive-user', id: 'interactive:local' });
@@ -4444,6 +4469,7 @@ async function launchBackgroundTerminal(
     },
     spawn: async (authorizedPlan) => {
       const spawnLaunch = materializeEffectiveLaunch(authorizedPlan.resolved.effectiveLaunch);
+      if (authorizedPlan.resolved.config.tmuxScope === 'all') await prepareTmuxAvailability();
       const request = await withPreparedNativeSession(
         authorizedPlan.request,
         spawnLaunch.cwd,

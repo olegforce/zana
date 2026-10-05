@@ -1,3 +1,5 @@
+import { prepareThreadReads } from '../services/threads/thread-reads.js';
+import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
 import { protectPreviewServer } from '../../../../services/mobile-relay/protected-ports.mjs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -38,6 +40,7 @@ export async function startProductServer(options: StartProductServerOptions): Pr
     throw new Error('product HTTP is restricted to a loopback host');
   }
 
+  await prepareThreadReads(options.dataDir ?? resolveZccDataDir());
   const ctx = createProductHttpContext({
     dataDir: options.dataDir,
     origins: { ...options.origins, serverPort: options.port ?? options.origins.serverPort },

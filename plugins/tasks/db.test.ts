@@ -58,7 +58,7 @@ describe("tasks storage", () => {
             "SELECT COUNT(*) AS count FROM schema_version",
           )
           .get()?.count,
-      ).toBe(6);
+      ).toBe(7);
     } finally {
       await harness.dispose();
     }
@@ -795,4 +795,19 @@ describe("tasks storage", () => {
       await harness.dispose();
     }
   });
+});
+
+
+it('pages only non-terminal task threads directly through the indexed table', async () => {
+  const { store, harness } = setup();
+  try {
+    const project = createProject(store, 'PAGE'); const task = store.createTask({ projectId: project.id, title: 'Paged threads' });
+    for (let i = 0; i < 130; i++) store.upsertTaskThread({ taskId: task.id, threadId: 't' + i, title: 'Thread', presetName: 'Default', liveStatus: i < 25 ? 'completed' : 'working' });
+    const first = store.listNonTerminalTaskThreads(); expect(first).toHaveLength(100);
+    const second = store.listNonTerminalTaskThreads(first[99].id); expect(second).toHaveLength(5);
+    expect(new Set([...first, ...second].map(row => row.id)).size).toBe(105);
+    expect(store.hasNonTerminalTaskThreads()).toBe(true);
+    for (const row of [...first, ...second]) store.updateTaskThreadStatus(row.id, 'completed');
+    expect(store.hasNonTerminalTaskThreads()).toBe(false); expect(store.listNonTerminalTaskThreads()).toEqual([]);
+  } finally { await harness.dispose(); }
 });

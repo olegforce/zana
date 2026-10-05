@@ -391,25 +391,25 @@ describe('MainModuleHost — built-in persona/team ctx + teardown-clears', () =>
 describe('MainModuleHost.storageClear — uninstall storage purge', () => {
   const storeFile = (id: string) => join(tmpdir(), '.zcc', 'modules', `${id}.json`);
 
-  it('drops the in-memory cache AND the backing <id>.json file', () => {
+  it('drops the in-memory cache AND the backing <id>.json file', async () => {
     const id = `purge-${randomBytes(4).toString('hex')}`;
     const host = new MainModuleHost({ log: () => {} });
-    host.storageSet(id, 'k', 'v');
+    await host.storageSet(id, 'k', 'v');
     expect(existsSync(storeFile(id))).toBe(true);
-    expect(host.storageGet(id, 'k')).toBe('v');
+    expect(await host.storageGet(id, 'k')).toBe('v');
 
-    host.storageClear(id);
+    await host.storageClear(id);
 
     // File gone, and a fresh read (new store) sees nothing — a reinstall of the
     // same id starts clean rather than inheriting the removed extension's state.
     expect(existsSync(storeFile(id))).toBe(false);
-    expect(host.storageGet(id, 'k')).toBeUndefined();
+    expect(await host.storageGet(id, 'k')).toBeUndefined();
   });
 
-  it('is a safe no-op when the module wrote nothing (no file)', () => {
+  it('is a safe no-op when the module wrote nothing (no file)', async () => {
     const id = `empty-${randomBytes(4).toString('hex')}`;
     const host = new MainModuleHost({ log: () => {} });
-    expect(() => host.storageClear(id)).not.toThrow();
+    await expect(host.storageClear(id)).resolves.toBeUndefined();
     expect(existsSync(storeFile(id))).toBe(false);
   });
 });

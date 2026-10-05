@@ -153,7 +153,8 @@ const mainEntries = {
   'host-child': resolve(__dirname, 'apps/desktop/src/extensions/host-child.ts'),
   'server-runtime': resolve(__dirname, 'apps/server/src/utility-entry.ts'),
   'host-runtime': resolve(__dirname, 'apps/host-daemon/src/utility-entry.ts'),
-  'plugin-host-worker': resolve(__dirname, 'apps/host-daemon/src/plugin-host-worker.ts')
+  'plugin-host-worker': resolve(__dirname, 'apps/host-daemon/src/plugin-host-worker.ts'),
+  'plugin-server-worker': resolve(__dirname, 'apps/server/src/plugins/plugin-server-worker.ts')
 };
 const bbLicenseBanner = `/*! BB-derived code: MIT license\n${readFileSync(resolve(__dirname, 'docs/third-party/BB-LICENSE'), 'utf8')}\n*/`;
 const mainOutput = {

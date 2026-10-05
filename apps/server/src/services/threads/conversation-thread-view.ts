@@ -67,7 +67,7 @@ export function conversationThreadViews(
   threads: readonly ConversationThreadRow[]
 ): ConversationThreadView[] {
   const maxById = maxConversationEventSequenceByThreadIds(ctx.db, threads.map((thread) => thread.id));
-  const reads = loadThreadReads(ctx.dataDir);
+  const reads = loadThreadReads(ctx.dataDir, threads.map(thread => thread.id));
   return threads.map((thread) => {
     const maxSeq = maxById[thread.id] ?? 0;
     return conversationThreadView(ctx, thread, {

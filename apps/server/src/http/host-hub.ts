@@ -342,7 +342,11 @@ export function createHostHub(
     const committedHub: ProductHub = { ...hub, emit: (type, payload) => { afterCommit.push(() => hub.emit(type, payload)); } };
     commitHostEventBatch(db, terminalSessions, () => {
       const planThreads = new Set<string>();
+      const dirtyTerminals = new Set<string>();
+      const outputChunks = new Map<string, string[]>();
+      let lastOutput: { sessionId: string; data: string; startOffset: number; endOffset: number } | undefined;
       batch.events.forEach((event, index) => {
+        if (event.kind !== 'terminal.output' || event.terminalId !== lastOutput?.sessionId) lastOutput = undefined;
         if (event.kind === 'plugin.host.signal' || event.kind === 'plugin.host.worker-exited') {
           const payload = event.payload as Record<string, unknown> | null;
           if (!payload || typeof payload !== 'object' || typeof payload.pluginId !== 'string' || typeof payload.generation !== 'string'
@@ -405,17 +409,18 @@ export function createHostHub(
             const record = terminalSessions.get(event.terminalId);
             if (record) {
               const startOffset = record.outputEndOffset ?? record.outputText?.length ?? 0;
-              const next = appendBoundedTerminalOutput(
-                record.outputText !== undefined
-                  ? { text: record.outputText, truncated: record.outputTruncated ?? false }
-                  : undefined,
-                data
-              );
-              record.outputText = next.text;
-              record.outputTruncated = next.truncated;
+              const chunks = outputChunks.get(event.terminalId) ?? [];
+              chunks.push(data);
+              outputChunks.set(event.terminalId, chunks);
               record.outputEndOffset = startOffset + data.length;
-              terminalSessions.set(event.terminalId, record);
-              committedHub.emit('terminals:data', { sessionId: event.terminalId, data, startOffset, endOffset: record.outputEndOffset });
+              dirtyTerminals.add(event.terminalId);
+              if (lastOutput) {
+                lastOutput.data += data;
+                lastOutput.endOffset = record.outputEndOffset;
+              } else {
+                lastOutput = { sessionId: event.terminalId, data, startOffset, endOffset: record.outputEndOffset };
+                committedHub.emit('terminals:data', lastOutput);
+              }
             }
           } else {
             const exitCode = event.payload && typeof event.payload === 'object' && 'exitCode' in event.payload
@@ -426,11 +431,13 @@ export function createHostHub(
               record.status = 'exited';
               record.exitCode = Number.isFinite(exitCode) ? exitCode : 0;
               record.finishedAt = Date.now();
-              terminalSessions.set(event.terminalId, record);
+              dirtyTerminals.add(event.terminalId);
             }
             committedHub.emit('terminals:exit', {
               sessionId: event.terminalId,
-              code: Number.isFinite(exitCode) ? exitCode : 0
+              code: Number.isFinite(exitCode) ? exitCode : 0,
+              ...(event.payload && typeof event.payload === 'object' && 'reason' in event.payload && typeof event.payload.reason === 'string'
+                ? { reason: event.payload.reason.slice(0, 240) } : {})
             });
             committedHub.emit('terminals:updated', { sessionId: event.terminalId });
           }
@@ -516,6 +523,20 @@ export function createHostHub(
           payload: event.payload
         });
       });
+      // Persist the final bounded tail once per session in the same transaction
+      // as its receipt. Cache mutations roll back and notifications wait for commit.
+      for (const id of dirtyTerminals) {
+        const record = terminalSessions.get(id)!;
+        const chunks = outputChunks.get(id);
+        if (chunks) {
+          const next = appendBoundedTerminalOutput(
+            { text: record.outputText ?? '', truncated: record.outputTruncated ?? false }, chunks.join('')
+          );
+          record.outputText = next.text;
+          record.outputTruncated = next.truncated;
+        }
+        terminalSessions.set(id, record);
+      }
       // Reconcile the committed batch once per affected thread, including its
       // terminal boundary. Avoid reparsing the same history for every delta.
       for (const threadId of planThreads) {

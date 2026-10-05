@@ -261,6 +261,41 @@ function defaultRpcHandler(projectRoot: string) {
 }
 
 describe('host enroll hub and thread create', () => {
+  it('persists each terminal once per batch and preserves interleaved Unicode cursors, exit ordering and dedupe', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-terminal-coalesce-'));
+    const { enrollToken } = await startServer(root);
+    const instanceId = randomUUID(), enrolled = await enrollHost(enrollToken, 'alpha', instanceId);
+    const socket = await openHostSocket(enrolled, instanceId, defaultRpcHandler(root));
+    await waitForHost(enrolled.hostId);
+    const a = randomUUID(), b = randomUUID();
+    for (const id of [a, b]) server!.ctx.terminalSessions.set(id, { id, projectId: 'proj-1', title: id, profile: 'shell', cwd: root, status: 'running', createdAt: 1, hostId: enrolled.hostId, daemonInstanceId: instanceId, outputText: id === a ? 'A' : '', outputEndOffset: id === a ? 1 : 0 });
+    const persist = vi.spyOn(server!.ctx.terminalSessions, 'set'), publish = vi.spyOn(server!.ctx.hub, 'emit');
+    const batch = { type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION, hostId: enrolled.hostId, instanceId, batchId: randomUUID(), events: [
+      { terminalId: a, kind: 'terminal.output', payload: { data: '🙂' } },
+      { terminalId: a, kind: 'terminal.output', payload: { data: 'B' } },
+      { terminalId: b, kind: 'terminal.output', payload: { data: 'Z' } },
+      { terminalId: a, kind: 'terminal.output', payload: { data: 'C' } },
+      { terminalId: a, kind: 'terminal.exited', payload: { exitCode: -1, reason: 'capacity' } },
+      { terminalId: randomUUID(), kind: 'terminal.output', payload: { data: 'unowned' } }
+    ] };
+    const send = () => new Promise<any>(resolve => {
+      const listener = (raw: WebSocket.RawData) => { const ack = JSON.parse(String(raw)); if (ack.type === 'host.event-ack') { socket.off('message', listener); resolve(ack); } };
+      socket.on('message', listener); socket.send(JSON.stringify(batch));
+    });
+    expect(await send()).toMatchObject({ accepted: 5, rejected: [{ index: 5, reason: 'unknown_terminal' }] });
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(server!.ctx.terminalSessions.get(a)).toMatchObject({ outputText: 'A🙂BC', outputEndOffset: 5, status: 'exited' });
+    const notices = publish.mock.calls.filter(([kind]) => kind.startsWith('terminals:'));
+    expect(notices).toEqual([
+      ['terminals:data', { sessionId: a, data: '🙂B', startOffset: 1, endOffset: 4 }],
+      ['terminals:data', { sessionId: b, data: 'Z', startOffset: 0, endOffset: 1 }],
+      ['terminals:data', { sessionId: a, data: 'C', startOffset: 4, endOffset: 5 }],
+      ['terminals:exit', { sessionId: a, code: -1, reason: 'capacity' }],
+      ['terminals:updated', { sessionId: a }]
+    ]);
+    await send(); expect(persist).toHaveBeenCalledTimes(2);
+    persist.mockRestore(); publish.mockRestore(); socket.close();
+  });
   it('recovers terminal ownership and deduplicates acknowledged history after a server restart', async () => {
     const root = mkdtempSync(join(tmpdir(), 'zcc-terminal-recovery-'));
     const { dataDir, enrollToken } = await startServer(root);

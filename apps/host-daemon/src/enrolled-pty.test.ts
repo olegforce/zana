@@ -33,6 +33,21 @@ function fakeHandle(): EnrolledPtyHandle & {
 }
 
 describe('enrolled pty', () => {
+  it('pauses existing/new shells and isolates an overflowing shell with an explicit exit reason', async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const a = Object.assign(fakeHandle(), { pause: vi.fn(), resume: vi.fn() });
+    const b = Object.assign(fakeHandle(), { pause: vi.fn(), resume: vi.fn() });
+    const events: HostEventEnvelope[] = [];
+    const pty = createEnrolledPty({ emit: event => events.push(event), spawn: vi.fn().mockReturnValueOnce(a).mockReturnValueOnce(b) });
+    await pty.startTerminal({ sessionId: 'a', cwd: '/tmp', cols: 80, rows: 24 });
+    pty.setOutputPaused(true); pty.setOutputPaused(true);
+    await pty.startTerminal({ sessionId: 'b', cwd: '/tmp', cols: 80, rows: 24 });
+    expect(a.pause).toHaveBeenCalledOnce(); expect(b.pause).toHaveBeenCalledOnce();
+    pty.stopOverflowedTerminal('a'); pty.stopOverflowedTerminal('a');
+    expect(events).toEqual([expect.objectContaining({ terminalId: 'a', kind: 'terminal.exited', payload: expect.objectContaining({ exitCode: -1, reason: expect.stringContaining('capacity') }) })]);
+    pty.setOutputPaused(false); expect(b.resume).toHaveBeenCalledOnce(); expect(a.resume).not.toHaveBeenCalled();
+    await pty.writeTerminal({ sessionId: 'b', data: 'alive' }); expect(b.writes).toEqual(['alive']); pty.dispose();
+  });
   it('uses the host shell, then BB executable fallbacks for minimal Linux services', () => {
     expect(resolveEnrolledShell({ SHELL: '/custom/fish' }, () => true)).toBe('/custom/fish');
     expect(resolveEnrolledShell({ SHELL: '/missing' }, path => path === '/bin/bash')).toBe('/bin/bash');

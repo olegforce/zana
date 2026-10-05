@@ -1,8 +1,9 @@
 import { product } from '../lib/product-client.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import type { Project, SearchHit, SearchResult } from '@zana-ai/zcc-domain/product';
 import { useUi } from '../store.js';
+import { highlightSearchHit } from './search-hit-highlight.js';
 
 interface Props {
   project: Project;
@@ -39,13 +40,13 @@ export function SearchPanel({ project, onClose }: Props) {
   }, [activeIdx]);
 
   useEffect(() => {
+    const id = ++reqIdRef.current;
     const q = query.trim();
     if (!q) {
       setResult(null);
       setRunning(false);
       return;
     }
-    const id = ++reqIdRef.current;
     setRunning(true);
     const handle = window.setTimeout(async () => {
       try {
@@ -62,7 +63,10 @@ export function SearchPanel({ project, onClose }: Props) {
         if (reqIdRef.current === id) setRunning(false);
       }
     }, 220);
-    return () => window.clearTimeout(handle);
+    return () => {
+      window.clearTimeout(handle);
+      reqIdRef.current++;
+    };
   }, [query, caseSensitive, regex, project.path, pushToast]);
 
   useEffect(() => {
@@ -70,17 +74,6 @@ export function SearchPanel({ project, onClose }: Props) {
   }, [result]);
 
   const hits = result?.hits ?? [];
-
-  const matchRe = useMemo<RegExp | null>(() => {
-    const q = query.trim();
-    if (!q || !result) return null;
-    try {
-      const pat = regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(pat, caseSensitive ? 'g' : 'gi');
-    } catch {
-      return null;
-    }
-  }, [query, regex, caseSensitive, result]);
 
   const choose = (hit: SearchHit) => {
     setProjectView(project.id, 'explorer');
@@ -181,7 +174,7 @@ export function SearchPanel({ project, onClose }: Props) {
                 onClick={() => choose(h)}
               >
                 <span className="search-line-no">{h.line}</span>
-                <span className="search-preview">{highlight(h.preview, matchRe)}</span>
+                <span className="search-preview">{highlightSearchHit(h)}</span>
                 <span className="search-rel">{h.rel}</span>
               </button>
             ))
@@ -196,21 +189,4 @@ export function SearchPanel({ project, onClose }: Props) {
       </div>
     </div>
   );
-}
-
-function highlight(text: string, re: RegExp | null): React.ReactNode {
-  if (!re) return text;
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  re.lastIndex = 0;
-  let key = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    parts.push(<mark key={key++}>{m[0]}</mark>);
-    last = m.index + m[0].length;
-    if (m[0].length === 0) re.lastIndex++;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
 }

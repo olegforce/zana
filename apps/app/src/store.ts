@@ -1754,6 +1754,7 @@ interface DataState {
       /** Workspace provision choice for CLI Agent New worktree / reuse / personal. */
       workspace?: import('@zana-ai/zcc-domain').SpawnEnvironmentChoice;
       prompt?: string;
+      agentOwnerId?: string;
       personaId?: string;
       /** Marks a renderer-derived project/global default; main resolves it again. */
       profileSource?: 'explicit' | 'seeded-default';
@@ -3204,6 +3205,7 @@ export const useData = create<DataState>((set, get) => ({
       const result = await product.terminals.create({
         projectId,
         profile,
+        agentOwnerId: opts?.agentOwnerId,
         profileSource: opts?.profileSource,
         personaId: opts?.personaId,
         frameworkIds: opts?.frameworkIds,

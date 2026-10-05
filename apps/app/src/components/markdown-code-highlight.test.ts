@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import hljs from 'highlight.js/lib/common';
+import { describe, expect, it, vi } from 'vitest';
 import {
   highlightMarkdownCode,
   languageFromMarkdownClassName
@@ -28,4 +29,16 @@ describe('highlightMarkdownCode', () => {
     expect(languageFromMarkdownClassName('language-mermaid')).toBeNull();
     expect(languageFromMarkdownClassName(undefined)).toBeNull();
   });
+});
+
+it('avoids auto detection and expensive grammars above the input budget', () => {
+  const auto = vi.spyOn(hljs, 'highlightAuto'); const explicit = vi.spyOn(hljs, 'highlight');
+  expect(highlightMarkdownCode({ code: '<x>', language: 'unknown-language' }).__html).toBe('&lt;x&gt;');
+  expect(highlightMarkdownCode({ code: '<x>', language: null }).__html).toBe('&lt;x&gt;');
+  expect(highlightMarkdownCode({ code: '<'.repeat(16001), language: 'js' }).__html).toBe('&lt;'.repeat(16001));
+  expect(auto).not.toHaveBeenCalled(); expect(explicit).not.toHaveBeenCalled(); auto.mockRestore(); explicit.mockRestore();
+});
+it('escapes text when a recognized grammar fails', () => {
+  const spy = vi.spyOn(hljs, 'highlight').mockImplementationOnce(() => { throw Error('bad grammar'); });
+  expect(highlightMarkdownCode({ code: '<broken>', language: 'js' }).__html).toBe('&lt;broken&gt;'); spy.mockRestore();
 });

@@ -13,7 +13,7 @@
  * pure command builders) so it can be unit-tested without spawning anything.
  */
 
-import { execFileSync, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 
 /**
  * Prefix every ZCC-managed tmux session name with this, so the boot-time
@@ -30,6 +30,7 @@ export function tmuxSessionName(sessionId: string): string {
 // Cache the probe: it shells out, and the answer can't change within a run
 // (the PATH is fixed at boot). `null` = not yet probed.
 let cachedAvailable: boolean | null = null;
+let pendingProbe: Promise<TmuxVerifyResult> | undefined;
 
 /**
  * Whether tmux can be used on this host. False on Windows unconditionally
@@ -37,10 +38,16 @@ let cachedAvailable: boolean | null = null;
  * `tmux` isn't on PATH. Cached after the first call. Pass `force` in tests to
  * re-probe.
  */
-export function isTmuxAvailable(force = false): boolean {
+export async function prepareTmuxAvailability(force = false): Promise<boolean> {
   if (!force && cachedAvailable !== null) return cachedAvailable;
-  cachedAvailable = probeTmux();
-  return cachedAvailable;
+  return (await verifyTmux()).installed;
+}
+
+/** Synchronous spawn assembly only consumes a warmed cache. A direct legacy
+ * caller safely falls back while the nonblocking probe completes. */
+export function isTmuxAvailable(): boolean {
+  if (cachedAvailable === null) void verifyTmux();
+  return cachedAvailable ?? false;
 }
 
 export interface TmuxVerifyResult {
@@ -50,38 +57,32 @@ export interface TmuxVerifyResult {
 }
 
 /** Probe tmux for Settings using main's repaired PATH. Never throws. */
-export function verifyTmux(): TmuxVerifyResult {
+export function verifyTmux(): Promise<TmuxVerifyResult> {
   if (process.platform === 'win32') {
-    return { installed: false, installHint: 'tmux is unavailable on Windows' };
+    return Promise.resolve({ installed: false, installHint: 'tmux is unavailable on Windows' });
   }
-  try {
-    const version = execFileSync('tmux', ['-V'], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3_000
-    }).trim();
-    cachedAvailable = true;
-    return { installed: true, version: version || undefined, installHint: 'brew install tmux' };
-  } catch {
-    cachedAvailable = false;
-    return { installed: false, installHint: 'brew install tmux' };
-  }
+  if (pendingProbe) return pendingProbe;
+  const task = new Promise<TmuxVerifyResult>((resolve) => {
+    const done = (error: Error | null, stdout = '') => resolve({
+      installed: !error, version: !error ? stdout.trim() || undefined : undefined,
+      installHint: 'brew install tmux'
+    });
+    try { execFile('tmux', ['-V'], { encoding: 'utf8', timeout: 3_000, maxBuffer: 4096 }, done); }
+    catch { done(new Error('tmux unavailable')); }
+  });
+  pendingProbe = task;
+  void task.then(result => {
+    if (pendingProbe !== task) return;
+    cachedAvailable = result.installed;
+    pendingProbe = undefined;
+  });
+  return task;
 }
 
 /** Reset the cache (tests only). */
 export function resetTmuxAvailabilityCache(): void {
   cachedAvailable = null;
-}
-
-function probeTmux(): boolean {
-  // POSIX-only tool; never available on Windows.
-  if (process.platform === 'win32') return false;
-  try {
-    // `tmux -V` prints the version and exits 0 when present. Cheap, no server
-    // started. A non-zero exit or a missing binary throws → not available.
-    execFileSync('tmux', ['-V'], { stdio: ['ignore', 'ignore', 'ignore'], timeout: 3_000 });
-    return true;
-  } catch {
-    return false;
-  }
+  pendingProbe = undefined;
 }
 
 /**

@@ -13,8 +13,10 @@ import {
   rmSync,
   type Dirent
 } from 'node:fs';
-import { join, relative, extname, resolve, dirname, sep } from 'node:path';
+import { opendir, realpath, stat as asyncStat, open } from 'node:fs/promises';
+import { join, relative, extname, resolve, dirname, sep, isAbsolute } from 'node:path';
 import type { FsEntry, FsReadResult, FsWriteResult, FsMutateResult, FsReadDataUrlResult, SearchHit, SearchResult, SearchOptions } from '@zana-ai/zcc-domain/product';
+import { createRegexScanner } from './regex-worker.js';
 
 const DENY = new Set([
   'node_modules',
@@ -248,6 +250,7 @@ export function deletePath(root: string, absPath: string): FsMutateResult {
 
 const MAX_WALK_FILES = 8000;
 const MAX_WALK_DEPTH = 12;
+const MAX_WALK_ENTRIES = 32_000;
 
 export interface WalkedFile {
   /** path relative to root, posix-style */
@@ -256,38 +259,51 @@ export interface WalkedFile {
   path: string;
 }
 
-export function walkFiles(root: string): WalkedFile[] {
+export async function walkFiles(root: string): Promise<WalkedFile[]> {
   const out: WalkedFile[] = [];
+  let realRoot: string;
+  try { realRoot = await realpath(root); } catch { return out; }
   const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-  while (stack.length > 0 && out.length < MAX_WALK_FILES) {
+  const visited = new Set<string>();
+  let examined = 0;
+  while (stack.length > 0 && out.length < MAX_WALK_FILES && examined < MAX_WALK_ENTRIES) {
     const { dir, depth } = stack.pop()!;
     if (depth > MAX_WALK_DEPTH) continue;
-    let dirents: Dirent[];
     try {
-      dirents = readdirSync(dir, { withFileTypes: true }) as Dirent[];
-    } catch {
-      continue;
-    }
-    for (const d of dirents) {
-      if (DENY.has(d.name)) continue;
-      const full = join(dir, d.name);
-      let isDir = d.isDirectory();
-      let isFile = d.isFile();
-      if (d.isSymbolicLink()) {
-        try {
-          const st = statSync(full);
-          isDir = st.isDirectory();
-          isFile = st.isFile();
-        } catch {
-          continue;
+      const canonical = await realpath(dir);
+      const rel = relative(realRoot, canonical);
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || visited.has(canonical)) continue;
+      visited.add(canonical);
+      // Stream directory entries and yield during I/O. A file-count cap alone
+      // doesn't bound a tree of empty directories or symlink cycles.
+      const entries = await opendir(dir);
+      for await (const d of entries) {
+        if (++examined > MAX_WALK_ENTRIES) break;
+        if (DENY.has(d.name)) continue;
+        const full = join(dir, d.name);
+        let isDir = d.isDirectory();
+        let isFile = d.isFile();
+        if (d.isSymbolicLink()) {
+          try {
+            const target = await realpath(full);
+            const rel = relative(realRoot, target);
+            if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+            const st = await asyncStat(target);
+            isDir = st.isDirectory();
+            isFile = st.isFile();
+          } catch {
+            continue;
+          }
+        }
+        if (isDir && depth < MAX_WALK_DEPTH) {
+          stack.push({ dir: full, depth: depth + 1 });
+        } else if (isFile) {
+          out.push({ rel: relative(root, full).split('\\').join('/'), path: full });
+          if (out.length >= MAX_WALK_FILES) break;
         }
       }
-      if (isDir) {
-        stack.push({ dir: full, depth: depth + 1 });
-      } else if (isFile) {
-        out.push({ rel: relative(root, full).split('\\').join('/'), path: full });
-        if (out.length >= MAX_WALK_FILES) break;
-      }
+    } catch {
+      // Unreadable or disappearing directories must not abort the whole scan.
     }
   }
   return out;
@@ -311,11 +327,11 @@ export function walkFiles(root: string): WalkedFile[] {
  *   2. `originCwd + reportedPath` (the agent's real working dir, when captured)
  *   3. unique basename match anywhere under `root` (the walk; ambiguous → skip)
  */
-export function resolveDoc(
+export async function resolveDoc(
   root: string,
   reportedPath: string,
   originCwd?: string
-): { ok: true; rel: string } | { ok: false } {
+): Promise<{ ok: true; rel: string } | { ok: false }> {
   // Base the returned relative path on the REALPATH'd root: confine() returns a
   // realpath'd absolute (symlinks resolved), so computing `relative()` against a
   // symlinked raw root would yield spurious `../` segments. Fall back to the raw
@@ -359,7 +375,7 @@ export function resolveDoc(
   //    the same basename) → decline rather than guess the wrong one.
   const base = cleanReported.split(/[/\\]/).pop() ?? cleanReported;
   if (base) {
-    const matches = walkFiles(root).filter(
+    const matches = (await walkFiles(root)).filter(
       (f) => (f.rel.split('/').pop() ?? f.rel) === base
     );
     if (matches.length === 1) return { ok: true, rel: matches[0].rel };
@@ -377,75 +393,101 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function searchFiles(
+export async function searchFiles(
   root: string,
   query: string,
   opts: SearchOptions = {}
-): SearchResult {
+): Promise<SearchResult> {
   const trimmed = query.trim();
   if (!trimmed) return { hits: [], scanned: 0, truncated: false };
+  if (trimmed.length > 4096) return { hits: [], scanned: 0, truncated: true };
 
-  let re: RegExp;
-  try {
-    const pattern = opts.regex ? trimmed : escapeRegex(trimmed);
-    const flags = opts.caseSensitive ? 'g' : 'gi';
-    re = new RegExp(pattern, flags);
-  } catch {
-    return { hits: [], scanned: 0, truncated: false };
-  }
-
-  const files = walkFiles(root);
+  const flags = opts.caseSensitive ? 'g' : 'gi';
+  // Only escaped literal expressions run here. User regex compilation and
+  // matching both belong to the bounded worker.
+  const re = opts.regex ? null : new RegExp(escapeRegex(trimmed), flags);
   const hits: SearchHit[] = [];
   let scanned = 0;
   let truncated = false;
+  const scanner = opts.regex ? createRegexScanner() : null;
+  if (opts.regex && !scanner) return { hits: [], scanned: 0, truncated: true };
+  const deadline = Date.now() + 10_000;
 
-  outer: for (const f of files) {
-    let stat;
-    try {
-      stat = statSync(f.path);
-    } catch {
-      continue;
+  try {
+    if (scanner) {
+      try { await scanner.scan('', trimmed, flags); }
+      catch (error) { return { hits: [], scanned: 0, truncated: !(error instanceof Error && error.message === 'Invalid search expression') }; }
     }
-    if (!stat.isFile()) continue;
-    if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
-
-    let buf: Buffer;
-    try {
-      buf = readFileSync(f.path);
-    } catch {
-      continue;
-    }
-    // Skip binary files: NUL byte in first 8 KB.
-    const probe = buf.subarray(0, Math.min(8192, buf.length));
-    if (probe.includes(0)) continue;
-
-    scanned++;
-    const text = buf.toString('utf8');
-    const lines = text.split('\n');
-    let perFile = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      re.lastIndex = 0;
-      const m = re.exec(line);
-      if (!m) continue;
-      const truncatedLine =
-        line.length > SEARCH_LINE_TRUNC ? line.slice(0, SEARCH_LINE_TRUNC) + '…' : line;
-      hits.push({
-        rel: f.rel,
-        path: f.path,
-        line: i + 1,
-        column: m.index + 1,
-        match: m[0],
-        preview: truncatedLine
-      });
-      perFile++;
-      if (hits.length >= SEARCH_MAX_HITS) {
-        truncated = true;
-        break outer;
+    const files = await walkFiles(root);
+    outer: for (const f of files) {
+      if (Date.now() > deadline) { truncated = true; break; }
+      let stat;
+      try {
+        stat = await asyncStat(f.path);
+      } catch {
+        continue;
       }
-      if (perFile >= SEARCH_MAX_HITS_PER_FILE) break;
+      if (!stat.isFile()) continue;
+      if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
+
+      let buf: Buffer;
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        handle = await open(f.path, 'r');
+        // Bound the read even if a file grows after stat().
+        buf = Buffer.alloc(Math.min(stat.size, SEARCH_MAX_FILE_BYTES));
+        let bytesRead = 0;
+        while (bytesRead < buf.length) {
+          const read = await handle.read(buf, bytesRead, buf.length - bytesRead, bytesRead);
+          if (read.bytesRead === 0) break;
+          bytesRead += read.bytesRead;
+        }
+        buf = buf.subarray(0, bytesRead);
+      } catch {
+        continue;
+      } finally { await handle?.close().catch(() => {}); }
+      // Skip binary files: NUL byte in first 8 KB.
+      const probe = buf.subarray(0, Math.min(8192, buf.length));
+      if (probe.includes(0)) continue;
+
+      scanned++;
+      const text = buf.toString('utf8');
+      if (scanner) {
+        try {
+          const found = await scanner.scan(text, trimmed, flags);
+          for (const hit of found) {
+            hits.push({ ...hit, rel: f.rel, path: f.path });
+            if (hits.length >= SEARCH_MAX_HITS) { truncated = true; break outer; }
+          }
+        } catch { truncated = true; break; }
+        continue;
+      }
+      const lines = text.split('\n');
+      let perFile = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        re!.lastIndex = 0;
+        const m = re!.exec(line);
+        if (!m) continue;
+        const truncatedLine =
+          line.length > SEARCH_LINE_TRUNC ? line.slice(0, SEARCH_LINE_TRUNC) + '…' : line;
+        hits.push({
+          rel: f.rel,
+          path: f.path,
+          line: i + 1,
+          column: m.index + 1,
+          match: m[0],
+          preview: truncatedLine
+        });
+        perFile++;
+        if (hits.length >= SEARCH_MAX_HITS) {
+          truncated = true;
+          break outer;
+        }
+        if (perFile >= SEARCH_MAX_HITS_PER_FILE) break;
+      }
     }
-  }
+  } finally { scanner?.dispose(); }
 
   return { hits, scanned, truncated };
 }

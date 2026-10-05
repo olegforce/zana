@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { openAsyncJsonStore } from '../storage/async-json-store.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { PromptInput, ThreadQueuedMessage } from '@zana-ai/zcc-domain/thread-runtime';
@@ -10,7 +10,7 @@ interface QueuedStore {
 
 const writeChains = new Map<string, Promise<unknown>>();
 
-function withLock<T>(key: string, fn: () => T): Promise<T> {
+function withLock<T>(key: string, fn: () => T | Promise<T>): Promise<T> {
   const prev = writeChains.get(key) ?? Promise.resolve();
   const run = prev.catch(() => undefined).then(fn);
   writeChains.set(key, run);
@@ -25,22 +25,30 @@ function storePath(dataDir: string): string {
   return join(dataDir, 'thread-queued-messages.json');
 }
 
-function loadStore(dataDir: string): QueuedStore {
-  try {
-    const parsed = JSON.parse(readFileSync(storePath(dataDir), 'utf8')) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return parsed as QueuedStore;
-  } catch {
-    return {};
-  }
+const stores = new Map<string, ReturnType<typeof openAsyncJsonStore>>();
+function queueStore(dataDir: string) {
+  let store = stores.get(dataDir);
+  if (!store) { store = openAsyncJsonStore(storePath(dataDir)); stores.set(dataDir, store); }
+  return store;
 }
-
-function saveStore(dataDir: string, store: QueuedStore): void {
-  mkdirSync(dataDir, { recursive: true });
-  const dest = storePath(dataDir);
-  const tmp = `${dest}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(store), { encoding: 'utf8', mode: 0o600 });
-  renameSync(tmp, dest);
+export function closeQueuedMessages(dataDir: string): void {
+  stores.get(dataDir)?.dispose(); stores.delete(dataDir);
+}
+async function readQueue(dataDir: string, threadId: string): Promise<ThreadQueuedMessage[]> {
+  const value = await queueStore(dataDir).get<ThreadQueuedMessage[]>(threadId);
+  return Array.isArray(value) ? value : [];
+}
+async function saveQueue(dataDir: string, threadId: string, list: ThreadQueuedMessage[]): Promise<void> {
+  if (list.length > 100) throw new ThreadCreateError(413, 'queue-limit', 'A thread can queue at most 100 messages');
+  try {
+    if (list.length) await queueStore(dataDir).set(threadId, list);
+    else await queueStore(dataDir).delete(threadId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/quota|exceeds/i.test(message)) throw new ThreadCreateError(413, 'queue-limit', message);
+    if (/busy|capacity|timed out/i.test(message)) throw new ThreadCreateError(503, 'queue-busy', message);
+    throw error;
+  }
 }
 
 function promptText(content: PromptInput[]): string {
@@ -74,8 +82,8 @@ function toQueuedMessage(
   };
 }
 
-export function listQueuedMessages(dataDir: string, threadId: string): ThreadQueuedMessage[] {
-  return loadStore(dataDir)[threadId] ?? [];
+export function listQueuedMessages(dataDir: string, threadId: string): Promise<ThreadQueuedMessage[]> {
+  return readQueue(dataDir, threadId);
 }
 
 export function createQueuedMessage(
@@ -87,11 +95,9 @@ export function createQueuedMessage(
   if (input.length === 0) {
     throw new ThreadCreateError(400, 'invalid-input', 'queued message input is required');
   }
-  return withLock(dataDir, () => {
-    const store = loadStore(dataDir);
+  return withLock(dataDir, async () => {
     const message = toQueuedMessage(input, extras);
-    store[threadId] = [...(store[threadId] ?? []), message];
-    saveStore(dataDir, store);
+    await saveQueue(dataDir, threadId, [...await readQueue(dataDir, threadId), message]);
     return message;
   });
 }
@@ -103,9 +109,8 @@ export function updateQueuedMessage(
   input: PromptInput[],
   expectedUpdatedAt: number
 ): Promise<ThreadQueuedMessage> {
-  return withLock(dataDir, () => {
-    const store = loadStore(dataDir);
-    const list = store[threadId] ?? [];
+  return withLock(dataDir, async () => {
+    const list = await readQueue(dataDir, threadId);
     const index = list.findIndex((row) => row.id === queuedMessageId);
     if (index < 0) throw new ThreadCreateError(404, 'unknown-queued-message', 'queued message not found');
     const current = list[index]!;
@@ -119,18 +124,15 @@ export function updateQueuedMessage(
     };
     const copy = [...list];
     copy[index] = next;
-    store[threadId] = copy;
-    saveStore(dataDir, store);
+    await saveQueue(dataDir, threadId, copy);
     return next;
   });
 }
 
 export function deleteQueuedMessage(dataDir: string, threadId: string, queuedMessageId: string): Promise<void> {
-  return withLock(dataDir, () => {
-    const store = loadStore(dataDir);
-    const list = store[threadId] ?? [];
-    store[threadId] = list.filter((row) => row.id !== queuedMessageId);
-    saveStore(dataDir, store);
+  return withLock(dataDir, async () => {
+    const list = await readQueue(dataDir, threadId);
+    await saveQueue(dataDir, threadId, list.filter((row) => row.id !== queuedMessageId));
   });
 }
 
@@ -140,9 +142,8 @@ export function reorderQueuedMessage(
   queuedMessageId: string,
   previousQueuedMessageId: string | null
 ): Promise<ThreadQueuedMessage[]> {
-  return withLock(dataDir, () => {
-    const store = loadStore(dataDir);
-    const list = [...(store[threadId] ?? [])];
+  return withLock(dataDir, async () => {
+    const list = [...await readQueue(dataDir, threadId)];
     const from = list.findIndex((row) => row.id === queuedMessageId);
     if (from < 0) throw new ThreadCreateError(404, 'unknown-queued-message', 'queued message not found');
     const [moved] = list.splice(from, 1);
@@ -151,8 +152,7 @@ export function reorderQueuedMessage(
       ? list.findIndex((row) => row.id === previousQueuedMessageId) + 1
       : 0;
     list.splice(Math.max(0, insertAt), 0, moved);
-    store[threadId] = list;
-    saveStore(dataDir, store);
+    await saveQueue(dataDir, threadId, list);
     return list;
   });
 }

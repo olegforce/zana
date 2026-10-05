@@ -625,7 +625,7 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
       const handle = createPluginApi('cron', dir);
       handle.api.background.schedule('tick', '* * * * *', job);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(job).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(job).toHaveBeenCalledTimes(1));
       await vi.advanceTimersByTimeAsync(1_000);
       expect(job).toHaveBeenCalledTimes(1);
       await handle.dispose();
@@ -711,6 +711,25 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
       expect(database.prepare('SELECT title FROM items WHERE id = ?').get('1')).toEqual({ title: 'Adopted' });
       await handle.dispose();
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects changed migrations and rolls back invalid new statements', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-migrate-failure-'));
+    const handle = createPluginApi('migration-failure', dir);
+    try {
+      const db = handle.api.storage.database();
+      const first = 'CREATE TABLE items (id TEXT PRIMARY KEY);';
+      db.migrate([first]);
+      expect(() => db.migrate(['CREATE TABLE items (id INTEGER PRIMARY KEY);'])).toThrow('does not match');
+      expect(() => db.migrate([first, 'CREATE TABLE extra (id TEXT);', 'invalid sql'])).toThrow();
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'extra'").all()).toEqual([]);
+      expect(db.prepare('SELECT id FROM _zcc_migrations').all()).toEqual([{ id: 0 }]);
+      db.migrate([first, 'CREATE TABLE extra (id TEXT);']);
+      expect(db.prepare('SELECT id FROM _zcc_migrations ORDER BY id').all()).toEqual([{ id: 0 }, { id: 1 }]);
+    } finally {
+      await handle.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   });

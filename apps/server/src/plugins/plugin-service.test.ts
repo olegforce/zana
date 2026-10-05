@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  createPluginService,
+  createPluginService as createService,
   defaultPluginDataDir,
   installBundledPlugin,
   isLegacyExtensionJsonPluginRoot,
@@ -45,6 +45,10 @@ vi.mock('@zana-ai/zcc-plugin-build', async (importOriginal) => {
 });
 
 const roots: string[] = [];
+const services: ReturnType<typeof createService>[] = [];
+function createPluginService(...args: Parameters<typeof createService>) {
+  const service = createService(...args); services.push(service); return service;
+}
 
 function root(): string {
   const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-service-'));
@@ -53,6 +57,7 @@ function root(): string {
 }
 
 afterEach(() => {
+  for (const service of services.splice(0)) service.stop();
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
   marketplaceMaterializer.resolve = null;
   pluginBuilder.buildApp = null;
@@ -1793,5 +1798,23 @@ describe('plugin services registry', () => {
     expect(service.get('beta')?.statusDetail).toBe('needs plugin: alpha');
     await expect(service.callRpc('beta', 'hasAlpha', {})).resolves.toBe(false);
     service.stop();
+  });
+});
+
+describe('isolated plugin service return semantics', () => {
+  it('preserves sync values and unsubscribe handles and supports async methods', async () => {
+    const provider = writePlugin(join(root(), 'provider'), 'sync-provider', `export default api => {
+      let changed = 0;
+      api.services.provide({ version: 1, lazy: () => Promise.resolve('lazy'), label: () => 'ready', async delayed() { await new Promise(r => setTimeout(r, 5)); return 'async'; }, subscribe() { changed++; return () => { changed--; }; }, count: () => changed });
+    }`);
+    const consumer = writePlugin(join(root(), 'consumer'), 'sync-consumer', `export default api => {
+      const sdk = api.services.use('sync-provider');
+      api.rpc.method('check', async () => {
+        const label = 'prefix ' + sdk.label(); const unsubscribe = sdk.subscribe(); const during = sdk.count(); unsubscribe();
+        return { label, during, after: sdk.count(), delayed: await sdk.delayed(), lazy: await sdk.lazy().then(v => v), version: sdk.version, hasVersion: 'version' in sdk };
+      });
+    }`);
+    const service = createPluginService({ dataDir: root(), bundledRoot: root() }); await service.install(provider); await service.install(consumer);
+    expect(await service.callRpc('sync-consumer', 'check', {})).toEqual({ label: 'prefix ready', during: 1, after: 0, delayed: 'async', lazy: 'lazy', version: 1, hasVersion: true });
   });
 });

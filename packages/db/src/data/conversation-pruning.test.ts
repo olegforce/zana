@@ -154,7 +154,7 @@ it('rolls back cursor and deletes on failure, restores busy timeout, and advance
   const first = add('provider/rateLimits/updated'); add('provider/rateLimits/updated');
   db.sqlite.exec(`CREATE TRIGGER reject_prune BEFORE DELETE ON thread_events BEGIN SELECT RAISE(ABORT, 'test failure'); END`);
   expect(() => batch('rate-limits')).toThrow('test failure');
-  expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(5000);
+  expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(25);
   expect(ids()).toContain(first.id);
   expect(db.sqlite.prepare('SELECT * FROM conversation_event_pruning_cursors').all()).toEqual([]);
   db.sqlite.exec('DROP TRIGGER reject_prune');
@@ -195,7 +195,7 @@ it('defers immediately on a competing writer and restores the normal timeout', (
   try {
     writer.sqlite.exec('BEGIN IMMEDIATE');
     expect(() => batch('rate-limits')).toThrow(/locked/);
-    expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(5000);
+    expect(db.sqlite.pragma('busy_timeout', { simple: true })).toBe(25);
   } finally { writer.sqlite.exec('ROLLBACK'); writer.close(); }
   expect(batch('rate-limits').removed).toBe(1);
 });
