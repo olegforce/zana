@@ -15,11 +15,11 @@ test('app boots: renderer mounts and the IPC bridge is live', async ({ app }) =>
     expect(await app.electron.evaluate(({ app }) => app.isPackaged)).toBe(true);
   }
   expect(app.window.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
-  // React root mounted something.
-  const rootChildren = await app.window.evaluate(
+  // The HTML root exists before asynchronous startup and the App import finish.
+  // Wait for React to commit content; a permanently empty renderer still fails.
+  await expect.poll(() => app.window.evaluate(
     () => document.querySelector('#root')?.childElementCount ?? 0
-  );
-  expect(rootChildren).toBeGreaterThan(0);
+  ), { timeout: 30_000 }).toBeGreaterThan(0);
 
   // The preload context bridge exposed the extensions API the marketplace uses.
   const hasBridge = await app.window.evaluate(
