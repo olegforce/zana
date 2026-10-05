@@ -29,6 +29,11 @@ export function imageContentType(path: string): string | null {
   return 'image/webp';
 }
 
+/** Binary previews must keep their bytes intact across JSON transport. */
+export function previewContentType(path: string): string | null {
+  return path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : imageContentType(path);
+}
+
 export async function readThreadHostFile(
   ctx: ProductHttpContext,
   threadId: string,
@@ -57,8 +62,8 @@ export async function readThreadHostFile(
       try {
         const info = await file.stat();
         if (!info.isFile()) throw new ProjectFsError(404, 'path_not_found', 'attachment not found');
-        const contentType = imageContentType(attachmentPath);
-        const cap = contentType ? IMAGE_READ_MAX_BYTES : 2_000_000;
+        const contentType = previewContentType(attachmentPath);
+        const cap = contentType?.startsWith('image/') ? IMAGE_READ_MAX_BYTES : 2_000_000;
         if (info.size > cap) throw new ProjectFsError(413, 'too_large', 'file exceeds the read cap');
         // Bound the read too, in case the file grows after stat().
         const chunks: Buffer[] = [];
@@ -103,7 +108,7 @@ export async function readThreadHostFile(
       relPath,
       content: result.content,
       encoding: result.encoding,
-      contentType: imageContentType(relPath)
+      contentType: previewContentType(relPath)
     };
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'path_not_found') {

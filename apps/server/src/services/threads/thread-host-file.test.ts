@@ -108,6 +108,16 @@ describe('readThreadHostFile', () => {
     expect(file.encoding).toBe('base64');
     expect(file.content).toBe('iVBORw0KGgo=');
   });
+
+  it('preserves base64 PDF bytes and identifies their content type', async () => {
+    vi.mocked(getConversationThread).mockReturnValueOnce({ environmentId: 'e1', hostId: 'h1' } as never);
+    vi.mocked(getEnvironment).mockReturnValueOnce({ path: '/tmp/env' } as never);
+    const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from([255, 128, 0])]);
+    const ctx = { db: {}, hostHub: { callHostOnlineRpc: vi.fn(async () => ({ content: bytes.toString('base64'), encoding: 'base64' })) } } as unknown as ProductHttpContext;
+    expect(await readThreadHostFile(ctx, 't1', 'report.PDF')).toMatchObject({
+      content: bytes.toString('base64'), encoding: 'base64', contentType: 'application/pdf'
+    });
+  });
 });
 
 describe('CLI session workspace previews', () => {
@@ -246,6 +256,16 @@ describe('uploaded attachment previews', () => {
     });
   });
 
+  it('reads uploaded PDF bytes without decoding them as text', async () => {
+    const path = join(root, 'report.PDF');
+    const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from([255, 128, 0])]);
+    await writeFile(path, bytes);
+    const file = await readThreadHostFile(ctx, 't1', path);
+    expect(file).toMatchObject({ encoding: 'base64', contentType: 'application/pdf' });
+    expect(Buffer.from(file.content, 'base64')).toEqual(bytes);
+    expect(hostRead).not.toHaveBeenCalled();
+  });
+
   it('rejects another project, sibling-prefix paths and traversal outside the attachment root', async () => {
     for (const candidate of [
       join(dataDir, 'attachments', 'p2', 'private.png'),
@@ -269,7 +289,7 @@ describe('uploaded attachment previews', () => {
     expect(hostRead).not.toHaveBeenCalled();
   });
 
-  it.each([['huge.png', IMAGE_READ_MAX_BYTES], ['huge.txt', 2_000_000]])(
+  it.each([['huge.png', IMAGE_READ_MAX_BYTES], ['huge.txt', 2_000_000], ['huge.pdf', 2_000_000]])(
     'bounds %s reads', async (name, cap) => {
       const path = join(root, name);
       await writeFile(path, Buffer.alloc(cap + 1));

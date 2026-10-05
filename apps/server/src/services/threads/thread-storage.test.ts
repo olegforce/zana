@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,12 +42,44 @@ describe('thread storage', () => {
     expect(Buffer.from(file.content, 'base64')).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
+  it('preserves PDF bytes and bounds the read', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-storage-pdf-'));
+    try {
+      vi.mocked(getConversationThread).mockReturnValue({ id: 'thr_storage' } as never);
+      const ctx = { dataDir, db: {} } as unknown as ProductHttpContext;
+      const root = threadStorageRoot(dataDir, 'thr_storage');
+      mkdirSync(root, { recursive: true });
+      const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from([255, 128, 0])]);
+      writeFileSync(join(root, 'report.PDF'), bytes);
+      const file = await readThreadStorageFile(ctx, 'thr_storage', 'report.PDF');
+      expect(file).toMatchObject({ encoding: 'base64', contentType: 'application/pdf' });
+      expect(Buffer.from(file.content, 'base64')).toEqual(bytes);
+      writeFileSync(join(root, 'report.PDF'), Buffer.alloc(2_000_001));
+      await expect(readThreadStorageFile(ctx, 'thr_storage', 'report.PDF')).rejects.toMatchObject({ status: 413 });
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+
   it('rejects missing threads and path escapes', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-storage-'));
     vi.mocked(getConversationThread).mockReturnValueOnce(null);
     const ctx = { dataDir, db: {} } as unknown as ProductHttpContext;
     await expect(listThreadStorageFiles(ctx, 'missing')).rejects.toBeInstanceOf(ThreadCreateError);
+    vi.mocked(getConversationThread).mockReturnValueOnce(null);
+    await expect(readThreadStorageFile(ctx, 'missing', 'report.pdf')).rejects.toBeInstanceOf(ThreadCreateError);
     vi.mocked(getConversationThread).mockReturnValue({ id: 'thr_storage' } as never);
     await expect(readThreadStorageFile(ctx, 'thr_storage', '../secret')).rejects.toBeInstanceOf(ProjectFsError);
+  });
+
+  it('reports missing files and directories as unavailable', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-storage-missing-'));
+    try {
+      vi.mocked(getConversationThread).mockReturnValue({ id: 'thr_storage' } as never);
+      const ctx = { dataDir, db: {} } as unknown as ProductHttpContext;
+      const root = threadStorageRoot(dataDir, 'thr_storage');
+      mkdirSync(join(root, 'directory.pdf'), { recursive: true });
+      for (const path of ['directory.pdf', 'missing.pdf']) {
+        await expect(readThreadStorageFile(ctx, 'thr_storage', path)).rejects.toMatchObject({ status: 404 });
+      }
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
   });
 });

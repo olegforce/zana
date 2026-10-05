@@ -100,36 +100,49 @@ function PdfFileOpener(props) {
   }
   return React.createElement(
     'div',
-    { style: { position: 'relative', height: '100%', minHeight: 0, overflow: 'hidden' } },
-    state.frameLoaded
-      ? null
-      : React.createElement(
-          'div',
-          {
-            role: 'status',
-            'aria-label': `Rendering ${props.path}`,
-            style: {
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-muted)',
-              background: 'var(--bg, inherit)'
-            }
-          },
-          'Rendering PDF…'
-        ),
-    React.createElement('iframe', {
-      src: state.url,
-      title: props.path,
-      style: { display: 'block', width: '100%', height: '100%', border: 0 },
-      onLoad: () => {
-        setState((current) =>
-          current.status === 'ready' ? { ...current, frameLoaded: true } : current
-        );
-      }
-    })
+    { 'data-testid': 'pdf-preview', style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' } },
+    React.createElement(
+      'div',
+      { style: { display: 'flex', justifyContent: 'flex-end', padding: '8px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 } },
+      React.createElement('a', {
+        href: state.url,
+        download: props.path.split(/[\\/]/).pop() || 'document.pdf',
+        style: { color: 'var(--text)', fontSize: 12 }
+      }, 'Download PDF')
+    ),
+    React.createElement(
+      'div',
+      { style: { position: 'relative', flex: '1 1 auto', minHeight: 0 } },
+      state.frameLoaded
+        ? null
+        : React.createElement(
+            'div',
+            {
+              role: 'status',
+              'aria-label': `Rendering ${props.path}`,
+              style: {
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)',
+                background: 'var(--bg, inherit)'
+              }
+            },
+            'Rendering PDF…'
+          ),
+      React.createElement('iframe', {
+        src: state.url,
+        title: props.path,
+        style: { display: 'block', width: '100%', height: '100%', border: 0 },
+        onLoad: () => {
+          setState((current) =>
+            current.status === 'ready' ? { ...current, frameLoaded: true } : current
+          );
+        }
+      })
+    )
   );
 }
 
