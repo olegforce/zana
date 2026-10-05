@@ -52,11 +52,15 @@ it('rejects deferred CLI execution on both packed machines while retaining real 
         daemonInstanceId: server.ctx.hostHub.getSession(enrollment.hostId)!.instanceId,
         title: 'Remote shell fixture', profile: 'shell', status: 'running', cwd: root, createdAt: Date.now() });
       expect(await call({ type: 'terminal.start', sessionId, root, cols: 93, rows: 31,
-        command: 'test -t 0 && printf "SHELL_READY\\n"; read marker; printf "SHELL_DONE\\n"' }), stderr)
+        command: 'test -t 0 && printf "SHELL_READY\\n"; read marker; printf "SHELL_DONE\\n"; read finished' }), stderr)
         .toMatchObject({ sessionId, started: true });
       await vi.waitFor(() => expect(server.ctx.terminalSessions.get(sessionId)?.outputText, stderr).toContain('SHELL_READY'), { timeout: 15_000 });
       await call({ type: 'terminal.resize', sessionId, cols: 110, rows: 35 });
       await call({ type: 'terminal.input', sessionId, data: 'finish\r' });
+      // Acknowledge the output before allowing the fixture to exit. This test
+      // verifies remote I/O and execution authority, independently of PTY EOF timing.
+      await vi.waitFor(() => expect(server.ctx.terminalSessions.get(sessionId)?.outputText, stderr).toContain('SHELL_DONE'), { timeout: 15_000 });
+      await call({ type: 'terminal.input', sessionId, data: 'close\r' });
       await vi.waitFor(() => expect(server.ctx.terminalSessions.get(sessionId)?.status, stderr).toBe('exited'), { timeout: 15_000 });
       expect(server.ctx.terminalSessions.get(sessionId)?.exitCode).toBe(0);
       expect(server.ctx.terminalSessions.get(sessionId)?.outputText).toContain('SHELL_DONE');
