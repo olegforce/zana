@@ -314,7 +314,13 @@ ${hangBranch}`));
     expect(started.body.result.structuredContent).toMatchObject({ state: 'queued', harness: 'acp-opencode', model: 'fake/default' });
     const jobId = started.body.result.structuredContent.job_id;
     await tool('zana_launch_job', args);
-    await expect.poll(async () => (await rpc('snapshot')).bindings.length, { timeout: 45_000 }).toBe(1);
+    await expect.poll(async () => (await rpc('snapshot')).bindings.length, { timeout: 45_000 }).toBe(1).catch(async error => {
+      await testInfo.attach('slack-launch-diagnostics.json', {
+        body: JSON.stringify({ snapshot: await rpc('snapshot'), job: (await tool('zana_job_status', { job_id: jobId })).body }, null, 2),
+        contentType: 'application/json'
+      });
+      throw error;
+    });
     const binding = (await rpc('snapshot')).bindings[0];
     expect(posts.filter(p => p.text === `Task from Zana: ${args.task}`)).toHaveLength(1);
     await expect.poll(async () => (await tool('zana_job_status', { job_id: jobId })).body.result.structuredContent.state, { timeout: 30_000 }).toBe('idle');
