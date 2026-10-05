@@ -4298,7 +4298,7 @@ const agentTerminalBudget = createAgentTerminalBudget(id => {
   return !!session && session.status !== 'exited';
 });
 
-async function createInteractiveTerminal(req: CreateTerminalRequest): Promise<Result<TerminalSession>> {
+export async function createInteractiveTerminal(req: CreateTerminalRequest): Promise<Result<TerminalSession>> {
   if (req.agentOwnerId !== undefined) {
     const ownerId = req.agentOwnerId;
     if (typeof ownerId !== 'string' || req.profile !== 'shell') return { ok: false, code: 'DENIED', message: 'Invalid agent shell owner' };

@@ -10,6 +10,9 @@ const h = vi.hoisted(() => ({
   observer: null as ResizeObserverCallback | null,
   fit: vi.fn(), resize: vi.fn(), resizePty: vi.fn().mockResolvedValue(undefined),
   gpuCreated: vi.fn(), gpuDisposed: vi.fn(), constructed: vi.fn(), options: {} as Record<string,unknown>,
+  write: vi.fn(), reset: vi.fn(), scroll: vi.fn(), selected: false,
+  active: { viewportY: 0, baseY: 0 }, exit: null as any, replayRead: null as any, replayOptions: null as any,
+  backlog: vi.fn(async () => ''), snapshot: vi.fn(async () => ({ text: '', startOffset: 0, endOffset: 0 })),
   data: { fontSize: 14, theme: 'dark', terminalTheme: 'auto', terminalWheelArrowsEnabled: true, projects: [] },
   ui: { agentModal: null as { sessionId: string } | null, pushToast: vi.fn() }
 }));
@@ -18,20 +21,26 @@ vi.mock('../store.js', () => ({
   useUi: Object.assign((pick: (s: typeof h.ui) => unknown) => pick(h.ui), { getState: () => h.ui })
 }));
 vi.mock('../lib/product-client.js', () => ({ product: { terminals: {
-  resize: h.resizePty, onData: () => () => {}, onExit: () => () => {}, write: vi.fn()
+  resize: h.resizePty, onData: () => () => {}, onExit: (fn: any) => { h.exit = fn; return () => {}; }, write: vi.fn(),
+  backlog: h.backlog, backlogSnapshot: h.snapshot
 } } }));
 vi.mock('../lib/product-ws.js', () => ({ subscribeProductReconnect: () => () => {} }));
-vi.mock('../lib/terminal-replay.js', () => ({ createTerminalReplay: () => ({ replay: vi.fn(), dispose: vi.fn() }) }));
+vi.mock('../lib/terminal-replay.js', () => ({ createTerminalReplay: (read: any, options: any) => {
+  h.replayRead = read; h.replayOptions = options; return { replay: vi.fn(), dispose: vi.fn() };
+} }));
 vi.mock('../hooks/useFileDrop.js', () => ({ useFileDrop: () => ({ dropOver: false, dropHandlers: {} }) }));
 vi.mock('../lib/osc52-clipboard.js', () => ({ registerOsc52Clipboard: () => ({ dispose: vi.fn() }) }));
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   cols = 80; rows = 24;
   options: Record<string, unknown>;
-  buffer = { active: { viewportY: 0, baseY: 0 } };
+  buffer = { active: h.active };
   parser = {};
   constructor(options: Record<string, unknown>) { this.options = options; h.options = options; h.constructed(); }
   resize(cols: number, rows: number) { h.resize(cols, rows); this.cols = cols; this.rows = rows; }
-  open() {} loadAddon() {} refresh() {} scrollToBottom() {} focus() {} dispose() {}
+  open() {} loadAddon() {} refresh() {} scrollToBottom() { h.scroll(); } focus() {} dispose() {}
+  hasSelection() { return h.selected; }
+  write(data: string, done: () => void) { h.write(data); done(); }
+  reset() { h.reset(); }
   onScroll() { return { dispose() {} }; } onData() { return { dispose() {} }; }
   attachCustomKeyEventHandler() {} attachCustomWheelEventHandler() {}
 } }));
@@ -58,6 +67,7 @@ function observe(width: number, height: number) {
 beforeEach(() => {
   vi.useFakeTimers();
   h.shown = false; h.frames.clear(); h.nextFrame = 0;
+  h.selected = false; h.active.viewportY = h.active.baseY = 0;
   h.data.fontSize = 14; h.ui.agentModal = null;
   vi.clearAllMocks();
   vi.spyOn(HTMLElement.prototype, 'offsetParent', 'get').mockImplementation(function () { return h.shown ? document.body : null; });
@@ -143,4 +153,29 @@ describe('terminal resize visibility', () => {
     expect(h.fit).toHaveBeenCalledTimes(1);
     expect(h.resizePty).toHaveBeenLastCalledWith('s1', 80, 24);
   });
+});
+
+it('wires bounded replay writes, reset, selection-safe following and terminal exit reasons', async () => {
+  h.shown = true;
+  const view = render(<TerminalView session={session} area="a" />); await frames(); await frames();
+  const signal = new AbortController().signal;
+  await h.replayRead(signal); expect(h.snapshot).toHaveBeenCalledWith('s1', signal);
+  act(() => h.replayOptions.write('stream')); await frames();
+  expect(h.write).toHaveBeenCalledWith('stream'); expect(h.scroll).toHaveBeenCalled();
+  h.scroll.mockClear(); h.selected = true;
+  act(() => h.replayOptions.write('selected')); await frames();
+  expect(h.scroll).not.toHaveBeenCalled();
+  h.selected = false; h.active.viewportY = 0; h.active.baseY = 1;
+  act(() => h.replayOptions.write('scrolled')); await frames();
+  expect(h.scroll).not.toHaveBeenCalled();
+  await act(async () => { h.replayOptions.reset(); await vi.advanceTimersByTimeAsync(0); }); expect(h.reset).toHaveBeenCalled();
+  await act(async () => {
+    h.exit('other', 1); h.exit('s1', 9, 'overflow'); h.exit('s1', 1); h.exit('s1', 0);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await frames();
+  expect(h.write.mock.calls.map(([data]) => data).join('')).toContain('overflow');
+  expect(h.write.mock.calls.map(([data]) => data).join('')).toContain('[exited code 1]');
+  expect(h.write.mock.calls.map(([data]) => data).join('')).toContain('[session exited]');
+  view.unmount(); h.replayOptions.follow();
 });

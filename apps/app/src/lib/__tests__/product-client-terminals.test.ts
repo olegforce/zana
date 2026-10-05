@@ -1,7 +1,17 @@
+// @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { product } from '../product-client.js';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('forwards typed terminal exit reasons and releases its subscription', async () => {
+  const socket = { addEventListener: vi.fn(), close: vi.fn(), readyState: 1, send: vi.fn() };
+  vi.stubGlobal('WebSocket', Object.assign(function () { return socket; }, { OPEN: 1 }));
+  const received = vi.fn(), stop = product.terminals.onExit(received);
+  const message = socket.addEventListener.mock.calls.find(([type]) => type === 'message')![1];
+  message({ data: JSON.stringify({ type: 'terminals:exit', payload: { sessionId: 'one', code: 9, reason: 'overflow' } }) });
+  expect(received).toHaveBeenCalledExactlyOnceWith('one', 9, 'overflow'); stop();
+});
 
 it('hydrates each project with only its own terminals so mobile lists and portals do not duplicate sessions', async () => {
   const first = { id: 'one', projectId: 'project-a', title: 'First agent' };

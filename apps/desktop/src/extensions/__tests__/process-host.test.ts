@@ -950,3 +950,56 @@ describe('ExtensionProcessHost — persona/team registry broker routing', () => 
     expect(cleared).toContain('alpha');
   });
 });
+
+describe('asynchronous storage broker and routing', () => {
+  it.each(['storage.get', 'storage.set'] as const)('acknowledges %s only after persistence and relays rejection', async method => {
+    let resolve!: (value?: unknown) => void;
+    const storage = { get: vi.fn(() => new Promise(r => { resolve = r; })), set: vi.fn(() => new Promise<void>(r => { resolve = r; })) };
+    const { host, endpoints } = makeHost({ storage });
+    const ep = await spawnReady(host, endpoints, 'alpha');
+    ep.emit({ type: 'broker', reqId: 100, method, args: ['key', 'value'] });
+    expect(ep.sent.some(m => m.type === 'broker-result')).toBe(false);
+    resolve('saved'); await Promise.resolve();
+    expect(ep.sent.at(-1)).toMatchObject({ type: 'broker-result', reqId: 100, ok: true });
+    const action = method === 'storage.get' ? storage.get : storage.set;
+    action.mockImplementationOnce(() => Promise.reject(new Error('disk unavailable')));
+    ep.emit({ type: 'broker', reqId: 101, method, args: ['key', 'value'] }); await Promise.resolve();
+    expect(ep.sent.at(-1)).toMatchObject({ reqId: 101, ok: false, error: 'disk unavailable' });
+    await host.teardown('alpha');
+  });
+
+  it.each([
+    ['fs.readFile', 'readFile', ['/safe', 'utf-8']], ['fs.writeFile', 'writeFile', ['/safe', 'value']],
+    ['fs.readdir', 'readdir', ['/safe']], ['fs.stat', 'stat', ['/safe']], ['fs.exists', 'exists', ['/safe']],
+    ['fetch', 'fetch', ['https://allowed.example', {}]], ['mcp', 'mcp', ['server', 'tool', {}, {}]],
+    ['mcp.initWorkspace', 'mcpInitWorkspace', [{}]], ['mcp.isWorkspaceInitialized', 'mcpIsWorkspaceInitialized', [{}]],
+    ['llm.run', 'llm', [{}]], ['stream.open', 'streamOpen', ['stream', {}]], ['stream.close', 'streamClose', ['stream']]
+  ])('preserves authenticated authority for %s across async replies', async (method, performer, args) => {
+    const perform = vi.fn(async () => 'result');
+    const { host, endpoints } = makeHost({ caps: { [performer as string]: perform } as unknown as BrokerCapabilities });
+    const ep = await spawnReady(host, endpoints, 'alpha');
+    ep.emit({ type: 'broker', reqId: 102, method: method as never, args: args as unknown[] });
+    await Promise.resolve();
+    expect(perform).toHaveBeenCalledWith('alpha', ...(args as unknown[]));
+    expect(ep.sent.at(-1)).toMatchObject({ reqId: 102, ok: true, result: 'result' });
+    await host.teardown('alpha');
+  });
+
+  it('returns the shared storage persistence promise through the module router', async () => {
+    const pending = Promise.withResolvers<void>();
+    const builtins = { storageSet: vi.fn(() => pending.promise), storageClear: vi.fn(async () => {}) };
+    const router = new ModuleRouter(builtins as never, {} as never);
+    expect(router.storageSet('disk', 'key', 42)).toBe(pending.promise);
+    expect(builtins.storageSet).toHaveBeenCalledWith('disk', 'key', 42);
+    pending.resolve(); await pending.promise;
+    await router.storageClear('disk'); expect(builtins.storageClear).toHaveBeenCalledWith('disk');
+  });
+});
+
+it('acknowledges logging and rejects an unknown broker operation', async () => {
+  const { host, endpoints } = makeHost(), ep = await spawnReady(host, endpoints, 'alpha');
+  ep.emit({ type: 'broker', reqId: 103, method: 'log', args: ['message'] });
+  expect(ep.sent.at(-1)).toMatchObject({ reqId: 103, ok: true });
+  ep.emit({ type: 'broker', reqId: 104, method: 'unknown' as never, args: [] });
+  expect(ep.sent.at(-1)).toMatchObject({ reqId: 104, ok: false }); await host.teardown('alpha');
+});

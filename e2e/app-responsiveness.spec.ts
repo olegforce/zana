@@ -19,7 +19,7 @@ test('search edits do not execute a regex against retained renderer previews', a
     dispatchEvent(new PopStateEvent('popstate'));
   }, id);
   await expect(page.getByText('regex-highlight-audit', { exact: true }).first()).toBeVisible();
-  await page.keyboard.press('Meta+Shift+f');
+  await page.keyboard.press('ControlOrMeta+Shift+f');
   const input = page.locator('.search-panel input');
   await expect(input).toBeVisible();
   await input.fill('!');

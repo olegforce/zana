@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutionBoardSnapshot } from '@zana-ai/zcc-domain/product';
 import { buildJobDetailsText, ExecutionJobDetails } from './ExecutionJobDetails.js';
@@ -160,5 +160,53 @@ describe('ExecutionJobDetails request lifecycle', () => {
     expect(await screen.findByText('Ship')).toBeTruthy();
     resolveOld({ ...structuredClone(baseSnapshot), execution: { ...baseSnapshot.execution, jobTitle: 'Stale job' } });
     await Promise.resolve(); expect(screen.queryByText('Stale job')).toBeNull(); view.unmount();
+  });
+});
+
+describe('execution polling and artifact lifetimes', () => {
+  it('deduplicates pending refreshes and cancels polling on unmount', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(window.cc.executionBoard.snapshot), pending = Promise.withResolvers<ExecutionBoardSnapshot>();
+    read.mockReturnValueOnce(pending.promise);
+    const view = render(<ExecutionJobDetails projectId="project-1" executionId="execution-1" onClose={() => {}} />);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' })); expect(read).toHaveBeenCalledOnce();
+      await act(async () => pending.resolve(structuredClone(baseSnapshot)));
+      await act(async () => vi.advanceTimersByTimeAsync(2000)); expect(read).toHaveBeenCalledTimes(2);
+      const late = Promise.withResolvers<ExecutionBoardSnapshot>(); read.mockReturnValueOnce(late.promise);
+      await act(async () => vi.advanceTimersByTimeAsync(2000)); view.unmount();
+      await act(async () => late.reject(Error('late failure')));
+      await act(async () => vi.advanceTimersByTimeAsync(10_000)); expect(read).toHaveBeenCalledTimes(3);
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each(['small', 'large', 'denied', 'rejected'] as const)('renders artifact %s without unbounded preview work', async kind => {
+    const snap = structuredClone(baseSnapshot);
+    snap.artifacts = [{ id: 'artifact', name: 'Result artifact', mediaType: 'text/plain', contentDigest: 'digest' } as never];
+    vi.mocked(window.cc.executionBoard.snapshot).mockResolvedValue(snap);
+    const content = kind === 'large' ? 'x'.repeat(100_000) : 'complete result';
+    const read = vi.mocked(window.cc.executionBoard.readArtifact);
+    if (kind === 'rejected') read.mockRejectedValue(Error('offline'));
+    else read.mockResolvedValue((kind === 'denied' ? { ok: false, message: 'denied' } : { ok: true, value: { content } }) as never);
+    const view = render(<ExecutionJobDetails projectId="project-1" executionId="execution-1" onClose={() => {}} />);
+    const summary = await screen.findByText(/Result artifact/), details = summary.closest('details')!;
+    await act(async () => { details.open = true; });
+    await waitFor(() => expect(details.querySelector('pre')?.textContent).not.toBe('Loading…'));
+    expect(read).toHaveBeenCalledWith('project-1', 'execution-1', 'artifact');
+    expect(details.querySelector('pre')!.textContent!.length).toBeLessThanOrEqual(64_000);
+    await act(async () => { details.open = false; }); await act(async () => { details.open = true; });
+    expect(read).toHaveBeenCalledOnce(); view.unmount();
+  });
+
+  it.each([false, true])('drops a late artifact settlement after scope disposal (rejected=%s)', async rejected => {
+    const snap = structuredClone(baseSnapshot);
+    snap.artifacts = [{ id: 'artifact', name: 'Old artifact', mediaType: 'text/plain', contentDigest: 'digest' } as never];
+    vi.mocked(window.cc.executionBoard.snapshot).mockResolvedValue(snap);
+    const pending = Promise.withResolvers<any>(); vi.mocked(window.cc.executionBoard.readArtifact).mockReturnValue(pending.promise);
+    const view = render(<ExecutionJobDetails projectId="project-1" executionId="execution-1" onClose={() => {}} />);
+    const details = (await screen.findByText(/Old artifact/)).closest('details')!;
+    details.open = true; fireEvent(details, new Event('toggle')); view.unmount();
+    await act(async () => { if (rejected) pending.reject(Error('late')); else pending.resolve({ ok: true, value: { content: 'stale' } }); });
+    expect(useUi.getState().toasts).toEqual([]);
   });
 });

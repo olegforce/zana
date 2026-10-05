@@ -4,11 +4,13 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { useSecondaryPanel, useThreadSecondaryPanel } from './useThreadSecondaryPanel.js';
 import { closableTabsToContract } from './threadTabsContract.js';
 import { persistSecondaryPanel, emptySecondaryPanelState } from './threadSecondaryPanelState.js';
+import { useData, useUi } from '../../../store.js';
 
-const { tabs, updateTabs, onTabs, useCompactLayout } = vi.hoisted(() => ({
+const { tabs, updateTabs, onTabs, useCompactLayout, closeTerminal, listTerminals } = vi.hoisted(() => ({
   tabs: vi.fn(), updateTabs: vi.fn(), onTabs: vi.fn(), useCompactLayout: vi.fn(),
+  closeTerminal: vi.fn(), listTerminals: vi.fn(),
 }));
-vi.mock('../../../lib/product-client.js', () => ({ product: { threads: { tabs, updateTabs, onTabs } } }));
+vi.mock('../../../lib/product-client.js', () => ({ product: { threads: { tabs, updateTabs, onTabs }, terminals: { close: closeTerminal, list: listTerminals } } }));
 vi.mock('../../../hooks/useCompactLayout.js', () => ({ useCompactLayout }));
 beforeEach(() => {
   localStorage.clear();
@@ -17,6 +19,8 @@ beforeEach(() => {
   tabs.mockReset().mockResolvedValue({ revision: 0, tabs: [] });
   updateTabs.mockReset().mockResolvedValue({ revision: 1, tabs: [] });
   onTabs.mockReset().mockReturnValue(() => {});
+  closeTerminal.mockReset().mockResolvedValue(true); listTerminals.mockReset().mockResolvedValue([]);
+  useData.setState({ terminals: {} }); useUi.setState({ toasts: [] });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -325,4 +329,35 @@ it('drops pending writes and removes the event subscription on unmount', async (
   await act(async () => sent.resolve({ revision: 1, tabs: [] }));
   expect(updateTabs).toHaveBeenCalledTimes(1);
   expect(unsubscribe).toHaveBeenCalledOnce();
+});
+
+it('keeps a closing shell tab until exit and deduplicates concurrent closes', async () => {
+  persistSecondaryPanel('agent', { ...emptySecondaryPanelState(), tabs: [{ id: 'tab', kind: 'terminal', title: 'Shell', sessionId: 'shell' }] });
+  useData.setState({ terminals: { p: [{ id: 'shell', status: 'running', projectId: 'p' } as never] } });
+  const pending = Promise.withResolvers<boolean>(); closeTerminal.mockReturnValueOnce(pending.promise);
+  const view = renderHook(() => useSecondaryPanel('agent'));
+  let closing!: Promise<void>;
+  act(() => { closing = view.result.current.closeTab('tab'); void view.result.current.closeTab('tab'); });
+  expect(closeTerminal).toHaveBeenCalledOnce(); expect(view.result.current.state.tabs).toHaveLength(1);
+  await act(async () => { pending.resolve(true); await closing; });
+  expect(listTerminals).toHaveBeenCalledWith('p'); expect(view.result.current.state.tabs).toEqual([]);
+  expect(useData.getState().terminals.p).toEqual([]);
+});
+
+it.each([new Error('offline'), 'offline'])('preserves a failed close and displays its failure %s', async failure => {
+  persistSecondaryPanel('agent', { ...emptySecondaryPanelState(), tabs: [{ id: 'tab', kind: 'terminal', title: 'Shell', sessionId: 'shell' }] });
+  closeTerminal.mockRejectedValueOnce(failure);
+  const view = renderHook(() => useSecondaryPanel('agent'));
+  await act(async () => view.result.current.closeTab('tab'));
+  expect(view.result.current.state.tabs).toHaveLength(1); expect(useUi.getState().toasts).toHaveLength(1);
+});
+
+it('drops a late close from the previous owner and closes a local view without a roster entry', async () => {
+  persistSecondaryPanel('agent', { ...emptySecondaryPanelState(), tabs: [{ id: 'tab', kind: 'terminal', title: 'Shell', sessionId: 'shell' }] });
+  const pending = Promise.withResolvers<boolean>(); closeTerminal.mockReturnValueOnce(pending.promise);
+  const view = renderHook(({ owner }) => useSecondaryPanel(owner), { initialProps: { owner: 'agent' } });
+  let closing!: Promise<void>; act(() => { closing = view.result.current.closeTab('tab'); });
+  view.rerender({ owner: 'other' });
+  await act(async () => { pending.resolve(true); await closing; });
+  expect(view.result.current.state.tabs).toEqual([]); expect(listTerminals).not.toHaveBeenCalled();
 });
