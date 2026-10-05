@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PluginNewThreadPanelActionRegistration, PluginThreadPanelActionRegistration } from '@zana-ai/zcc-plugin-sdk';
 
@@ -10,7 +10,7 @@ vi.mock('../../../lib/app-surface.js', () => ({
   hasDesktopBridge: () => false
 }));
 vi.mock('../../../lib/product-client.js', () => ({
-  product: { fs: {} }
+  product: { fs: { walkFiles: vi.fn().mockResolvedValue([]) } }
 }));
 vi.mock('../../../store.js', () => ({
   useData: (selector: (s: { projects: unknown[] }) => unknown) => selector({ projects: [] })
@@ -39,10 +39,35 @@ vi.mock('../../../plugins/plugin-slots.js', () => ({
 }));
 
 import { ThreadNewTabPage, ThreadNewTabView } from './ThreadNewTabPage.js';
+import { product } from '../../../lib/product-client.js';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe('ThreadNewTabPage', () => {
+  it('opens terminal tools without scanning and loads files once when searching', async () => {
+    vi.mocked(product.fs.walkFiles).mockResolvedValueOnce([{ path: '/project/report.md', rel: 'report.md' }]);
+    render(<ThreadNewTabPage projectId="p1" cwd="/project" onOpenFile={vi.fn()}
+      onOpenBrowser={vi.fn()} onStartTerminal={vi.fn()} onOpenPlugin={vi.fn()} />);
+    expect(product.fs.walkFiles).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'report' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'report.md' })).toBeTruthy());
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'reports' } });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'report' } });
+    expect(product.fs.walkFiles).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a pending scan after the panel switches to a terminal', async () => {
+    let resolve!: (files: { path: string; rel: string }[]) => void;
+    vi.mocked(product.fs.walkFiles).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const panel = render(<ThreadNewTabPage projectId="p1" cwd="/project" onOpenFile={vi.fn()}
+      onOpenBrowser={vi.fn()} onStartTerminal={vi.fn()} onOpenPlugin={vi.fn()} />);
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'report' } });
+    panel.unmount();
+    await act(async () => resolve([{ path: '/project/report.md', rel: 'report.md' }]));
+    expect(screen.queryByRole('button', { name: 'report.md' })).toBeNull();
+  });
+
   it('shows Start terminal and hides Open browser without a desktop bridge', () => {
     const html = renderToStaticMarkup(
       <ThreadNewTabPage

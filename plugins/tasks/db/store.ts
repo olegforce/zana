@@ -1647,6 +1647,19 @@ export function createTasksStore(db: PluginDatabase) {
       .map(taskThreadFromRow);
   }
 
+  function listNonTerminalTaskThreads(after = ''): TaskThread[] {
+    return db.prepare<[string], TaskThreadRow>(`
+      SELECT * FROM task_threads WHERE live_status <> 'completed' AND id > ?
+      ORDER BY id LIMIT 100
+    `).all(after).map(taskThreadFromRow);
+  }
+
+  function hasNonTerminalTaskThreads(): boolean {
+    return db.prepare<[], { present: number }>(`
+      SELECT 1 AS present FROM task_threads WHERE live_status <> 'completed' LIMIT 1
+    `).get() !== undefined;
+  }
+
   function updateTaskThreadStatus(
     id: string,
     liveStatus: TaskThreadLiveStatus,
@@ -1846,6 +1859,8 @@ export function createTasksStore(db: PluginDatabase) {
     getTaskThreadByThreadId,
     listTaskThreadsByThreadId,
     listTaskThreads,
+    listNonTerminalTaskThreads,
+    hasNonTerminalTaskThreads,
     updateTaskThreadStatus,
     deleteTaskThread,
     createPreset,

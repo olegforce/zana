@@ -1,3 +1,4 @@
+import { prepareThreadReads } from './services/threads/thread-reads.js';
 import { discoverProjectCli } from './services/launch/cli-discovery.js';
 import { createProductCliCallbackAuthority } from './services/launch/cli-callback-authority.js';
 import { projectFeed } from './services/feed/project-feed.js';
@@ -88,6 +89,7 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
         projectSettingsFile: join(message.dataDir, 'project-settings.json')
       });
       const preferredPort = serverPortFromEnv();
+      await prepareThreadReads(message.dataDir);
       const product = createProductHttpContext({
         dataDir: message.dataDir,
         origins: { serverPort: preferredPort, devAppPort: DEFAULT_DEV_APP_PORT },

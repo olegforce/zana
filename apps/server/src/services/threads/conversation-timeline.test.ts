@@ -3,6 +3,10 @@ import { storedEventsToMeta, conversationOutline, conversationTimeline, resetTim
 import { registerThreadProvider } from './thread-provider-catalog.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 
+// This suite projects mocked events; marker persistence is tested with SQLite
+// separately and must not write to the literal /tmp path in these fixtures.
+vi.mock('./thread-reads.js', () => ({ getThreadReadSeq: () => 0 }));
+
 vi.mock('@zana-ai/zcc-db', () => ({
   getConversationThread: vi.fn(() => ({
     id: '11111111-1111-4111-8111-111111111111',

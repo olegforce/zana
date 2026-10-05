@@ -3,13 +3,15 @@ import { isProjectIcon, spawnEnvironmentChoiceSchema, type ProjectIcon } from '@
 import { readHostFile, writeHostFile } from '../http/files-via-host.js';
 import { readPluginProjectFile, writePluginProjectFile } from '../http/plugin-project-files.js';
 import { environmentPullRequest } from '../services/environments/environment-actions.js';
-import { conversationHistory } from '../services/threads/conversation-history.js';
+import { conversationHistoryAsync } from '../services/threads/conversation-history.js';
 import { threadSummary } from './thread-events.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as jitiModule from 'jiti';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { openAsyncJsonStore } from '../services/storage/async-json-store.js';
+import { runInNewContext } from 'node:vm';
 import { dirname, join, resolve, sep } from 'node:path';
-import { createHash } from 'node:crypto';
+import { applyPluginSqliteMigrations } from './plugin-database-migrations.js';
 import { createRequire } from 'node:module';
 import { createSqliteDatabase, listHosts, getPrimaryHost, getConversationThread } from '@zana-ai/zcc-db';
 import type {
@@ -117,49 +119,6 @@ function toSdkLibraryDoc(doc: LibraryDoc) {
   };
 }
 
-function applyPluginSqliteMigrations(
-  runScript: (sql: string) => void,
-  prepare: PluginDatabase['prepare'],
-  transaction: PluginDatabase['transaction'],
-  statements: readonly string[]
-): void {
-  runScript(
-    'CREATE TABLE IF NOT EXISTS _zcc_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, statement_hash TEXT)'
-  );
-  const hashes = statements.map((statement) => createHash('sha256').update(statement).digest('hex'));
-  const rows = prepare('SELECT id, statement_hash FROM _zcc_migrations ORDER BY id').all() as Array<{
-    id: number;
-    statement_hash: string | null;
-  }>;
-  const applied = new Map(rows.map((row) => [row.id, row.statement_hash]));
-  hashes.forEach((hash, index) => {
-    const recorded = applied.get(index);
-    if (recorded && recorded !== hash) {
-      throw new Error(
-        `migration ${index} does not match the recorded statement; append a new migration instead of changing or reusing an index`
-      );
-    }
-  });
-  const record = prepare('INSERT INTO _zcc_migrations (id, applied_at, statement_hash) VALUES (?, ?, ?)');
-  transaction(() => {
-    statements.forEach((statement, index) => {
-      if (applied.has(index)) return;
-      const savepoint = `zcc_m${index}`;
-      runScript(`SAVEPOINT ${savepoint}`);
-      try {
-        runScript(statement);
-        runScript(`RELEASE SAVEPOINT ${savepoint}`);
-      } catch (error) {
-        runScript(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-        runScript(`RELEASE SAVEPOINT ${savepoint}`);
-        const message = error instanceof Error ? error.message : String(error);
-        // Recover DBs that already applied ALTER ADD COLUMN before migrate became incremental.
-        if (!/duplicate column name/i.test(message)) throw error;
-      }
-      record.run(index, Date.now(), hashes[index]);
-    });
-  });
-}
 
 export type PluginRuntimeStatus =
   | 'running'
@@ -183,7 +142,7 @@ export interface PluginHandle {
   api: ZccPluginApi;
   extraSkillRoots: string[];
   extraInstructions: string[];
-  extraInstructionProviders: Array<(ctx: { threadId: string; projectId: string }) => string | null>;
+  extraInstructionProviders: Array<(ctx: { threadId: string; projectId: string }) => string | null | Promise<string | null>>;
   agentConfigurers: Array<
     (
       ctx: PluginAgentConfigureContext
@@ -365,6 +324,7 @@ export function createPluginApi(
   const realtimeListeners = new Set<(event: string, payload: unknown) => void>();
   let settingDescriptors: Record<string, PluginSettingDescriptor> = {};
   let stale = false;
+  let disposal: Promise<void> | undefined;
   const cliRecord: { registration: PluginCliRegistration | null } = { registration: null };
   const httpRoutes: PluginHttpRouteRecord[] = [];
   const agentTools: PluginAgentToolRecord[] = [];
@@ -391,7 +351,8 @@ export function createPluginApi(
     }
   );
   const rpc = new Map<string, (args: unknown) => unknown | Promise<unknown>>();
-  const readKv = (): Record<string, unknown> => readJsonFile<Record<string, unknown>>(kvPath, {});
+  const kv = openAsyncJsonStore(kvPath);
+  disposeHooks.push(() => kv.dispose());
   const readSettings = (): Record<string, PluginSettingValue | undefined> =>
     mergeSecretSettings(
       kvDir,
@@ -428,7 +389,7 @@ export function createPluginApi(
   };
 
   function emitLog(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
-    const line = `[plugin:${pluginId}] ${message}`;
+    const line = `[plugin:${pluginId}] ${message.slice(0, 8192)}`;
     if (level === 'debug') console.debug(line);
     else if (level === 'info') console.info(line);
     else if (level === 'warn') console.warn(line);
@@ -464,20 +425,16 @@ export function createPluginApi(
     },
     storage: {
       kv: {
-        get: async <T>(key: string) => readKv()[key] as T | undefined,
+        get: async <T>(key: string) => { assertLive(); return kv.get<T>(key); },
         set: async (key, value) => {
           assertLive();
-          const next = readKv();
-          next[key] = value;
-          writeJsonFile(kvPath, next);
+          await kv.set(key, value);
         },
         delete: async (key) => {
-          const next = readKv();
-          delete next[key];
-          writeJsonFile(kvPath, next);
+          assertLive();
+          await kv.delete(key);
         },
-        list: async (prefix) =>
-          Object.keys(readKv()).filter((key) => (prefix ? key.startsWith(prefix) : true))
+        list: async (prefix) => { assertLive(); return kv.list(prefix); }
       },
       database: (): PluginDatabase => {
         assertLive();
@@ -585,10 +542,10 @@ export function createPluginApi(
           if (!options?.productContext) throw new Error('zcc.sdk is not available in this runtime');
           const limit = Number.isSafeInteger(args.limit) ? Math.max(1, Math.min(25, args.limit!)) : 25;
           const { db } = options.productContext;
-          return conversationHistory(db, {
+          return (await conversationHistoryAsync(db, {
             query: typeof args.query === 'string' ? args.query : '',
             ...(typeof args.archived === 'boolean' ? { archived: args.archived ? 'archived' as const : 'active' as const } : {})
-          }).rows.slice(0, limit).flatMap(({ id }) => {
+          })).rows.slice(0, limit).flatMap(({ id }) => {
             const row = getConversationThread(db, id);
             return row ? [threadSummary(row)] : [];
           });
@@ -1188,8 +1145,8 @@ export function createPluginApi(
     background: {
       service: (_name, start) => {
         void Promise.resolve(start()).then((stop) => {
-          if (typeof stop === 'function') disposeHooks.push(stop);
-        });
+          if (typeof stop === 'function') { if (stale) return stop(); disposeHooks.push(stop); }
+        }).catch(error => console.error(`[plugin:${pluginId}] background service failed`, error));
       },
       schedule: (cronOrName, jobOrCron, maybeJob?) => {
         assertLive();
@@ -1199,19 +1156,21 @@ export function createPluginApi(
         const job = named ? maybeJob : jobOrCron;
         if (typeof job !== 'function') throw new Error('background.schedule requires a job function');
         const persistKey = name ? `schedule:${name}:last` : '';
+        let running = false;
         const timer = setInterval(() => {
+          if (running || stale) return;
           if (!cronMatches(cron)) return;
-          const minute = cronMinuteKey();
-          if (persistKey) {
-            const last = readKv()[persistKey];
-            if (last === minute) return;
-            const next = readKv();
-            next[persistKey] = minute;
-            writeJsonFile(kvPath, next);
-          }
-          void Promise.resolve(job()).catch((error) => {
+          running = true;
+          void (async () => {
+            const minute = cronMinuteKey();
+            if (persistKey) {
+              if (await kv.get(persistKey) === minute || stale) return;
+              await kv.set(persistKey, minute);
+            }
+            if (!stale) await job();
+          })().catch((error) => {
             console.error(`[plugin:${pluginId}] schedule ${name || cron} failed`, error);
-          });
+          }).finally(() => { running = false; });
         }, 60_000);
         disposeHooks.push(() => clearInterval(timer));
       },
@@ -1370,7 +1329,7 @@ export function createPluginApi(
       for (const [key, descriptor] of Object.entries(settingDescriptors)) {
         projected[key] = next[key] ?? descriptor.default;
       }
-      for (const listener of settingListeners) listener(projected);
+      await Promise.allSettled(settingListeners.map(listener => Promise.resolve().then(() => listener(projected))));
     },
     subscribeRealtime(listener) {
       realtimeListeners.add(listener);
@@ -1378,7 +1337,9 @@ export function createPluginApi(
         realtimeListeners.delete(listener);
       };
     },
-    async dispose() {
+    dispose() {
+      if (disposal) return disposal;
+      disposal = (async () => {
       stale = true;
       hostWorkerExitHandlers.length = 0; hostSignalHandlers.clear();
       options?.interruptPluginInteractions?.(pluginId);
@@ -1399,6 +1360,8 @@ export function createPluginApi(
         }
       }
       disposeHooks.length = 0;
+      })();
+      return disposal;
     }
   };
 }
@@ -1585,7 +1548,7 @@ export async function runFactoryTimeBoxed(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      Promise.resolve(factory(api)),
+      Promise.resolve(runInNewContext('factory(api)', { factory, api }, { timeout: Math.max(1, Math.min(timeoutMs, 100)) })),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`plugin factory timed out after ${timeoutMs}ms`)),

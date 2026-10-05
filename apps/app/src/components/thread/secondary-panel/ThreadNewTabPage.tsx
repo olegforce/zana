@@ -249,16 +249,22 @@ export function ThreadNewTabPage({
   const desktop = hasDesktopBridge();
   const root = cwd || project?.path || null;
   const recents = threadId ? readThreadRecentItems(threadId) : [];
+  const searching = query.trim().length > 0;
+  const [filesRoot, setFilesRoot] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!searching || !root || filesRoot === root) return;
     let cancelled = false;
     void loadWalkedFiles(product.fs.walkFiles, root).then((list) => {
-      applyIfCurrent(cancelled, list, setFiles);
+      applyIfCurrent(cancelled, list, (next) => {
+        setFiles(next);
+        setFilesRoot(root);
+      });
     });
     return () => { cancelled = true; };
-  }, [root]);
+  }, [filesRoot, root, searching]);
 
-  const matches = useMemo(() => matchNewTabFiles(files, query), [files, query]);
+  const matches = useMemo(() => matchNewTabFiles(filesRoot === root ? files : [], query), [files, filesRoot, root, query]);
 
   const handleOpenPlugin = (moduleId: string, title: string, options?: OpenPluginOptions) => {
     const actionId = options?.actionId;

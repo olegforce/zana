@@ -149,7 +149,6 @@ describe("task thread lifecycle", () => {
 
     expect(fixture.harness.sdk.callsTo("threads.get")).toEqual([
       [{ threadId: "thr_worker" }],
-      [{ threadId: "thr_worker" }],
     ]);
     expect(
       fixture.store.tasks.getTaskThread(fixture.taskThreadId)?.liveStatus,
@@ -216,7 +215,7 @@ describe("task thread lifecycle", () => {
       "message.cancelled": 0,
       "thread.unarchived": 0,
     });
-    expect(host.harness.sdk.callsTo("threads.get")).toHaveLength(2);
+    expect(host.harness.sdk.callsTo("threads.get")).toHaveLength(1);
     expect(store.tasks.getTaskThread(tracked.id)?.liveStatus).toBe("starting");
 
     await host.harness.dispose();
@@ -237,7 +236,7 @@ describe("task thread lifecycle", () => {
     expect(
       fixture.store.tasks.getTaskThread(fixture.taskThreadId)?.liveStatus,
     ).toBe("working");
-    expect(fixture.harness.sdk.callsTo("threads.get")).toHaveLength(2);
+    expect(fixture.harness.sdk.callsTo("threads.get")).toHaveLength(1);
     expect(fixture.harness.sdk.callsTo("subscribe")).toEqual([]);
 
     await fixture.harness.dispose();
@@ -254,7 +253,7 @@ describe("task thread lifecycle", () => {
             reads += 1;
             return makeThreadResponse({
               id: "thr_safety_net",
-              status: reads <= 2 ? "starting" : "active",
+              status: reads <= 1 ? "starting" : "active",
             });
           },
         },

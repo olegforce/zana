@@ -19,6 +19,8 @@ export interface EnrolledPtyHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;
+  pause?(): void;
+  resume?(): void;
   onData(listener: (data: string) => void): void;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
 }
@@ -44,6 +46,8 @@ function defaultSpawn(
     write: (data) => handle.write(data),
     resize: (cols, rows) => handle.resize(cols, rows),
     kill: (signal?: string) => handle.kill(signal),
+    pause: () => handle.pause(),
+    resume: () => handle.resume(),
     onData: (listener) => { handle.onData(listener); },
     onExit: (listener) => {
       handle.onExit((event) => listener({ exitCode: event.exitCode, signal: event.signal }));
@@ -59,6 +63,7 @@ export function createEnrolledPty(options: {
   const sessions = new Map<string, EnrolledPtyHandle>();
   const spawn = options.spawn ?? defaultSpawn;
   const shell = options.shell ?? resolveEnrolledShell();
+  let paused = false;
 
   function startTerminal(input: { sessionId: string; cwd: string; cols: number; rows: number; command?: string }): { pid?: number } {
     const existing = sessions.get(input.sessionId);
@@ -73,6 +78,7 @@ export function createEnrolledPty(options: {
       name: 'xterm-256color'
     });
     sessions.set(input.sessionId, handle);
+    if (paused) handle.pause?.();
     handle.onData((data) => {
       if (sessions.get(input.sessionId) !== handle) return;
       options.emit({
@@ -102,6 +108,19 @@ export function createEnrolledPty(options: {
   }
 
   return {
+    setOutputPaused(value: boolean): void {
+      if (value === paused) return;
+      paused = value;
+      for (const handle of sessions.values()) { if (value) handle.pause?.(); else handle.resume?.(); }
+    },
+    stopOverflowedTerminal(sessionId: string): void {
+      const handle = sessions.get(sessionId);
+      if (!handle) return;
+      sessions.delete(sessionId);
+      try { terminatePtyProcessTree(handle); } finally {
+        options.emit({ terminalId: sessionId, kind: 'terminal.exited', payload: { exitCode: -1, reason: 'Terminal stopped: output delivery capacity exceeded; some output was lost.' } });
+      }
+    },
     startTerminal: async (input: { sessionId: string; cwd: string; cols: number; rows: number; command?: string }) =>
       startTerminal(input),
     writeTerminal: async (input: { sessionId: string; data: string }) => {

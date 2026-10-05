@@ -2,7 +2,7 @@ import hljs from 'highlight.js/lib/common';
 
 const HIGHLIGHT_CACHE_MAX_ENTRIES = 128;
 const HIGHLIGHT_CACHE_MAX_CHARS = 4_000_000;
-const HIGHLIGHT_CACHE_MAX_CODE_LENGTH = 128_000;
+export const HIGHLIGHT_MAX_CODE_LENGTH = 16_000;
 
 const highlightCache = new Map<string, { __html: string }>();
 let highlightCacheChars = 0;
@@ -21,14 +21,10 @@ function highlightUncached({ code, language }: HighlightMarkdownCodeArgs): strin
     try {
       return hljs.highlight(code, { language, ignoreIllegals: true }).value;
     } catch {
-      return hljs.highlightAuto(code).value;
+      return escapeHtml(code);
     }
   }
-  try {
-    return hljs.highlightAuto(code).value;
-  } catch {
-    return escapeHtml(code);
-  }
+  return escapeHtml(code);
 }
 
 function escapeHtml(code: string): string {
@@ -40,8 +36,8 @@ function escapeHtml(code: string): string {
 }
 
 export function highlightMarkdownCode(args: HighlightMarkdownCodeArgs): { __html: string } {
-  if (args.code.length > HIGHLIGHT_CACHE_MAX_CODE_LENGTH) {
-    return { __html: highlightUncached(args) };
+  if (args.code.length > HIGHLIGHT_MAX_CODE_LENGTH) {
+    return { __html: escapeHtml(args.code) };
   }
   const key = highlightCacheKey(args);
   const cached = highlightCache.get(key);

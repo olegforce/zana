@@ -13,6 +13,7 @@ import {
   buildLocalTmuxCommand,
   wrapRemoteTmux,
   isTmuxAvailable,
+  prepareTmuxAvailability,
   resetTmuxAvailabilityCache,
   verifyTmux,
   reapOrphanTmuxSessions,
@@ -25,14 +26,14 @@ describe('tmux helpers (pure)', () => {
     expect(TMUX_SESSION_PREFIX).toBe('cc-');
   });
 
-  it('reports installed tmux version for Settings', () => {
-    execFileSyncMock.mockReturnValue('tmux 3.6a\n');
-    expect(verifyTmux()).toEqual({ installed: true, version: 'tmux 3.6a', installHint: 'brew install tmux' });
+  it('reports installed tmux version for Settings', async () => {
+    execFileMock.mockImplementation((_bin, _args, _opts, callback) => callback(null, 'tmux 3.6a\n')); resetTmuxAvailabilityCache();
+    expect(await verifyTmux()).toEqual({ installed: true, version: 'tmux 3.6a', installHint: 'brew install tmux' });
   });
 
-  it('reports actionable missing tmux status without throwing', () => {
-    execFileSyncMock.mockImplementation(() => { throw new Error('ENOENT'); });
-    expect(verifyTmux()).toEqual({ installed: false, installHint: 'brew install tmux' });
+  it('reports actionable missing tmux status without throwing', async () => {
+    execFileMock.mockImplementation((_bin, _args, _opts, callback) => callback(new Error('ENOENT'), '')); resetTmuxAvailabilityCache();
+    expect(await verifyTmux()).toEqual({ installed: false, installHint: 'brew install tmux' });
   });
 
   it('buildLocalTmuxCommand wraps command + args in new-session -A -s <name> --', () => {
@@ -146,44 +147,52 @@ describe('tmux helpers (pure)', () => {
 });
 
 describe('isTmuxAvailable', () => {
+  it('shares an in-flight asynchronous probe and keeps synchronous spawn assembly nonblocking', async () => {
+    let done!: (error: Error | null, output: string) => void;
+    execFileMock.mockImplementation((_bin, _args, _opts, callback) => { done = callback; });
+    expect(isTmuxAvailable()).toBe(false);
+    const first = prepareTmuxAvailability(), second = prepareTmuxAvailability();
+    expect(execFileMock).toHaveBeenCalledOnce(); done(null, 'tmux 3.6');
+    expect(await first).toBe(true); expect(await second).toBe(true); expect(isTmuxAvailable()).toBe(true);
+  });
   const realPlatform = process.platform;
 
   beforeEach(() => {
     resetTmuxAvailabilityCache();
-    execFileSyncMock.mockReset();
+    execFileMock.mockReset();
   });
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: realPlatform });
     resetTmuxAvailabilityCache();
   });
 
-  it('is false on win32 without probing', () => {
+  it('is false on win32 without probing', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
-    expect(isTmuxAvailable(true)).toBe(false);
-    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(await prepareTmuxAvailability(true)).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it('is true when `tmux -V` succeeds', () => {
+  it('is true when `tmux -V` succeeds', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
-    execFileSyncMock.mockReturnValue('tmux 3.4');
-    expect(isTmuxAvailable(true)).toBe(true);
-    expect(execFileSyncMock).toHaveBeenCalledWith('tmux', ['-V'], expect.anything());
+    execFileMock.mockImplementation((_bin, _args, _opts, callback) => callback(null, 'tmux 3.4'));
+    expect(await prepareTmuxAvailability(true)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledWith('tmux', ['-V'], expect.anything(), expect.any(Function));
   });
 
-  it('is false when the binary is missing (throws)', () => {
+  it('is false when the binary is missing (throws)', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
-    execFileSyncMock.mockImplementation(() => {
+    execFileMock.mockImplementation(() => {
       throw new Error('ENOENT');
     });
-    expect(isTmuxAvailable(true)).toBe(false);
+    expect(await prepareTmuxAvailability(true)).toBe(false);
   });
 
-  it('caches the result (no second probe without force)', () => {
+  it('caches the result (no second probe without force)', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
-    execFileSyncMock.mockReturnValue('tmux 3.4');
-    expect(isTmuxAvailable(true)).toBe(true);
-    expect(isTmuxAvailable()).toBe(true); // cached
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    execFileMock.mockImplementation((_bin, _args, _opts, callback) => callback(null, 'tmux 3.4'));
+    expect(await prepareTmuxAvailability(true)).toBe(true);
+    expect(await prepareTmuxAvailability()).toBe(true); // cached
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
 

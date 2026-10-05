@@ -100,6 +100,15 @@ function httpProduct(): Pick<
   | 'marketplaces'
   | 'cliSkills'
 > {
+  let terminalRosterRead: Promise<{ sessions: TerminalSession[] }> | undefined;
+  const terminalRoster = () => {
+    if (!terminalRosterRead) {
+      const read = apiJson<{ sessions: TerminalSession[] }>('/terminals');
+      terminalRosterRead = read;
+      void read.finally(() => { if (terminalRosterRead === read) terminalRosterRead = undefined; }).catch(() => {});
+    }
+    return terminalRosterRead;
+  };
   return {
     projects: {
       list: async () => {
@@ -411,7 +420,7 @@ function httpProduct(): Pick<
       listTmuxRestoreCandidates: async () => [],
       listRememberedSessions: async () => [],
       list: async (projectId: string) => {
-        const body = await apiJson<{ sessions: TerminalSession[] }>('/terminals');
+        const body = await terminalRoster();
         return body.sessions.filter((session) => session.projectId === projectId);
       },
       restore: async () => ({
@@ -446,7 +455,7 @@ function httpProduct(): Pick<
       setHeartbeat: async () => null,
       setHeadless: async () => null,
       backlog: async (id) => (await apiJson<{ text: string }>(`/terminals/${encodeURIComponent(id)}/output`)).text,
-      backlogSnapshot: async (id) => apiJson<{ text: string; startOffset: number; endOffset: number }>(`/terminals/${encodeURIComponent(id)}/output`),
+      backlogSnapshot: async (id, signal) => apiJson<{ text: string; startOffset: number; endOffset: number }>(`/terminals/${encodeURIComponent(id)}/output`, { signal }),
       onData: (cb) => subscribeProductEvent<{ sessionId: string; data: string; startOffset?: number; endOffset?: number }>('terminals:data', (payload) => {
         cb(payload.sessionId, payload.data, typeof payload.startOffset === 'number' && typeof payload.endOffset === 'number'
           ? { startOffset: payload.startOffset, endOffset: payload.endOffset } : undefined);
@@ -463,8 +472,8 @@ function httpProduct(): Pick<
         });
         return () => { disposed = true; stop(); };
       },
-      onExit: (cb) => subscribeProductEvent<{ sessionId: string; code: number }>('terminals:exit', (payload) => {
-        cb(payload.sessionId, payload.code);
+      onExit: (cb) => subscribeProductEvent<{ sessionId: string; code: number; reason?: string }>('terminals:exit', (payload) => {
+        cb(payload.sessionId, payload.code, payload.reason);
       }),
       onWake: noopSubscribe,
       onTitle: noopSubscribe,

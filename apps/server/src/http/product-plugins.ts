@@ -243,7 +243,7 @@ export async function attachProductPluginService(
       }).map(toPluginThreadSummary);
     },
     listQueuedMessages: async ({ threadId }) => {
-      return listQueuedMessages(ctx.dataDir, threadId).map((row) => ({ id: row.id }));
+      return (await listQueuedMessages(ctx.dataDir, threadId)).map((row) => ({ id: row.id }));
     },
     createQueuedMessage: async ({ threadId, input, senderThreadId }) => {
       const message = await createQueuedMessage(ctx.dataDir, threadId, input as never, {

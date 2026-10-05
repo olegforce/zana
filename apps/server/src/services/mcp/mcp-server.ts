@@ -610,9 +610,9 @@ function buildProjectMcpServer(opts: {
   // traversal can't escape. Never throws — falls back to the reported path.
   const projectRoot = opts.projectRoot;
   const normalizeDocPath = projectRoot
-    ? (reportedPath: string): string => {
+    ? async (reportedPath: string): Promise<string> => {
         try {
-          const found = resolveDoc(projectRoot, reportedPath, origin?.cwd);
+          const found = await resolveDoc(projectRoot, reportedPath, origin?.cwd);
           return found.ok ? found.rel : reportedPath;
         } catch {
           return reportedPath;

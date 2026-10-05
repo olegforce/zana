@@ -513,7 +513,7 @@ export function registerExtensionsIpc(): void {
         // Purge the extension's persistent `ctx.storage` KV (its `<id>.json`) so
         // a later reinstall of the same id starts clean instead of inheriting
         // the removed extension's state — the storage twin of removing the dir.
-        ctx.moduleRouter.storageClear(id);
+        await ctx.moduleRouter.storageClear(id);
         // Remove any deployed `ext-<id>-*` skill dirs. `syncExtensionSkills` below
         // (via ctx.runDiskSync) only prunes contributors it's GIVEN — an uninstalled
         // extension is absent from the next `ctx.extensionEntries`, so it would never

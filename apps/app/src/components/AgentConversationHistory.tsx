@@ -1,5 +1,6 @@
 import { ProviderIcon } from './thread/pickers/ProviderIcon.js';
 import { product } from '../lib/product-client.js';
+import { startSerialPoll } from '../lib/serial-poll.js';
 import { useEffect, useRef, useState } from 'react';
 import { Clock, RefreshCw } from 'lucide-react';
 import type { ConversationHistorySnapshot } from '@zana-ai/zcc-domain/product';
@@ -80,7 +81,7 @@ export function AgentConversationHistory({ projectId, onResumed }: Props) {
     generation.current += 1;
     const currentGeneration = generation.current;
     void load();
-    const poll = window.setInterval(async () => {
+    const stopPoll = startSerialPoll(async () => {
       const id = snapshotId.current;
       if (!id) return;
       let next: ConversationHistorySnapshot;
@@ -93,12 +94,12 @@ export function AgentConversationHistory({ projectId, onResumed }: Props) {
        showSnapshot(next, refreshingRef.current);
        if (next.status === 'ready') {
          setRefreshState(false);
-         window.clearInterval(poll);
+         return false;
        }
-    }, 250);
+    }, 250, false);
     return () => {
       generation.current += 1;
-      window.clearInterval(poll);
+      stopPoll();
       if (snapshotId.current) void product.history.release(snapshotId.current);
       snapshotId.current = '';
     };

@@ -26,7 +26,7 @@ export interface MainModuleContext {
   /**
    * Per-extension persistent KV store (backs `ModuleHost.storage`).
    *
-   * NOTE (P3-A): for built-in modules (in-process) `get` returns synchronously.
+   * Storage runs off the host event loop. Always await reads and writes.
    * For a DISK extension running out-of-process in its `utilityProcess`, the
    * store lives host-side and `get` resolves a Promise over the broker port —
    * `await ctx.storage.get(key)` works in both cases. The store is namespaced by
@@ -35,7 +35,7 @@ export interface MainModuleContext {
    */
   storage: {
     get<T = unknown>(key: string): T | undefined | Promise<T | undefined>;
-    set(key: string, value: unknown): void;
+    set(key: string, value: unknown): void | Promise<void>;
   };
   /** Structured logger; messages are tagged with the extension id. */
   log: (message: string, err?: unknown) => void;

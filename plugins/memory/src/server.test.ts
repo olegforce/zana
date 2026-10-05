@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakePluginHost } from '@zana-ai/zcc-plugin-sdk/testing';
 import plugin from '../server.mjs';
 import { CATALOG_MAX_CHARS } from './memory-store.js';
@@ -41,6 +41,12 @@ async function addMemory(harness, input) {
 }
 
 describe('memory plugin server', () => {
+  beforeEach(() => {
+    // An attached agent's project must not supply context to these fixtures.
+    vi.stubEnv('ZCC_PROJECT_ID', undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   it('registers a CLI and instruction catalog without native agent tools', async () => {
     const harness = await loadPlugin();
     expect(harness.cli?.name).toBe('memory');

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, upsertHost, setConversationProviderThreadId, createEnvironment, createConversationThread, archiveConversationThread, appendConversationThreadEvent, type ZccDatabase } from '@zana-ai/zcc-db';
-import { conversationHistory, THREAD_HISTORY_PAGE_SIZE } from './conversation-history.js';
+import { conversationHistory, conversationHistoryAsync, THREAD_HISTORY_PAGE_SIZE } from './conversation-history.js';
 
 let db: ZccDatabase;
 let dir: string;
@@ -62,4 +62,23 @@ it('keeps unavailable conversations readable and explains why they cannot contin
   db.sqlite.prepare('UPDATE threads SET provider_thread_id = NULL WHERE id = ?').run(thread.id);
   // Legacy provider identities can be recovered from events during restore.
   expect(conversationHistory(db, {}).rows[0].unavailableReason).toBeUndefined();
+});
+
+
+it('worker search preserves filtering, labels, pagination and literal wildcard behavior', async () => {
+  for (let i = 0; i < 43; i++) create('search %_ ' + i);
+  const hidden = create('search %_ hidden', 'p', 'hidden');
+  const providers = [{ id: 'codex', displayName: 'Codex' }];
+  for (const query of [{ query: '%_', projectId: 'p' }, { query: '%_', offset: 40 }, { query: 'no-such-result' }, {}]) {
+    expect(await conversationHistoryAsync(db, query, providers)).toEqual(conversationHistory(db, query, providers));
+  }
+  expect((await conversationHistoryAsync(db, { query: '%_' })).rows.map(row => row.id)).not.toContain(hidden.id);
+});
+it('a full-text miss over growing history runs without blocking other timers', async () => {
+  const thread = create('history volume');
+  const payload = { event: { item: { type: 'assistantMessage', text: 'existing '.repeat(500) } } };
+  db.transaction(() => { for (let i = 0; i < 5000; i++) appendConversationThreadEvent(db, { threadId: thread.id, type: 'item/completed', payload }); });
+  let ticks = 0; const timer = setInterval(() => ticks++, 1);
+  try { expect((await conversationHistoryAsync(db, { query: 'absent-search-needle' })).rows).toEqual([]); expect(ticks).toBeGreaterThan(5); }
+  finally { clearInterval(timer); }
 });

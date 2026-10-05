@@ -10,6 +10,7 @@ overrides:
 
 patchedDependencies:
   '@react-native-cookies/cookies@6.2.1': da4435a0bcb7116870ab28b0d53e6f2d286220a2eca88e919cdbc705a59f4a95
+  '@xterm/xterm@6.0.0': 6721661ba29928915c7236363b955d092d968b088de72b08d95cba86a7a2b515
   decode-uri-component@0.2.2: 880ccc0ad34d9585d90ba346a5b8a738b5c835036afa963adf31a7e291bcb5b3
 
 importers:
@@ -209,7 +210,7 @@ importers:
         version: 0.19.0
       '@xterm/xterm':
         specifier: ^6.0.0
-        version: 6.0.0
+        version: 6.0.0(patch_hash=6721661ba29928915c7236363b955d092d968b088de72b08d95cba86a7a2b515)
       '@zana-ai/zcc-contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -15573,7 +15574,7 @@ snapshots:
 
   '@xterm/addon-webgl@0.19.0': {}
 
-  '@xterm/xterm@6.0.0': {}
+  '@xterm/xterm@6.0.0(patch_hash=6721661ba29928915c7236363b955d092d968b088de72b08d95cba86a7a2b515)': {}
 
   '@xyflow/react@12.11.6(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:

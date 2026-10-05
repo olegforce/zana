@@ -5,6 +5,7 @@
 // It's only needed once the user actually opens a diff (agent inspector,
 // explorer, library), so it loads on demand.
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
+import { boundedText, LargeTextPreview } from './LargeTextPreview.js';
 
 export default function DiffViewerInner({
   original,
@@ -19,6 +20,16 @@ export default function DiffViewerInner({
   splitView?: boolean;
   isDark: boolean;
 }) {
+  // The dependency falls back to synchronous diffing when its worker fails.
+  // Admission bounds both that fallback and the number of changed rows.
+  if (boundedText(original, 32_000, 500).length < original.length ||
+      boundedText(modified, 32_000, 500).length < modified.length) {
+    return <section aria-label="Large diff">
+      <p>This diff is large. Showing the original and modified text.</p>
+      <h4>Original</h4><LargeTextPreview text={original} />
+      <h4>Modified</h4><LargeTextPreview text={modified} />
+    </section>;
+  }
   return (
     <ReactDiffViewer
       oldValue={original}
@@ -30,6 +41,7 @@ export default function DiffViewerInner({
       // Faster for large files than word-level/char-heavy modes.
       compareMethod={DiffMethod.LINES}
       disableWordDiff
+      infiniteLoading={{ containerHeight: '400px', pageSize: 80 }}
       hideSummary
       useDarkTheme={isDark}
       styles={compactStyles}

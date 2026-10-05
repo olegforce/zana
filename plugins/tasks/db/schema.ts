@@ -239,6 +239,8 @@ const MIGRATIONS = [
     ALTER TABLE presets ADD COLUMN service_tier TEXT
       CHECK (service_tier IN ('default', 'fast'));
   `,
+  `CREATE INDEX IF NOT EXISTS idx_task_threads_reconcile
+    ON task_threads(id) WHERE live_status <> 'completed';`,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

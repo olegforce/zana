@@ -19,14 +19,15 @@ test('project navigation keeps hidden terminal renderers idle and preserves the 
     if (await heading.getAttribute('aria-expanded') === 'false') await heading.click();
     const row = page.getByRole('button', { name: `Open ${basename(projectDir)}`, exact: true });
     await row.click();
-    sessionId = await page.evaluate(async (projectId) => {
-      const result = await window.cc.terminals.create({ projectId, profile: 'shell', cols: 80, rows: 24 });
-      if (!result.ok) throw new Error(result.message);
-      return result.value.id;
-    }, projectId);
     await page.getByTestId('project-nav-terminals').click();
+    await page.locator('.empty-project').getByRole('button', { name: 'New terminal', exact: true }).click();
     const terminal = page.locator('.term .xterm').first();
     await expect(terminal).toBeVisible();
+    sessionId = await page.evaluate(async projectId => {
+      const shell = (await window.cc.terminals.list(projectId)).find(session => session.profile === 'shell' && session.status !== 'exited');
+      if (!shell) throw new Error('Missing shell created through the project UI');
+      return shell.id;
+    }, projectId);
     // Exercise a real scrollback buffer through the PTY and production renderer.
     await page.evaluate((id) => window.cc.terminals.write(id, "printf 'SCROLLBACK-%s\\n' {1..20000}; echo NAVIGATION_OUTPUT_READY\r"), sessionId);
     await expect.poll(() => page.evaluate((id) => window.cc.terminals.backlog(id), sessionId!)).toContain('NAVIGATION_OUTPUT_READY\r\n');

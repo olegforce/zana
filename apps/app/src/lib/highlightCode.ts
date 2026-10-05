@@ -1,4 +1,5 @@
 import hljs from 'highlight.js/lib/common';
+import { HIGHLIGHT_MAX_CODE_LENGTH } from '../components/markdown-code-highlight.js';
 
 /**
  * Map a file path to a highlight.js language id, or null when we have no good
@@ -103,6 +104,7 @@ export function highlightForPath(
   path: string,
   code: string
 ): { html: string; language: string } | null {
+  if (code.length > HIGHLIGHT_MAX_CODE_LENGTH) return null;
   const language = languageForPath(path);
   if (!language) return null;
   try {
@@ -120,6 +122,7 @@ export function highlightForPath(
  * or null if the `diff` grammar is unexpectedly missing from the bundle.
  */
 export function highlightDiff(patch: string): string | null {
+  if (patch.length > HIGHLIGHT_MAX_CODE_LENGTH) return null;
   if (!hljs.getLanguage('diff')) return null;
   try {
     return hljs.highlight(patch, { language: 'diff', ignoreIllegals: true }).value;

@@ -8,10 +8,10 @@
  */
 
 import { app } from 'electron';
+import { AsyncJsonStore } from '@zana-ai/zcc-server/services/storage/async-json-store';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
 import type {
   MainModule,
@@ -154,45 +154,11 @@ async function builtinFetch(url: string, init?: BrokeredFetchInit): Promise<Brok
 
 /** Per-module JSON KV store under `~/.zcc/modules/<id>.json`. */
 class ModuleStorage {
-  private cache: Record<string, unknown>;
-  private readonly file: string;
-
-  constructor(private readonly moduleId: string, dir: string) {
-    this.file = join(dir, `${moduleId}.json`);
-    this.cache = this.load();
-  }
-
-  private load(): Record<string, unknown> {
-    if (!existsSync(this.file)) return {};
-    try {
-      return JSON.parse(readFileSync(this.file, 'utf-8')) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-
-  get<T = unknown>(key: string): T | undefined {
-    return this.cache[key] as T | undefined;
-  }
-
-  set(key: string, value: unknown): void {
-    this.cache[key] = value;
-    const tmp = `${this.file}.tmp.${randomBytes(4).toString('hex')}`;
-    writeFileSync(tmp, JSON.stringify(this.cache, null, 2));
-    renameSync(tmp, this.file);
-  }
-
-  /**
-   * Drop this module's entire namespace — in-memory cache AND the backing
-   * `<id>.json` file. Called on UNINSTALL so a later reinstall of the same id
-   * starts clean instead of inheriting the removed extension's stale state.
-   * Best-effort: a missing file is fine; an rm failure is swallowed (the caller
-   * logs). NOT called on disable/teardown — those preserve state for re-enable.
-   */
-  clear(): void {
-    this.cache = {};
-    rmSync(this.file, { force: true });
-  }
+  private readonly store: AsyncJsonStore;
+  constructor(moduleId: string, dir: string) { this.store = new AsyncJsonStore(join(dir, `${moduleId}.json`)); }
+  get<T = unknown>(key: string): Promise<T | undefined> { return this.store.get<T>(key); }
+  set(key: string, value: unknown): Promise<void> { return this.store.set(key, value); }
+  async clear(): Promise<void> { try { await this.store.clear(); } finally { this.store.dispose(); } }
 }
 
 export interface ModuleHostDeps {
@@ -442,8 +408,8 @@ export class MainModuleHost {
     return this.storageFor(moduleId).get(key);
   }
 
-  storageSet(moduleId: string, key: string, value: unknown): void {
-    this.storageFor(moduleId).set(key, value);
+  storageSet(moduleId: string, key: string, value: unknown): Promise<void> {
+    return this.storageFor(moduleId).set(key, value);
   }
 
   /**
@@ -453,9 +419,9 @@ export class MainModuleHost {
    * when the module wrote nothing THIS session (a store from a prior run still
    * has a file on disk). Best-effort; isolated + logged, never throws.
    */
-  storageClear(moduleId: string): void {
+  async storageClear(moduleId: string): Promise<void> {
     try {
-      this.storageFor(moduleId).clear();
+      await this.storageFor(moduleId).clear();
     } catch (err) {
       this.deps.log(`module storage clear failed: ${moduleId}`, err);
     }

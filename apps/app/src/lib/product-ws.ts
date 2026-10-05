@@ -8,6 +8,10 @@ let openingTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
 let lastFrame = 0;
 const listeners = new Set<Listener>();
+const typedListeners = new Map<string, Set<(payload: unknown) => void>>();
+const typedDispatch: Listener = event => {
+  for (const callback of typedListeners.get(event.type) ?? []) { try { callback(event.payload); } catch {} }
+};
 const openWaiters = new Set<() => void>();
 function dispatch(event: ProductWsEvent) {
   // A failed view must not prevent every other subscriber from receiving data.
@@ -100,7 +104,15 @@ export function subscribeProductReconnect(callback: () => void | Promise<void>):
   return () => { stopped = true; stop(); };
 }
 export function subscribeProductEvent<T>(type: string, callback: (payload: T) => void): () => void {
-  return subscribeProductWs(event => { if (event.type === type) callback(event.payload as T); });
+  const callbacks = typedListeners.get(type) ?? new Set<(payload: unknown) => void>();
+  const wrapped = (payload: unknown) => callback(payload as T);
+  callbacks.add(wrapped); typedListeners.set(type, callbacks);
+  const stop = subscribeProductWs(typedDispatch);
+  return () => {
+    callbacks.delete(wrapped);
+    if (!callbacks.size) typedListeners.delete(type);
+    if (!typedListeners.size) stop();
+  };
 }
 
 export function waitForProductWsOpen(): Promise<void> {

@@ -2,6 +2,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEventSink } from './event-sink.js';
 
 describe('event sink', () => {
+  it('pauses producers at high water and resumes only after acknowledgement drains the queue', async () => {
+    let online = false;
+    const onPressure = vi.fn();
+    const sink = createEventSink({ isSessionOpen: () => online, postEvents: async () => {}, onPressure, maxBytes: 1000 });
+    sink.emit({ kind: 'terminal.output', terminalId: 's', payload: { data: 'x'.repeat(300) } });
+    expect(onPressure).toHaveBeenCalledExactlyOnceWith(true);
+    online = true; await sink.flush();
+    expect(onPressure.mock.calls).toEqual([[true], [false]]); await sink.dispose();
+  });
+  it('isolates terminal overflow and preserves delivery for unrelated work', async () => {
+    const onOverflow = vi.fn(), onTerminalOverflow = vi.fn();
+    const events: string[] = [];
+    const sink = createEventSink({ isSessionOpen: () => false, postEvents: async batch => { events.push(...batch.map(event => event.kind)); }, maxBytes: 1000, onOverflow, onTerminalOverflow });
+    sink.emit({ kind: 'terminal.output', terminalId: 'noisy', payload: { data: 'x'.repeat(900) } });
+    sink.emit({ kind: 'thread.started', threadId: 'other' });
+    expect(onTerminalOverflow).toHaveBeenCalledExactlyOnceWith('noisy'); expect(onOverflow).not.toHaveBeenCalled();
+    await sink.dispose();
+  });
   afterEach(() => vi.useRealTimers());
   it('automatically retries a lost acknowledgement without another event or reconnect', async () => {
     vi.useFakeTimers();

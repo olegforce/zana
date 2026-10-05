@@ -4,7 +4,8 @@ import { IPC } from '@zana-ai/zcc-desktop-contract';
 import { ctx } from './ctx.js';
 import { rejectRoot, trustedProjectRoot } from './shared.js';
 import { verifyEditors } from '@zana-ai/zcc-server/services/projects/editor-verify';
-import { confine, createDir as fsCreateDir, createFile as fsCreateFile, deletePath as fsDelete, readFile as fsReadFile, renamePath as fsRename, resolveDoc as fsResolveDoc, writeFile as fsWriteFile, listDir, readDataUrl, searchFiles, walkFiles } from '@zana-ai/zcc-server/services/projects/fs';
+import { confine, createDir as fsCreateDir, createFile as fsCreateFile, renamePath as fsRename, resolveDoc as fsResolveDoc, writeFile as fsWriteFile, readDataUrl, searchFiles, walkFiles } from '@zana-ai/zcc-server/services/projects/fs';
+import { deletePathAsync as fsDelete, readFileAsync as fsReadFile, listDirAsync as listDir } from '@zana-ai/zcc-server/services/projects/async-fs';
 import { commitProjectChanges, discardChanges, getGitStatus, gitCommonDir, isGitRepo, listBranches, listWorktrees, previewProjectCommit, pushProjectBranch, removeWorktree, showHead, withWorktreeLock } from '@zana-ai/zcc-server/services/projects/git';
 import { createDirRemote as fsCreateDirRemote, createFileRemote as fsCreateFileRemote, deleteRemote as fsDeleteRemote, listDirRemote as fsListDirRemote, readFileRemote as fsReadFileRemote, remoteRoot as fsRemoteRoot, renameRemote as fsRenameRemote, writeFileRemote as fsWriteFileRemote } from '@zana-ai/zcc-host-daemon/remote-fs';
 import { downloadFromRemote as fsDownloadFromRemote, uploadToRemote as fsUploadToRemote } from '@zana-ai/zcc-host-daemon/remote-transfer';
@@ -139,7 +140,7 @@ export function registerFsIpc(): void {
       }
       const realRoot = await trustedProjectRoot(root);
       if (!realRoot) return { ok: false, message: 'Path is not inside a known project' };
-      const found = fsResolveDoc(
+      const found = await fsResolveDoc(
         realRoot,
         reportedPath,
         typeof originCwd === 'string' && originCwd ? originCwd : undefined
@@ -484,4 +485,3 @@ export function registerFsIpc(): void {
     () => ({ ok: false, message: 'Read failed' })
   );
 }
-

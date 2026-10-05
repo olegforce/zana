@@ -161,7 +161,7 @@ export interface RegisterInboxPushOpts {
    * when it can't be improved. Host-resolved (project root + origin cwd), never
    * agent-supplied. Never throws.
    */
-  normalizeDocPath?: (reportedPath: string) => string;
+  normalizeDocPath?: (reportedPath: string) => string | Promise<string>;
   inboxStore: IInboxStore;
   /**
    * Optional suppress-while-working gate for QUESTION-bearing pushes. A plain
@@ -212,9 +212,12 @@ export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPush
         // project-root-relative location so the entry points at the file from
         // the start. Best-effort — a normalizer that can't improve a path (or
         // isn't wired) leaves it unchanged.
-        const normalizedDocs = normalizeDocPath
-          ? docs?.map((d) => ({ ...d, path: normalizeDocPath(d.path) }))
-          : docs;
+        let normalizedDocs = docs;
+        if (normalizeDocPath && docs) {
+          normalizedDocs = [];
+          // Recovery can scan a project; keep those scans sequential.
+          for (const doc of docs) normalizedDocs.push({ ...doc, path: await normalizeDocPath(doc.path) });
+        }
         const input: InboxInput = {
           projectId,
           projectLabel,

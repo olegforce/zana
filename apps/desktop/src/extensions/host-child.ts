@@ -1,3 +1,4 @@
+import { createStorageProxy } from './storage-proxy.js';
 /**
  * Per-extension child bootstrap (P3-A) — runs INSIDE an Electron
  * `utilityProcess`, one process per untrusted DISK extension. This is the file
@@ -168,21 +169,9 @@ function runWithPort(port: PortLike): void {
     });
   }
 
-  // The proxy ctx. storage.get is async over the wire, but the SDK's
-  // `storage.get` is declared sync. We expose a sync-looking shape backed by a
-  // host round-trip via a cached read on first touch is overkill for P3-A — the
-  // current built-ins use storage synchronously, but DISK extensions go through
-  // this proxy where get returns a Promise. We keep the SDK type and document
-  // that disk-ext storage.get resolves a Promise. (Built-ins keep the real sync
-  // store in-process via MainModuleHost; they never hit this proxy.)
+  // Both reads and writes await the authenticated host's storage worker.
   const proxyCtx: MainModuleContext = {
-    storage: {
-      get: (<T = unknown>(key: string) => broker('storage.get', [key]) as Promise<T | undefined>) as MainModuleContext['storage']['get'],
-      set: (key: string, value: unknown) => {
-        // Fire-and-forget from the module's perspective; the host persists.
-        void broker('storage.set', [key, value]);
-      }
-    },
+    storage: createStorageProxy(broker),
     extensions: {
       listInstalled: () =>
         broker('extensions.listInstalled', []) as Promise<Array<{ id: string; repository?: string }>>,

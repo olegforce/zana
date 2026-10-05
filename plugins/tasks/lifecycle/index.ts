@@ -26,16 +26,6 @@ function liveStatusFromThread(thread: SdkThread): TaskThreadLiveStatus {
   }
 }
 
-function trackedThreads(store: TasksApiStore): TaskThread[] {
-  const tracked: TaskThread[] = [];
-  for (const task of store.tasks.listTasks()) {
-    for (const thread of store.tasks.listTaskThreads(task.id)) {
-      tracked.push(thread);
-    }
-  }
-  return tracked;
-}
-
 function statusCommentBody(
   thread: TaskThread,
   liveStatus: Extract<TaskThreadLiveStatus, "completed" | "failed">,
@@ -118,20 +108,24 @@ async function reconcileTrackedThread(
 async function reconcileTrackedThreads(
   bb: BbPluginApi,
   store: TasksApiStore,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const nonTerminalThreads = trackedThreads(store).filter(
-    (thread) => !TERMINAL_LIVE_STATUSES.has(thread.liveStatus),
-  );
-
-  for (const trackedThread of nonTerminalThreads) {
-    await reconcileTrackedThread(bb, store, trackedThread);
+  let after = '';
+  while (!signal?.aborted) {
+    const page = store.tasks.listNonTerminalTaskThreads(after);
+    if (!page.length) return;
+    for (const thread of page) {
+      if (signal?.aborted) return;
+      await reconcileTrackedThread(bb, store, thread);
+    }
+    after = page[page.length - 1].id;
+    if (page.length < 100) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 }
 
 function hasNonTerminalTrackedThreads(store: TasksApiStore): boolean {
-  return trackedThreads(store).some(
-    (thread) => !TERMINAL_LIVE_STATUSES.has(thread.liveStatus),
-  );
+  return store.tasks.hasNonTerminalTaskThreads();
 }
 
 function waitForNextReconciliation(
@@ -187,11 +181,10 @@ export async function registerLifecycle(
           THREAD_STATUS_RECONCILE_INTERVAL_MS,
         );
         if (signal.aborted) break;
-        await reconcileTrackedThreads(bb, store);
+        await reconcileTrackedThreads(bb, store, signal);
       }
     },
   });
 
-  await reconcileTrackedThreads(bb, store);
   await reconcileTrackedThreads(bb, store);
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,12 +8,13 @@ import {
   parsePositiveInt,
   parseTimelineSegmentLimit
 } from './thread-path-confine.js';
-import { getThreadReadSeq, markThreadRead, peekThreadReadSeq } from './thread-reads.js';
+import { closeThreadReads, getThreadReadSeq, markThreadRead, peekThreadReadSeq } from './thread-reads.js';
 import { imageContentType } from './thread-host-file.js';
 
 let dir: string | null = null;
 
 afterEach(() => {
+  if (dir) { closeThreadReads(dir); }
   if (dir) rmSync(dir, { recursive: true, force: true });
   dir = null;
 });
@@ -53,8 +54,8 @@ describe('thread reads', () => {
     expect(peekThreadReadSeq(dir, 't1')).toBe(4);
     expect(markThreadRead(dir, 't1', -1)).toBe(-1);
     expect(peekThreadReadSeq(dir, 't1')).toBe(-1);
-    const body = JSON.parse(readFileSync(join(dir, 'thread-reads.json'), 'utf8')) as { t1: number };
-    expect(body.t1).toBe(-1);
+    closeThreadReads(dir);
+    expect(peekThreadReadSeq(dir, 't1')).toBe(-1);
   });
 });
 

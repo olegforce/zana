@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { product } from '../../../lib/product-client.js';
+import { useData, useUi } from '../../../store.js';
+import { closePanelTab, waitForPanelTerminalExit } from './panelTerminalLifecycle.js';
+import { forgetAgentTerminal } from './useThreadOpenTerminalSignal.js';
 import { useCompactLayout } from '../../../hooks/useCompactLayout.js';
 import { createSecondaryPanelCommands } from './threadSecondaryPanelLogic.js';
 import {
@@ -236,7 +239,29 @@ export function useSecondaryPanel(
   }, []);
 
   const commands = useMemo(() => createSecondaryPanelCommands(update), [update]);
-  return useMemo(() => ({ state, ...commands }), [commands, state]);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const closing = useRef(new Set<string>());
+  const closeTab = useCallback(async (tabId: string) => {
+    if (closing.current.has(tabId)) return;
+    closing.current.add(tabId);
+    const owner = ownerRef.current;
+    const tabs = stateRef.current.tabs;
+    try {
+      await closePanelTab(tabs.find(tab => tab.id === tabId), tabs, {
+        close: id => product.terminals.close(id),
+        waitForExit: async id => {
+          const projectId = Object.entries(useData.getState().terminals).find(([, sessions]) => sessions.some(session => session.id === id))?.[0];
+          return !projectId || waitForPanelTerminalExit(id, () => product.terminals.list(projectId));
+        },
+        released: id => { forgetAgentTerminal(id); useData.getState().dismissTerminals([id]); },
+        remove: id => { if (mountedRef.current && owner === ownerRef.current) commands.closeTab(id); }
+      });
+    } catch (error) {
+      useUi.getState().pushToast(error instanceof Error ? error.message : 'Could not close terminal', 'error');
+    } finally { closing.current.delete(tabId); }
+  }, [commands]);
+  return useMemo(() => ({ state, ...commands, closeTab }), [commands, state, closeTab]);
 }
 
 export function useThreadSecondaryPanel(

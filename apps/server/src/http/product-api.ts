@@ -15,7 +15,7 @@ import { mutateProjectFile } from './project-file-mutations.js';
 import { invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
 import { assertPlanRevision, planImplementationMode, planImplementationPrompt } from '../services/threads/conversation-plan-implementation.js';
 import { readPluginHttpBody, PluginHttpBodyTooLarge } from './plugin-http-body.js';
-import { conversationHistory } from '../services/threads/conversation-history.js';
+import { conversationHistoryAsync } from '../services/threads/conversation-history.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, sep, posix } from 'node:path';
 import { homedir } from 'node:os';
@@ -94,6 +94,7 @@ import {
   updateConversationPluginMetadata
 } from '../services/threads/conversation-plugin-metadata.js';
 import { openThreadFilePreview, previewFileDepsFromContext } from '../services/threads/preview-file.js';
+import { isSqliteBusy, retrySqliteTransaction } from '@zana-ai/zcc-db';
 import { openThreadTerminal, openThreadTerminalDepsFromContext } from '../services/threads/open-thread-terminal.js';
 import { createMenubarThreadSource, MENUBAR_THREAD_LIMIT } from '../services/threads/menubar-thread-source.js';
 import { listThreadProviders, bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
@@ -1230,7 +1231,7 @@ export async function handleProductHttp(
 
     if (path === '/api/v1/threads/history' && method === 'GET') {
       const archived = requestUrl.searchParams.get('archived');
-      sendJson(response, 200, conversationHistory(ctx.db, {
+      sendJson(response, 200, await conversationHistoryAsync(ctx.db, {
         projectId: requestUrl.searchParams.get('projectId') ?? undefined,
         query: requestUrl.searchParams.get('q') ?? undefined,
         archived: archived === 'archived' || archived === 'active' ? archived : 'all',
@@ -1403,7 +1404,7 @@ export async function handleProductHttp(
         return true;
       }
       const maxSeq = Math.max(0, nextConversationEventSequence(ctx.db, thread.id) - 1);
-      markThreadRead(ctx.dataDir, thread.id, maxSeq);
+      await retrySqliteTransaction(() => markThreadRead(ctx.dataDir, thread.id, maxSeq));
       const view = conversationThreadView(ctx, thread);
       ctx.hub.emit('threads:updated', view);
       sendJson(response, 200, { thread: view });
@@ -1417,7 +1418,7 @@ export async function handleProductHttp(
         sendJson(response, 404, { error: 'unknown-thread', message: 'thread is not registered' });
         return true;
       }
-      markThreadRead(ctx.dataDir, thread.id, -1);
+      await retrySqliteTransaction(() => markThreadRead(ctx.dataDir, thread.id, -1));
       const view = conversationThreadView(ctx, thread);
       ctx.hub.emit('threads:updated', view);
       sendJson(response, 200, { thread: view });
@@ -1977,7 +1978,7 @@ export async function handleProductHttp(
 
     const queuedList = routeParams(path, '/api/v1/threads/:id/queued-messages');
     if (queuedList && method === 'GET') {
-      sendJson(response, 200, listQueuedMessages(ctx.dataDir, queuedList.id));
+      sendJson(response, 200, await listQueuedMessages(ctx.dataDir, queuedList.id));
       return true;
     }
     if (queuedList && method === 'POST') {
@@ -2049,7 +2050,7 @@ export async function handleProductHttp(
     if (queuedSend && method === 'POST') {
       try {
         const body = (await readJsonBody(request)) as { mode?: unknown };
-        const list = listQueuedMessages(ctx.dataDir, queuedSend.id);
+        const list = await listQueuedMessages(ctx.dataDir, queuedSend.id);
         const queued = list.find((row) => row.id === queuedSend.queuedMessageId);
         if (!queued) {
           sendJson(response, 404, { error: 'unknown-queued-message', message: 'queued message not found' });
@@ -3539,6 +3540,11 @@ export async function handleProductHttp(
     sendJson(response, 404, { error: 'not found' });
     return true;
   } catch (error) {
+    if (isSqliteBusy(error)) {
+      response.setHeader('Retry-After', '1');
+      sendJson(response, 503, { error: 'database-busy', message: 'Database is busy. Retry shortly.' });
+      return true;
+    }
     if (error instanceof ConversationHistoryReadLimitError) {
       sendHostFailure(response, error);
       return true;

@@ -829,7 +829,7 @@ export interface CcApi {
      */
     backlog(sessionId: string): Promise<string>;
     /** Hosted terminals carry UTF-16 offsets across retained snapshots and events. */
-    backlogSnapshot?(sessionId: string): Promise<string | { text: string; startOffset: number; endOffset: number }>;
+    backlogSnapshot?(sessionId: string, signal?: AbortSignal): Promise<string | { text: string; startOffset: number; endOffset: number }>;
     /**
      * Native on-disk CLI plan for a Plan-mode local session. Renderer supplies
      * sessionId only; main discovers and confines the path.
@@ -900,7 +900,7 @@ export interface CcApi {
      */
     subagentChildrenSnapshot(): Promise<Array<[string, SubagentChild[]]>>;
     onData(cb: (sessionId: string, data: string, cursor?: { startOffset: number; endOffset: number }) => void): () => void;
-    onExit(cb: (sessionId: string, code: number) => void): () => void;
+    onExit(cb: (sessionId: string, code: number, reason?: string) => void): () => void;
     /**
      * Fired when the machine wakes from sleep (powerMonitor 'resume'). No
      * payload. The renderer uses it to re-attach remote tabs whose `ssh` proxy

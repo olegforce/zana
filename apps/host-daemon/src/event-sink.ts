@@ -26,6 +26,8 @@ export function createEventSink(options: {
   postEvents: (events: HostEventEnvelope[], batchId: string) => Promise<void>;
   debounceMs?: number;
   onOverflow?: (error: Error) => void;
+  onPressure?: (paused: boolean) => void;
+  onTerminalOverflow?: (terminalId: string) => void;
   maxBytes?: number;
   maxEvents?: number;
 }): EventSink {
@@ -36,10 +38,19 @@ export function createEventSink(options: {
   let flushing: Promise<void> | null = null;
   let disposed = false;
   let retryMs = 0;
+  let pressured = false;
+  const maxBytes = options.maxBytes ?? MAX_HOST_EVENT_QUEUE_BYTES;
+  const maxEvents = options.maxEvents ?? MAX_HOST_EVENT_QUEUE_LENGTH;
+  const pressure = () => {
+    const next = pressured ? bytes > maxBytes / 8 || queue.length > maxEvents / 8
+      : bytes >= maxBytes / 4 || queue.length >= maxEvents / 4;
+    if (next !== pressured) { pressured = next; options.onPressure?.(next); }
+  };
 
   async function drain(): Promise<void> {
     if (flushing) {
       await flushing;
+      if (!retryMs && queue.length && !disposed && options.isSessionOpen()) await drain();
       return;
     }
     flushing = (async () => {
@@ -57,6 +68,7 @@ export function createEventSink(options: {
         if (disposed) return;
         queue.splice(0, sending.entries.length);
         bytes -= sending.entries.reduce((sum, entry) => sum + entry.bytes, 0);
+        pressure();
         batch = null;
         retryMs = 0;
       }
@@ -83,7 +95,14 @@ export function createEventSink(options: {
       if (disposed) return;
       const json = JSON.stringify(event);
       const size = Buffer.byteLength(json, 'utf8');
-      if (bytes + size > (options.maxBytes ?? MAX_HOST_EVENT_QUEUE_BYTES) || queue.length >= (options.maxEvents ?? MAX_HOST_EVENT_QUEUE_LENGTH)) {
+      // Reserve space for exits/control events. A noisy shell is isolated;
+      // it must not tear down unrelated threads on the shared connection.
+      if (event.kind === 'terminal.output' && event.terminalId && options.onTerminalOverflow
+        && (bytes + size > maxBytes * 0.75 || queue.length >= maxEvents * 0.75)) {
+        options.onTerminalOverflow(event.terminalId);
+        return;
+      }
+      if (bytes + size > maxBytes || queue.length >= maxEvents) {
         disposed = true;
         if (timer) clearTimeout(timer);
         timer = null;
@@ -94,6 +113,7 @@ export function createEventSink(options: {
       // Own a snapshot: providers may mutate their event object after emitting.
       queue.push({ event: JSON.parse(json) as HostEventEnvelope, bytes: size });
       bytes += size;
+      pressure();
       if (IMMEDIATE_KINDS.has(event.kind)) {
         // Incoming output must not defeat the backoff during an outage.
         if (timer && retryMs) return;
@@ -121,6 +141,7 @@ export function createEventSink(options: {
       }
       await drain();
       queue.length = 0; bytes = 0; batch = null;
+      if (pressured) { pressured = false; options.onPressure?.(false); }
     }
   };
 }

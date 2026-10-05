@@ -1,4 +1,5 @@
 import { createTerminalReplay } from '../lib/terminal-replay.js';
+import { createTerminalWriteQueue } from '../lib/terminal-write-queue.js';
 import { subscribeProductReconnect } from '../lib/product-ws.js';
 import { product } from '../lib/product-client.js';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -50,6 +51,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
   const fitRef = useRef<FitAddon | null>(null);
   const rendererRef = useRef<ReturnType<typeof createVisibleTerminalRenderer> | null>(null);
   const offsRef = useRef<Array<() => void>>([]);
+  const writesRef = useRef<ReturnType<typeof createTerminalWriteQueue> | null>(null);
   const fontSize = useData((s) => s.fontSize);
   const wheelArrowsEnabled = useData((s) => s.terminalWheelArrowsEnabled);
   const theme = useData((s) => s.theme);
@@ -216,6 +218,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
       const el = ref.current;
       const sized = !!el && el.clientHeight > 0 && el.clientWidth > 0;
       renderer.setVisible(visibleRef.current && sized);
+      writesRef.current?.setVisible(visibleRef.current && sized && isTerminalHostVisible(el));
       if (!sized) {
         // Not laid out. Keep retrying only if this terminal is currently shown
         // (offsetParent is null for a display:none element); otherwise stop —
@@ -290,7 +293,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
     // shows just a cursor on an empty buffer. We fetch main's retained tail and
     // write it before any live output.
     //
-    const writeFollowing = (data: string) => {
+    const writes = createTerminalWriteQueue((data, done) => {
       // Decide BEFORE writing whether we were tailing; new rows push baseY
       // down, and xterm's built-in auto-scroll can miss the last row when the
       // viewport height is stale (hidden tab, mid-resize), leaving the wheel
@@ -308,12 +311,16 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
         // Don't yank the viewport to bottom while the user has an active
         // selection — auto-scrolling mid-selection loses their highlight and
         // makes copy-from-terminal impossible.
-        if (follow && !disposedRef.current && !term.hasSelection()) term.scrollToBottom();
+        try {
+          if (follow && !disposedRef.current && !term.hasSelection()) term.scrollToBottom();
+        } finally { done(); }
       });
-    };
-    const replay = createTerminalReplay(() => product.terminals.backlogSnapshot
-      ? product.terminals.backlogSnapshot(session.id) : product.terminals.backlog(session.id), {
-      reset: () => term.reset(), write: writeFollowing,
+    }, visibleRef.current);
+    writesRef.current = writes;
+    const writeFollowing = (data: string) => writes.write(data);
+    const replay = createTerminalReplay(signal => product.terminals.backlogSnapshot
+      ? product.terminals.backlogSnapshot(session.id, signal) : product.terminals.backlog(session.id), {
+      reset: () => writes.reset(() => term.reset()), write: writeFollowing,
       follow: () => { if (!disposedRef.current && !term.hasSelection()) term.scrollToBottom(); }
     });
     const offData = product.terminals.onData((id, data, cursor) => {
@@ -321,13 +328,13 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
     });
     void replay.replay();
     const offReconnect = subscribeProductReconnect(() => replay.replay(true));
-    const offExit = product.terminals.onExit((id, code) => {
+    const offExit = product.terminals.onExit((id, code, reason) => {
       if (id !== session.id) return;
       // 0 / undefined → dim "[session exited]"; non-zero → red "[exited code N]".
       const bad = typeof code === 'number' && code !== 0;
       const sgr = bad ? '\x1b[31m' : '\x1b[2m';
-      const label = bad ? `[exited code ${code}]` : '[session exited]';
-      term.write(`\r\n${sgr}${label}\x1b[0m\r\n`);
+      const label = reason ?? (bad ? `[exited code ${code}]` : '[session exited]');
+      writes.write(`\r\n${sgr}${label}\x1b[0m\r\n`);
     });
     offsRef.current = [offData, offExit, offReconnect, () => replay.dispose(), () => offScroll.dispose(), () => offOsc52.dispose()];
 
@@ -449,6 +456,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
       const w = box ? Math.round(box.width) : ref.current?.clientWidth ?? 0;
       const h = box ? Math.round(box.height) : ref.current?.clientHeight ?? 0;
       renderer.setVisible(visibleRef.current && w > 0 && h > 0 && isTerminalHostVisible(ref.current));
+      writes.setVisible(visibleRef.current && w > 0 && h > 0 && isTerminalHostVisible(ref.current));
       // Hidden / not-yet-laid-out, or unchanged from the last fit — nothing to do.
       if (w === 0 || h === 0) {
         settle.cancel();
@@ -487,6 +495,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
 
     return () => {
       disposedRef.current = true;
+      writes.dispose(); writesRef.current = null;
       settle.dispose();
       settleRef.current = null;
       cancelAnimationFrame(initialFitRaf);
@@ -552,6 +561,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
   // will also catch most pane resizes, but firing here removes a one-frame
   // mismatch when the layout class changes without a size change yet.
   useEffect(() => {
+    writesRef.current?.setVisible(visible && isTerminalHostVisible(ref.current));
     if (!visible) {
       rendererRef.current?.setVisible(false);
       settleRef.current?.cancel();
@@ -563,6 +573,7 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
       try {
         if (disposedRef.current || !isTerminalHostVisible(ref.current)) return;
         rendererRef.current?.setVisible(true);
+        writesRef.current?.setVisible(true);
         // Split open/close can change layout without a lasting pixel delta
         // (ResizeObserver then skips). The settled-style nudge still has to
         // run so a Claude TUI redraws and xterm busts a stale cell cache.

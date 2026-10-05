@@ -1,3 +1,5 @@
+import { closeThreadReads } from '../services/threads/thread-reads.js';
+import { closeQueuedMessages } from '../services/threads/queued-messages.js';
 import { previewService, disposePreviews } from '../services/previews/preview-service.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -355,6 +357,7 @@ export function createProductHttpContext(
     pluginHostArtifacts: new PluginHostArtifactRegistry(),
     toProjects: () => projects.list() as unknown as Project[],
     dispose: () => {
+      closeThreadReads(dataDir); closeQueuedMessages(dataDir);
       disposePreviews(ctx);
       stopHistoryMaintenance();
       ctx.cliCallbacks?.dispose();
