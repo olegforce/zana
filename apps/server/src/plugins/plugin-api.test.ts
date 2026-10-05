@@ -1,3 +1,4 @@
+import { ClaudeCliProvider } from '@zana-ai/zcc-llm';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { openDatabase, upsertHost } from '@zana-ai/zcc-db';
@@ -392,6 +393,39 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('gates assistant and inbox reads on runtime availability and plugin lifetime', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-read-gates-'));
+    const bare = createPluginApi('bare', dir);
+    const calls = () => [bare.api.sdk.inbox.search({projectIds:['p1']}), bare.api.sdk.inbox.read({projectIds:['p1'],entryId:'r'}), bare.api.sdk.assistant.complete({instructions:'classify',prompt:'hello'})];
+    try {
+      await Promise.all(calls().map(call => expect(call).rejects.toThrow('not available')));
+      await bare.dispose();
+      await Promise.all(calls().map(call => expect(call).rejects.toThrow(/stale/)));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('cancels in-flight assistant processes when the plugin is disposed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-assistant-cancel-'));
+    let signal: AbortSignal | undefined;
+    const run = vi.spyOn(ClaudeCliProvider.prototype, 'run').mockImplementation(args => new Promise((_resolve,reject) => {signal=args.signal;signal!.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});}));
+    const handle = createPluginApi('demo',dir,{productContext:{config:{getConfig:()=>({})}} as any});
+    try {
+      const pending = expect(handle.api.sdk.assistant.complete({instructions:'classify',prompt:'request'})).rejects.toThrow('aborted');
+      await handle.dispose(); await pending; expect(signal?.aborted).toBe(true);
+    } finally {run.mockRestore();rmSync(dir,{recursive:true,force:true});}
+  });
+
+  it('delegates inbox reads to main store and validates assistant input in the product runtime', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-plugin-inbox-reader-'));
+    const ctx = {toProjects:()=>[{id:'p1',name:'Alpha'}],inbox:{read:vi.fn(async()=>({entries:[{id:'r',ts:1,projectId:'p1',subject:'Review',comments:'Findings',report:true}],hasMore:false}))},inboxRead:{getReadState:async()=>({readIds:{}})}};
+    const handle = createPluginApi('demo', dir, {productContext:ctx as any});
+    try {
+      expect(await handle.api.sdk.inbox.search({projectIds:['p1']})).toMatchObject({entries:[{id:'r',subject:'Review'}]});
+      expect(await handle.api.sdk.inbox.read({projectIds:['p1'],entryId:'r'})).toMatchObject({content:'Findings'});
+      await expect(handle.api.sdk.assistant.complete({instructions:'',prompt:'invalid'})).rejects.toThrow();
+    } finally {await handle.dispose();rmSync(dir,{recursive:true,force:true});}
   });
 
   it('wires sdk.library list/read/write through productContext', async () => {

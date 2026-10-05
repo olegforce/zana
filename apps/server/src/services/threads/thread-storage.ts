@@ -6,7 +6,7 @@ import { ThreadCreateError } from '../../http/thread-create.js';
 import { ProjectFsError } from '../../http/project-fs-via-host.js';
 import { isSafeRelPath } from '../../http/library-via-host.js';
 import { confinePathToRoot } from './thread-path-confine.js';
-import { IMAGE_READ_MAX_BYTES, imageContentType } from './thread-host-file.js';
+import { IMAGE_READ_MAX_BYTES, previewContentType } from './thread-host-file.js';
 
 const STORAGE_WALK_CAP = 500;
 const STORAGE_FILE_BYTE_CAP = 2_000_000;
@@ -86,8 +86,8 @@ export async function readThreadStorageFile(
     if (!info.isFile()) {
       throw new ProjectFsError(404, 'path_not_found', 'file not found');
     }
-    const contentType = imageContentType(relPath);
-    const cap = contentType ? IMAGE_READ_MAX_BYTES : STORAGE_FILE_BYTE_CAP;
+    const contentType = previewContentType(relPath);
+    const cap = contentType?.startsWith('image/') ? IMAGE_READ_MAX_BYTES : STORAGE_FILE_BYTE_CAP;
     if (info.size > cap) {
       throw new ProjectFsError(413, 'too_large', 'file exceeds the read cap');
     }

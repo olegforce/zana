@@ -996,6 +996,8 @@ export async function dispatchHostCommand(
       if (stat.size > cap) {
         throw new HostCommandError('too_large', 'file exceeds the read cap');
       }
+      // PDF streams contain binary data; UTF-8 decoding corrupts their bytes.
+      const binary = image || command.relPath.toLowerCase().endsWith('.pdf');
       let file: Awaited<ReturnType<typeof open>> | undefined;
       try {
         file = await open(contained, 'r');
@@ -1009,7 +1011,7 @@ export async function dispatchHostCommand(
           size += chunk.bytesRead;
         }
         const body = buffer.subarray(0, size);
-        return { content: body.toString(image ? 'base64' : 'utf8'), encoding: image ? 'base64' as const : 'utf8' as const };
+        return { content: body.toString(binary ? 'base64' : 'utf8'), encoding: binary ? 'base64' as const : 'utf8' as const };
       } finally { await file?.close().catch(() => {}); }
     }
     case 'host.write_file':

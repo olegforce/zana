@@ -20,10 +20,16 @@ function assertPlainJsonData(value: unknown, seen: Set<object>): void {
   if (value === null || typeof value !== "object") return;
   if (seen.has(value)) throw new Error("pluginMetadata contains a cycle");
   const array = Array.isArray(value);
-  if (
-    Object.getPrototypeOf(value) !==
-    (array ? Array.prototype : Object.prototype)
-  ) {
+  const prototype = Object.getPrototypeOf(value);
+  const builtin = array ? Array : Object;
+  // Worker RPC reconstructs JSON dictionaries without prototypes; VM contexts
+  // also have distinct built-ins. Both are plain data, unlike custom classes.
+  const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+  const builtinPrototype = (!array && prototype === null) || prototype === builtin.prototype || (
+    typeof constructor === "function" && constructor.prototype === prototype &&
+    Function.prototype.toString.call(constructor) === Function.prototype.toString.call(builtin)
+  );
+  if (!builtinPrototype) {
     throw new Error("pluginMetadata must contain plain JSON data");
   }
   seen.add(value);

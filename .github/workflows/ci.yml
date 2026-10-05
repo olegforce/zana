@@ -56,6 +56,15 @@ jobs:
       - name: Export mobile bundles
         run: pnpm --filter @zana-ai/zcc-mobile export
 
+      # The diagram tests exercise the same local asset shipped in the plugin.
+      # A clean unit-test checkout has not run the production plugin build.
+      - name: Prepare Slack runtime assets
+        run: pnpm --filter zcc-plugin-slack-bridge-2ff2 package
+
+      # The real Chromium diagram test needs the same sandbox support as Electron.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Unit tests with coverage
         run: pnpm exec vitest run --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage/root
 

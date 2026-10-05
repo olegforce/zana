@@ -1,78 +1,101 @@
 {
-    "display_information": {
-        "name": "Zana"
+  "display_information": {
+    "name": "Zana"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false,
+      "agent_tasks_enabled": true
     },
-    "features": {
-        "app_home": {
-            "home_tab_enabled": true,
-            "messages_tab_enabled": false,
-            "messages_tab_read_only_enabled": true
+    "bot_user": {
+      "display_name": "Zana",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/zana",
+        "url": "https://zana-ide.com/api/slack/events/",
+        "description": "Start agents, list Projects, and check activity in Zana",
+        "usage_hint": "[run <project> <task> | projects | status [project] | connect | help]",
+        "should_escape": true
+      }
+    ],
+    "agent_view": {
+      "agent_description": "Work with agents on your connected Zana Projects. Select a Project, start a task, answer questions, and share results. Keep your Zana computer running.",
+      "suggested_prompts": [
+        {
+          "title": "Review my work",
+          "message": "Review the recent changes in my connected Project."
         },
-        "bot_user": {
-            "display_name": "Zana",
-            "always_online": true
-        },
-        "slash_commands": [
-            {
-                "command": "/zana",
-                "url": "https://zana-ide.com/api/slack/events/",
-                "description": "Start agents, list Projects, and check activity in Zana",
-                "usage_hint": "[run <project> <task> | projects | status [project] | connect | help]",
-                "should_escape": true
-            }
-        ],
-        "rich_previews": {
-            "is_active": true,
-            "entity_types": [
-                "slack#/entities/file"
-            ],
-            "domain_allowlist": [
-                "zana-ide.com"
-            ]
+        {
+          "title": "Plan a task",
+          "message": "Help me plan the next task in my connected Project."
         }
+      ]
     },
-    "oauth_config": {
-        "scopes": {
-            "bot": [
-                "groups:write",
-                "app_mentions:read",
-                "channels:read",
-                "chat:write",
-                "commands",
-                "groups:read",
-                "mcp:connect",
-                "users:read",
-                "channels:history",
-                "groups:history"
-            ]
-        },
-        "pkce_enabled": false
-    },
-    "settings": {
-        "event_subscriptions": {
-            "request_url": "https://zana-ide.com/api/slack/events/",
-            "bot_events": [
-                "app_home_opened",
-                "app_mention",
-                "entity_details_requested",
-                "message.channels",
-                "message.groups"
-            ]
-        },
-        "interactivity": {
-            "is_enabled": true,
-            "request_url": "https://zana-ide.com/api/slack/events/"
-        },
-        "org_deploy_enabled": false,
-        "socket_mode_enabled": false,
-        "token_rotation_enabled": false,
-        "app_level_token_rotation_enabled": false,
-        "is_mcp_enabled": false
-    },
-    "mcp_servers": {
-        "Zana jobs": {
-            "url": "https://zana-ide.com/api/slack/mcp/",
-            "auth_type": "slack_identity_auth"
-        }
+    "rich_previews": {
+      "is_active": true,
+      "entity_types": [
+        "slack#/entities/file"
+      ],
+      "domain_allowlist": [
+        "zana-ide.com"
+      ]
     }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "im:read",
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "groups:write",
+        "mcp:connect",
+        "users:read",
+        "im:history"
+      ]
+    },
+    "pkce_enabled": false
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://zana-ide.com/api/slack/events/",
+      "bot_events": [
+        "app_home_opened",
+        "app_mention",
+        "entity_details_requested",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://zana-ide.com/api/slack/events/",
+      "message_menu_options_url": "https://zana-ide.com/api/slack/events/"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false,
+    "app_level_token_rotation_enabled": false,
+    "is_mcp_enabled": false
+  },
+  "mcp_servers": {
+    "Zana jobs": {
+      "url": "https://zana-ide.com/api/slack/mcp/",
+      "auth_type": "slack_identity_auth"
+    }
+  }
 }

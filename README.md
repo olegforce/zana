@@ -50,6 +50,8 @@ ways of working become reusable **personas, teams, goals, and schedules**.
 | **A clear view of the fleet**<br>See which agents are working, idle, done, or waiting for you. Open the session that needs attention. | **Decisions that keep work moving**<br>Receive questions and reports in the Inbox, then send your answer back to the waiting agent. |
 | **Work you can repeat**<br>Reuse personas and teams, pursue goals with success criteria, and schedule recurring tasks with per-run reports. | **Knowledge that stays with you**<br>Keep findings in the Library. Review Markdown, diagrams, diffs, and attachments alongside the work. |
 
+**Zana for Slack comes pre-installed.** Open **Plugins → Zana for Slack → Configuration** to link your account, connect Project channels, and enable private report-inbox access. [Slack setup and controls](plugins/slack-bridge-2ff2/README.md).
+
 ### From intent to outcome
 
 1. **Connect a project.** Add a local folder, an enrolled machine, or an SSH project.

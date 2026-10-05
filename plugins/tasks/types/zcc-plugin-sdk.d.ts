@@ -5,6 +5,7 @@
  */
 
 declare module '@zana-ai/zcc-plugin-sdk' {
+  export type { PluginSdk, PluginSdkInbox, PluginSdkInboxEntry, PluginSdkInboxSearchArgs, PluginSdkInboxSearchResult, PluginSdkInboxReport, PluginSdkAssistant } from '@zana-ai/zcc-plugin-sdk/server';
   export type { PluginAgentsViewProps, PluginFleetMember, PluginFleetSchedule, PluginFleetExecution } from '@zana-ai/zcc-plugin-sdk/app';
   export const PROJECT_ICONS: readonly ['Circle', 'Cloud', 'Folder', 'Code', 'Database', 'Globe', 'Package', 'Rocket', 'Briefcase', 'Terminal', 'Layers', 'Wrench'];
   export type ProjectIcon = (typeof PROJECT_ICONS)[number];
@@ -18,6 +19,42 @@ declare module '@zana-ai/zcc-plugin-sdk' {
 }
 
 declare module '@zana-ai/zcc-plugin-sdk/server' {
+export interface PluginSdkInboxSearchArgs {
+  projectIds: string[];
+  query?: string;
+  before?: string;
+  limit?: number;
+  unreadOnly?: boolean;
+  reportsOnly?: boolean;
+}
+export interface PluginSdkInboxEntry {
+  id: string;
+  ts: number;
+  projectId: string;
+  projectName: string;
+  subject: string;
+  comments: string;
+  documents: number;
+  unread: boolean;
+}
+export interface PluginSdkInboxSearchResult {
+  entries: PluginSdkInboxEntry[];
+  hasMore: boolean;
+  nextBefore?: string;
+}
+export interface PluginSdkInboxReport extends PluginSdkInboxEntry {
+  documentIndex?: number;
+  content: string;
+  truncated: boolean;
+}
+export interface PluginSdkAssistant {
+  /** Bounded text-only inference, without agent tools or Project access. */
+  complete(args: { instructions: string; prompt: string; signal?: AbortSignal }): Promise<{ text: string }>;
+}
+
+export type PluginSdk = ZccPluginApi['sdk'];
+export type PluginSdkInbox = PluginSdk['inbox'];
+
   export { PROJECT_ICONS, type ProjectIcon } from '@zana-ai/zcc-plugin-sdk';
   export const PLUGIN_CLI_OUTPUT_MAX_BYTES: number;
   export function enforcePluginCliOutputLimit(result: {
@@ -309,7 +346,10 @@ declare module '@zana-ai/zcc-plugin-sdk/server' {
           modelLoadError: { providerId: string; code: string; detail?: string | null } | null;
         }>;
       };
+      assistant: PluginSdkAssistant;
       inbox: {
+        search(args: PluginSdkInboxSearchArgs): Promise<PluginSdkInboxSearchResult>;
+        read(args: { projectIds: string[]; entryId: string; documentIndex?: number }): Promise<PluginSdkInboxReport>;
         push(args: { projectId: string; comments: string }): Promise<{ id: string }>;
       };
       projects: {

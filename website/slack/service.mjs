@@ -11,12 +11,14 @@ const notice = text => ({ response_type: 'ephemeral', text });
 const offline = 'Your computer or Slack plugin is unavailable. No new request has been queued. Open Zana on your chosen computer, then try again.';
 const uncertain = 'Delivery is unconfirmed. Check Zana for Slack → Diagnostics on your computer before sending the task again.';
 
-export async function createSlackService({ db, connect, dispatchPlugin, pluginId, sessionSecret, signingSecret, identity, call, now = Date.now, intervalMs = 1000 }) {
+export async function createSlackService({ db, connect, dispatchPlugin, pluginId, sessionSecret, signingSecret, identity, call, now = Date.now, intervalMs = 1000, onIngressRejection = detail => console.warn('Slack native control rejected', JSON.stringify(detail)) }) {
   const registry = createSlackRegistry({ db, sessionSecret, identity, now });
   const machineBlocks = createHomeMachines({ connect, now });
   const scoped = createScopedSlack({ call, registry, identity, origin: connect.accountUrl, decorateHome: (view, link) => addHomeMachines(view, link, machineBlocks) });
   const rate = rateLimiter(now); let closed = false; let processing;
   const jobs = new Set();
+  // Two fixed keys and one log per minute each; never retain event content or IDs.
+  const rejectionLogTimes = new Map();
   const run = job => { const promise = job.catch(() => {}).finally(() => jobs.delete(promise)); jobs.add(promise); return promise; };
   // An interrupted send is never re-executed after a dyno restart.
   await db.query("UPDATE slack_requests SET state='needs-review',payload='' WHERE state='dispatching'");
@@ -181,6 +183,7 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
     const work = execute(id, link, payload); run(work); return work;
   }
   async function dispatch(request, clientKey = 'unknown') {
+    let nativeControl;
     try {
       if (closed || new URL(request.url).origin !== connect.accountUrl) throw new SlackError('service_unavailable', 503);
       const path = new URL(request.url).pathname.replace(/\/$/, '');
@@ -194,6 +197,22 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
         const type = request.headers.get('content-type')?.split(';')[0];
         try { payload = type === 'application/json' ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw.toString())); if (payload.payload) payload = JSON.parse(payload.payload); }
         catch { throw new SlackError('invalid_payload'); }
+        if (payload.type === 'event_callback' && ['agent_session_stopped', 'agent_session_title_changed'].includes(payload.event?.type)) nativeControl = {
+          event: payload.event.type,
+          teamMatches: payload.team_id === identity.team,
+          teamPresent: typeof payload.team_id === 'string',
+          eventTeamMatches: payload.event.team_id === identity.team,
+          eventTeamPresent: typeof payload.event.team_id === 'string',
+          authorizationMatches: Array.isArray(payload.authorizations) && payload.authorizations.some(a => a?.team_id === identity.team && a.user_id === identity.bot && a.is_bot === true),
+          contextTeamMatches: payload.context_team_id === identity.team,
+          appMatches: payload.api_app_id === identity.app,
+          userValid: /^[UW][A-Z0-9]{5,30}$/.test(payload.event.user ?? ''),
+          channelValid: /^D[A-Z0-9]{5,30}$/.test(payload.event.channel ?? ''),
+        };
+        // On Enterprise Grid, native controls use different team metadata from DMs.
+        // Only a signed authorization for THIS installed bot may select our team.
+        // ingest still verifies the DM participant and an already-owned thread.
+        if (nativeControl?.authorizationMatches && nativeControl.appMatches && nativeControl.channelValid) payload.team_id = identity.team;
         if (payload.type === 'url_verification') { if (typeof payload.challenge !== 'string' || payload.challenge.length > 300) throw new SlackError('invalid_challenge'); return json({ challenge: payload.challenge }); }
         const id = payload.event_id ? hash(`${identity.team}:${payload.event_id}`) : hash(raw);
         return json(await ingest(payload, id));
@@ -241,7 +260,14 @@ export async function createSlackService({ db, connect, dispatchPlugin, pluginId
       }
       if (path.endsWith('/revoke') && request.method === 'POST') return json(await registry.revoke((await readJson(request)).id, user.id));
       throw new SlackError('not_found', 404);
-    } catch (error) { return json({ error: error instanceof SlackError ? error.message : 'slack_unavailable' }, error instanceof SlackError ? error.status : 503); }
+    } catch (error) {
+      const reason = error instanceof SlackError ? error.message : 'slack_unavailable';
+      if (nativeControl && now() - (rejectionLogTimes.get(nativeControl.event) ?? -Infinity) >= 60_000) {
+        rejectionLogTimes.set(nativeControl.event, now());
+        try { onIngressRejection({ ...nativeControl, reason }); } catch { /* Diagnostics cannot change acknowledgement. */ }
+      }
+      return json({ error: reason }, error instanceof SlackError ? error.status : 503);
+    }
   }
   return { dispatch, registry, drain, async close() { closed = true; clearInterval(timer); await processing; await Promise.allSettled([...jobs]); } };
 }
