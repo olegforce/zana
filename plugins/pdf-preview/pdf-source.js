@@ -12,7 +12,9 @@ export function resolvePdfReadTarget(path, source) {
     return `/api/v1/threads/${encodeURIComponent(threadId)}/thread-storage/content?${encodePathQuery(path)}`;
   }
   if (source.kind === 'workspace' || source.kind === 'host') {
-    return `/api/v1/threads/${encodeURIComponent(threadId)}/host-files/content?${encodePathQuery(path)}`;
+    const query = new URLSearchParams({ path });
+    if (typeof source.projectId === 'string' && source.projectId) query.set('projectId', source.projectId);
+    return `/api/v1/threads/${encodeURIComponent(threadId)}/host-files/content?${query}`;
   }
   return null;
 }

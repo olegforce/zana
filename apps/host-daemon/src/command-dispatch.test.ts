@@ -253,7 +253,7 @@ describe('host command dispatch', () => {
     })).rejects.toBeInstanceOf(HostCommandError);
   });
 
-  it('reads text as utf8 and images as base64', async () => {
+  it('reads text as utf8 and images and PDFs as base64', async () => {
     const root = mkdtempSync(join(tmpdir(), 'zcc-read-file-'));
     writeFileSync(join(root, 'note.md'), '# hello\n');
     writeFileSync(join(root, 'shot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]));
@@ -272,6 +272,11 @@ describe('host command dispatch', () => {
     }) as { content: string; encoding: string };
     expect(image.encoding).toBe('base64');
     expect(Buffer.from(image.content, 'base64')).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]));
+    const pdfBytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from([0xff, 0x80, 0x00, 0xfe])]);
+    writeFileSync(join(root, 'report.PDF'), pdfBytes);
+    const pdf = await dispatchHostCommand(runtime, { type: 'host.read_file', root, relPath: 'report.PDF' }) as { content: string; encoding: string };
+    expect(pdf.encoding).toBe('base64');
+    expect(Buffer.from(pdf.content, 'base64')).toEqual(pdfBytes);
     const ranged = await dispatchHostCommand(runtime, {
       type: 'host.read_file', root, relPath: 'shot.png', byteRange: { offset: 1, length: 3 }
     });

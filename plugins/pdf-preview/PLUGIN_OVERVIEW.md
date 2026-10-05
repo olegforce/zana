@@ -5,6 +5,7 @@ Open a PDF from a thread and read it in place. The plugin shows the document in 
 - Page navigation, zoom, and text search from your browser PDF viewer.
 - A loading indicator while ZCC fetches the file and while the viewer renders it.
 - A clear error message and a Retry button when the file does not load.
+- A Download PDF action above the viewer, available as soon as the file loads.
 
 ## How it works
 

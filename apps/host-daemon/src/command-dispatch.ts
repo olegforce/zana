@@ -1030,7 +1030,8 @@ export async function dispatchHostCommand(
       if (stat.size > cap) {
         throw new HostCommandError('too_large', 'file exceeds the read cap');
       }
-      if (image) {
+      // PDF streams contain binary data; UTF-8 decoding corrupts their bytes.
+      if (image || command.relPath.toLowerCase().endsWith('.pdf')) {
         return { content: readFileSync(contained).toString('base64'), encoding: 'base64' as const };
       }
       return { content: readFileSync(contained, 'utf8'), encoding: 'utf8' as const };
