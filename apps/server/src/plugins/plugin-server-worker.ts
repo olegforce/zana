@@ -5,9 +5,8 @@ import { applyPluginSqliteMigrations } from './plugin-database-migrations.js';
 import { createPluginWorkerBridge } from './plugin-worker-bridge.js';
 import type { ZccPluginApi, PluginDatabase } from '@zana-ai/zcc-plugin-sdk';
 
-async function runPluginWorker() {
-  if (!parentPort) throw new Error('Plugin worker requires a parent port');
-  const port = parentPort;
+export async function runPluginWorker(port = parentPort) {
+  if (!port) throw new Error('Plugin worker requires a parent port');
   const workerData = await new Promise<any>(resolve => port.once('message', message => resolve(message.data)));
   const bridge = createPluginWorkerBridge(port, 'plugin');
   const api = bridge.decode(workerData.api) as ZccPluginApi;

@@ -12,6 +12,14 @@ import {
 } from './conversation-turn-settlement.js';
 import { LIVE_TURN_COMMAND_TIMEOUT_MS } from '../../http/host-hub.js';
 
+// Lifecycle projection is independent of the indexed marker persistence seam,
+// which has its own real-SQLite tests. Keep this mocked database fixture in memory.
+vi.mock('./thread-reads.js', () => ({
+  peekThreadReadSeq: () => null,
+  getThreadReadSeq: () => 0,
+  loadThreadReads: () => ({})
+}));
+
 const thread = {
   id: '11111111-1111-4111-8111-111111111111',
   projectId: 'proj-1',

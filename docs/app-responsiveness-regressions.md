@@ -47,14 +47,14 @@ The terminal-specific contracts are in [terminal-freeze-regressions.md](terminal
 ## Verification
 
 ```sh
-node scripts/verify-responsiveness-coverage.mjs
+node scripts/testing/verify-responsiveness-coverage.mjs
 pnpm test:e2e -- e2e/app-responsiveness.spec.ts e2e/docs-plugin-availability.spec.ts e2e/shared-legacy-plugins.spec.ts e2e/terminal-resource-lifecycle.spec.ts e2e/thread-terminal-panel.spec.ts e2e/terminal-view-navigation.spec.ts
 pnpm test:e2e:jobteam
 ```
 
 The coverage script enforces 80% statements, branches, functions and lines for
-each listed helper. Worker entry execution needs the real Electron checks;
-ordinary coverage instrumentation does not measure code inside those threads.
+each listed helper. Worker entry unit tests exercise startup and API behavior;
+the real Electron checks additionally verify transport, native ABI and termination.
 
 The responsiveness spec measures the real search renderer, large document copy,
 6,000-file asynchronous deletion, native worker SQLite, plugin service transport,
@@ -62,7 +62,7 @@ a callback that loops after await, archive misses, competing SQLite writes,
 legacy storage persistence, and a 4,000-line Git diff with forced worker failure.
 Fixtures use private homes and temporary repositories, not personal files.
 
-Recorded local results: 220 focused tests passed with 93.1% statement and 87.4%
+Recorded local results: 223 focused tests passed with 93.4% statement and 87.1%
 branch coverage; all 29 isolated Electron cases across the listed suites passed.
 The regex workload's maximum renderer timer gap fell from 4,057.8 ms to 12.6 ms.
 Four-shell streaming measured 14.9 ms maximum delay with no observed long tasks.
