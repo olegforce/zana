@@ -1,6 +1,8 @@
 # Zana TestFlight releases
 
-Zana follows BB’s EAS → TestFlight processing → optional beta-group distribution approach using its own accounts. This repository prepares the pipeline; it does not claim a published app, invite testers automatically, or publish to the App Store. The workflow has **only `workflow_dispatch`**, and `submit` defaults to **false**.
+Android, iOS, and TestFlight workflows have been removed from GitHub Actions. The workflow setup and dispatch instructions below are retained as historical release documentation; those actions are no longer available. Local release tools remain available for deliberate owner use.
+
+Zana follows BB’s EAS → TestFlight processing → optional beta-group distribution approach using its own accounts. It does not invite testers automatically or publish to the App Store.
 
 ## One-time owner configuration
 
