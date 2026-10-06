@@ -8,6 +8,10 @@ import {
 } from '@zana-ai/zcc-db';
 import { startProductServer, type ProductServer } from './product-server.js';
 import { registerThreadProvider } from '../services/threads/thread-provider-catalog.js';
+import { controlCredentialForSession } from '@zana-ai/zcc-host-daemon/control-credential';
+import { signUiSend } from './ui-send-proof.js';
+
+const uiSecret = 'desktop-only-boot-secret-of-at-least-32-bytes';
 
 let server: ProductServer;
 let dir: string;
@@ -17,7 +21,7 @@ let provider: { unregister(): void };
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'zcc-next-turn-http-'));
-  server = await startProductServer({ dataDir: dir, origins: { serverPort: 0, devAppPort: 5173 } });
+  server = await startProductServer({ dataDir: dir, uiSendSecret: uiSecret, origins: { serverPort: 0, devAppPort: 5173 } });
   provider = registerThreadProvider('test', {
     id: 'codex', displayName: 'Codex',
     capabilities: { supportsServiceTier: false, fork: 'checkpoint', supportsThreadArchive: false, supportsThreadRename: false, permissionModes: ['full'] }
@@ -46,17 +50,20 @@ function queue(target = threadId) {
     payload: JSON.stringify({ kind: 'send', mode: 'queue-if-active', input: 'selected message' })
   });
 }
-function send(id: string) {
+function send(id: string, callerHeaders?: Record<string, string>) {
   return fetch(`${server.url}api/v1/threads/${threadId}/next-turn/${id}/send`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+    method: 'POST', headers: { 'content-type': 'application/json', ...callerHeaders }, body: '{}'
   });
+}
+function uiSend(id: string) {
+  return send(id, { 'x-zcc-ui-send-proof': signUiSend(uiSecret, threadId, id) });
 }
 
 it('sends the selected stored prompt and broadcasts the remaining paused queue', async () => {
   const first = queue();
   const selected = queue();
   const emit = vi.spyOn(server.ctx.hub, 'emit');
-  const response = await send(selected.id);
+  const response = await uiSend(selected.id);
   expect(response.status, await response.clone().text()).toBe(200);
   await expect(response.json()).resolves.toEqual({ ok: true });
   expect(server.ctx.hostHub.callHostOnlineRpc).toHaveBeenCalledWith(expect.objectContaining({
@@ -73,7 +80,7 @@ it('sends the selected stored prompt and broadcasts the remaining paused queue',
 
 it('rejects a queued message belonging to another thread', async () => {
   const foreign = queue(otherThreadId);
-  const response = await send(foreign.id);
+  const response = await uiSend(foreign.id);
   expect(response.status).toBe(404);
   await expect(response.json()).resolves.toMatchObject({ error: 'unknown-queued-send' });
   expect(server.ctx.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
@@ -83,8 +90,55 @@ it('rejects a queued message belonging to another thread', async () => {
 it('surfaces host-offline errors without losing the selected message', async () => {
   const selected = queue();
   server.ctx.hostHub.connectedHostIds = () => [];
-  const response = await send(selected.id);
+  const response = await uiSend(selected.id);
   expect(response.status).toBe(502);
   await expect(response.json()).resolves.toMatchObject({ error: 'host_unavailable' });
   expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
+});
+
+it('rejects a forged caller-session credential (OBL-003) without sending or dropping the queued message', async () => {
+  const selected = queue();
+  const response = await send(selected.id, {
+    'x-zcc-caller-session-id': 'session-not-real',
+    'x-zcc-caller-credential': 'not-the-real-hmac'
+  });
+  expect(response.status).toBe(403);
+  await expect(response.json()).resolves.toMatchObject({ error: 'invalid_caller_credential' });
+  expect(server.ctx.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
+  expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
+});
+
+it('rejects even a valid agent-session HMAC and headerless desktop-looking calls', async () => {
+  const selected = queue();
+  const sessionId = 'session-real-1';
+  const agent = await send(selected.id, {
+    'x-zcc-caller-session-id': sessionId,
+    'x-zcc-caller-credential': controlCredentialForSession(sessionId),
+    'x-zcc-app-surface': 'desktop'
+  });
+  expect(agent.status).toBe(403);
+  const forged = await send(selected.id, {
+    origin: 'http://127.0.0.1:5173', 'x-zcc-app-surface': 'desktop'
+  });
+  expect(forged.status).toBe(403);
+  expect((await send(selected.id)).status).toBe(403);
+  expect(server.ctx.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
+  expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
+});
+
+it('requires a fresh single-use desktop proof bound to the queued item and thread', async () => {
+  const selected = queue();
+  const proof = signUiSend(uiSecret, threadId, selected.id);
+  const wrongItem = await send(queue().id, { 'x-zcc-ui-send-proof': proof });
+  expect(wrongItem.status).toBe(403);
+  const wrongThread = await fetch(`${server.url}api/v1/threads/${otherThreadId}/next-turn/${selected.id}/send`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-zcc-ui-send-proof': proof }, body: '{}'
+  });
+  expect(wrongThread.status).toBe(403);
+  expect((await send(selected.id, { 'x-zcc-ui-send-proof': signUiSend('wrong-secret', threadId, selected.id) })).status).toBe(403);
+  expect((await send(selected.id, { 'x-zcc-ui-send-proof': signUiSend(uiSecret, threadId, selected.id, Date.now() - 31_000) })).status).toBe(403);
+  const sent = await send(selected.id, { 'x-zcc-ui-send-proof': proof });
+  expect(sent.status, await sent.clone().text()).toBe(200);
+  expect((await send(selected.id, { 'x-zcc-ui-send-proof': proof })).status).toBe(403);
+  expect(server.ctx.hostHub.callHostOnlineRpc).toHaveBeenCalledTimes(1);
 });

@@ -313,6 +313,7 @@ export class PluginHostManager {
               command.contributedEnv ?? [],
               this.options.shellEnv?.() ?? {},
             ),
+            ...(command.projectRoot !== undefined ? { projectRoot: command.projectRoot } : {}),
           })
         ) {
           worker.pending.delete(command.callId);

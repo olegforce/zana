@@ -13,6 +13,8 @@ import { handleProjectSourcesApi } from './project-sources-api.js';
 import { resolveProjectHost } from './project-host.js';
 import { mutateProjectFile } from './project-file-mutations.js';
 import { invalidateHarnessModelCatalog } from '@zana-ai/zcc-host-daemon/harness/registry';
+import { redactToolInput } from '@zana-ai/zcc-host-daemon/harness/claude/hooks';
+import { productServerHasDesktopCredential } from './cli-agent-ops.js';
 import { assertPlanRevision, planImplementationMode, planImplementationPrompt } from '../services/threads/conversation-plan-implementation.js';
 import { readPluginHttpBody, PluginHttpBodyTooLarge } from './plugin-http-body.js';
 import { conversationHistoryAsync } from '../services/threads/conversation-history.js';
@@ -97,7 +99,7 @@ import { openThreadFilePreview, previewFileDepsFromContext } from '../services/t
 import { isSqliteBusy, retrySqliteTransaction } from '@zana-ai/zcc-db';
 import { openThreadTerminal, openThreadTerminalDepsFromContext } from '../services/threads/open-thread-terminal.js';
 import { createMenubarThreadSource, MENUBAR_THREAD_LIMIT } from '../services/threads/menubar-thread-source.js';
-import { listThreadProviders, bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
+import { listThreadProviders, bridgeLaunchForProvider, getThreadProvider, canonicalThreadProviderId } from '../services/threads/thread-provider-catalog.js';
 import { resolveHarnessWorkspacePath } from '../services/threads/remote-tool-proxy.js';
 import { toRemoteStartPathHost } from '../services/hosts/host-public.js';
 import {
@@ -496,7 +498,7 @@ export async function handleProductHttp(
       return true;
     }
     if (path === '/api/v1/system/instance' && method === 'GET') {
-      sendJson(response, 200, { instanceId: ctx.productInstanceId, sharedProductServices: Boolean(process.env.ZCC_PRODUCT_SERVER_CREDENTIAL), projectSources: true, connectMachines: usesConnect(ctx) });
+      sendJson(response, 200, { instanceId: ctx.productInstanceId, sharedProductServices: productServerHasDesktopCredential(), projectSources: true, connectMachines: usesConnect(ctx) });
       return true;
     }
     if (path === '/api/v1/health' && (method === 'GET' || method === 'HEAD')) {
@@ -1902,8 +1904,15 @@ export async function handleProductHttp(
 
     const nextTurnSend = routeParams(path, '/api/v1/threads/:id/next-turn/:itemId/send');
     if (nextTurnSend && method === 'POST') {
+      const overriddenBy = ctx.verifyUiSend(
+        headerValue(request.headers, 'x-zcc-ui-send-proof'), nextTurnSend.id, nextTurnSend.itemId
+      ) ? 'desktop-ui' : null;
+      if (overriddenBy === null) {
+        sendJson(response, 403, { error: 'invalid_caller_credential', message: 'Send now requires a verified desktop UI action' });
+        return true;
+      }
       try {
-        await sendHeldConversationMessage(ctx, nextTurnSend.id, nextTurnSend.itemId);
+        await sendHeldConversationMessage(ctx, nextTurnSend.id, nextTurnSend.itemId, overriddenBy);
         sendJson(response, 200, { ok: true });
       } catch (error) {
         if (error instanceof ThreadCreateError) {
@@ -3038,6 +3047,24 @@ export async function handleProductHttp(
       return true;
     }
 
+    const pluginTabAvailability = path.match(/^\/api\/v1\/plugins\/([^/]+)\/project-tab-availability$/);
+    if (pluginTabAvailability && method === 'POST') {
+      const pluginId = decodeURIComponent(pluginTabAvailability[1]!);
+      if (!ctx.plugins) {
+        sendJson(response, 503, { ok: false, code: 'plugin-host-unavailable', message: 'plugin host is unavailable' });
+        return true;
+      }
+      const body = (await readJsonBody(request)) as { tabId?: unknown; projectId?: unknown };
+      const tabId = typeof body?.tabId === 'string' ? body.tabId.trim() : '';
+      const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : '';
+      if (!tabId || !projectId) {
+        sendJson(response, 400, { ok: false, code: 'invalid-request', message: 'tabId and projectId are required' });
+        return true;
+      }
+      sendJson(response, 200, await ctx.plugins.evaluateProjectTabAvailability({ pluginId, tabId, projectId }));
+      return true;
+    }
+
     const pluginHttp = path.match(/^\/api\/v1\/plugins\/([^/]+)\/http(\/.*)$/);
     if (pluginHttp && ctx.plugins) {
       const pluginId = decodeURIComponent(pluginHttp[1]!);
@@ -3386,6 +3413,34 @@ export async function handleProductHttp(
       } catch (error) {
         sendHostFailure(response, error);
       }
+      return true;
+    }
+
+    const terminalToolPolicy = routeParams(path, '/api/v1/terminals/:id/tool-policy');
+    if (terminalToolPolicy && method === 'POST') {
+      const session = requireTerminalSession(ctx, terminalToolPolicy.id);
+      if (!session) {
+        sendJson(response, 404, { ok: false, code: 'unknown-session', message: 'terminal is not registered' });
+        return true;
+      }
+      if (!ctx.plugins) {
+        sendJson(response, 200, { action: 'deny', reason: 'plugin service is unavailable' });
+        return true;
+      }
+      const body = (await readJsonBody(request, 256 * 1024)) as { invocationId?: unknown; toolName?: unknown; input?: unknown };
+      if (typeof body?.invocationId !== 'string' || !body.invocationId || typeof body?.toolName !== 'string' || !body.toolName) {
+        sendJson(response, 400, { ok: false, code: 'invalid-tool-policy-request', message: 'invocationId and toolName are required' });
+        return true;
+      }
+      const policy = await ctx.plugins.decideToolPolicy({
+        invocationId: body.invocationId,
+        threadId: session.id,
+        projectId: session.projectId,
+        providerId: canonicalThreadProviderId(session.profile),
+        toolName: body.toolName,
+        input: redactToolInput(body.input)
+      });
+      sendJson(response, 200, policy);
       return true;
     }
 

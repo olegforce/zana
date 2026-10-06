@@ -1,6 +1,77 @@
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import type { LaunchProfileId } from '@zana-ai/zcc-domain/product';
 import type { ProviderCapabilities } from '@zana-ai/zcc-domain/launch-provider';
+import { randomUUID } from 'node:crypto';
+
+export type NativeToolHookState = 'announced' | 'awaiting-decision' | 'allowed' | 'denied' | 'executing' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface NativeToolHookEvent {
+  invocationId: string;
+  state: NativeToolHookState;
+  toolName: string;
+  input: Record<string, unknown>;
+  timestamp: number;
+}
+
+export interface NativeToolHookBridge {
+  enabled?: boolean;
+  before?: (event: NativeToolHookEvent) => boolean | Promise<boolean>;
+  after?: (event: NativeToolHookEvent) => void | Promise<void>;
+  emit?: (event: NativeToolHookEvent) => void | Promise<void>;
+}
+
+export function redactToolInput(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const seen = new WeakSet<object>();
+  let visited = 0;
+  const redact = (value: unknown, depth: number): unknown => {
+    if (typeof value === 'string') return value.length > 16_384 ? '[REDACTED]' : value;
+    if (!value || typeof value !== 'object') return value;
+    if (seen.has(value) || depth > 20 || ++visited > 1_000) return '[REDACTED]';
+    seen.add(value);
+    if (Array.isArray(value)) return value.slice(0, 1_000).map((item) => redact(item, depth + 1));
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 1_000)) {
+      out[key] = /token|secret|password|key|credential/i.test(key) ? '[REDACTED]' : redact(item, depth + 1);
+    }
+    return out;
+  };
+  return redact(input, 0) as Record<string, unknown>;
+}
+
+/** Execute a capability-gated native tool with one ordered, terminal lifecycle. */
+export async function executeNativeToolHook<T>(
+  toolName: string,
+  input: unknown,
+  execute: () => Promise<T>,
+  bridge: NativeToolHookBridge = {}
+): Promise<T> {
+  if (!bridge.enabled) return execute();
+  const invocationId = randomUUID();
+  const payload = redactToolInput(input);
+  const emit = async (state: NativeToolHookState) => {
+    await bridge.emit?.({ invocationId, state, toolName, input: payload, timestamp: Date.now() });
+  };
+  await emit('announced');
+  await emit('awaiting-decision');
+  let allowed = true;
+  try { allowed = bridge.before ? await bridge.before({ invocationId, state: 'awaiting-decision', toolName, input: payload, timestamp: Date.now() }) : true; }
+  catch { allowed = false; }
+  if (!allowed) { await emit('denied'); throw new Error(`native tool denied: ${toolName}`); }
+  await emit('allowed');
+  await emit('executing');
+  try {
+    const result = await execute();
+    await emit('succeeded');
+    await bridge.after?.({ invocationId, state: 'succeeded', toolName, input: payload, timestamp: Date.now() });
+    return result;
+  } catch (error) {
+    const state: NativeToolHookState = error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'failed';
+    await emit(state);
+    await bridge.after?.({ invocationId, state, toolName, input: payload, timestamp: Date.now() });
+    throw error;
+  }
+}
 
 export interface ClaudeLifecycleCallbacks {
   readonly stop?: string;
@@ -10,6 +81,7 @@ export interface ClaudeLifecycleCallbacks {
   readonly toolActivity?: string;
   readonly overseer?: string;
   readonly contentScreen?: string;
+  readonly nativeTool?: string;
 }
 
 export interface ClaudeLifecycleContribution {
@@ -29,6 +101,7 @@ export interface ClaudeHookSettings {
   readonly overseerCurlMaxSec?: number;
   readonly contentScreen?: boolean;
   readonly contentScreenCurlMaxSec?: number;
+  readonly nativeTool?: boolean;
   readonly autoMode?: Record<string, unknown>;
 }
 
@@ -172,6 +245,26 @@ export function buildClaudeHookSettings(opts: ClaudeHookSettings): string {
     else hooks.PostToolUse = [contentScreenHook];
   }
 
+  if (opts.nativeTool) {
+    // OBL-004: this must actually BLOCK, so unlike overseer/contentScreen (which
+    // discard the curl reply and always exit 0) we relay the policy route's
+    // `hookSpecificOutput.permissionDecision` JSON verbatim to stdout — Claude's
+    // own PreToolUse contract. FAIL CLOSED: an empty/missing reply (unset env,
+    // timeout, transport failure) synthesizes an explicit `deny` ourselves,
+    // matching the Codex-side fix (see codex/provider.ts hookArgs).
+    const nativeToolCmd =
+      'ZCC_IN=$(cat); ' +
+      'OUT=""; ' +
+      '[ -n "$ZCC_NATIVETOOL_URL" ] && ' +
+      'OUT=$(printf "%s" "$ZCC_IN" | curl -s -m 5 -X POST --data-binary @- "$ZCC_NATIVETOOL_URL" 2>/dev/null); ' +
+      'if [ -z "$OUT" ]; then ' +
+      'echo \'{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"native tool policy unreachable"}}\'; ' +
+      'else printf "%s" "$OUT"; fi; exit 0';
+    const nativeToolHook = { matcher: '', hooks: [{ type: 'command', command: nativeToolCmd }] };
+    if (Array.isArray(hooks.PreToolUse)) hooks.PreToolUse.push(nativeToolHook);
+    else hooks.PreToolUse = [nativeToolHook];
+  }
+
   const settings: Record<string, unknown> = { hooks };
   if (opts.autoMode) settings.autoMode = opts.autoMode;
   return JSON.stringify(settings);
@@ -224,10 +317,14 @@ export function renderClaudeLifecycle(input: {
     !input.headless &&
     input.caps.acceptsPermissionMode;
   const contentScreen = !remote && !!input.callbacks.contentScreen && contentScreenMode !== 'off';
+  // Unlike overseer/contentScreen/toolActivity, native-tool policy is a
+  // security-blocking gate (OBL-004) rather than an advisory ping — it stays
+  // live for both local and remote launches, same as notify/subagent.
+  const nativeTool = !!input.callbacks.nativeTool;
   const autoMode = !remote && input.autoModeActive
     ? buildClaudeAutoModeSettings(input.config)
     : undefined;
-  const wantsAnyHook = stop || notify || firstPrompt || subagents || toolActivity || overseer || contentScreen;
+  const wantsAnyHook = stop || notify || firstPrompt || subagents || toolActivity || overseer || contentScreen || nativeTool;
   const settings = wantsAnyHook || autoMode
     ? buildClaudeHookSettings({
     stop,
@@ -240,6 +337,7 @@ export function renderClaudeLifecycle(input: {
     overseerCurlMaxSec:
       overseerMode !== 'off' && input.config.overseerDeepTierEnabled === true ? 28 : 10,
     contentScreen,
+    nativeTool,
     autoMode
       })
     : undefined;
@@ -258,5 +356,6 @@ export function renderClaudeLifecycle(input: {
   if (toolActivity && input.callbacks.toolActivity) env.ZCC_TOOLACTIVITY_URL = input.callbacks.toolActivity;
   if (overseer && input.callbacks.overseer) env.ZCC_OVERSEER_URL = input.callbacks.overseer;
   if (contentScreen && input.callbacks.contentScreen) env.ZCC_CONTENTSCREEN_URL = input.callbacks.contentScreen;
+  if (nativeTool && input.callbacks.nativeTool) env.ZCC_NATIVETOOL_URL = input.callbacks.nativeTool;
   return { args: settings ? ['--settings', settings] : [], env };
 }

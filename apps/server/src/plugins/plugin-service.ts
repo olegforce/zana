@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, watch } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { resolveZccDataDir } from '@zana-ai/zcc-host-daemon/host-config';
@@ -95,7 +95,10 @@ import type {
   PluginCliExecutionResult,
   PluginHttpRequest,
   PluginHttpResponse,
-  PluginThreadEvent
+  PluginThreadEvent,
+  PluginDispatchAdmissionRequest,
+  PluginToolPolicyRequest,
+  PluginToolPolicyDecision
 } from '@zana-ai/zcc-plugin-sdk/server';
 import type { ToolCallResponse } from '@zana-ai/zcc-domain/thread-runtime';
 import {
@@ -181,9 +184,16 @@ export interface PluginService {
     pluginId: string;
     itemId: string;
   }): Promise<{ ok: true; context: string } | { ok: false; error: string }>;
+  evaluateProjectTabAvailability(args: {
+    pluginId: string;
+    tabId: string;
+    projectId: string;
+  }): Promise<import('@zana-ai/zcc-domain').ProjectTabAvailabilityContract>;
   runCliCommand(id: string, argv: string[], context?: { projectId?: string; threadId?: string; cwd?: string }): Promise<PluginCliExecutionResult>;
   dispatchHttp(pluginId: string, request: PluginHttpRequest): Promise<PluginHttpResponse>;
   emitThreadEvent(event: PluginThreadEvent): Promise<void>;
+  admitDispatch(request: PluginDispatchAdmissionRequest): Promise<import('@zana-ai/zcc-domain').DispatchAdmissionDecision>;
+  decideToolPolicy(request: PluginToolPolicyRequest): Promise<PluginToolPolicyDecision>;
   readLogs(id: string, tail?: number): Promise<string[]>;
   /** Rewrite injected-skill-roots.json for the current bundled-skill opt-outs. */
   syncInjectedSkillRoots(): Promise<void>;
@@ -288,6 +298,22 @@ export interface PluginServiceOptions {
     signal?: AbortSignal;
   }) => Promise<import('@zana-ai/zcc-plugin-sdk/server').PluginInteractionResult>;
   interruptPluginInteractions?: (pluginId: string) => void;
+  getInteraction?: (args: { pluginId: string; interactionId: string }) => Promise<
+    import('@zana-ai/zcc-domain').InteractionContract | null
+  >;
+  upsertInteraction?: (args: {
+    pluginId: string;
+    projectId: string;
+    correlationId: string;
+    kind: string;
+    payload: import('@zana-ai/zcc-domain').ContractJson;
+  }) => Promise<import('@zana-ai/zcc-domain').InteractionContract>;
+  acknowledgeInteraction?: (
+    args: { pluginId: string } & import('@zana-ai/zcc-domain').InteractionAcknowledgement
+  ) => Promise<import('@zana-ai/zcc-domain').InteractionContract>;
+  cancelInteraction?: (
+    args: { pluginId: string } & import('@zana-ai/zcc-domain').InteractionAcknowledgement
+  ) => Promise<import('@zana-ai/zcc-domain').InteractionContract>;
   spawnThread?: (args: import('@zana-ai/zcc-plugin-sdk/server').PluginSdkThreadSpawnArgs & { pluginId: string }) => Promise<{ id: string }>;
   getThread?: (args: { pluginId: string; threadId: string }) => Promise<
     import('@zana-ai/zcc-plugin-sdk/server').PluginSdkThreadSummary | null
@@ -369,6 +395,8 @@ export interface PluginServiceOptions {
   }) => Promise<import('@zana-ai/zcc-domain/thread-runtime').JsonObject>;
   pushInbox?: (args: { pluginId: string; projectId: string; comments: string }) => Promise<{ id: string }>;
   listProjects?: (args: { pluginId: string }) => Promise<Array<{ id: string; name: string; path?: string; icon?: import('@zana-ai/zcc-domain').ProjectIcon }>>;
+  registerPersonas?: (pluginId: string, personas: readonly import('@zana-ai/zcc-domain/product').PersonaInput[]) => void;
+  registerTeams?: (pluginId: string, teams: readonly import('@zana-ai/zcc-domain/product').TeamInput[]) => void;
   productContext?: import('../http/product-context.js').ProductHttpContext;
   /** Shared live host-artifact map; omitted tests get a private registry. */
   pluginHostArtifacts?: PluginHostArtifactRegistry;
@@ -488,6 +516,10 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
   const servicesRegistry = createPluginServicesRegistry();
   const promotionQueue = createSerializedTransactionQueue();
   const lifecycleEpochs = new Map<string, number>();
+  // OBL-004: retry with the same invocationId must return the same decision rather
+  // than re-invoking plugin handlers. Map insertion order supplies bounded FIFO eviction.
+  const toolPolicyDecisions = new Map<string, Promise<PluginToolPolicyDecision>>();
+  const TOOL_POLICY_DECISIONS_MAX = 500;
 
   const lifecycleEpoch = (id: string): number => lifecycleEpochs.get(id) ?? 0;
   const bumpLifecycleEpoch = (id: string): void => {
@@ -652,6 +684,29 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       return { ok: true, context };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async function evaluateProjectTabAvailability(args: {
+    pluginId: string;
+    tabId: string;
+    projectId: string;
+  }): Promise<import('@zana-ai/zcc-domain').ProjectTabAvailabilityContract> {
+    const livePlugin = live.get(args.pluginId);
+    const registration = livePlugin?.handle?.projectTabAvailability.find((row) => row.tabId === args.tabId);
+    if (!registration) return { available: true };
+    try {
+      const result = await withDeadline(
+        Promise.resolve(registration.evaluate({ projectId: args.projectId })),
+        PLUGIN_MENTION_RESOLVE_TIMEOUT_MS,
+        `project tab availability ${args.pluginId}/${args.tabId}`
+      );
+      return { available: Boolean(result?.available), ...(result?.reason ? { reason: result.reason } : {}) };
+    } catch (error) {
+      return {
+        available: false,
+        reason: error instanceof Error ? error.message : String(error)
+      };
     }
   }
 
@@ -828,6 +883,9 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     hostArtifacts.delete(id);
     current.unavailableProviders?.forEach((provider) => provider.unregister());
     await current.handle?.dispose();
+    // A disposed plugin's contributed personas/teams must not outlive it as zombies.
+    opts.registerPersonas?.(id, []);
+    opts.registerTeams?.(id, []);
   }
 
   async function loadOne(row: InstalledPluginRow): Promise<void> {
@@ -920,6 +978,10 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       providerUnavailableReason: hostArtifactProblem,
       requestPluginInteraction: opts.requestPluginInteraction,
       interruptPluginInteractions: opts.interruptPluginInteractions,
+      getInteraction: opts.getInteraction,
+      upsertInteraction: opts.upsertInteraction,
+      acknowledgeInteraction: opts.acknowledgeInteraction,
+      cancelInteraction: opts.cancelInteraction,
       spawnThread: opts.spawnThread,
       getThread: opts.getThread,
       listThreadEvents: opts.listThreadEvents,
@@ -941,13 +1003,25 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       updatePluginMetadata: opts.updatePluginMetadata,
       pushInbox: opts.pushInbox,
       listProjects: opts.listProjects,
+      registerPersonas: opts.registerPersonas,
+      registerTeams: opts.registerTeams,
       productContext: opts.productContext,
-      hostCall: opts.productContext ? async (method, input, hostId, signal, timeoutMs) => {
+       hostCall: opts.productContext ? async (method, input, hostId, signal, timeoutMs, projectId) => {
         // Resolve only this plugin's active generation; renderer input cannot
         // choose an artifact or invoke another plugin's host entry.
         const artifact = hostArtifacts.get(row.id);
         if (!artifact || artifact.generation !== hostArtifact?.generation) throw new Error('Plugin host generation is unavailable');
-        return callPluginHostRpc(opts.productContext!, { pluginId: row.id, artifact, method, input, hostId, signal, timeoutMs });
+         let projectRoot: string | undefined;
+         if (projectId) {
+           const project = opts.productContext!.projects.list().find((candidate) => candidate.id === projectId);
+           if (!project) throw new Error('unrecognized projectId');
+           try {
+             projectRoot = realpathSync(project.path);
+           } catch {
+             throw new Error('project root is unavailable');
+           }
+         }
+         return callPluginHostRpc(opts.productContext!, { pluginId: row.id, artifact, method, input, hostId, signal, timeoutMs, projectRoot });
       } : undefined,
       dataDir: opts.dataDir,
       onNeedsConfiguration: (message) => {
@@ -1713,6 +1787,7 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
     cliContributions,
     mentionProviders,
     resolveMention,
+    evaluateProjectTabAvailability,
     async runCliCommand(id, argv, context) {
       const byId = live.get(id)?.handle;
       if (byId) return runPluginCli(byId, argv, context);
@@ -1736,6 +1811,75 @@ export function createPluginService(opts: PluginServiceOptions): PluginService {
       await Promise.all(
         [...live.values()].map((current) => current.handle?.emitThreadEvent(event) ?? Promise.resolve())
       );
+    },
+    async admitDispatch(request) {
+      const reviews = [...live.values()].flatMap((current) =>
+        (current.handle?.dispatchAdmissionHandlers ?? []).map(async (handler) => {
+          try {
+            const decision: unknown = await handler(request);
+            if (!decision || typeof decision !== 'object') throw new Error('invalid dispatch admission decision');
+            const result = decision as Record<string, unknown>;
+            if (result.action === 'reject' && typeof result.message === 'string') {
+              return { action: 'reject', message: result.message, pluginId: current.row.id } as const;
+            }
+            if (result.action === 'wait' && typeof result.reason === 'string' && typeof result.overrideable === 'boolean') {
+              return { action: 'wait', reason: result.reason, overrideable: result.overrideable, pluginId: current.row.id } as const;
+            }
+            if (result.action === 'proceed') return { action: 'proceed' } as const;
+            throw new Error('invalid dispatch admission decision');
+          } catch (error) {
+            console.warn(`[plugins] dispatch admission ${current.row.id} failed`, error);
+            return { action: 'reject', message: `Plugin dispatch admission unavailable: ${current.row.id}` } as const;
+          }
+        })
+      );
+      try {
+        // One deadline covers the whole fan-out, including any handler that never settles.
+        // Never proceed or return an overrideable wait without every veto reviewed.
+        const decisions = await withDeadline(Promise.all(reviews), 9_000, 'dispatch admission');
+        return decisions.find((decision) => decision.action === 'reject')
+          ?? decisions.find((decision) => decision.action === 'wait')
+          ?? { action: 'proceed' };
+      } catch {
+        return { action: 'reject', message: 'Plugin dispatch admission timed out' };
+      }
+    },
+    async decideToolPolicy(request) {
+      const cached = toolPolicyDecisions.get(request.invocationId);
+      if (cached) return cached;
+      const decision = (async () => {
+        for (const current of live.values()) {
+          for (const handler of current.handle?.toolPolicyHandlers ?? []) {
+            try {
+              const decision: unknown = await withDeadline(
+                Promise.resolve().then(() => handler(request)),
+                PLUGIN_MENTION_RESOLVE_TIMEOUT_MS,
+                `tool policy ${current.row.id}`
+              );
+              if (!decision || typeof decision !== 'object') throw new Error('invalid tool policy decision');
+              const result = decision as Record<string, unknown>;
+              if (result.action === 'deny' && typeof result.reason === 'string') {
+                return { action: 'deny', reason: result.reason } as const;
+              }
+              if (result.action !== 'allow') throw new Error('invalid tool policy decision');
+            } catch (error) {
+              console.warn(`[plugins] tool policy ${current.row.id} failed`, error);
+              return { action: 'deny', reason: `Plugin tool policy unavailable: ${current.row.id}` } as const;
+            }
+          }
+        }
+        return { action: 'allow' } as const;
+      })();
+      if (toolPolicyDecisions.size >= TOOL_POLICY_DECISIONS_MAX) {
+        toolPolicyDecisions.delete(toolPolicyDecisions.keys().next().value!);
+      }
+      toolPolicyDecisions.set(request.invocationId, decision);
+      try {
+        return await decision;
+      } catch (error) {
+        toolPolicyDecisions.delete(request.invocationId);
+        throw error;
+      }
     },
     async readLogs(id, tail = 100) {
       return readPluginLogTail(opts.dataDir, id, tail);
