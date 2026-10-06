@@ -2,6 +2,22 @@ import { test, expect } from './fixtures/app.js';
 
 test('AI Harness makes setup readable and preserves keyboard, enablement, and binary settings', async ({ app }, testInfo) => {
   const win = app.window;
+  // The layout fixture must not depend on a developer's installed Codex or
+  // signed-in model catalogue. Keep the real Settings request/search flow.
+  let codexModelRequests = 0;
+  await win.route('**/api/v1/system/execution-options*', async (route) => {
+    const codex = new URL(route.request().url()).searchParams.get('providerId') === 'codex';
+    if (codex) codexModelRequests += 1;
+    await route.fulfill({ json: {
+      providers: [{ id: 'codex', displayName: 'Codex', available: true,
+        composerActions: [], capabilities: { permissionModes: ['full'] } }],
+      models: codex ? [{ id: 'layout-codex-model', model: 'layout-codex-model',
+        displayName: 'Layout Codex model', isDefault: true,
+        supportedReasoningEfforts: [], defaultReasoningEffort: null }] : [],
+      selectedOnlyModels: [], permissionCeiling: 'full', modelLoadError: null
+    } });
+  });
+  await win.reload();
   await win.getByRole('link', { name: 'Settings', exact: true }).click();
   await win.getByTestId('settings-nav-harness').click();
   const panel = win.locator('.harness-settings');
@@ -53,6 +69,11 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
   await expect(modernPanel.locator('.thread-provider-id')).toHaveCount(0);
   await provider.click();
   await expect(modernPanel.locator('.thread-provider-id')).toHaveText('provider-codex');
+  const loadModels = modernPanel.getByRole('button', { name: /^(Load|Reload)$/ });
+  await expect(loadModels).toBeEnabled({ timeout: 30_000 });
+  const requestsBeforeLoad = codexModelRequests;
+  await loadModels.click();
+  await expect.poll(() => codexModelRequests).toBeGreaterThan(requestsBeforeLoad);
   const search = modernPanel.getByRole('searchbox', { name: 'Search Codex models' });
   await expect(search).toBeVisible({ timeout: 30_000 });
   const modelId = await modernPanel.locator('.thread-provider-models code').first().innerText();
