@@ -6,7 +6,7 @@ import { archiveConversationThread, createConversationThread, createEnvironment,
 import { turnScope } from '@zana-ai/zcc-domain/thread-runtime';
 import { EMPTY_THREAD_ACTIVITY } from '@zana-ai/zcc-thread-view';
 import { startProductServer, type ProductServer } from './product-server.js';
-import { HostUnavailableError } from './host-hub.js';
+import { AmbiguousHostError, HostUnavailableError } from './host-hub.js';
 import { registerThreadProvider } from '../services/threads/thread-provider-catalog.js';
 
 let server: ProductServer | null = null;
@@ -1758,7 +1758,7 @@ describe('product HTTP', () => {
 });
 
 describe('product HTTP project clone hostId', () => {
-  it('omits hostId when cloning onto the primary host', async () => {
+  it.each([false, true])('clones onto the primary host with another machine connected: %s', async (withSecondary) => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-clone-primary-'));
     writeFileSync(join(dataDir, 'projects.json'), JSON.stringify({ version: 1, projects: [] }));
     writeFileSync(
@@ -1776,8 +1776,15 @@ describe('product HTTP project clone hostId', () => {
     });
     expect(host.isPrimary).toBe(true);
     const clonedPath = mkdtempSync(join(tmpdir(), 'zcc-clone-primary-repo-'));
-    server.ctx.hostHub.connectedHostIds = () => [host.id];
-    server.ctx.hostHub.resolveHostId = () => host.id;
+    const secondary = withSecondary ? upsertHost(server.ctx.db, {
+      name: 'buildbox', hostKeyHash: 'r'.repeat(64), isPrimary: false
+    }) : undefined;
+    server.ctx.hostHub.connectedHostIds = () => secondary ? [secondary.id, host.id] : [host.id];
+    const resolve = vi.fn((id?: string) => {
+      if (!id && secondary) throw new AmbiguousHostError();
+      return id ?? host.id;
+    });
+    server.ctx.hostHub.resolveHostId = resolve;
     server.ctx.hostHub.callHostOnlineRpc = vi.fn(async () => ({
       path: clonedPath,
       gitRemoteUrl: 'https://github.com/example/demo.git'
@@ -1792,6 +1799,34 @@ describe('product HTTP project clone hostId', () => {
     const body = await response.json() as { project: { path: string; hostId?: string } };
     expect(body.project.path).toBe(realpathSync(clonedPath));
     expect(body.project.hostId).toBeUndefined();
+    expect(resolve).toHaveBeenCalledWith(host.id);
+    expect(server.ctx.hostHub.callHostOnlineRpc).toHaveBeenCalledWith(expect.objectContaining({ hostId: host.id }));
+  });
+
+  it.each([false, true])('does not clone on a secondary when the primary is unavailable (registered: %s)', async (registered) => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-clone-primary-offline-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    if (registered) upsertHost(server.ctx.db, {
+      id: 'primary', name: 'laptop', hostKeyHash: 'p'.repeat(64), isPrimary: true
+    });
+    upsertHost(server.ctx.db, { id: 'secondary', name: 'buildbox', hostKeyHash: 'r'.repeat(64), isPrimary: false });
+    const resolve = vi.fn((id?: string) => {
+      if (id === 'primary') throw new HostUnavailableError('Primary offline');
+      return id ?? 'secondary';
+    });
+    server.ctx.hostHub.resolveHostId = resolve;
+    const rpc = vi.fn();
+    server.ctx.hostHub.callHostOnlineRpc = rpc;
+    const response = await fetch(`${server.url}api/v1/projects/clone`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://github.com/example/demo.git' })
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'host-unavailable' });
+    if (registered) expect(resolve).toHaveBeenCalledWith('primary');
+    else expect(resolve).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(server.ctx.projects.list()).toEqual([]);
   });
 
   it('persists hostId when cloning onto a non-primary host', async () => {
@@ -1819,7 +1854,8 @@ describe('product HTTP project clone hostId', () => {
     const clonedPath = join(dataDir, 'remote-checkout', 'demo');
     mkdirSync(clonedPath, { recursive: true });
     server.ctx.hostHub.connectedHostIds = () => [remote.id];
-    server.ctx.hostHub.resolveHostId = (id?: string) => id ?? remote.id;
+    const resolve = vi.fn((id?: string) => id ?? remote.id);
+    server.ctx.hostHub.resolveHostId = resolve;
     server.ctx.hostHub.callHostOnlineRpc = vi.fn(async () => ({
       path: clonedPath,
       gitRemoteUrl: 'https://github.com/example/demo.git'
@@ -1834,6 +1870,7 @@ describe('product HTTP project clone hostId', () => {
     const body = await response.json() as { project: { path: string; hostId?: string } };
     expect(body.project.path).toBe(clonedPath);
     expect(body.project.hostId).toBe(remote.id);
+    expect(resolve).toHaveBeenCalledWith(remote.id);
   });
 });
 
