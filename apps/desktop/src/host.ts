@@ -252,7 +252,7 @@ import { SchedulerManager } from '@zana-ai/zcc-server/services/scheduler/schedul
 import { GoalManager } from '@zana-ai/zcc-server/services/goals/goal-manager';
 import { FollowUpManager } from '@zana-ai/zcc-server/services/followups/followup-manager';
 import { ProjectRecordStore } from '@zana-ai/zcc-server/services/projects/project-record-store';
-import { listAllSchedules, saveSchedule, deleteSchedule } from '@zana-ai/zcc-server/services/scheduler/scheduler-store';
+import { listAllSchedules, saveSchedule, readSchedule, deleteSchedule } from '@zana-ai/zcc-server/services/scheduler/scheduler-store';
 import { validateScheduleFile } from '@zana-ai/zcc-server/services/scheduler/schedule-validation';
 import { listAllGoals, saveGoal, deleteGoal, validateGoalFile } from '@zana-ai/zcc-server/services/goals/goal-store';
 import { listAllFollowUps, saveFollowUp, deleteFollowUp, validateFollowUpFile } from '@zana-ai/zcc-server/services/followups/followup-store';
@@ -7224,7 +7224,7 @@ async function bootstrapNormal() {
         return runtimeSupervisor.projectMetadata(request);
       },
       validate: validateScheduleFile,
-      local: { list: listAllSchedules, save: saveSchedule, remove: deleteSchedule },
+      local: { list: listAllSchedules, read: readSchedule, save: saveSchedule, remove: deleteSchedule },
       log: (projectId, error) => logMainError(`schedule metadata ${projectId}`, error)
     }),
     inbox: inboxStore,
@@ -8182,6 +8182,9 @@ async function bootstrapNormal() {
     // filtering happens in the tool (route projectId, optional allProjects).
     scheduleAgentApi: {
       list: () => scheduler.list(),
+      get: (id) => scheduler.get(id),
+      update: (id, patch) => scheduler.update(id, patch),
+      reload: (id) => scheduler.reload(id),
       runNow: (id) => scheduler.runNow(id),
       setEnabled: (id, enabled) => scheduler.setEnabled(id, enabled)
     }
@@ -8539,6 +8542,18 @@ async function bootstrapNormal() {
       return { ok: true, delivered, handle: targetLabel, id: msg.id };
     },
     listSchedules: () => scheduler.list(),
+    getSchedule: async (id) => {
+      try { return { ok: true, value: scheduler.get(id) }; }
+      catch (error) { return { ok: false, code: 'GET_FAILED', message: String(error) }; }
+    },
+    reloadSchedule: async (id) => {
+      try { return { ok: true, value: await scheduler.reload(id) }; }
+      catch (error) { return { ok: false, code: 'RELOAD_FAILED', message: String(error) }; }
+    },
+    updateSchedule: async (id, patch) => {
+      try { return { ok: true, value: await scheduler.update(id, patch) }; }
+      catch (error) { return { ok: false, code: 'UPDATE_FAILED', message: String(error) }; }
+    },
     runScheduleNow: async (id) => {
       try {
         return { ok: true, value: await scheduler.runNow(id) };

@@ -4418,6 +4418,13 @@ export function toTeamSummary(t: Team): TeamSummary {
   };
 }
 
+export interface ScheduleReloadResult {
+  reloaded: boolean;
+  schedule: ScheduledTask;
+  reason?: string;
+  sessionIds?: string[];
+}
+
 export interface ScheduleUpdateInput {
   name?: string;
   description?: string;

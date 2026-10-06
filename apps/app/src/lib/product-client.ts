@@ -359,6 +359,8 @@ function httpProduct(): Pick<
       onChanged: (cb: (goals: Goal[]) => void) => subscribeProductEvent<Goal[]>('goals:changed', cb)
     } as CcApi['goals'],
     scheduler: {
+      get: async () => ({ ok: false, code: 'unavailable', message: 'Live schedule reads require the instance owner to be connected' }),
+      reload: async () => ({ ok: false, code: 'unavailable', message: 'Schedule reload requires the instance owner to be connected' }),
       list: async () => {
         const body = await apiJson<{ tasks: ScheduledTask[] }>('/scheduler');
         return body.tasks;
