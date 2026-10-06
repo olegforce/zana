@@ -322,7 +322,7 @@ export function createCommandRuntime(options: {
     listModels: options.listModels,
     providerHealth: options.providerHealth,
     homeDir: options.homeDir,
-    peerSsh: options.peerSsh,
+    peerSsh: options.peerSsh ?? createSystemPeerDaemonSsh(),
     desktopBrowserBroker: options.desktopBrowserBroker,
     verifyProviders: options.verifyProviders ?? (async () => {
       const [results, extraInstalledAgents] = await Promise.all([
@@ -1225,7 +1225,8 @@ export async function dispatchHostCommand(
         joinCode: command.joinCode,
         hostId: command.hostId,
         serverUrl: command.serverUrl,
-        serverHost,
+        serverHost: command.sshTunnel ? `ssh-${command.hostId}` : serverHost,
+        sshTunnel: command.sshTunnel,
         artifactPath: command.artifactPath
       });
     }

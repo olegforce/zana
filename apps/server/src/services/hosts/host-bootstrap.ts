@@ -17,6 +17,7 @@ import { resolveHostArtifact } from './host-artifact.js';
 import type { ProjectRecord } from '../../project-store.js';
 import type { PeerDaemonStatusResult } from '@zana-ai/zcc-contracts/host-rpc';
 import { connectInstallCommand, issueConnectHostCode, usesConnect } from './connect-enrollment.js';
+import { createHash } from 'node:crypto';
 
 const PEER_HOST_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,6 +34,12 @@ const CONNECT_WAIT_MS = 90_000;
 const CONNECT_WAIT_TICK_MS = 15_000;
 const DAEMON_UNRESPONSIVE_RE =
   /did not report connected|did not connect|service-managed daemon did not report connected/i;
+
+/** Only transport failures warrant changing the route; enrollment refusals do not. */
+export function isPeerNetworkFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /curl: \((?:5|6|7|28|35|52|56|60)\)|fetch failed|ECONNREFUSED|ECONNRESET|ENETUNREACH|ETIMEDOUT|ERR_ACCESS_DENIED|packet length too long/i.test(message);
+}
 
 export const PAIRING_DOOR_ERROR =
   'Could not reach the pairing door. Retry, or copy the SSH command.';
@@ -387,6 +394,7 @@ async function installPeer(
     hostId: string;
     serverUrl: string;
     emit: HostBootstrapListener;
+    sshTunnel?: { localPort: number; remotePort: number };
   }
 ): Promise<void> {
   const primary = requirePrimaryHost(ctx);
@@ -406,7 +414,8 @@ async function installPeer(
         joinCode: input.joinCode,
         hostId: input.hostId,
         serverUrl: input.serverUrl,
-        artifactPath: artifact.tarballPath
+        artifactPath: artifact.tarballPath,
+        ...(input.sshTunnel ? { sshTunnel: input.sshTunnel } : {})
       }
     });
     if (result.log.trim()) emitLogLines(input.emit, result.log.trim());
@@ -464,6 +473,23 @@ async function installConnectPeer(ctx: ProductHttpContext, remote: ProjectRemote
     ctx.hub.emit('hosts:changed', undefined);
     return issued.hostId;
   } catch (error) {
+    if (isPeerNetworkFailure(error)) {
+      emit({ type: 'log', text: 'Public HTTPS is unavailable on this machine; connecting through SSH…' });
+      // The authenticated primary owns the SSH connection. The forwarded port
+      // is loopback-only on both ends; the normal one-time host enrollment and
+      // host-key authentication still gate the product connection.
+      const remotePort = 20000 + createHash('sha256').update(issued.hostId).digest().readUInt32BE(0) % 40000;
+      const localPort = ctx.origins.serverPort;
+      const localCode = ctx.joinCodes.mintForHost(issued.hostId);
+      await installPeer(ctx, {
+        remote, hostId: issued.hostId, joinCode: localCode.joinCode,
+        serverUrl: `http://127.0.0.1:${remotePort}`, emit,
+        sshTunnel: { localPort, remotePort }
+      });
+      updateHostSshIdentity(ctx.db, issued.hostId, { host: remote.host, user: remote.user, proxyJump: remote.proxyJump });
+      ctx.hub.emit('hosts:changed', undefined);
+      return issued.hostId;
+    }
     const classified = classifyInstallFailure(error);
     throw new HostBootstrapError(classified.code, classified.message, connectInstallCommand(issued));
   }

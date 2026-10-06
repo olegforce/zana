@@ -47,6 +47,8 @@ describe('peer-daemon commands', () => {
       expect(cmd).toContain('/api/connect/host-installer');
       expect(cmd).toContain('umask 077');
       expect(cmd).toContain('trap');
+      expect(cmd).toContain('"$node_bin" "$f"');
+      expect(cmd).toContain('/nix/store/*-nodejs-22.*/bin/node');
       expect(cmd).not.toContain('--join-code');
       return { code: 0, stdout: 'Installed ' + connect.code };
     });
@@ -57,6 +59,23 @@ describe('peer-daemon commands', () => {
     for (const patch of [{ accountUrl: 'http://account.example' }, { accountUrl: 'https://account.example/path' }, { accountUrl: 'https://user@account.example' }, { serverId: '-flag' }, { code: 'zcde_legacy' }]) {
       await expect(peerDaemonConnectInstall(ssh, { remote, connect: { ...connect, ...patch } })).rejects.toThrow('Invalid Connect');
     }
+  });
+  it('opens the loopback-only SSH tunnel before transferring and installing the daemon', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'peer-tunnel-install-')), artifact = join(dir, 'host.tgz');
+    writeFileSync(artifact, 'artifact');
+    try {
+      const ssh = mockSsh(() => ({ code: 0 })), calls: string[] = [];
+      ssh.tunnel = async (_remote, localPort, remotePort) => { calls.push(`${localPort}:${remotePort}`); };
+      const input = { remote: { host: 'pony' }, artifactPath: artifact, serverHost: 'ssh-machine', hostId: 'machine', joinCode: 'zcde_test',
+        serverUrl: 'http://127.0.0.1:28888', sshTunnel: { localPort: 8780, remotePort: 28888 } };
+      await peerDaemonInstall(ssh, input); expect(calls).toEqual(['8780:28888']);
+      await expect(peerDaemonInstall(ssh, { ...input, serverUrl: 'https://external.example' })).rejects.toThrow('loopback');
+      await expect(peerDaemonInstall({ ...ssh, tunnel: undefined }, input)).rejects.toThrow('loopback');
+      ssh.untunnel = (_remote, localPort, remotePort) => { calls.push(`removed:${localPort}:${remotePort}`); };
+      ssh.pipeFile = async () => ({ code: 1, stdout: '', stderr: 'unpack failed' });
+      await expect(peerDaemonInstall(ssh, input)).rejects.toThrow('unpack failed');
+      expect(calls.at(-1)).toBe('removed:8780:28888');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it('refuses a flag-shaped or invalid server host', () => {
     expect(() => peerStatusCommand('-oProxyCommand=x')).toThrow(/valid hostname/);
@@ -170,7 +189,7 @@ describe('peer-daemon commands', () => {
     writeFileSync(join(oldBin, 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
     const selected = join(selectedBin, 'node');
     // The selected launcher invokes a child via env, just like a CLI shebang.
-    writeFileSync(selected, '#!/bin/sh\nif [ "$1" = -p ]; then echo 22; else /usr/bin/env node -p version; fi\n', { mode: 0o700 });
+    writeFileSync(selected, '#!/bin/sh\nif [ "$1" = -e ] || [ "$1" = -p ]; then echo 22; else /usr/bin/env node -p version; fi\n', { mode: 0o700 });
     try {
       const result = execFileSync('/bin/sh', ['-c', peerRestartCommand('fixture.test')], {
         env: { HOME: home, PATH: `${oldBin}:/usr/bin:/bin`, ZCC_NODE: selected }, encoding: 'utf8', timeout: 10000

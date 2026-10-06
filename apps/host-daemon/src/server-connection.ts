@@ -261,6 +261,7 @@ export function startEnrolledHostConnection(options: {
     options.onConnectionChange?.(false);
     socket?.close();
     previewTunnel.close();
+    runtime.peerSsh?.close?.();
     await pluginHosts.shutdown();
     adapter?.dispose();
     enrolledPty?.dispose();
