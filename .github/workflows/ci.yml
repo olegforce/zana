@@ -12,7 +12,12 @@ on:
     branches:
       - main
   # Manual trigger also runs the same required verification jobs.
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Optional comparison base for the full unpublished branch range'
+        required: false
+        type: string
 
 # A new push to a PR cancels the previous run for that PR — no point burning
 # minutes on a commit that's already superseded. main pushes use the ref so they
@@ -74,7 +79,7 @@ jobs:
       - name: Enforce changed-code coverage
         run: node scripts/ci-verification.mjs --coverage coverage/root/coverage-final.json coverage/tasks/coverage-final.json coverage/pi/coverage-final.json coverage/release/coverage-final.json
         env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+          CI_BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
 
   # Every affected seam is exercised in the built app; failures fail CI.
   # Keep model-spending live attach suites outside unattended CI.
@@ -119,7 +124,7 @@ jobs:
       - name: Build and test affected Electron boundaries
         run: xvfb-run -a node scripts/ci-verification.mjs
         env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+          CI_BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
           NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Upload Playwright report on failure

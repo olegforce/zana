@@ -8,6 +8,15 @@ import {
 import { ProviderRequestDecodeError } from "@zana-ai/zcc-provider-bridge-protocol/bridge-kit";
 
 describe("decodeCodexInteractiveRequest", () => {
+  it("ignores malformed user-input envelopes and unknown request methods", () => {
+    expect(decodeCodexInteractiveRequest({ id: 1, method: "item/tool/requestUserInput", params: {} })).toBeNull();
+    expect(decodeCodexInteractiveRequest({ id: 1, method: "unknown/request", params: {} })).toBeNull();
+  });
+  it("rejects questions that cannot be represented by the durable question schema", () => {
+    expect(() => decodeCodexInteractiveRequest({ id: 1, method: "item/tool/requestUserInput", params: {
+      threadId: "t", turnId: "turn", itemId: "item", questions: [{ id: "q", header: "Choice", question: "", isSecret: false, options: null }]
+    } })).toThrow(ProviderRequestDecodeError);
+  });
   it("maps command approval requests into pending interaction payloads", () => {
     expect(
       decodeCodexInteractiveRequest({
@@ -556,6 +565,23 @@ describe("decodeCodexInteractiveRequest", () => {
 });
 
 describe("buildCodexInteractiveResponse", () => {
+  const questionPayload = {
+    kind: "user_question" as const,
+    questions: [{ id: "q", prompt: "Choose an option", shortLabel: "Choice", multiSelect: false,
+      options: [{ value: "q:option-1", label: "First", description: "The first option" }], allowFreeText: true }]
+  };
+  const answerQuestion = (answers: Record<string, { selected: string[]; freeText: string | null }>) =>
+    buildCodexInteractiveResponse({ payload: questionPayload, resolution: { kind: "user_answer", answers } });
+
+  it("returns selected option labels when no free text was provided", () => {
+    expect(answerQuestion({ q: { selected: ["q:option-1"], freeText: null } })).toEqual({ answers: { q: { answers: ["First"] } } });
+  });
+  it("rejects a missing, empty, or unknown answer instead of sending incomplete input", () => {
+    expect(() => answerQuestion({})).toThrow("Missing answer");
+    expect(() => answerQuestion({ q: { selected: [], freeText: null } })).toThrow("is empty");
+    expect(() => answerQuestion({ q: { selected: ["unknown"], freeText: null } })).toThrow("Unknown selected option");
+  });
+
   it("maps bb command approvals back to Codex responses", () => {
     expect(
       buildCodexInteractiveResponse({

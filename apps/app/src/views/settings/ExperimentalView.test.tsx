@@ -52,8 +52,8 @@ describe('Experimental CLI Agent host catalog', () => {
       />
     );
     expect(html).toContain('CLI Agent host catalog');
-    expect(html).toContain('execution-options');
-    expect(html).toContain('local install list');
+    expect(html).toContain('live host harness list for local CLI Agents');
+    expect(html).toContain('Remote projects always use their remote host daemon');
   });
 });
 

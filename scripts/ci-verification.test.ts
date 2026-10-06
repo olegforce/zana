@@ -121,4 +121,6 @@ it('keeps the existing required CI check as an always-running gate over both job
   expect(workflow).toContain('pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage');
   expect(workflow).toContain('--config vitest.release-coverage.config.ts --coverage');
   expect(workflow).toContain('coverage/tasks/coverage-final.json coverage/pi/coverage-final.json coverage/release/coverage-final.json');
+  expect(workflow).toContain("description: 'Optional comparison base for the full unpublished branch range'");
+  expect(workflow.match(/CI_BASE_SHA: \$\{\{ inputs\.base_sha \|\| github\.event\.pull_request\.base\.sha \|\| github\.event\.before \|\| 'HEAD\^' \}\}/g)).toHaveLength(2);
 });

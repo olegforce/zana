@@ -341,6 +341,30 @@
       }
     },
     {
+      "id": "google-analytics",
+      "displayName": "Google Analytics",
+      "description": "App activity and coarse page views in Google Analytics, with a disconnect switch.",
+      "overview": "App opens, visible activity, and coarse page views in your Google Analytics 4 property. Runs independently alongside PostHog so you can compare the two.\n\n## What you get\n\n- App-open events and a visible-app activity ping every minute.\n- Initial page views and navigation between fixed sections such as Agents, Inbox, Settings, Explorer, and Library.\n- A disconnect switch and a separate switch for presence-only measurement.\n\nThe plugin is installed and enabled by default but sends nothing until a GA4 Web stream's Measurement ID and Measurement Protocol API secret are configured in plugin Settings or supplied to the product server. Disable or uninstall it at any time; an uninstall is respected on future launches.\n\nEvents use a random installation id. They never include prompts, replies, titles, paths, actual URLs, or project/thread ids. Google receives the direct network connection. Visible activity indicates an open app, not typing or an exact count of people. Measurement Protocol-only reporting has limitations; verify live events in your own GA4 Realtime report.\n",
+      "icon": {
+        "lucide": "ChartNoAxesColumn"
+      },
+      "tags": [
+        "official"
+      ],
+      "author": {
+        "name": "Zana",
+        "github": "salesforce",
+        "url": "https://github.com/salesforce/zana"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/salesforce/zana",
+          "subdir": "plugins/google-analytics",
+          "ref": "HEAD"
+        }
+      }
+    },
+    {
       "id": "harness-grok",
       "displayName": "Grok Build CLI Agent",
       "description": "CLI Agent TUI for the native grok Build coding CLI.",
@@ -624,6 +648,30 @@
         "git": {
           "url": "https://github.com/salesforce/zana",
           "subdir": "plugins/pr-monitor",
+          "ref": "HEAD"
+        }
+      }
+    },
+    {
+      "id": "prompt-library",
+      "displayName": "Prompt Library",
+      "description": "Star, search, and reuse structured prompts from thread, project, or all history.",
+      "overview": "Keep useful prompts close at hand. Search the current thread, a project, or all visible thread history, star prompts, and restore them into the composer.\n\nRestoring a prompt preserves its structured text and attachment references. Uploaded attachments reused in another project are copied into that project's storage before sending. Machine-local attachments must belong to the destination machine.\n\nPrompt Library is optional and is not installed automatically. Starred prompts are stored locally in the plugin's storage.\n",
+      "icon": {
+        "lucide": "BookMarked"
+      },
+      "tags": [
+        "official"
+      ],
+      "author": {
+        "name": "Zana",
+        "github": "salesforce",
+        "url": "https://github.com/salesforce/zana"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/salesforce/zana",
+          "subdir": "plugins/prompt-library",
           "ref": "HEAD"
         }
       }
