@@ -1,6 +1,41 @@
 import { test, expect } from './fixtures/app.js';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+test('Projects header refresh reloads out-of-band changes without an overflow menu', async ({ app, home }) => {
+  const win = app.window;
+  const path = join(home, 'refresh-project');
+  mkdirSync(path);
+  const result = await win.evaluate((dir) => window.cc.projects.add(dir), path);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.message);
+  await win.getByTestId('nav-inbox').click();
+  const rail = win.locator('.sidebar--global');
+  await expect(rail.getByRole('button', { name: 'Open refresh-project', exact: true })).toBeVisible();
+  const refresh = rail.getByRole('button', { name: 'Reload project list', exact: true });
+  await expect(refresh).toBeVisible();
+  await expect(refresh).toHaveAttribute('title', 'Refresh projects');
+  await expect(rail.getByRole('button', { name: 'Project menu', exact: true })).toHaveCount(0);
+
+  // Editing the isolated project store bypasses the usual onChanged push.
+  const projectsFile = join(home, '.zcc', 'projects.json');
+  const stored = JSON.parse(readFileSync(projectsFile, 'utf8'));
+  stored.projects.find((project: { id: string }) => project.id === result.value.id).name = 'refreshed-project';
+  writeFileSync(projectsFile, JSON.stringify(stored));
+  await rail.getByRole('button', { name: 'Organize projects', exact: true }).click();
+  await refresh.click();
+  await expect(rail.getByRole('menu', { name: 'Organize projects', exact: true })).toHaveCount(0);
+  await expect(rail.getByRole('button', { name: 'Open refreshed-project', exact: true })).toBeVisible();
+  await expect(rail.getByRole('button', { name: 'Open refresh-project', exact: true })).toHaveCount(0);
+  await expect(refresh).toBeEnabled();
+
+  await rail.getByRole('button', { name: 'Collapse Projects section' }).click();
+  await expect(refresh).toBeVisible();
+  await refresh.focus();
+  await refresh.press('Enter');
+  await expect(refresh).toBeEnabled();
+  await expect(rail.getByRole('button', { name: 'Project menu', exact: true })).toHaveCount(0);
+});
 
 test('sidebar project search, keyboard actions, and Settings stay usable in both themes', async ({ app, home }, testInfo) => {
   const win = app.window;
