@@ -377,11 +377,55 @@ describe('product HTTP', () => {
     await expect(unknown.json()).resolves.toMatchObject({ code: 'unknown-project' });
 
     rpc.mockClear();
-    const conflictingHost = await fetch(
+    server.ctx.hostHub.resolveHostId = (id) => id ?? 'host-1';
+    const foreignHost = await fetch(
       `${server.url}api/v1/system/execution-options?providerId=acp-opencode&projectId=proj-options&hostId=foreign`
     );
-    expect(conflictingHost.status).toBe(409);
-    expect(rpc).not.toHaveBeenCalled();
+    expect(foreignHost.status).toBe(200);
+    expect(rpc.mock.calls.every(([input]) => (input as { hostId?: string }).hostId === 'foreign')).toBe(true);
+    expect(JSON.stringify(rpc.mock.calls)).not.toContain(projectRoot);
+  });
+
+  it.each([
+    [true, undefined], [true, '/home/remote-user'], [false, undefined], [false, '/home/remote-user']
+  ])('discovers models on another machine without a checkout (quickAgent %s, home %s)', async (quickAgent, homeDir) => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-scratch-options-'));
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zcc-scratch-root-'));
+    writeFileSync(join(dataDir, 'projects.json'), JSON.stringify({ version: 1, projects: [{
+      id: 'scratch-options', name: quickAgent ? 'Default Project' : 'App', path: projectRoot,
+      ...(quickAgent ? { quickAgent: true } : {}), createdAt: 1, lastActiveAt: 1
+    }] }));
+    server = await startTestProductServer({ dataDir, port: 0, bindAddress: '127.0.0.1' });
+    upsertHost(server.ctx.db, { id: 'primary', name: 'Laptop', hostKeyHash: 'a'.repeat(64), isPrimary: true });
+    upsertHost(server.ctx.db, { id: 'remote', name: 'Devbox', hostKeyHash: 'b'.repeat(64), isPrimary: false, homeDir });
+    server.ctx.pluginHostArtifacts.set('provider-acp', {
+      path: '/tmp/provider-acp-host.js', digest: 'b'.repeat(64), byteLength: 12, generation: 'g1'
+    });
+    providerHandles.push(registerThreadProvider('provider-acp', {
+      id: 'acp-opencode', displayName: 'OpenCode', capabilities: {
+        supportsServiceTier: false, fork: 'checkpoint', supportsThreadArchive: false,
+        supportsThreadRename: false, permissionModes: ['full']
+      }
+    }));
+    server.ctx.hostHub.resolveHostId = (id) => id ?? 'primary';
+    const rpc = vi.fn(async (input: { command: { type: string } }) => {
+      if (input.command.type === 'provider.status') return { providers: [] };
+      if (input.command.type === 'provider.list_models') return { models: [], selectedOnlyModels: [] };
+      throw new Error(`unexpected ${input.command.type}`);
+    });
+    server.ctx.hostHub.callHostOnlineRpc = rpc;
+    const url = `${server.url}api/v1/system/execution-options?providerId=acp-opencode&projectId=scratch-options&hostId=remote`;
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    const listing = rpc.mock.calls.map(([input]) => input).find(input => input.command.type === 'provider.list_models');
+    expect(listing).toMatchObject({ hostId: 'remote', command: { type: 'provider.list_models' } });
+    expect((listing!.command as { cwd?: string }).cwd).toBe(homeDir);
+    expect(rpc.mock.calls.every(([input]) => input.hostId === 'remote')).toBe(true);
+    expect(JSON.stringify(rpc.mock.calls)).not.toContain(projectRoot);
+    server.ctx.hostHub.callHostOnlineRpc = async () => { throw new HostUnavailableError(); };
+    const offline = await fetch(url);
+    expect(offline.status).toBe(503);
+    expect(await offline.json()).toMatchObject({ code: 'host-unavailable' });
   });
 
   it('uses the bound remote host and remote workspace for execution-option discovery', async () => {

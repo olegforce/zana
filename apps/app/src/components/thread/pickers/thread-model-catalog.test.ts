@@ -9,7 +9,7 @@ import {
   threadModelCatalogForHost,
   MODEL_CATALOG_TIMEOUT_MS,
   MODEL_CATALOG_FRESH_MS,
-  recoverStaleModelCatalogs, updateModelCatalogHosts, invalidateModelCatalogs, modelDiscoveryConfigKey,
+  recoverStaleModelCatalogs, recoverUnavailableModelCatalogs, updateModelCatalogHosts, invalidateModelCatalogs, modelDiscoveryConfigKey,
   type ThreadExecutionOptionsFetcher
 } from './thread-model-catalog.js';
 
@@ -581,6 +581,78 @@ describe('thread model catalog', () => {
 });
 
 describe('automatic catalog recovery', () => {
+  it('automatically retries a missing provider and clears its error when registration returns', async () => {
+    vi.useFakeTimers();
+    let missing = true;
+    const fetcher = vi.fn(async (query) => query?.providerId && missing
+      ? { ...optionsBody(['codex'], 'stale'), models: [], modelLoadError: { providerId: 'codex', code: 'provider_unavailable' as const, detail: null } }
+      : optionsBody(['codex'], 'working'));
+    resetThreadModelCatalog(fetcher);
+    const catalog = threadModelCatalogForHost('local', 'project');
+    const unsubscribe = catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    expect(catalog.getSnapshot().byProvider.codex).toMatchObject({ models: [], modelLoadError: 'provider_unavailable' });
+    missing = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(catalog.getSnapshot().byProvider.codex).toMatchObject({ modelLoadError: null, models: [modelRow('working-model')] });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds unavailable-provider retries and rediscovers only repaired providers on roster refresh', async () => {
+    vi.useFakeTimers();
+    let repaired = false;
+    const fetcher = vi.fn(async (query) => {
+      const body = optionsBody(['codex', 'pi'], 'working');
+      body.providers[0].available = repaired;
+      body.providers[1].available = false;
+      if (!query?.providerId || (query.providerId === 'codex' && repaired)) return body;
+      return { ...body, models: [], modelLoadError: { providerId: query.providerId, code: 'provider_unavailable' as const, detail: 'Plugin unavailable' } };
+    });
+    resetThreadModelCatalog(fetcher);
+    const catalog = threadModelCatalogForHost();
+    const unsubscribe = catalog.subscribe(() => undefined);
+    await catalog.ensure();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetcher.mock.calls.filter(([query]) => query?.providerId === 'codex')).toHaveLength(4);
+    expect(fetcher.mock.calls.filter(([query]) => query?.providerId === 'pi')).toHaveLength(4);
+    repaired = true;
+    await vi.advanceTimersByTimeAsync(MODEL_CATALOG_FRESH_MS);
+    expect(catalog.getSnapshot().byProvider.codex.modelLoadError).toBeNull();
+    expect(catalog.getSnapshot().byProvider.pi.modelLoadError).toBe('provider_unavailable');
+    expect(fetcher.mock.calls.filter(([query]) => query?.providerId === 'pi')).toHaveLength(4);
+    unsubscribe();
+  });
+
+  it('recovers failed catalogs on plugin lifecycle changes while leaving healthy and offline scopes idle', async () => {
+    vi.useFakeTimers();
+    let failed = true;
+    const fetcher = vi.fn(async (query) => query?.providerId && query.projectId !== 'healthy' && failed
+      ? { ...optionsBody(['codex'], 'stale'), models: [], modelLoadError: { providerId: 'codex', code: 'provider_unavailable' as const, detail: null } }
+      : optionsBody(['codex'], 'working'));
+    resetThreadModelCatalog(fetcher);
+    updateModelCatalogHosts([{ id: 'local', status: 'connected' }, { id: 'offline', status: 'connected' }]);
+    const mounted = threadModelCatalogForHost('local', 'failed');
+    const idle = threadModelCatalogForHost('local', 'idle');
+    const healthy = threadModelCatalogForHost('local', 'healthy');
+    const offline = threadModelCatalogForHost('offline', 'failed');
+    const unsubscribers = [mounted, healthy, offline].map((catalog) => catalog.subscribe(() => undefined));
+    await Promise.all([mounted.ensure(), idle.ensure(), healthy.ensure(), offline.ensure()]);
+    updateModelCatalogHosts([{ id: 'local', status: 'connected' }, { id: 'offline', status: 'disconnected' }]);
+    fetcher.mockClear();
+    failed = false;
+    recoverUnavailableModelCatalogs();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mounted.getSnapshot().byProvider.codex.modelLoadError).toBeNull();
+    expect(fetcher.mock.calls.map(([query]) => query?.projectId)).toEqual(['failed', 'failed']);
+    await idle.ensure();
+    expect(idle.getSnapshot().byProvider.codex.modelLoadError).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    unsubscribers.forEach((unsubscribe) => unsubscribe());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('clears cached models and modes when the provider plugin becomes unavailable', async () => {
     let unavailable = false;
     resetThreadModelCatalog(async () => unavailable

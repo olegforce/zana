@@ -1,5 +1,6 @@
 import {
   recoverStaleModelCatalogs,
+  recoverUnavailableModelCatalogs,
   refreshThreadProviderModelsFromPush
 } from './components/thread/pickers/thread-model-catalog.js';
 import { ConversationHistoryDialog } from './components/history/ConversationHistoryDialog.js';
@@ -292,7 +293,10 @@ function AppShell() {
     let cancelled = false;
     void initPluginApps();
     const off = product.pluginApps.onChanged((entries) => {
-      if (!cancelled) void reconcilePluginApps(entries);
+      if (!cancelled) {
+        recoverUnavailableModelCatalogs();
+        void reconcilePluginApps(entries);
+      }
     });
     return () => {
       cancelled = true;

@@ -80,6 +80,31 @@ describe('hosts API', () => {
     });
   });
 
+  it('keeps a renamed machine name when its credentials are rotated during pairing', async () => {
+    await start();
+    const enroll = (hostId?: string) => fetch(`${server!.url}internal/hosts/enroll`, {
+      method: 'POST', headers: {
+        authorization: 'Bearer enroll-token-enroll-token-enroll', 'content-type': 'application/json'
+      }, body: JSON.stringify({ protocolVersion: HOST_RPC_PROTOCOL_VERSION,
+        hostName: 'opaque-system-hostname', instanceId: '11111111-1111-4111-8111-111111111111', hostId })
+    });
+    const initial = await enroll();
+    expect(initial.status).toBe(201);
+    const first = await initial.json() as { hostId: string; hostKey: string };
+    expect(listHosts(server!.ctx.db).find(host => host.id === first.hostId)?.name).toBe('opaque-system-hostname');
+    const renamed = await fetch(`${server!.url}api/v1/hosts/${first.hostId}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'My dev machine' })
+    });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ name: 'My dev machine' });
+    const repaired = await enroll(first.hostId);
+    expect(repaired.status).toBe(201);
+    const next = await repaired.json() as { hostId: string; hostKey: string };
+    expect(next.hostId).toBe(first.hostId);
+    expect(next.hostKey).not.toBe(first.hostKey);
+    expect(listHosts(server!.ctx.db).find(host => host.id === first.hostId)?.name).toBe('My dev machine');
+  });
+
   it('stores a default workspace path on an enrolled machine, not this Mac', async () => {
     await start();
     await fetch(`${server!.url}internal/hosts/enroll`, {
