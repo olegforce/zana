@@ -526,12 +526,14 @@ export function resetThreadModelCatalog(fetcher?: ThreadExecutionOptionsFetcher 
 
 /** Revalidate on a return from an external login/configuration edit, with a cooldown. */
 export function recoverStaleModelCatalogs(): void {
-  for (const catalog of catalogs.values()) catalog.recover();
+  // Recovery emits synchronously. Subscribers can read a catalog and move it
+  // to the end of the LRU Map, so always iterate a snapshot of the roster.
+  for (const catalog of [...catalogs.values()]) catalog.recover();
 }
 
 /** Plugin lifecycle pushes can repair a failed provider without a host reconnect. */
 export function recoverUnavailableModelCatalogs(): void {
-  for (const catalog of catalogs.values()) {
+  for (const catalog of [...catalogs.values()]) {
     if (Object.values(catalog.getSnapshot().byProvider).some((entry) => entry.modelLoadError === 'provider_unavailable')) {
       catalog.recover(true);
     }
@@ -543,7 +545,7 @@ let primaryCatalogHost: string | undefined;
 export function updateModelCatalogHosts(hosts: readonly { id: string; status: string; isPrimary?: boolean }[]): void {
   const next = new Map(hosts.map((host) => [host.id, host.status]));
   const primary = hosts.find((host) => host.isPrimary)?.id ?? hosts[0]?.id;
-  for (const catalog of catalogs.values()) {
+  for (const catalog of [...catalogs.values()]) {
     const host = catalog.getSnapshot().hostId ?? primary;
     const online = host != null && next.get(host) === 'connected';
     const reconnected = online && (knownHostStates.get(host!) !== 'connected'
@@ -561,5 +563,5 @@ export function modelDiscoveryConfigKey(config: object): string {
     .sort(([a], [b]) => a.localeCompare(b)));
 }
 export function invalidateModelCatalogs(): void {
-  for (const catalog of catalogs.values()) catalog.recover(true);
+  for (const catalog of [...catalogs.values()]) catalog.recover(true);
 }

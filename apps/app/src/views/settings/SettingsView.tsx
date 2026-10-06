@@ -88,7 +88,7 @@ export const SETTINGS_SECTIONS: Array<{
   { id: 'inbox', label: 'Inbox', icon: Inbox, desc: 'Guidance, tool trust, and PDF export', group: 'config' },
   { id: 'browser', label: 'Browsers', icon: Globe, desc: 'Import cookies into the in-app browser', group: 'config' },
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare, desc: 'Appearance, shell & tmux', group: 'config' },
-  { id: 'harness', label: 'AI Harness', icon: Bot, desc: 'Verify & enable Claude Code, Cursor, Codex & PI', group: 'config' },
+  { id: 'harness', label: 'AI Harness', icon: Bot, desc: 'Manage coding agents, model availability, and session defaults.', group: 'config' },
   { id: 'editor', label: 'Editor', icon: SquareArrowOutUpRight, desc: 'Open-in-editor & terminal buttons', group: 'config' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, desc: 'LLM micro-call prompts', group: 'config' },
   { id: 'machines', label: 'Machines', icon: Laptop, desc: 'Pair remote host daemons', group: 'remote' },
@@ -150,8 +150,8 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<SettingsTab, Array<{ id: strin
     { id: 'terminal-tmux', label: 'tmux' }
   ],
   harness: [
+    { id: 'harness-status', label: 'Installed harnesses' },
     { id: 'harness-models', label: 'Model lists' },
-    { id: 'harness-status', label: 'Install status' },
     { id: 'harness-thread', label: 'Modern' },
     { id: 'harness-legacy', label: 'CLI Agent' },
     { id: 'harness-claude', label: 'Claude Code' },
