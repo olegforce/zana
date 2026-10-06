@@ -2774,7 +2774,10 @@ export async function handleProductHttp(
         const slug = typeof body.name === 'string' && body.name.trim()
           ? body.name.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || normalized.repoName
           : normalized.repoName;
-        const hostId = ctx.hostHub.resolveHostId(typeof body.hostId === 'string' ? body.hostId : undefined);
+        // The default clone root belongs to the primary machine. Connecting
+        // another daemon must neither make local imports ambiguous nor move
+        // that local destination onto the remaining remote when primary is off.
+        const hostId = resolveProjectHost(ctx, typeof body.hostId === 'string' && body.hostId ? body.hostId : undefined);
         const targetPath = typeof body.targetPath === 'string' && isAbsolute(body.targetPath)
           ? body.targetPath
           : join(resolveCloneRoot(ctx), slug);
