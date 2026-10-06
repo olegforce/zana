@@ -1,5 +1,7 @@
-import { test, expect } from './fixtures/app.js';
+import { test, expect, isAppRendererUrl } from './fixtures/app.js';
 import type { Locator, Page } from '@playwright/test';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 async function beginDrag(page: Page, source: Locator, target: Locator, x = 0.9, y = 0.5) {
   const from = await source.boundingBox();
@@ -12,6 +14,75 @@ async function beginDrag(page: Page, source: Locator, target: Locator, x = 0.9, 
 }
 
 const nav = (page: Page, title: string) => page.getByTestId(`nav-${title.toLowerCase()}`);
+
+test.use({ e2e: true, initialConfig: { sponsorPromptDismissed: true } });
+
+test('project splits: drag views and agents in focused and dedicated project windows', async ({ app }) => {
+  const { window: page, home, electron } = app;
+  const projectName = 'Split Project';
+  const path = join(home, projectName);
+  mkdirSync(path);
+  const bin = join(path, 'agent.cjs');
+  writeFileSync(bin, `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('2.1.220 (Claude Code)'); process.exit(0); }
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`);
+  chmodSync(bin, 0o755);
+  const { projectId, sessionId } = await page.evaluate(async ({ path, bin }) => {
+    await window.cc.config.set({ claudeBinary: bin });
+    const project = await window.cc.projects.add(path);
+    if (!project.ok) throw new Error(project.message);
+    const session = await window.cc.terminals.create({
+      projectId: project.value.id, profile: 'claude', title: 'Split Agent', cols: 80, rows: 24
+    });
+    if (!session.ok) throw new Error(session.message);
+    return { projectId: project.value.id, sessionId: session.value.id };
+  }, { path, bin });
+  const heading = page.getByTestId('sidebar-projects-heading');
+  if (await heading.getAttribute('aria-expanded') === 'false') await heading.click();
+  await page.getByRole('button', { name: `Open ${projectName}`, exact: true }).click();
+
+  async function checkProjectSplits(target: Page) {
+    const rail = target.locator('.project-scoped-nav');
+    const workspace = target.getByTestId('split-workspace');
+    await expect(rail).toBeVisible();
+    await rail.getByTestId('project-nav-agents').click();
+    await beginDrag(target, rail.getByTestId('project-nav-scheduler'), workspace, 0.03, 0.03);
+    await expect(target.locator('.split-drag-overlay-label')).toHaveText('Split left');
+    await target.keyboard.press('Escape');
+    await target.mouse.up();
+    await expect(workspace).toHaveAttribute('data-split', 'false');
+    await beginDrag(target, rail.getByTestId('project-nav-terminals'), workspace);
+    await expect(target.locator('.split-drag-overlay-label')).toHaveText('Split right');
+    await target.mouse.up();
+    await expect(workspace).toHaveAttribute('data-split', 'true');
+    await expect(workspace.locator('.split-pane')).toHaveCount(2);
+    await expect(workspace.getByTestId('project-mode-pane')).toHaveCount(2);
+    const agents = workspace.locator('.split-pane').filter({ has: target.locator('[data-mode="agents"]') });
+    // The project tree sits below the mode links. Reaching this pane edge
+    // travels farther vertically than horizontally, and must still split.
+    await beginDrag(target, rail.locator('[data-kind="agent"]').filter({ hasText: 'Split Agent' }), agents, 0.1, 0.1);
+    await expect(target.locator('.split-drag-overlay-label')).toHaveText('Split left');
+    await target.mouse.up();
+    await expect(workspace.locator('.split-pane')).toHaveCount(3);
+    await expect(target).toHaveURL(new RegExp(`/projects/${projectId}/sessions/${sessionId}`));
+    await expect(rail).toBeVisible();
+    await rail.getByTestId('project-nav-explorer').click({ modifiers: ['ControlOrMeta'] });
+    await expect(workspace.locator('.split-pane')).toHaveCount(4);
+    await expect(target).toHaveURL(new RegExp(`/projects/${projectId}/explorer`));
+    await expect(rail).toBeVisible();
+  }
+
+  await checkProjectSplits(page);
+  await page.evaluate((id) => window.cc.windows.openProject(id), projectId);
+  let scoped: Page | undefined;
+  await expect.poll(() => {
+    scoped = electron.windows().find((candidate) => candidate !== page && isAppRendererUrl(candidate.url()));
+    return Boolean(scoped);
+  }).toBe(true);
+  await checkProjectSplits(scoped!);
+});
 
 test('shell splits: drag, cancel, resize, move, maximize and reload', async ({ app }, testInfo) => {
   const { window: page } = app;
