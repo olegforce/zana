@@ -50,6 +50,7 @@ test('update banner previews the offered version’s release notes before instal
     await expect(banner).toContainText('Version 9.9.9 is available.');
   } finally {
     await closeApp(app.electron);
-    rmSync(home, { recursive: true, force: true });
+    // Shutdown may finish while an owned child is completing its last write.
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
