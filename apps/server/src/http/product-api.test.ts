@@ -3087,7 +3087,9 @@ describe('async history and queue HTTP responsiveness', () => {
       const read = await fetch(`${server.url}api/v1/threads/history${query}`);
       expect(read.status).toBe(200); expect(await read.json()).toHaveProperty('rows');
     }
-    const queue = `${server.url}api/v1/threads/thread/queued-messages`;
+    const host = upsertHost(server.ctx.db, { name: 'queue host', hostKeyHash: 'q'.repeat(64) });
+    const thread = createConversationThread(server.ctx.db, { projectId: 'p', hostId: host.id, providerId: 'codex' });
+    const queue = `${server.url}api/v1/threads/${thread.id}/queued-messages`;
     expect(await (await fetch(queue)).json()).toEqual([]);
     const created = await fetch(queue, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'queued' }) });
     expect(created.status).toBe(201);

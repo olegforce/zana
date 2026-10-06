@@ -831,6 +831,7 @@ describe('automatic catalog recovery', () => {
     expect(modelDiscoveryConfigKey(initial)).toBe(modelDiscoveryConfigKey({ ...initial, theme: 'dark' }));
     expect(modelDiscoveryConfigKey(initial)).not.toBe(modelDiscoveryConfigKey({ ...initial, codexBinary: 'new' }));
     expect(modelDiscoveryConfigKey(initial)).not.toBe(modelDiscoveryConfigKey({ ...initial, harnessCodexEnabled: false }));
+    expect(modelDiscoveryConfigKey(initial)).not.toBe(modelDiscoveryConfigKey({ ...initial, providerServiceTiersDisabled: true }));
   });
 });
 

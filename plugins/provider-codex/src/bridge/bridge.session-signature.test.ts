@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,3 +109,26 @@ it("keeps an auto-reviewed session when only escalation intent changes", async (
     harness.messages.filter((message) => message.method === "session/replaced"),
   ).toEqual([]);
 }, 30_000);
+
+it.each([
+  { before: sessionOptions, after: autoAskSessionOptions, sandbox: 'workspaceWrite' },
+  { before: autoAskSessionOptions, after: sessionOptions, sandbox: 'dangerFullAccess' }
+])('refreshes $sandbox on follow-ups and steers without replacing the child', async ({ before, after, sandbox }) => {
+  const requestLogPath = join(workspaceDir, 'requests.jsonl');
+  const scriptPath = join(workspaceDir, 'script.json');
+  writeFileSync(scriptPath, JSON.stringify({ requestLogPath }));
+  vi.stubEnv('ZCC_CODEX_BRIDGE_APP_SERVER_ARGS', JSON.stringify([fakeAppServerPath, scriptPath]));
+  const requests = () => readFileSync(requestLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  harness.sendRequest(1, 'thread/start', { threadId: THREAD_ID, cwd: workspaceDir, instructionMode: 'append', options: before });
+  const started = await harness.waitForResponse(1);
+  const providerThreadId = (started.result as { providerThreadId: string }).providerThreadId;
+  harness.sendRequest(2, 'turn/start', { threadId: THREAD_ID, providerThreadId, clientRequestId: 'creq_signature2', input: [{ type: 'text', text: '/wait-for-interrupt' }], options: before });
+  expect((await harness.waitForResponse(2)).error).toBeUndefined();
+  await vi.waitFor(() => expect(harness.messages.some(message => JSON.stringify(message).includes('turn.open'))).toBe(true));
+  harness.sendRequest(3, 'turn/steer', { threadId: THREAD_ID, providerThreadId, expectedTurnId: 'turn-fx-1', clientRequestId: 'creq_signature3', input: [{ type: 'text', text: 'apply new policy' }], options: after });
+  expect((await harness.waitForResponse(3)).error).toBeUndefined();
+  expect(requests().map(request => request.method)).toContain('turn/interrupt');
+  expect(requests().filter(request => request.method === 'turn/start').at(-1).params.sandboxPolicy.type).toBe(sandbox);
+  expect(harness.messages.filter(message => message.method === 'session/replaced')).toEqual([]);
+  expect(requests().filter(request => request.method === 'initialize')).toHaveLength(1);
+});

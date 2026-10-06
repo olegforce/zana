@@ -1,4 +1,5 @@
 import { bridgeLaunchForProvider, getThreadProvider } from '../services/threads/thread-provider-catalog.js';
+import { normalizePortableAttachments } from '../services/projects/portable-attachments.js';
 import { join } from 'node:path';
 import {
   createPluginService,
@@ -246,7 +247,10 @@ export async function attachProductPluginService(
       return (await listQueuedMessages(ctx.dataDir, threadId)).map((row) => ({ id: row.id }));
     },
     createQueuedMessage: async ({ threadId, input, senderThreadId }) => {
-      const message = await createQueuedMessage(ctx.dataDir, threadId, input as never, {
+      const thread = getConversationThread(ctx.db, threadId);
+      if (!thread) throw new Error('Thread is not registered');
+      const normalized = await normalizePortableAttachments(ctx, input, thread.projectId, thread.hostId);
+      const message = await createQueuedMessage(ctx.dataDir, threadId, normalized as never, {
         senderThreadId
       });
       return { id: message.id };

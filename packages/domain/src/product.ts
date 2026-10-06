@@ -2260,6 +2260,10 @@ export interface AppConfig {
    * every report stays inline (no demotion).
    */
   feedNoiseClassifierEnabled?: boolean;
+  /** Suspend installed non-bundled plugins without changing their enabled preference. */
+  pluginSafeMode?: boolean;
+  /** Suppress non-default service tiers for this instance. */
+  providerServiceTiersDisabled?: boolean;
   /**
    * Allow terminal output to WRITE the system clipboard via OSC 52. When ON
    * (default), an OSC 52 copy escape emitted by a local or remote process
@@ -3339,6 +3343,7 @@ export interface ThreadHistoryQuery {
   offset?: number;
 }
 export interface ThreadHistoryRow {
+  matchingMessage?: { sequence:number; text:string };
   id: string;
   projectId: string;
   providerId: string;

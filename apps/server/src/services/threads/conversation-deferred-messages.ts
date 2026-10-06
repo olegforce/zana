@@ -30,7 +30,7 @@ export interface DeferredSendPayload {
   kind: 'send';
   input: unknown;
   mode: ThreadSendMode;
-  execution?: { permissionMode?: PermissionMode; model?: string; reasoningLevel?: ReasoningLevel; serviceTier?: 'default' | 'fast'; acpMode?: string };
+  execution?: { permissionMode?: PermissionMode; model?: string; reasoningLevel?: ReasoningLevel; serviceTier?: string; acpMode?: string };
   senderThreadId?: string;
 }
 
@@ -54,7 +54,7 @@ export function deferConversationSend(
     threadId: string;
     input: unknown;
     mode: ThreadSendMode;
-    execution?: { permissionMode?: PermissionMode; model?: string; reasoningLevel?: ReasoningLevel; serviceTier?: 'default' | 'fast'; acpMode?: string };
+    execution?: { permissionMode?: PermissionMode; model?: string; reasoningLevel?: ReasoningLevel; serviceTier?: string; acpMode?: string };
     senderThreadId?: string;
     sendAfter?: number | null;
     paused?: boolean;

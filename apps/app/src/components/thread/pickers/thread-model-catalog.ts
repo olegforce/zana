@@ -157,7 +157,8 @@ function createCatalog(
       id: row.id,
       displayName: row.displayName,
       permissionModes: row.capabilities?.permissionModes ?? [],
-      composerActions: composerActionsFromProvider(row.composerActions)
+      composerActions: composerActionsFromProvider(row.composerActions),
+      serviceTiers: row.serviceTiers ?? (row.capabilities?.supportsServiceTier ? [{id:'default',label:'Default'},{id:'fast',label:'Fast'}] : [])
     }));
   }
 
@@ -559,7 +560,7 @@ export function updateModelCatalogHosts(hosts: readonly { id: string; status: st
 
 /** Relevant config changes invalidate mounted and idle scopes without theme/layout churn. */
 export function modelDiscoveryConfigKey(config: object): string {
-  return JSON.stringify(Object.entries(config).filter(([key]) => /^harness.*Enabled$|Binary$/.test(key))
+  return JSON.stringify(Object.entries(config).filter(([key]) => key === 'providerServiceTiersDisabled' || /^harness.*Enabled$|Binary$/.test(key))
     .sort(([a], [b]) => a.localeCompare(b)));
 }
 export function invalidateModelCatalogs(): void {

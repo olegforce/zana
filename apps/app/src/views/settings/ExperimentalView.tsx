@@ -19,6 +19,15 @@ export function ExperimentalView({
 }) {
   return (
     <>
+      <Section title="Provider service tiers" help="Control whether providers offer non-default tiers.">
+        <CheckboxField label="Disable non-default service tiers" checked={config.providerServiceTiersDisabled ?? false}
+          help="Hide tier choices and reject non-default tier requests on this instance." onChange={v => onUpdate({providerServiceTiersDisabled:v})} />
+      </Section>
+      <Section title="Plugin recovery" help="Temporarily suspend installed plugins while diagnosing a problem.">
+        <CheckboxField label="Plugin safe mode"
+          help="Suspend non-bundled plugins and their tools. Turning this off restores plugins that were enabled. Your plugin settings are preserved."
+          checked={config.pluginSafeMode ?? false} onChange={v => onUpdate({ pluginSafeMode: v })} />
+      </Section>
       <Section
         title="Experimental features"
         help="Opt-in features under active evaluation. They’re off by default and may change or be removed. Enabling one reveals its own settings here."

@@ -1,3 +1,4 @@
+import { normalizePortableAttachments } from '../services/projects/portable-attachments.js';
 import { handlePreviewsApi } from './previews-api.js';
 import { libraryDocumentOperation } from '../services/library/library-documents.js';
 import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
@@ -66,11 +67,11 @@ import {
 } from '../services/threads/conversation-lifecycle.js';
 import { compactConversation } from '../services/threads/conversation-compact.js';
 import { closeConversationWithFollowup } from '../services/threads/thread-close-followup.js';
-import { conversationPromptHistory } from '../services/threads/conversation-prompt-history.js';
+import { conversationPromptHistory, pagedConversationPromptHistory } from '../services/threads/conversation-prompt-history.js';
 import { conversationNextTurnView } from '../services/threads/conversation-next-turn.js';
 import { dropDeferredConversationMessage } from '../services/threads/conversation-deferred-messages.js';
 import { archiveAllConversationChildren, conversationChildSummary } from '../services/threads/conversation-child-ops.js';
-import { resolveConversationMentions, searchConversationThreads } from '../services/threads/conversation-search.js';
+import { resolveConversationMentions, searchConversationThreadsWithHistory } from '../services/threads/conversation-search.js';
 import {
   addUserPlanTask,
   getDurableThreadPlanView,
@@ -584,7 +585,9 @@ export async function handleProductHttp(
 
     if (path === '/api/v1/config' && (method === 'PATCH' || method === 'POST')) {
       const patch = (await readJsonBody(request)) as Partial<AppConfig>;
+      const previousSafeMode = ctx.config.getConfig().pluginSafeMode === true;
       const config = presentAppConfig(ctx.config.setConfig(patch));
+      if (previousSafeMode !== (config.pluginSafeMode === true)) await ctx.plugins?.refreshSafeMode();
       ctx.pairingRelay?.refresh();
       ctx.hub.emit('config:changed', config);
       try {
@@ -1247,10 +1250,28 @@ export async function handleProductHttp(
       return true;
     }
 
+    if (path === '/api/v1/prompts/history' && method === 'GET') {
+      const scope = requestUrl.searchParams.get('scope') ?? 'all';
+      if (!['thread', 'project', 'all'].includes(scope)) { sendJson(response, 400, { error: 'invalid_scope' }); return true; }
+      try {
+        sendJson(response, 200, await pagedConversationPromptHistory(ctx, {
+          scope: scope as 'thread' | 'project' | 'all',
+          threadId: requestUrl.searchParams.get('threadId') ?? undefined,
+          projectId: requestUrl.searchParams.get('projectId') ?? undefined,
+          cursor: requestUrl.searchParams.get('cursor') ?? undefined,
+          query: requestUrl.searchParams.get('q') ?? undefined
+        }));
+      } catch (error) {
+        if (error instanceof ThreadCreateError) sendJson(response, error.status, { error: error.code, message: error.message });
+        else sendHostFailure(response, error);
+      }
+      return true;
+    }
+
     if (path === '/api/v1/threads/search' && method === 'GET') {
       const q = requestUrl.searchParams.get('q') ?? requestUrl.searchParams.get('query') ?? '';
       const projectId = requestUrl.searchParams.get('projectId');
-      sendJson(response, 200, searchConversationThreads(ctx, q, projectId));
+      sendJson(response, 200, await searchConversationThreadsWithHistory(ctx, q, projectId));
       return true;
     }
 
@@ -2001,7 +2022,10 @@ export async function handleProductHttp(
           : typeof body.text === 'string'
             ? [{ type: 'text', text: body.text, mentions: [] }]
             : [];
-        const message = await createQueuedMessage(ctx.dataDir, queuedList.id, input as never, {
+        const target = getConversationThread(ctx.db, queuedList.id);
+        if (!target) throw new ThreadCreateError(404,'unknown-thread','thread is not registered');
+        const normalized = await normalizePortableAttachments(ctx, input, target.projectId, target.hostId);
+        const message = await createQueuedMessage(ctx.dataDir, queuedList.id, normalized as never, {
           model: typeof body.model === 'string' ? body.model : undefined,
           senderThreadId: typeof body.senderThreadId === 'string' && body.senderThreadId.trim()
             ? body.senderThreadId.trim()
@@ -2022,11 +2046,14 @@ export async function handleProductHttp(
     if (queuedOne && method === 'PATCH') {
       try {
         const body = (await readJsonBody(request)) as { input?: unknown; expectedUpdatedAt?: unknown };
+        const target = getConversationThread(ctx.db, queuedOne.id);
+        if (!target) throw new ThreadCreateError(404,'unknown-thread','thread is not registered');
+        const normalized = await normalizePortableAttachments(ctx, body.input, target.projectId, target.hostId);
         const message = await updateQueuedMessage(
           ctx.dataDir,
           queuedOne.id,
           queuedOne.queuedMessageId,
-          (Array.isArray(body.input) ? body.input : []) as never,
+          (Array.isArray(normalized) ? normalized : []) as never,
           typeof body.expectedUpdatedAt === 'number' ? body.expectedUpdatedAt : 0
         );
         sendJson(response, 200, message);
@@ -2126,7 +2153,7 @@ export async function handleProductHttp(
             ? body.permissionMode : undefined,
           model: typeof body.model === 'string' ? body.model : undefined,
           reasoningLevel: parseReasoningLevel(body.reasoningLevel),
-          serviceTier: body.serviceTier === 'default' || body.serviceTier === 'fast' ? body.serviceTier : undefined,
+          serviceTier: typeof body.serviceTier === 'string' ? body.serviceTier : undefined,
           acpMode: typeof body.acpMode === 'string' ? body.acpMode : undefined
         });
         sendJson(response, 200, { ok: true, thread: conversationThreadView(ctx, thread) });
@@ -2173,7 +2200,7 @@ export async function handleProductHttp(
             : undefined,
           model: typeof body.model === 'string' ? body.model : undefined,
           reasoningLevel: parseReasoningLevel(body.reasoningLevel),
-          serviceTier: body.serviceTier === 'default' || body.serviceTier === 'fast' ? body.serviceTier : undefined,
+          serviceTier: typeof body.serviceTier === 'string' ? body.serviceTier : undefined,
           acpMode: typeof body.acpMode === 'string' ? body.acpMode : undefined,
           parentThreadId: typeof body.parentThreadId === 'string' ? body.parentThreadId : undefined,
           visibility: body.visibility === 'hidden' || body.visibility === 'visible'
@@ -3456,7 +3483,7 @@ export async function handleProductHttp(
             listErrorDetail = modelListErrorDetail(error);
           }
         }
-        return buildThreadExecutionOptions({ providerId, availability, extraInstalled, listed, listError, listErrorDetail });
+        return buildThreadExecutionOptions({ providerServiceTiersDisabled:ctx.config.getConfig().providerServiceTiersDisabled, providerId, availability, extraInstalled, listed, listError, listErrorDetail });
       };
       if (streaming) {
         const stream = beginNdjson(response);

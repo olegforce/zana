@@ -287,6 +287,7 @@ export function useThreadComposerOptions(input: {
     modelLoadErrorDetail,
     reasoningLevel,
     setReasoningLevel,
-    reasoningOptions
+    reasoningOptions,
+    serviceTierOptions: catalog.providers.find(row => row.id === providerId)?.serviceTiers ?? []
   };
 }

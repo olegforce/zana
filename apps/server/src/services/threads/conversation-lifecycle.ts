@@ -1,3 +1,5 @@
+import { authorizedServiceTier } from './provider-service-tier.js';
+import { normalizePortableAttachments } from '../projects/portable-attachments.js';
 import { assertPlanImplementationReady, assertPlanRevision } from './conversation-plan-implementation.js';
 import { withConversationSend, withConversationSendCancellation, type ConversationSendLease } from './conversation-send-guard.js';
 import {
@@ -102,7 +104,7 @@ export async function sendConversationTurn(
     permissionMode?: PermissionMode;
     model?: string;
     reasoningLevel?: ReasoningLevel;
-    serviceTier?: 'default' | 'fast';
+    serviceTier?: string;
     acpMode?: string;
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
@@ -122,7 +124,7 @@ async function sendConversationTurnWithLease(
     permissionMode?: PermissionMode;
     model?: string;
     reasoningLevel?: ReasoningLevel;
-    serviceTier?: 'default' | 'fast';
+    serviceTier?: string;
     acpMode?: string;
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
@@ -139,8 +141,11 @@ async function sendConversationTurnWithLease(
   if (!live.environmentId) {
     throw new ThreadCreateError(409, 'environment_not_ready', 'thread has no environment');
   }
+  input = await normalizePortableAttachments(ctx, input, live.projectId, live.hostId);
+  lease.assertCurrent();
   const permissionMode = threadPermissionMode(ctx, live, execution?.permissionMode);
   const lastExecution = readLastThreadExecution(ctx, live.id);
+  const explicitServiceTier = execution?.serviceTier !== undefined;
   execution = {
     ...execution,
     model: execution?.model ?? lastExecution.model ?? undefined,
@@ -148,7 +153,8 @@ async function sendConversationTurnWithLease(
     acpMode: execution?.acpMode ?? lastExecution.acpMode ?? undefined,
     serviceTier: execution?.serviceTier ?? lastExecution.serviceTier
   };
-  const serviceTier = execution.serviceTier;
+  const serviceTier = authorizedServiceTier(ctx, live.providerId, execution.serviceTier, {inherited:!explicitServiceTier});
+  execution.serviceTier = serviceTier;
   let packedExecution = { ...execution, permissionMode, serviceTier };
   const requestedMode = requestedExecutionModeFromTurn({ acpMode: execution?.acpMode, input });
   if (options.compact !== true) {
@@ -315,7 +321,7 @@ async function dispatchTurnSubmit(
       permissionMode?: PermissionMode;
       model?: string;
       reasoningLevel?: ReasoningLevel;
-      serviceTier?: 'default' | 'fast';
+      serviceTier?: string;
       acpMode?: string;
     };
     clientRequestId?: string;
@@ -393,7 +399,7 @@ async function recoverOrSettleTurnSubmit(
       permissionMode?: PermissionMode;
       model?: string;
       reasoningLevel?: ReasoningLevel;
-      serviceTier?: 'default' | 'fast';
+      serviceTier?: string;
       acpMode?: string;
     };
     clientRequestId?: string;
@@ -822,7 +828,7 @@ async function turnSubmitCommand(
     permissionMode?: PermissionMode;
     model?: string;
     reasoningLevel?: ReasoningLevel;
-    serviceTier?: 'default' | 'fast';
+    serviceTier?: string;
     acpMode?: string;
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
@@ -868,7 +874,7 @@ async function threadStartCommandForFork(
     permissionMode?: PermissionMode;
     model?: string;
     reasoningLevel?: ReasoningLevel;
-    serviceTier?: 'default' | 'fast';
+    serviceTier?: string;
     acpMode?: string;
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;

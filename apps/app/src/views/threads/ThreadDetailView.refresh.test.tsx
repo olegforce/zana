@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act,cleanup,render } from '@testing-library/react';
+import { act,cleanup,fireEvent,render,screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach,expect,it,vi } from 'vitest';
 const h=vi.hoisted(() => ({event:(_:any) => {},updated:(_:any) => {},reconnect:() => {},off:vi.fn(),get:vi.fn(),timeline:vi.fn(),upsert:vi.fn()}));
@@ -18,7 +18,7 @@ vi.mock('../../components/thread/secondary-panel/useThreadOpenTerminalSignal.js'
 vi.mock('../thread-detail/PaneContext.js',() => ({useOptionalPaneContext:() => null,usePaneSecondaryPanelRegistration:() => {}}));
 vi.mock('../../components/thread/pending-interactions/useOpenPendingInteractions.js',async original => ({...await original<any>(),useOpenPendingInteractions:() => []}));
 vi.mock('../../components/ThreadCommandComposer.js',() => ({ThreadCommandComposer:() => null}));
-vi.mock('../../components/thread/ThreadTimeline.js',() => ({ThreadTimeline:({rows}:any) => <div>{rows.length} rows</div>}));
+vi.mock('../../components/thread/ThreadTimeline.js',() => ({ThreadTimeline:({rows,hasOlder,loadingOlder,onLoadOlder}:any) => <div>{rows.length} rows{hasOlder && <button disabled={loadingOlder} onClick={onLoadOlder}>Load older</button>}</div>}));
 vi.mock('../../components/thread/ThreadWorkspaceBanner.js',() => ({ThreadWorkspaceBanner:() => null}));
 vi.mock('../../components/thread/ThreadDetailOverflow.js',() => ({ThreadDetailOverflow:() => null}));
 vi.mock('../../components/thread/ThreadDetailSearch.js',() => ({ThreadDetailSearch:() => null}));
@@ -44,4 +44,62 @@ it('wires bounded continuous refresh, matching filters, reconnect and unmount ca
   act(() => h.event({threadId:'a',sequence:100}));view.unmount();
   await act(async () => vi.advanceTimersByTime(1000));
   expect(h.get).toHaveBeenCalledTimes(count);expect(h.off).toHaveBeenCalledTimes(3);
+});
+
+it('keeps hidden panes idle and catches up once on reveal using the loaded sequence',async () => {
+  vi.useFakeTimers();
+  h.get.mockResolvedValue({thread:{id:'a',title:'Retained thread',status:'idle',createdAt:1}});
+  h.timeline.mockResolvedValue({rows:[],maxSeq:10,status:'idle',activeThinking:null});
+  const content = (enabled:boolean) => <MemoryRouter><ThreadDetail threadId="a" embedded timelineEnabled={enabled}/></MemoryRouter>;
+  const view=render(content(false));
+  await act(async () => {});
+  expect(h.get).not.toHaveBeenCalled();expect(h.timeline).not.toHaveBeenCalled();
+  view.rerender(content(true));await act(async () => {});
+  expect(h.timeline).toHaveBeenCalledTimes(1);
+  view.rerender(content(false));
+  const offCount=h.off.mock.calls.length;
+  await act(async () => {for(let index=0;index<100;index++){h.event({threadId:'a',sequence:index+11});h.updated({id:'a'});h.reconnect();vi.advanceTimersByTime(25);}});
+  expect(h.timeline).toHaveBeenCalledTimes(1);expect(h.off).toHaveBeenCalledTimes(offCount);
+  expect(screen.getByRole('heading',{name:'Retained thread'})).toBeTruthy();
+  h.timeline.mockResolvedValue({delta:{upsertRows:[]},maxSeq:111,status:'idle'});
+  view.rerender(content(true));await act(async () => {});
+  expect(h.timeline).toHaveBeenCalledTimes(2);
+  expect(h.timeline.mock.calls[1]?.[1]).toMatchObject({afterSequence:'10'});
+  expect(screen.getByRole('heading',{name:'Retained thread'})).toBeTruthy();
+});
+
+it('aborts hidden in-flight requests and ignores their late results',async () => {
+  let finish: (value:any) => void = () => {};
+  h.get.mockImplementationOnce(() => new Promise(resolve => {finish=resolve;}));
+  h.timeline.mockResolvedValue({rows:[],maxSeq:0,status:'idle'});
+  const content=(enabled:boolean) => <MemoryRouter><ThreadDetail threadId="a" embedded timelineEnabled={enabled}/></MemoryRouter>;
+  const view=render(content(true));await act(async () => {});
+  const signal=h.get.mock.calls[0]?.[1].signal;
+  view.rerender(content(false));expect(signal.aborted).toBe(true);
+  await act(async () => finish({thread:{id:'a',title:'Stale hidden result',status:'idle'}}));
+  expect(screen.queryByRole('heading',{name:'Stale hidden result'})).toBeNull();
+});
+
+it('aborts an older-history request on hide and allows paging again after reveal', async () => {
+  h.get.mockResolvedValue({ thread: { id: 'a', title: 'Paging thread', status: 'idle', createdAt: 1 } });
+  const page = { rows: [], maxSeq: 10, status: 'idle', timelinePage: { hasOlderRows: true, olderCursor: { anchorId: 'older', anchorSeq: 5 } } };
+  h.timeline.mockResolvedValue(page);
+  const content = (enabled: boolean) => <MemoryRouter><ThreadDetail threadId="a" embedded timelineEnabled={enabled}/></MemoryRouter>;
+  const view = render(content(true));
+  await act(async () => {});
+  let finish!: (value: unknown) => void;
+  h.timeline.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  fireEvent.click(screen.getByRole('button', { name: 'Load older' }));
+  expect((screen.getByRole('button', { name: 'Load older' }) as HTMLButtonElement).disabled).toBe(true);
+  const signal = h.timeline.mock.calls[1]?.[2].signal;
+  view.rerender(content(false));
+  expect(signal.aborted).toBe(true);
+  view.rerender(content(true));
+  await act(async () => {});
+  expect((screen.getByRole('button', { name: 'Load older' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => finish({ ...page, timelinePage: { hasOlderRows: false } }));
+  expect(screen.getByRole('button', { name: 'Load older' })).toBeTruthy();
+  h.timeline.mockResolvedValueOnce({ ...page, timelinePage: { hasOlderRows: false } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Load older' })));
+  expect(screen.queryByRole('button', { name: 'Load older' })).toBeNull();
 });

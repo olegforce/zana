@@ -265,7 +265,7 @@ export interface PluginSdkThreadSpawnArgs {
   title?: string;
   model?: string;
   reasoningLevel?: string;
-  serviceTier?: 'default' | 'fast';
+  serviceTier?: string;
   hostId?: string;
   permissionMode?: 'accept-edits' | 'auto' | 'full';
   visibility?: 'visible' | 'hidden';
@@ -524,6 +524,12 @@ export interface PluginSdkProjects {
 }
 
 export interface PluginSdk {
+  experimental_promptHistory: {
+    list(args: { scope: 'thread' | 'project' | 'all'; threadId?: string; projectId?: string; cursor?: string; query?: string }): Promise<{
+      entries: Array<{id:string; createdAt:number; input: import('@zana-ai/zcc-domain/thread-runtime').PromptInput[]; threadId:string; projectId:string; hostId:string; sequence:number}>;
+      nextCursor: string | null;
+    }>;
+  };
   system: { defaultHost(): Promise<{ id: string } | null> };
   /** Enrolled machine identity only; no host credentials or connection metadata. */
   hosts: {

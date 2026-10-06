@@ -1849,3 +1849,14 @@ describe('isolated plugin service return semantics', () => {
     expect(await service.callRpc('sync-consumer', 'check', {})).toEqual({ label: 'prefix ready', during: 1, after: 0, delayed: 'async', lazy: 'lazy', version: 1, hasVersion: true });
   });
 });
+
+it('safe mode suspends non-bundled RPC and preserves enabled preferences across reload and restore', async () => {
+ let safeMode=false;
+ const dir=writePlugin(join(root(),'safe-mode'),'safe-mode');
+ const service=createPluginService({dataDir:root(),bundledRoot:root(),getAppConfig:()=>({pluginSafeMode:safeMode})});
+ await service.install(dir);expect(await service.callRpc('safe-mode','ping',{})).toMatchObject({ok:true});
+ safeMode=true;await service.refreshSafeMode();expect(service.get('safe-mode')).toMatchObject({enabled:true,status:'disabled',statusDetail:'Suspended by plugin safe mode'});
+ await expect(service.callRpc('safe-mode','ping',{})).rejects.toThrow();await service.reload('safe-mode');expect(service.status('safe-mode')).toBe('disabled');
+ safeMode=false;await service.refreshSafeMode();expect(service.status('safe-mode')).toBe('running');expect(await service.callRpc('safe-mode','ping',{})).toMatchObject({ok:true});
+ await service.disable('safe-mode');safeMode=true;await service.refreshSafeMode();safeMode=false;await service.refreshSafeMode();expect(service.get('safe-mode')).toMatchObject({enabled:false,status:'disabled',statusDetail:null});
+});

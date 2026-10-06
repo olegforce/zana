@@ -1345,6 +1345,8 @@ importers:
 
   plugins/github: {}
 
+  plugins/google-analytics: {}
+
   plugins/harness-claude:
     devDependencies:
       '@zana-ai/zcc-plugin-sdk':
@@ -1455,6 +1457,8 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.3.0(react@19.3.0)
+
+  plugins/prompt-library: {}
 
   plugins/provider-acp:
     dependencies:

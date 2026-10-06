@@ -217,3 +217,46 @@ describe('remote browser automation', () => {
     expect(rpc.mock.calls.some(([x]) => x.command.type === 'desktop.browser.reveal_tab')).toBe(false);
   });
 });
+
+describe('desktop tab recovery', () => {
+  const orphan = { id: 'browser:tab-1', kind: 'browser', environmentId: null, title: 'Old', url: 'about:blank', desktopTarget: { hostId: SCOPE.hostId, instanceId: 'old-window', generation: 'old-generation' } };
+  function recoveryContext(rpc: any) {
+    vi.mocked(getConversationThread).mockReturnValue({ id: SCOPE.threadId, projectId: 'p1' } as never);
+    vi.mocked(getThreadPluginMetadata).mockReturnValue(null as never);
+    vi.mocked(getThreadTabs).mockReturnValue({ revision: 1, tabsJson: JSON.stringify([orphan]) } as never);
+    vi.mocked(replaceThreadTabs).mockReturnValue({ revision: 2 } as never);
+    return ctx(rpc);
+  }
+  it('adopts a tab when its previous window is gone', async () => {
+    const rpc = vi.fn(async () => ({ instances: [{ instanceId: SCOPE.instanceId, generation: SCOPE.generation, label: 'Current' }] }));
+    const c = recoveryContext(rpc);
+    syncDesktopBrowserTabs(c, SCOPE, [tab() as never]);
+    await vi.waitFor(() => expect(replaceThreadTabs).toHaveBeenCalled());
+    const saved = JSON.parse(vi.mocked(replaceThreadTabs).mock.calls[0][1].tabsJson);
+    expect(saved[0].desktopTarget).toMatchObject({ instanceId: SCOPE.instanceId, generation: SCOPE.generation });
+  });
+  it('closes the duplicate instead of taking a tab from another live window', async () => {
+    const rpc = vi.fn(async ({ command }: any) => command.type === 'desktop.browser.list_instances'
+      ? { instances: [{ instanceId: SCOPE.instanceId, generation: SCOPE.generation }, { instanceId: 'old-window', generation: 'other' }] }
+      : { ok: true });
+    syncDesktopBrowserTabs(recoveryContext(rpc), SCOPE, [tab() as never]);
+    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'desktop.browser.close_tab' }) })));
+    expect(replaceThreadTabs).not.toHaveBeenCalled();
+  });
+  it('ignores an adoption result superseded by a newer snapshot', async () => {
+    let complete!: (value: unknown) => void;
+    const rpc = vi.fn(() => new Promise(resolve => { complete = resolve; }));
+    const c = recoveryContext(rpc);
+    syncDesktopBrowserTabs(c, SCOPE, [tab() as never]);
+    syncDesktopBrowserTabs(c, SCOPE, []);
+    complete({ instances: [{ instanceId: SCOPE.instanceId, generation: SCOPE.generation }] });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(replaceThreadTabs).not.toHaveBeenCalled();
+  });
+  it('ignores a generation that is no longer active', async () => {
+    const rpc = vi.fn(async () => ({ instances: [{ instanceId: SCOPE.instanceId, generation: 'new-generation' }] }));
+    syncDesktopBrowserTabs(recoveryContext(rpc), SCOPE, [tab() as never]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(replaceThreadTabs).not.toHaveBeenCalled();
+  });
+});

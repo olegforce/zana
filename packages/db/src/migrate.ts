@@ -421,6 +421,11 @@ export function migrate(database: SqliteDatabase): void {
     )`,
     'CREATE INDEX provider_model_catalogs_fetched_idx ON provider_model_catalogs(fetched_at)'
   ]);
+  if (!applied.has(27)) applyVersion(database, 27, [
+    "CREATE INDEX thread_events_user_history_idx ON thread_events(created_at DESC, id DESC) WHERE type = 'client/turn/requested'",
+    "CREATE INDEX threads_visible_project_idx ON threads(project_id, updated_at DESC) WHERE visibility = 'visible'"
+  ]);
+
 }
 
 export { CREATE_TABLES_V1 as SCHEMA_STATEMENTS_V1 };
