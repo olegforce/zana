@@ -58,6 +58,7 @@ import { resolveSpawnChoiceForHost } from './spawn-choice-for-host.js';
 import { toRemoteStartPathHost } from '../hosts/host-public.js';
 import { packConversationSessionTooling } from './conversation-session-tools.js';
 import { attachmentMarkersFromInput, hostPromptInputFromInput, resolvePromptAttachmentPath } from '../projects/attachments.js';
+import { attachmentPathResolverForHost } from '../projects/host-attachments.js';
 import { withResolvedPluginMentionContext } from '../../plugins/plugin-mentions.js';
 import {
   withResolvedPathMentionContext,
@@ -369,7 +370,7 @@ export async function createConversationFromRequest(
   prompt = hostPromptInputFromInput(
     resolvedPromptInput,
     promptSource,
-    (path) => resolvePromptAttachmentPath(ctx.dataDir, input.projectId, path)
+    await attachmentPathResolverForHost(ctx, { hostId, projectId: input.projectId, input: resolvedPromptInput })
   );
 
   // Presence-only signal for plugins (never the marker text/paths themselves).

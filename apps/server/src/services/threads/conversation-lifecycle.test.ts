@@ -55,6 +55,7 @@ vi.mock('@zana-ai/zcc-db', () => {
   }]);
   return {
   DEFERRED_THREAD_MESSAGE_CAP: 50,
+  getPrimaryHost: vi.fn(() => ({ id: 'host-1' })),
   getLatestConversationCheckpoint: vi.fn(() => null),
   listConversationActiveTurnInputs: vi.fn((_db, _id, before = Infinity) => {
     const events = listConversationThreadEvents();
@@ -168,6 +169,7 @@ import {
   listConversationThreadEvents,
   listConversationThreadEventsWindow,
   getHost,
+  getPrimaryHost,
   listConversationThreadsByProject,
   pauseDeferredThreadMessagesForThread,
   setConversationProviderThreadId,
@@ -536,6 +538,41 @@ describe('conversation lifecycle', () => {
         input: [
           { type: 'localImage', path: '/tmp/zcc-data/attachments/proj-1/shot.png' }
         ]
+      })
+    }));
+  });
+
+  it('copies a stored attachment onto a remote host before turn.submit', async () => {
+    const { mkdir, rm, writeFile } = await import('node:fs/promises');
+    const name = `remote-shot-${process.pid}-${Date.now()}.png`;
+    await mkdir('/tmp/zcc-data/attachments/proj-1', { recursive: true });
+    await writeFile(`/tmp/zcc-data/attachments/proj-1/${name}`, Buffer.from([7, 8]));
+    vi.mocked(getPrimaryHost).mockReturnValueOnce({ id: 'laptop' } as never);
+    const callHostOnlineRpc = vi.fn(async (input: unknown) => {
+      const command = (input as { command: { type: string } }).command;
+      if (command.type === 'project.clone_default_path') return { path: '/home/me/.zcc/checkouts/probe' };
+      if (command.type === 'host.write_file') return { outcome: 'written', sha256: 'x', sizeBytes: 2 };
+      return { threadId: thread.id, accepted: true };
+    });
+    try {
+      await sendConversationTurn(ctx(callHostOnlineRpc), thread.id, [{ type: 'localImage', path: name }]);
+    } finally {
+      await rm(`/tmp/zcc-data/attachments/proj-1/${name}`, { force: true });
+    }
+    const types = callHostOnlineRpc.mock.calls.map(([input]) => (input as { command: { type: string } }).command.type);
+    expect(types.indexOf('host.write_file')).toBeGreaterThan(-1);
+    expect(types.indexOf('host.write_file')).toBeLessThan(types.indexOf('turn.submit'));
+    expect(callHostOnlineRpc).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        type: 'host.write_file',
+        path: `/home/me/.zcc/attachments/proj-1/${name}`,
+        content: Buffer.from([7, 8]).toString('base64')
+      })
+    }));
+    expect(callHostOnlineRpc).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        type: 'turn.submit',
+        input: [{ type: 'localImage', path: `/home/me/.zcc/attachments/proj-1/${name}` }]
       })
     }));
   });

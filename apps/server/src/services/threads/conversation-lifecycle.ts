@@ -1,5 +1,6 @@
 import { authorizedServiceTier } from './provider-service-tier.js';
 import { normalizePortableAttachments } from '../projects/portable-attachments.js';
+import { attachmentPathResolverForHost } from '../projects/host-attachments.js';
 import { assertPlanImplementationReady, assertPlanRevision } from './conversation-plan-implementation.js';
 import { withConversationSend, withConversationSendCancellation, type ConversationSendLease } from './conversation-send-guard.js';
 import {
@@ -234,8 +235,9 @@ async function sendConversationTurnWithLease(
   const prompt = hostPromptInputFromInput(
     resolvedInput,
     textPrompt,
-    (path) => resolvePromptAttachmentPath(ctx.dataDir, live.projectId, path)
+    await attachmentPathResolverForHost(ctx, { hostId: live.hostId, projectId: live.projectId, input: resolvedInput })
   );
+  lease.assertCurrent();
   if (prompt.length === 0) {
     throw new ThreadCreateError(400, 'invalid-input', 'input is required');
   }
