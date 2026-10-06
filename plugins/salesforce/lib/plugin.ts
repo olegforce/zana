@@ -52,7 +52,7 @@ import { WorkbenchService } from './workbench-service.js';
 import { ProjectContexts, ProjectContextError } from './project-context.js';
 import type { SalesforceSdk } from './sdk-contract.js';
 import { compactError, fingerprint, isDxProject, resolveUnderRoot } from './dx-project.js';
-import { generatedOutputPath, parseGenerateInput } from './project-generate.js';
+import { generatedProjectPath, parseGenerateInput } from './project-generate.js';
 import { connectDxProject } from './project-connect.js';
 import {
   AgentFilesError,
@@ -363,7 +363,7 @@ export async function createSalesforcePlugin(zcc: ZccPluginApi, deps: Salesforce
     return {
       ok: true,
       name: parsed.name,
-      path: generatedOutputPath(cli.result, parsed.outputDir, parsed.name)
+      path: generatedProjectPath(parsed.outputDir, parsed.name)
     };
   });
   let actionReads = 0;

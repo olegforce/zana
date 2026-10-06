@@ -265,7 +265,12 @@ describe('salesforce plugin behavior', () => {
     expect(JSON.stringify(doctor)).not.toContain('SECRET_TOKEN');
   });
 
-  it('generates a DX project via sf project generate', async () => {
+  it.each([
+    { outputDir: '/tmp/ws', created: ['Acme/sfdx-project.json'] },
+    { outputDir: '/tmp/ws/Acme' },
+    { path: '/untrusted/path', 'output-dir': '/untrusted/parent' },
+    null,
+  ])('generates the requested DX child project regardless of CLI output %j', async result => {
     const { zcc, harness } = createFakePluginHost({ pluginId: 'salesforce', listProjects: async () => [{ id: 'p1', name: 'DX project', path: '/tmp/dx' }] });
     await createSalesforcePlugin(zcc, {
       ...mockDeps(),
@@ -274,7 +279,7 @@ describe('salesforce plugin behavior', () => {
           expect(args).toEqual(['project', 'generate', '--name', 'Acme', '--output-dir', '/tmp/ws', '--json']);
           return {
             code: 0,
-            stdout: JSON.stringify({ status: 0, result: { outputDir: '/tmp/ws/Acme' } }),
+            stdout: JSON.stringify({ status: 0, result }),
             stderr: ''
           };
         }
