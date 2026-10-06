@@ -107,7 +107,7 @@ function createCatalog(
     if (!error) { attempts.delete(id); retries.delete(id); return; }
     const count = attempts.get(id) ?? 0;
     attempts.set(id, count + 1);
-    if (['failed', 'timeout', 'host_unavailable'].includes(error) && count < MODEL_CATALOG_RETRY_DELAYS_MS.length) {
+    if (['failed', 'timeout', 'host_unavailable', 'provider_unavailable'].includes(error) && count < MODEL_CATALOG_RETRY_DELAYS_MS.length) {
       retries.set(id, Date.now() + MODEL_CATALOG_RETRY_DELAYS_MS[count]);
     } else retries.delete(id);
   }
@@ -244,6 +244,7 @@ function createCatalog(
 
   async function runPrefetch(epoch: number): Promise<void> {
     let roster: ThreadComposerProviderOption[] = [];
+    let availableProviders = new Set<string>();
     try {
       const body = await fetchBounded(optionsQuery());
       if (epoch !== catalogEpoch) return;
@@ -252,6 +253,7 @@ function createCatalog(
       rosterSuccessAt = Date.now();
       recordOutcome('', null);
       roster = mapProviders(body.providers);
+      availableProviders = new Set(body.providers.filter((row) => row.available !== false).map((row) => row.id));
       applyRoster(roster);
       emit();
     } catch (error) {
@@ -265,6 +267,7 @@ function createCatalog(
     const missing = roster.filter((row) => {
       const entry = byProvider[row.id];
       return !entry || inherited.has(row.id)
+        || (entry.modelLoadError === 'provider_unavailable' && availableProviders.has(row.id))
         || (!entry.modelLoadError && Date.now() - (entry.lastSuccessAt ?? 0) >= MODEL_CATALOG_FRESH_MS);
     }).map((row) => row.id);
     if (missing.length === 0) return;
@@ -524,6 +527,15 @@ export function resetThreadModelCatalog(fetcher?: ThreadExecutionOptionsFetcher 
 /** Revalidate on a return from an external login/configuration edit, with a cooldown. */
 export function recoverStaleModelCatalogs(): void {
   for (const catalog of catalogs.values()) catalog.recover();
+}
+
+/** Plugin lifecycle pushes can repair a failed provider without a host reconnect. */
+export function recoverUnavailableModelCatalogs(): void {
+  for (const catalog of catalogs.values()) {
+    if (Object.values(catalog.getSnapshot().byProvider).some((entry) => entry.modelLoadError === 'provider_unavailable')) {
+      catalog.recover(true);
+    }
+  }
 }
 
 let knownHostStates = new Map<string, string>();

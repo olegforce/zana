@@ -43,7 +43,7 @@ export function emptyModelsHint(
   if (modelLoadError === 'host_unavailable') return 'Host disconnected. Models will refresh after reconnection.';
   if (modelLoadError === 'invalid_request') return detail?.trim() || 'Model discovery configuration is unavailable';
   if (modelLoadError === 'provider_unavailable') {
-    return detail?.trim() || 'Provider plugin failed to load. Open Plugins to reload or update it.';
+    return detail?.trim() || 'Provider unavailable. Open Plugins to check its status.';
   }
   if (modelLoadError === 'failed') {
     const trimmed = detail?.trim();

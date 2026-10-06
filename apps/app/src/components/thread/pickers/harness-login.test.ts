@@ -138,7 +138,8 @@ describe('harness login status', () => {
   it('maps catalog failure codes onto operator-facing copy', () => {
     expect(emptyModelsHint('codex', 'missing_executable')).toBe('CLI not found');
     expect(emptyModelsHint('codex', 'timeout')).toBe('Timed out loading models');
-    expect(emptyModelsHint('codex', 'provider_unavailable')).toBe('Provider plugin failed to load. Open Plugins to reload or update it.');
+    expect(emptyModelsHint('codex', 'provider_unavailable')).toBe('Provider unavailable. Open Plugins to check its status.');
+    expect(emptyModelsHint('codex', 'provider_unavailable', '  Codex artifact is damaged. Open Plugins to reload.  ')).toBe('Codex artifact is damaged. Open Plugins to reload.');
     expect(emptyModelsHint('codex', 'failed', 'bb could not find the Codex CLI on this machine.')).toBe(
       'bb could not find the Codex CLI on this machine.'
     );

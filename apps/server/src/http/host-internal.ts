@@ -162,9 +162,12 @@ async function handleHostEnroll(
   const host = ctx.db.sqlite.transaction(() => {
     const join = token && joinPeek ? ctx.joinCodes.redeem(token) : null;
     if (joinPeek && !join) throw new Error('enrollment already consumed');
+    const hostId = join?.hostId ?? parsed.data.hostId;
+    // Enrollment rotates credentials, not the user's machine display name.
+    const existing = hostId ? getHost(ctx.db, hostId) : null;
     return upsertHost(ctx.db, {
-      id: join?.hostId ?? parsed.data.hostId,
-      name: parsed.data.hostName,
+      id: hostId,
+      name: existing?.name ?? parsed.data.hostName,
       hostKeyHash: hashHostKey(hostKey),
       isPrimary: join ? false : undefined,
       homeDir: parsed.data.homeDir

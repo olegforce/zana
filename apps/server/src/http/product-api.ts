@@ -348,7 +348,11 @@ async function resolveExecutionOptionsScope(args: {
     const primary = getPrimaryHost(ctx.db);
     const hostId = requestedHostId ?? project.hostId ?? primary?.id;
     const source = projectSources(project, primary?.id).find(row => row.hostId === hostId);
-    if (!source) return { ok: false, status: 409, code: 'source-unavailable', message: 'Add a checkout for this project on the selected machine' };
+    // Model discovery never requires a checkout: without one, discover in the
+    // machine's home and never forward another machine's project path.
+    if (!source) {
+      return { ok: true, hostId, cwd: hostId ? getHost(ctx.db, hostId)?.homeDir ?? undefined : undefined };
+    }
     const cwd = hostId === primary?.id ? confineCwd(ctx, source.path, undefined) : source.path;
     if (!cwd) return { ok: false, status: 409, code: 'path-unavailable', message: 'Project checkout is unavailable' };
     return { ok: true, hostId, cwd };
