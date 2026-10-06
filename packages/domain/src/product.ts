@@ -2464,11 +2464,9 @@ export interface AppConfig {
    */
   cliRemoteToolProxyEnabled?: boolean;
   /**
-   * EXPERIMENTAL — CLI Agent asks the project’s execution host which CLIs and
-   * models are installed (`GET /system/execution-options?hostId=…`, same path
-   * Modern uses) instead of this machine’s local `harness.descriptors` list.
-   * Default OFF: the CLI Agent picker still reflects locally installed
-   * harnesses and trusted PTY adapter catalogs.
+   * EXPERIMENTAL — local CLI Agent harness pickers use the host's live roster
+   * instead of local `harness.descriptors`. SSH projects always use their bound
+   * remote daemon for harness/model discovery, regardless of this flag.
    */
   cliRemoteHostCatalogEnabled?: boolean;
   /**

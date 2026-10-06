@@ -4041,13 +4041,12 @@ async function launchAuthorizedTerminal(
     persona: frameworkPersona
   });
   if (!selection.ok) return { ok: false, code: selection.code, message: selection.message };
-  // Registered project roots use the enrolled machine's discovery. Legacy SSH
-  // and main-owned scratch/worktrees retain their existing path until their
-  // environment records are owned by the product server.
-  const hostDiscovery = runtimeSupervisor && !project.remote && !effectiveLaunch.worktree && !effectiveLaunch.scratch
+  // Discovery follows the checkout; the SSH PTY still belongs to this machine.
+  // Legacy unbound SSH and main-owned scratch/worktrees keep their existing path.
+  const hostDiscovery = runtimeSupervisor && (project.remote ? Boolean(project.hostId) : !effectiveLaunch.worktree && !effectiveLaunch.scratch)
     ? createHostCliDiscovery(request => runtimeSupervisor!.cliDiscovery(request), {
-        projectId: project.id, hostId: req.hostId ?? project.hostId ?? runtimeSupervisor.hostId,
-        cwd: effectiveLaunch.cwd, profile: selection.profile,
+        projectId: project.id, hostId: project.remote ? project.hostId : req.hostId ?? project.hostId ?? runtimeSupervisor.hostId,
+        ...(project.remote ? {} : { cwd: effectiveLaunch.cwd }), profile: selection.profile,
         nativeAgentDiscoveryEnabled: config.nativeAgentDiscoveryEnabled === true
       })
     : undefined;
@@ -4273,7 +4272,8 @@ async function launchAuthorizedTerminal(
       legacyPersonaFacetCompatibility
     }, {
       consentStore: executionConsentStore,
-      installedVersion
+      installedVersion,
+      discovery: hostDiscovery?.discovery
     });
     if (currentExecution.decision === 'blocked') return { ok: false, reason: currentExecution.reason };
     const currentBinding = {

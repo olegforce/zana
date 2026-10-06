@@ -32991,6 +32991,48 @@ textarea.ui-command-composer-input {
   background: var(--bg-elevated, var(--bg-panel));
 }
 
+.model-reasoning-picker-model-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  z-index: 1;
+}
+
+.model-reasoning-picker-reload {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -4px -2px 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.model-reasoning-picker-reload:hover,
+.model-reasoning-picker-reload:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+.model-reasoning-picker-reload:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.model-reasoning-picker-reload:disabled { cursor: default; }
+.model-reasoning-picker-reload.is-reloading svg { animation: model-picker-reload-spin 1s linear infinite; }
+@keyframes model-picker-reload-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .model-reasoning-picker-reload.is-reloading svg { animation: none; }
+}
+
 .model-reasoning-picker-row {
   display: flex;
   align-items: center;

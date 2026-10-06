@@ -49,7 +49,7 @@ export function ExperimentalView({
         />
         <CheckboxField
           label="CLI Agent host catalog"
-          help="On a remote project, the CLI Agent picker asks that machine which CLIs and models are installed (same execution-options path Modern uses). Off ⇒ today’s local install list."
+          help="Use the live host harness list for local CLI Agents. Remote projects always use their remote host daemon for harness and model discovery."
           checked={config.cliRemoteHostCatalogEnabled ?? false}
           onChange={(v) => onUpdate({ cliRemoteHostCatalogEnabled: v })}
         />

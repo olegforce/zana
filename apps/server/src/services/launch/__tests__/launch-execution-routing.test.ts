@@ -62,6 +62,15 @@ describe('production execution routing preflight', () => {
       harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'llmgw/gpt-5.6-sol-1M' } } }
     }, services)).resolves.toEqual({ decision: 'blocked', reason: 'selected harness is disabled' });
   });
+  it('uses remote enablement and version without borrowing the coordinator installation', async () => {
+    const services = { ...deps(), discovery: { roles: vi.fn(async () => []), models: vi.fn(async () => ['remote/model']) } };
+    const input = { config: { ...config(), harnessOpenCodeEnabled: false }, profile: 'opencode' as const, projectId: 'p1',
+      projectPath: '/remote', scope: 'remote' as const, mode: 'interactive' as const, idempotencyKey: 'remote-enabled',
+      harnessRouting: { schemaVersion: 1 as const, byAdapter: { opencode: { modelTargetId: 'remote/model' } } } };
+    await expect(preflightTerminalExecution(input, services)).resolves.toEqual({ decision: 'allowed', scope: 'remote' });
+    services.installedVersion.mockResolvedValueOnce(undefined as never);
+    await expect(preflightTerminalExecution(input, services)).resolves.toEqual({ decision: 'blocked', reason: 'selected harness is unavailable or has no verifiable version' });
+  });
 
   it('allows approved exact OpenCode Plan routing', async () => {
     const services = deps();

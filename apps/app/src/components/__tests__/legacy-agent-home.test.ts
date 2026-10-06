@@ -92,6 +92,15 @@ describe('threadPermissionMode', () => {
 });
 
 describe('resolveCliAgentFamily', () => {
+  it('uses an offered remote harness when the local default is absent, while retaining valid preferences', () => {
+    const input = { currentFamilyId: '', rememberedFamilyId: null, effectiveDefaultFamilyId: 'claude',
+      availableFamilyIds: ['opencode', 'codex'], fallbackToAvailable: true };
+    expect(resolveCliAgentFamily(input)).toBe('opencode');
+    expect(resolveCliAgentFamily({ ...input, effectiveDefaultFamilyId: 'codex' })).toBe('codex');
+    expect(resolveCliAgentFamily({ ...input, rememberedFamilyId: 'codex' })).toBe('codex');
+    expect(resolveCliAgentFamily({ ...input, currentFamilyId: 'codex' })).toBe('codex');
+    expect(resolveCliAgentFamily({ ...input, fallbackToAvailable: false })).toBe('claude');
+  });
   it('keeps the current family when it is still installed', () => {
     expect(resolveCliAgentFamily({
       currentFamilyId: 'codex',

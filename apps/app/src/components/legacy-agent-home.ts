@@ -152,6 +152,7 @@ export function resolveCliAgentFamily(input: {
   rememberedFamilyId: string | null;
   effectiveDefaultFamilyId: string | null;
   stickyFamilyId?: string | null;
+  fallbackToAvailable?: boolean;
 }): string {
   if (input.stickyFamilyId) return input.stickyFamilyId;
   const available = new Set(input.availableFamilyIds);
@@ -163,7 +164,7 @@ export function resolveCliAgentFamily(input: {
   if (input.effectiveDefaultFamilyId && available.has(input.effectiveDefaultFamilyId)) {
     return input.effectiveDefaultFamilyId;
   }
-  return input.effectiveDefaultFamilyId || '';
+  return (input.fallbackToAvailable ? input.availableFamilyIds[0] : input.effectiveDefaultFamilyId) || '';
 }
 
 /**

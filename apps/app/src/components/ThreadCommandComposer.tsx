@@ -867,6 +867,7 @@ export function ThreadCommandComposer({
                 modelIsLoading={options.modelIsLoading}
                 modelLoadError={options.modelLoadError}
                 modelLoadErrorDetail={options.modelLoadErrorDetail}
+                onReloadModels={options.refreshModels}
                 onModelChange={options.setModel}
               />
             }
