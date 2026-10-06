@@ -105,8 +105,11 @@ describe('enrolled host with BB ws transport', () => {
   }, 12000);
   it('rejects authentication failures and cancels retries on shutdown', async () => {
     const f = await fixture(); f.rejectNext(1, 401); const connection = f.connect();
+    const closeTunnels = vi.fn();
+    connection.runtime.peerSsh = { close: closeTunnels } as any;
     await expect(connection.ready).rejects.toThrow('rejected credentials (401)');
     await connection.close(); await new Promise(r => setTimeout(r, 1200));
     expect(f.upgrades).toBe(1);
+    expect(closeTunnels).toHaveBeenCalledOnce();
   });
 });

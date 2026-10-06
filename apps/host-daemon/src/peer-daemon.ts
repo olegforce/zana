@@ -3,6 +3,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import type { ProjectRemote } from '@zana-ai/zcc-domain/product';
 import { sshBaseArgs } from './remote-fs.js';
 import { HostCommandError } from './host-command-error.js';
+import { PeerTunnels } from './peer-tunnels.js';
 
 const SSH_TIMEOUT_MS = 180_000;
 const MAX_LOG_BYTES = 256 * 1024;
@@ -17,6 +18,9 @@ export interface PeerDaemonSshResult {
 }
 
 export interface PeerDaemonSsh {
+  tunnel?(remote: ProjectRemote, localPort: number, remotePort: number): Promise<void>;
+  untunnel?(remote: ProjectRemote, localPort: number, remotePort: number): void;
+  close?(): void;
   run(remote: ProjectRemote, remoteCmd: string, timeoutMs?: number): Promise<PeerDaemonSshResult>;
   pipeFile(
     remote: ProjectRemote,
@@ -77,7 +81,11 @@ function collectStream(
 export type PeerDaemonSpawn = typeof spawn;
 
 export function createSystemPeerDaemonSsh(spawnImpl: PeerDaemonSpawn = spawn): PeerDaemonSsh {
+  const tunnels = new PeerTunnels(spawnImpl);
   return {
+    tunnel: (remote, localPort, remotePort) => tunnels.open(remote, localPort, remotePort),
+    untunnel: (remote, localPort, remotePort) => tunnels.remove(remote, localPort, remotePort),
+    close: () => tunnels.close(),
     async run(remote, remoteCmd, timeoutMs = SSH_TIMEOUT_MS) {
       const proc = spawnImpl('ssh', [...sshBaseArgs(remote), remoteCmd], {
         stdio: ['ignore', 'pipe', 'pipe']
@@ -123,7 +131,7 @@ export async function peerDaemonConnectInstall(ssh: PeerDaemonSsh, input: {
     || !PEER_HOST_ID_RE.test(serverId) || !/^(?:[A-F0-9]{4}-){7}[A-F0-9]{4}$/.test(code)) {
     throw new HostCommandError('invalid_request', 'Invalid Connect machine enrollment');
   }
-  const script = `(umask 077; f=$(mktemp); trap 'rm -f "$f"' EXIT; curl --proto '=https' -fsS --connect-timeout 10 --max-time 30 ${shQuote(accountUrl + '/api/connect/host-installer')} -o "$f" && node "$f" --account ${shQuote(accountUrl)} --server-id ${shQuote(serverId)} --code ${shQuote(code)})`;
+  const script = ['(', 'umask 077', ...peerNodeSelectionLines(), 'export PATH="$(dirname "$node_bin"):$PATH"', `f=$(mktemp); trap 'rm -f "$f"' EXIT; curl --proto '=https' -fsS --connect-timeout 10 --max-time 30 ${shQuote(accountUrl + '/api/connect/host-installer')} -o "$f" && "$node_bin" "$f" --account ${shQuote(accountUrl)} --server-id ${shQuote(serverId)} --code ${shQuote(code)}`, ')'].join('\n');
   const result = await ssh.run(input.remote, script, SSH_TIMEOUT_MS);
   const log = logText(result).replaceAll(code, '[redacted]');
   if (result.code !== 0) throw new HostCommandError('peer_install_failed', log || 'Connect machine installation failed');
@@ -226,14 +234,14 @@ function peerNodeSelectionLines(): string[] {
     'node_bin=""',
     'if [ -n "${ZCC_NODE:-}" ] && [ -x "$ZCC_NODE" ]; then node_bin=$ZCC_NODE; fi',
     'if [ -z "$node_bin" ] && command -v node >/dev/null 2>&1; then node_bin=$(command -v node); fi',
-    'if [ -z "$node_bin" ] || [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -lt 22 ]; then',
+    'if [ -z "$node_bin" ] || [ "$("$node_bin" -e "process.stdout.write(String(parseInt(process.versions.node,10)))" 2>/dev/null || echo 0)" -lt 22 ]; then',
     '  for cand in "$HOME/.nix-profile/bin/node" /nix/store/*-nodejs-22.*/bin/node /nix/store/*-nodejs-24.*/bin/node /nix/store/*-nodejs-slim-22.*/bin/node /nix/store/*-nodejs-slim-24.*/bin/node; do',
     '    [ -x "$cand" ] || continue',
-    '    major=$("$cand" -p "parseInt(process.versions.node,10)" 2>/dev/null) || continue',
+    '    major=$("$cand" -e "process.stdout.write(String(parseInt(process.versions.node,10)))" 2>/dev/null) || continue',
     '    if [ "$major" -ge 22 ]; then node_bin=$cand; break; fi',
     '  done',
     'fi',
-    '[ -n "$node_bin" ] && [ "$("$node_bin" -p "parseInt(process.versions.node,10)" 2>/dev/null || echo 0)" -ge 22 ] || { echo "Node.js >= 22 is required" >&2; exit 1; }'
+    '[ -n "$node_bin" ] && [ "$("$node_bin" -e "process.stdout.write(String(parseInt(process.versions.node,10)))" 2>/dev/null || echo 0)" -ge 22 ] || { echo "Node.js >= 22 is required" >&2; exit 1; }'
   ];
 }
 
@@ -415,26 +423,39 @@ export async function peerDaemonInstall(
     serverUrl: string;
     serverHost: string;
     artifactPath: string;
+    sshTunnel?: { localPort: number; remotePort: number };
   }
 ): Promise<{ ok: true; log: string }> {
   if (!existsSync(input.artifactPath)) {
     throw new HostCommandError('artifact_missing', 'host-daemon artifact is missing');
   }
-  const unpacked = await ssh.pipeFile(input.remote, peerUnpackCommand(input.serverHost), input.artifactPath);
-  if (unpacked.code !== 0) {
-    throw new HostCommandError('peer_unpack_failed', logText(unpacked) || 'Could not unpack the host-daemon artifact');
+  if (input.sshTunnel) {
+    const { localPort, remotePort } = input.sshTunnel;
+    if (input.serverUrl !== `http://127.0.0.1:${remotePort}` || !ssh.tunnel) {
+      throw new HostCommandError('invalid_server_url', 'SSH tunnel must target the product server on loopback');
+    }
+    await ssh.tunnel(input.remote, localPort, remotePort);
   }
-  const installed = await ssh.run(
-    input.remote,
-    peerInstallServiceCommand({
-      serverHost: input.serverHost,
-      joinCode: input.joinCode,
-      hostId: input.hostId,
-      serverUrl: input.serverUrl
-    })
-  );
-  if (installed.code !== 0) {
-    throw new HostCommandError('peer_install_failed', logText(installed) || 'Could not install the host daemon');
+  try {
+    const unpacked = await ssh.pipeFile(input.remote, peerUnpackCommand(input.serverHost), input.artifactPath);
+    if (unpacked.code !== 0) {
+      throw new HostCommandError('peer_unpack_failed', logText(unpacked) || 'Could not unpack the host-daemon artifact');
+    }
+    const installed = await ssh.run(
+      input.remote,
+      peerInstallServiceCommand({
+        serverHost: input.serverHost,
+        joinCode: input.joinCode,
+        hostId: input.hostId,
+        serverUrl: input.serverUrl
+      })
+    );
+    if (installed.code !== 0) {
+      throw new HostCommandError('peer_install_failed', logText(installed) || 'Could not install the host daemon');
+    }
+    return { ok: true, log: `${logText(unpacked)}\n${logText(installed)}`.trim() };
+  } catch (error) {
+    if (input.sshTunnel) ssh.untunnel?.(input.remote, input.sshTunnel.localPort, input.sshTunnel.remotePort);
+    throw error;
   }
-  return { ok: true, log: `${logText(unpacked)}\n${logText(installed)}`.trim() };
 }

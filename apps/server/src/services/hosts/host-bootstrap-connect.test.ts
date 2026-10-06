@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { openDatabase, upsertHost, updateHostSshIdentity, getHost } from '@zana-ai/zcc-db';
-import { bootstrapHostForProject, repairHost } from './host-bootstrap.js';
+import { bootstrapHostForProject, repairHost, isPeerNetworkFailure } from './host-bootstrap.js';
 import { issueConnectHostCode } from './connect-enrollment.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 
@@ -13,6 +13,7 @@ vi.mock('./connect-enrollment.js', async importOriginal => ({
   usesConnect: () => true,
   issueConnectHostCode: vi.fn()
 }));
+vi.mock('./host-artifact.js', () => ({ resolveHostArtifact: async () => ({ tarballPath: '/private/host.tgz' }) }));
 const cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).forEach(fn => fn()); vi.clearAllMocks(); });
 
@@ -30,11 +31,11 @@ function fixture() {
   const wait = vi.fn(async () => {});
   const bind = vi.fn(async () => {});
   const ctx = {
-    db, dataDir: dir,
+    db, dataDir: dir, origins: { serverPort: 43210 },
     hostHub: { ensureHostSessionReady: vi.fn(), connectedHostIds: () => [], callHostOnlineRpc: rpc, waitUntilConnected: wait },
     projects: { list: () => [project], bindToHost: bind },
     hub: { emit: vi.fn() },
-    joinCodes: { mint: vi.fn(() => { throw new Error('Legacy enrollment must not run'); }) }
+    joinCodes: { mint: vi.fn(() => { throw new Error('Legacy enrollment must not run'); }), mintForHost: vi.fn(id => ({ hostId: id, joinCode: 'zcde_tunnel' })) }
   } as unknown as ProductHttpContext;
   return { ctx, primary, remote, issued, rpc, wait, bind };
 }
@@ -89,3 +90,31 @@ it('does not report a successful install as connected until the host becomes rea
   expect(events.at(-1)).toMatchObject({ type: 'error', message: 'unexpected connection failure' });
   expect(events.some(event => event.type === 'done')).toBe(false);
 });
+
+it.each(['curl: (35) error:0A0000C6:SSL routines::packet length too long', 'fetch failed', 'curl: (28) Connection timed out'])(
+  'repairs a blocked public connection through a primary-owned SSH tunnel: %s', async message => {
+    const f = fixture();
+    f.rpc.mockRejectedValueOnce(new Error(message));
+    const events = await bootstrapHostForProject(f.ctx, 'project');
+    expect(events.at(-1)).toEqual({ type: 'done', hostId: f.remote.id });
+    expect(f.rpc).toHaveBeenCalledTimes(2);
+    const fallback = f.rpc.mock.calls[1][0] as any;
+    expect(fallback.hostId).toBe(f.primary.id);
+    expect(fallback.command).toMatchObject({ remote: { host: 'devbox', user: 'me', proxyJump: 'bastion' },
+      hostId: f.remote.id, joinCode: 'zcde_tunnel', artifactPath: '/private/host.tgz', sshTunnel: { localPort: 43210 } });
+    expect(fallback.command.serverUrl).toBe(`http://127.0.0.1:${fallback.command.sshTunnel.remotePort}`);
+    expect(f.bind).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({ type: 'log', text: 'Public HTTPS is unavailable on this machine; connecting through SSH…' });
+  }
+);
+
+it('surfaces a failed SSH fallback without binding or reporting success', async () => {
+  const f = fixture(); f.rpc.mockRejectedValueOnce(new Error('curl: (35) SSL failed')).mockRejectedValueOnce(new Error('SSH forwarding refused'));
+  const events = await bootstrapHostForProject(f.ctx, 'project');
+  expect(events.at(-1)).toMatchObject({ type: 'error', message: 'SSH forwarding refused' });
+  expect(f.bind).not.toHaveBeenCalled();
+});
+
+it.each(['curl: (22) The requested URL returned error: 403', 'Enrollment denied', 'Node.js >= 22 is required', 'host did not connect'])(
+  'does not bypass application or enrollment failures: %s', message => { expect(isPeerNetworkFailure(new Error(message))).toBe(false); }
+);
