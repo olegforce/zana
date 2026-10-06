@@ -5493,6 +5493,12 @@ export interface UpdateStatus {
   version?: string;
   /** Present when kind === 'error'. */
   message?: string;
+  /**
+   * Notes for the offered version(s), newest first, when the feed carries them
+   * (`available` / `downloaded`; omitted on progress ticks). Main-normalized markdown —
+   * never raw feed HTML — and bounded. Absent when the feed has none.
+   */
+  releaseNotes?: ReleaseNote[];
 }
 
 /** Download progress as emitted by electron-updater's `download-progress`. */

@@ -13566,7 +13566,7 @@ body.resizing-col .explorer-resizer::after {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
+  background: var(--bg-base);
   /* Compact chrome is keyed off the board pane, not the window — the Agents
      view sits beside the nav + list columns, so a "bit small" screen is a
      narrow board, not necessarily a narrow viewport. */
@@ -31240,7 +31240,7 @@ body.resizing-col .library-split-resizer::after {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
+  background: var(--bg-base);
   /* Compact chrome is keyed off the board pane, not the window — the Agents
      view sits beside the nav + list columns, so a "bit small" screen is a
      narrow board, not necessarily a narrow viewport. */
