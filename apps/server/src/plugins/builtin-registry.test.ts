@@ -51,6 +51,7 @@ const EXPECTED_CATEGORIES: Record<string, (typeof PLUGIN_CATALOG_CATEGORIES)[num
   'pdf-preview': 'Interface',
   'plugin-guide': 'Developer tools',
   'posthog-analytics': 'Host access',
+  'google-analytics': 'Host access',
   'pr-monitor': 'Developer tools',
   'provider-acp': 'Agent interaction',
   'provider-afcode': 'Agent interaction',
@@ -89,6 +90,7 @@ const EXPECTED_ICONS: Record<string, string> = {
   'pdf-preview': 'FileText',
   'plugin-guide': 'Puzzle',
   'posthog-analytics': 'LineChart',
+  'google-analytics': 'ChartNoAxesColumn',
   'pr-monitor': 'GitPullRequest',
   'provider-acp': './icons/cursor.svg',
   'provider-afcode': './icons/afcode.svg',
@@ -145,6 +147,15 @@ describe('promoted autoInstall reclaim', () => {
 });
 
 describe('bundled plugin registry invariants', () => {
+  it('installs both analytics plugins by default with independent user opt-out', () => {
+    for (const pluginId of ['google-analytics', 'posthog-analytics']) {
+      expect(BUILTIN_PLUGINS.find(plugin => plugin.pluginId === pluginId)).toMatchObject({
+        autoInstall: true, defaultEnabled: true
+      });
+      expect(RECLAIM_UNINSTALLED_AUTOINSTALL_IDS).not.toContain(pluginId);
+    }
+  });
+
   it('keeps official plugins bundled but out of the auto-install builtins', () => {
     const builtinNames = new Set(BUILTIN_PLUGINS.map((plugin) => plugin.name));
     for (const plugin of OFFICIAL_PLUGINS) {
