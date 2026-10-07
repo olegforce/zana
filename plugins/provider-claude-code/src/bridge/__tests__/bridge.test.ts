@@ -5943,14 +5943,15 @@ describe("canonical model context-window hint", () => {
 });
 
 describe("live Claude permission policy", () => {
-  it.each(["full", "extra-root"] as const)("applies %s permissions before accepting the next prompt", async scenario => {
+  it.each(["full", "extra-root", "plan"] as const)("applies %s permissions before accepting the next prompt", async scenario => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];
     queryMock.mockImplementation(() => { const query = createControlledClaudeQuery(); queries.push(query); return query; });
     const threadId = `thread-policy-${scenario}`;
     try {
       bridge.sendRequest(1, "thread/start", {
-        threadId, cwd: "/tmp/worktree", instructionMode: "append", options: canonicalOptions()
+        threadId, cwd: "/tmp/worktree", instructionMode: "append",
+        options: canonicalOptions({ providerOptions: scenario === "plan" ? { claudeCodePermissionMode: "plan" } : {} })
       });
       expect((await bridge.waitForResponse(1)).error).toBeUndefined();
       const options = scenario === "full"
@@ -5970,6 +5971,7 @@ describe("live Claude permission policy", () => {
         expect(getLatestQueryOptions().sandbox?.enabled).not.toBe(true);
       } else {
         expect(queries).toHaveLength(1);
+        if (scenario === "plan") expect(getLatestQueryOptions().permissionMode).toBe("plan");
         expect(queries[0]!.applyFlagSettings).toHaveBeenCalledWith(expect.objectContaining({
           permissions: { additionalDirectories: ["/tmp/extra-write-root"] }
         }));
@@ -5981,11 +5983,11 @@ describe("live Claude permission policy", () => {
     } finally { queries.forEach(query => query.finish()); bridge.restore(); }
   });
 
-  it("stops the resident session if a live policy is only partly applied", async () => {
+  it.each(["turn/start", "turn/steer"] as const)("stops the resident session if a live policy is only partly applied on %s", async method => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];
     queryMock.mockImplementation(() => { const query = createControlledClaudeQuery(); queries.push(query); return query; });
-    const threadId = "thread-policy-failure";
+    const threadId = `thread-policy-failure-${method}`;
     try {
       bridge.sendRequest(1, "thread/start", { threadId, cwd: "/tmp/worktree", instructionMode: "append", options: {
         permissionMode: "full", permissionScope: "full", approvalReviewer: null, permissionEscalation: null,
@@ -5993,7 +5995,8 @@ describe("live Claude permission policy", () => {
       } });
       await bridge.waitForResponse(1);
       queries[0]!.setPermissionMode.mockRejectedValueOnce(new Error("policy failed"));
-      bridge.sendRequest(2, "turn/start", canonicalTurnParams({ threadId, input: [{ type: "text", text: "must not be accepted" }] }));
+      bridge.sendRequest(2, method, canonicalTurnParams({ threadId, input: [{ type: "text", text: "must not be accepted" }],
+        ...(method === "turn/steer" ? { expectedTurnId: "turn-1" } : {}) }));
       expect((await bridge.waitForResponse(2)).error?.message).toContain("policy failed");
       expect(queries[0]!.close).toHaveBeenCalled();
     } finally { queries.forEach(query => query.finish()); bridge.restore(); }
