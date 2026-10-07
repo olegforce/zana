@@ -84,6 +84,11 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
   await search.fill('');
   await provider.click();
 
+  // Electron's CDP capture can stall under Xvfb after Playwright fast-forwards
+  // animations. The failure capture (which leaves animations alone) succeeds.
+  // Freeze visual motion in CSS instead, retaining every layout assertion.
+  await win.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
+
   async function captureModels(name: string) {
     // Config updates (including theme changes) invalidate the shared catalogue.
     const reload = modernPanel.getByRole('button', { name: /^(Load|Reload)$/ });
@@ -91,26 +96,26 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
     await reload.click();
     await expect(search).toBeVisible({ timeout: 30_000 });
     await provider.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(name), animations: 'disabled' });
+    await win.screenshot({ path: testInfo.outputPath(name) });
   }
 
   for (const theme of ['light', 'dark'] as const) {
     await win.evaluate((theme) => window.cc.config.set({ theme }), theme);
     await expect(win.locator('html')).toHaveAttribute('data-theme', theme);
     await win.locator('.settings-panel').evaluate((el) => { el.scrollTop = 0; });
-    await win.screenshot({ path: testInfo.outputPath(`harness-${theme}.png`), animations: 'disabled' });
+    await win.screenshot({ path: testInfo.outputPath(`harness-${theme}.png`) });
     await win.locator('#settings-anchor-harness-thread').scrollIntoViewIfNeeded();
-    await win.screenshot({ path: testInfo.outputPath(`harness-models-${theme}.png`), animations: 'disabled' });
+    await win.screenshot({ path: testInfo.outputPath(`harness-models-${theme}.png`) });
     await provider.click();
     await captureModels(`thread-options-${theme}.png`);
     await provider.click();
     await cli.click();
     await claudeSettings.click();
     await claudeSettings.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(`cli-options-${theme}.png`), animations: 'disabled' });
+    await win.screenshot({ path: testInfo.outputPath(`cli-options-${theme}.png`) });
     await panel.getByRole('group', { name: 'Tools & access', exact: true }).evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(`cli-tools-${theme}.png`), animations: 'disabled' });
-    await panel.locator('.harness-default-card').screenshot({ path: testInfo.outputPath(`cli-default-${theme}.png`), animations: 'disabled' });
+    await win.screenshot({ path: testInfo.outputPath(`cli-tools-${theme}.png`) });
+    await panel.locator('.harness-default-card').screenshot({ path: testInfo.outputPath(`cli-default-${theme}.png`) });
     await claudeSettings.click();
     await modern.click();
   }
@@ -120,13 +125,13 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
   const overflow = await settingsPanel.evaluate((el) => [...el.querySelectorAll('*')].filter((node) => node.getBoundingClientRect().right > el.getBoundingClientRect().right + 1).slice(0, 12).map((node) => ({ className: node.className, width: node.getBoundingClientRect().width })));
   await expect.poll(() => settingsPanel.evaluate((el) => el.scrollWidth <= el.clientWidth), { message: JSON.stringify(overflow) }).toBe(true);
   await settingsPanel.evaluate((el) => { el.scrollTop = 0; });
-  await win.screenshot({ path: testInfo.outputPath('harness-narrow.png'), animations: 'disabled' });
+  await win.screenshot({ path: testInfo.outputPath('harness-narrow.png') });
   await cli.click();
   await claudeSettings.click();
   await expect(binary).toHaveValue('claude');
   await expect.poll(() => settingsPanel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await claudeSettings.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-  await win.screenshot({ path: testInfo.outputPath('cli-options-narrow.png'), animations: 'disabled' });
+  await win.screenshot({ path: testInfo.outputPath('cli-options-narrow.png') });
   await modern.click();
   await provider.click();
   await captureModels('thread-options-narrow.png');
