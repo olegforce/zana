@@ -232,6 +232,15 @@ function makeDeps(over: Partial<ControlPlaneDeps> = {}): ControlPlaneDeps {
 }
 
 describe('dispatchOp', () => {
+  it('returns the authoritative team, agent and schedule inventories', async () => {
+    const agents = [{ sessionId: 's1', projectId: 'p1', handle: 'reviewer', cwd: '/tmp/p1', role: 'qa' }];
+    const schedules = [{ id: 'scheduled-job' }] as ReturnType<ControlPlaneDeps['listSchedules']>;
+    const deps = makeDeps({ listAgents: () => agents, getAgentStatus: () => 'working', listSchedules: () => schedules });
+    await expect(dispatchOp('team.list', {}, deps)).resolves.toEqual({ ok: true, value: deps.listTeams() });
+    await expect(dispatchOp('agent.list', {}, deps)).resolves.toEqual({ ok: true, value: [{ ...agents[0], state: 'working' }] });
+    await expect(dispatchOp('sched.list', {}, deps)).resolves.toEqual({ ok: true, value: schedules });
+  });
+
   it('term.create delegates to the injected (confined) creator, never trusting cwd directly', async () => {
     const createTerminal = vi.fn(() => ({ ok: true as const, value: { id: 's9' } as any }));
     const deps = makeDeps({ createTerminal });

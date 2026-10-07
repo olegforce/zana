@@ -5943,6 +5943,44 @@ describe("canonical model context-window hint", () => {
 });
 
 describe("live Claude permission policy", () => {
+  it.each(["full", "extra-root"] as const)("applies %s permissions before accepting the next prompt", async scenario => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const queries: ControlledClaudeQuery[] = [];
+    queryMock.mockImplementation(() => { const query = createControlledClaudeQuery(); queries.push(query); return query; });
+    const threadId = `thread-policy-${scenario}`;
+    try {
+      bridge.sendRequest(1, "thread/start", {
+        threadId, cwd: "/tmp/worktree", instructionMode: "append", options: canonicalOptions()
+      });
+      expect((await bridge.waitForResponse(1)).error).toBeUndefined();
+      const options = scenario === "full"
+        ? { permissionMode: "full", permissionScope: "full", approvalReviewer: null, permissionEscalation: null,
+            providerOptions: { workflowsEnabled: false } }
+        : canonicalOptions({ providerOptions: { additionalWorkspaceWriteRoots: ["/tmp/extra-write-root"] } });
+      bridge.sendRequest(3, "turn/start", {
+        ...canonicalTurnParams({ threadId, input: [{ type: "text", text: "continue with updated access" }] }), options
+      });
+      await bridge.flushWork();
+      await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe("continue with updated access");
+      expect((await bridge.waitForResponse(3)).error).toBeUndefined();
+      if (scenario === "full") {
+        expect(queries).toHaveLength(2);
+        expect(queries[0]!.close).toHaveBeenCalled();
+        expect(getLatestQueryOptions().permissionMode).toBe("bypassPermissions");
+        expect(getLatestQueryOptions().sandbox?.enabled).not.toBe(true);
+      } else {
+        expect(queries).toHaveLength(1);
+        expect(queries[0]!.applyFlagSettings).toHaveBeenCalledWith(expect.objectContaining({
+          permissions: { additionalDirectories: ["/tmp/extra-write-root"] }
+        }));
+      }
+      bridge.sendRequest(4, "thread/stop", { threadId, providerThreadId: threadId, intent: "interrupt", activeTurnId: null });
+      await bridge.flushWork();
+      queries.forEach(query => query.finish());
+      expect((await bridge.waitForResponse(4)).error).toBeUndefined();
+    } finally { queries.forEach(query => query.finish()); bridge.restore(); }
+  });
+
   it("stops the resident session if a live policy is only partly applied", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];

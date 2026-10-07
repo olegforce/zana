@@ -69,8 +69,8 @@ function openMenu(projectName: string) {
   fireEvent.click(screen.getByRole('button', { name: `Project actions for ${projectName}` }));
 }
 
-function renderList() {
-  render(<MemoryRouter><ProjectsList placement="sidebar" /></MemoryRouter>);
+function renderList(placement: 'sidebar' | 'pane' = 'sidebar') {
+  render(<MemoryRouter><ProjectsList placement={placement} /></MemoryRouter>);
 }
 
 afterEach(() => {
@@ -80,10 +80,10 @@ afterEach(() => {
 });
 
 describe('project plugin action titles', () => {
-  it('closes the project menu and prevents duplicate reloads until refresh finishes', async () => {
+  it.each(['sidebar', 'pane'] as const)('closes the project menu and prevents duplicate reloads in the %s until refresh finishes', async placement => {
     const pending = deferred<void>();
     h.loadProjects.mockReturnValueOnce(pending.promise);
-    renderList();
+    renderList(placement);
     openMenu('First');
     expect(document.querySelector('.project-menu')).not.toBeNull();
     const reload = screen.getByRole('button', { name: 'Reload project list' });

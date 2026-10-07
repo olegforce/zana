@@ -2421,6 +2421,19 @@ describe("acp bridge", () => {
     expect(threadEventsOfType("turn/input/accepted")).toHaveLength(1);
   });
 
+  it("rejects unsupported automatic permissions before accepting a new turn", async () => {
+    const { providerThreadId } = await startThread();
+    const request = sendTurnRequest("turn/start", providerThreadId, {
+      input: [{ type: "text", text: "must not run", mentions: [] }],
+      options: {
+        permissionMode: "auto", permissionScope: "workspace", approvalReviewer: "automatic", permissionEscalation: "ask"
+      }
+    });
+    expect((await waitForResponse(request)).error?.message).toContain('ACP does not support permission mode "auto"');
+    expect(threadEventsOfType("turn/input/accepted")).toEqual([]);
+    expect(agentMessageTexts()).toEqual([]);
+  });
+
   it("denies client fs writes outside the workspace in accept-edits mode", async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "bb-acp-outside-"));
     const targetPath = join(outsideDir, "outside.txt");
@@ -2444,7 +2457,7 @@ describe("acp bridge", () => {
     }
   });
 
-  it("allows canonical accept-edits writes into a configured extra write root", async () => {
+  it.each([false, true])("allows canonical accept-edits writes into an extra write root, with turn override %s", async overrideRoots => {
     const outsideDir = mkdtempSync(join(tmpdir(), "bb-acp-extra-root-"));
     const targetPath = join(outsideDir, "outside.txt");
     try {
@@ -2491,6 +2504,7 @@ describe("acp bridge", () => {
           permissionScope: "workspace",
           approvalReviewer: "user",
           permissionEscalation: "ask",
+          ...(overrideRoots ? { providerOptions: { additionalWorkspaceWriteRoots: [outsideDir] } } : {}),
         },
       });
       await waitForResponse(turnId);
