@@ -66,7 +66,9 @@ test('Salesforce project creation logs in before creating a connected DX project
   expect(await wizard.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath('salesforce-create-login-light.png') });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await wizard.getByRole('radio', { name: 'Sandbox', exact: true }).check();
+  // The native radio is visually hidden; users choose its visible label card.
+  await wizard.locator('.sf-login-option').filter({ has: wizard.getByRole('radio', { name: 'Sandbox', exact: true }) }).click();
+  await expect(wizard.getByRole('radio', { name: 'Sandbox', exact: true })).toBeChecked();
   await wizard.getByLabel('Org alias', { exact: true }).fill('fail-login');
   await wizard.getByRole('button', { name: 'Log in to Salesforce', exact: true }).click();
   await expect(wizard.getByRole('alert')).toContainText('Sign-in did not finish');
