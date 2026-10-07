@@ -8,8 +8,12 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { openDatabase, upsertHost, updateHostSshIdentity } from '../packages/db/src/index.js';
 
-for (const bound of [false, true]) {
-test(`CLI Agent ${bound ? 'repairs' : 'installs'} the remote daemon, uses its catalog and launches SSH from this machine`, async ({ home }) => {
+for (const { bound, agentDefault } of [
+  { bound: false, agentDefault: false },
+  { bound: true, agentDefault: false },
+  { bound: true, agentDefault: true }
+]) {
+test(`CLI Agent ${bound ? 'repairs' : 'installs'} the remote daemon, uses its catalog and launches SSH from this machine${agentDefault ? ' with Agent default' : ''}`, async ({ home }) => {
   test.setTimeout(180_000);
   let remoteId = randomUUID();
   const serverId = randomUUID(), remoteHome = join(home, 'remote-home');
@@ -65,7 +69,7 @@ process.stdout.write('Connect install log '.repeat(3000)+' COMPLETE-CONNECT-LOG\
     res.end(JSON.stringify({ serverId, hostId: remoteId, serverUrl: 'https://machine.example', code: 'ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD', expiresAt: Date.now() + 60_000 }));
     if (!child) child = spawn(process.execPath, [join(unpack, 'join.mjs'), 'join', '--join-code', body.enrollToken, '--host-id', remoteId, '--server-url', origin, '--host-daemon-port', String(remotePort)], {
       cwd: workspace, detached: true, stdio: 'ignore', env: { ...process.env, HOME: remoteHome, ZCC_DATA_DIR: remoteData, PATH: `${remoteBin}:${process.env.PATH}`, ZDOTDIR: remoteHome, SHELL: '/bin/zsh',
-        FAKE_ACP_MODEL_CONFIG: '1', FAKE_ACP_MODE_CONFIG: '1', FAKE_ACP_MODE_OPTIONS: 'build:Build,plan:Plan,reviewer:Reviewer' }
+        FAKE_ACP_MODEL_CONFIG: agentDefault ? '0' : '1', FAKE_ACP_MODE_CONFIG: '1', FAKE_ACP_MODE_OPTIONS: 'build:Build,plan:Plan,reviewer:Reviewer' }
     });
   });
   edge.listen(0, '127.0.0.1'); await once(edge, 'listening');
@@ -77,7 +81,8 @@ process.stdout.write('Connect install log '.repeat(3000)+' COMPLETE-CONNECT-LOG\
       env: { PATH: `${bin}:${process.env.PATH}`, SHELL: loginShell, ZDOTDIR: home },
       initialConfig: { lastProjectId: 'remote-fixture', defaultHarness: 'claude', claudeBinary: join(home, 'missing-local-claude'),
         harnessOpenCodeEnabled: false, opencodeBinary: join(home, 'missing-local-opencode'), nativeAgentDiscoveryEnabled: true,
-        cliRemoteHostCatalogEnabled: false, tmuxScope: 'off', remoteMcpEnabled: false } });
+        cliRemoteHostCatalogEnabled: false, tmuxScope: 'off', remoteMcpEnabled: false,
+        ...(agentDefault ? { harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'obsolete/global-model' } } } } : {}) } });
     expect(await app.electron.evaluate(() => process.env.PATH)).toContain(bin);
     const win = app.window; win.setDefaultTimeout(15_000); origin = new URL(win.url()).origin;
     const artifact = await fetch(`${origin}/install/zcc-host.tgz`);
@@ -135,10 +140,17 @@ process.stdout.write('Connect install log '.repeat(3000)+' COMPLETE-CONNECT-LOG\
       await second.getByTestId('model-reasoning-picker-trigger').click();
       await win.getByTestId('model-reasoning-provider-acp-opencode').click();
       await second.getByTestId('model-reasoning-picker-trigger').click();
-      await second.getByTestId('composer-mode-picker-trigger').click();
-      await win.getByRole('listbox', { name: 'Composer mode' }).getByRole('option', { name: 'Reviewer', exact: true }).click();
+      // Provider discovery and host reconnects can settle independently. Wait
+      // for the launch catalog before interacting with its native role menu.
+      await expect(second.getByTestId('legacy-agent-command-send')).toBeEnabled({ timeout: 30_000 });
+      if (agentDefault) {
+        await expect(second.getByTestId('model-reasoning-picker-trigger')).toContainText('Agent default');
+      } else {
+        await second.getByTestId('composer-mode-picker-trigger').click();
+        await win.getByRole('listbox', { name: 'Composer mode' }).getByRole('option', { name: 'Reviewer', exact: true }).click();
+      }
       await expect(second.getByRole('button', { name: 'Machine', exact: true })).toHaveCount(0);
-      await second.getByTestId('legacy-agent-command-input').fill('Run a remote native role');
+      await second.getByTestId('legacy-agent-command-input').fill(agentDefault ? 'hello' : 'Run a remote native role');
       await second.getByTestId('legacy-agent-command-send').click();
       await expect(second).toHaveCount(0);
       const sshCalls = () => readFileSync(audit, 'utf8').trim().split('\n')
@@ -149,8 +161,11 @@ process.stdout.write('Connect install log '.repeat(3000)+' COMPLETE-CONNECT-LOG\
       // Non-Claude CLIs run inside the remote login shell; decode its quoted
       // inner command before inspecting the structured role arguments.
       const roleCommand = roleLaunch.args.at(-1).replaceAll("'\\''", "'");
-      expect(roleCommand).toContain("'--agent' 'reviewer'");
+      if (agentDefault) expect(roleCommand).not.toContain('--agent');
+      else expect(roleCommand).toContain("'--agent' 'reviewer'");
       expect(roleCommand).not.toContain('--model');
+      expect(roleCommand).not.toContain('acp-default');
+      expect(roleCommand).not.toContain('obsolete/global-model');
       await expect(win.getByTestId('agent-modal-state')).toHaveAttribute('data-state', 'working');
       const roleSessions = await win.evaluate(() => window.cc.terminals.list('remote-fixture'));
       expect(roleSessions).toHaveLength(1);

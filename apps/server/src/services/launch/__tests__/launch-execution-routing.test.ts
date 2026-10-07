@@ -35,6 +35,31 @@ describe('production execution routing preflight', () => {
     installedVersion: vi.fn(async () => '1.18.10')
   });
 
+  it.each(['local', 'remote'] as const)('allows ACP Agent default without probing a synthetic model on %s launches', async (scope) => {
+    const provider = new OpenCodeProvider();
+    const discovery = { roles: vi.fn(async () => []), models: vi.fn(async () => ['llmgw/real-model']) };
+    const services = { ...deps(), provider, discovery };
+    await expect(preflightTerminalExecution({
+      config: { ...config(), harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'obsolete/model' } } } },
+      profile: 'opencode', projectId: 'p', projectPath: '/selected/source', scope,
+      mode: 'interactive', idempotencyKey: `agent-default-${scope}`,
+      harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'acp-default' } } }
+    }, services)).resolves.toEqual({ decision: 'allowed', scope });
+    expect(discovery.models).not.toHaveBeenCalled();
+    expect(services.installedVersion).not.toHaveBeenCalled();
+  });
+
+  it('still validates native roles when ACP Agent default is selected', async () => {
+    const services = { ...deps(), discovery: { roles: vi.fn(async () => []), models: vi.fn(async () => []) } };
+    await expect(preflightTerminalExecution({
+      config: config(), profile: 'opencode', projectId: 'p', projectPath: '/remote', scope: 'remote',
+      mode: 'interactive', idempotencyKey: 'agent-default-missing-role',
+      harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'acp-default', roleTargetId: 'missing-role' } } }
+    }, services)).resolves.toEqual({ decision: 'blocked', reason: 'role target unavailable' });
+    expect(services.discovery.roles).toHaveBeenCalledOnce();
+    expect(services.discovery.models).not.toHaveBeenCalled();
+  });
+
   it('preserves native behavior when no structured execution target wins', async () => {
     const services = deps();
     await expect(preflightTerminalExecution({
