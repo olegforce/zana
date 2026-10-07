@@ -1,4 +1,6 @@
 import { test, expect } from './fixtures/app.js';
+import type { Locator } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
 
 test('AI Harness makes setup readable and preserves keyboard, enablement, and binary settings', async ({ app }, testInfo) => {
   const win = app.window;
@@ -84,10 +86,36 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
   await search.fill('');
   await provider.click();
 
-  // Electron's CDP capture can stall under Xvfb after Playwright fast-forwards
-  // animations. The failure capture (which leaves animations alone) succeeds.
-  // Freeze visual motion in CSS instead, retaining every layout assertion.
+  // Keep visual artifacts still without changing the interaction assertions.
   await win.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
+  const nativeWindow = await app.electron.browserWindow(win);
+  async function capture(name: string, target?: Locator) {
+    if (target) await target.scrollIntoViewIfNeeded();
+    const box = target ? await target.boundingBox() : undefined;
+    if (target) expect(box).not.toBeNull();
+    const rect = box ? { x: Math.floor(box.x), y: Math.floor(box.y),
+      width: Math.ceil(box.width), height: Math.ceil(box.height) } : undefined;
+    // CDP capture repeatedly stalls under Xvfb despite a responsive renderer.
+    // Native capture explicitly keeps the compositor awake; never swallow a
+    // failed capture or turn a missing artifact into a passing layout test.
+    const encoded = await nativeWindow.evaluate(async (window, rect) => {
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const image = await Promise.race([
+          window.webContents.capturePage(rect, { stayHidden: true, stayAwake: true }),
+          new Promise<never>((_, reject) => {
+            deadline = setTimeout(() => reject(new Error('Layout capture timed out')), 15_000);
+          })
+        ]);
+        return image.toPNG().toString('base64');
+      } finally {
+        clearTimeout(deadline);
+      }
+    }, rect);
+    const png = Buffer.from(encoded, 'base64');
+    expect(png.byteLength).toBeGreaterThan(0);
+    writeFileSync(testInfo.outputPath(name), png);
+  }
 
   async function captureModels(name: string) {
     // Config updates (including theme changes) invalidate the shared catalogue.
@@ -96,26 +124,26 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
     await reload.click();
     await expect(search).toBeVisible({ timeout: 30_000 });
     await provider.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(name) });
+    await capture(name);
   }
 
   for (const theme of ['light', 'dark'] as const) {
     await win.evaluate((theme) => window.cc.config.set({ theme }), theme);
     await expect(win.locator('html')).toHaveAttribute('data-theme', theme);
     await win.locator('.settings-panel').evaluate((el) => { el.scrollTop = 0; });
-    await win.screenshot({ path: testInfo.outputPath(`harness-${theme}.png`) });
+    await capture(`harness-${theme}.png`);
     await win.locator('#settings-anchor-harness-thread').scrollIntoViewIfNeeded();
-    await win.screenshot({ path: testInfo.outputPath(`harness-models-${theme}.png`) });
+    await capture(`harness-models-${theme}.png`);
     await provider.click();
     await captureModels(`thread-options-${theme}.png`);
     await provider.click();
     await cli.click();
     await claudeSettings.click();
     await claudeSettings.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(`cli-options-${theme}.png`) });
+    await capture(`cli-options-${theme}.png`);
     await panel.getByRole('group', { name: 'Tools & access', exact: true }).evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await win.screenshot({ path: testInfo.outputPath(`cli-tools-${theme}.png`) });
-    await panel.locator('.harness-default-card').screenshot({ path: testInfo.outputPath(`cli-default-${theme}.png`) });
+    await capture(`cli-tools-${theme}.png`);
+    await capture(`cli-default-${theme}.png`, panel.locator('.harness-default-card'));
     await claudeSettings.click();
     await modern.click();
   }
@@ -125,13 +153,13 @@ test('AI Harness makes setup readable and preserves keyboard, enablement, and bi
   const overflow = await settingsPanel.evaluate((el) => [...el.querySelectorAll('*')].filter((node) => node.getBoundingClientRect().right > el.getBoundingClientRect().right + 1).slice(0, 12).map((node) => ({ className: node.className, width: node.getBoundingClientRect().width })));
   await expect.poll(() => settingsPanel.evaluate((el) => el.scrollWidth <= el.clientWidth), { message: JSON.stringify(overflow) }).toBe(true);
   await settingsPanel.evaluate((el) => { el.scrollTop = 0; });
-  await win.screenshot({ path: testInfo.outputPath('harness-narrow.png') });
+  await capture('harness-narrow.png');
   await cli.click();
   await claudeSettings.click();
   await expect(binary).toHaveValue('claude');
   await expect.poll(() => settingsPanel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await claudeSettings.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-  await win.screenshot({ path: testInfo.outputPath('cli-options-narrow.png') });
+  await capture('cli-options-narrow.png');
   await modern.click();
   await provider.click();
   await captureModels('thread-options-narrow.png');
