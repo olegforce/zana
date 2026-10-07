@@ -35467,9 +35467,17 @@ textarea.thread-command-editor {
   padding: 8px 12px 10px;
 }
 
-.thread-timeline-work.is-dim,
+/* Past rows recede only while collapsed. Opacity compounds through the tree,
+   so an opened row and everything nested inside it render at full contrast —
+   otherwise children of an expanded past group fall to ~16% and are unreadable. */
+.thread-timeline-work.is-dim:not(.is-open),
 .thread-timeline-system.is-dim {
   opacity: 0.4;
+}
+
+.thread-timeline-nested .thread-timeline-work.is-dim,
+.thread-timeline-nested .thread-timeline-system.is-dim {
+  opacity: 1;
 }
 
 .thread-timeline-work-header {
