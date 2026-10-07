@@ -1934,16 +1934,12 @@ export async function handleProductHttp(
         return true;
       }
       try {
-        let expectedUpdatedAt: number | undefined;
-        if (caller === 'mobile-ui') {
-          const body = await readJsonBody(request, 4096) as { confirmed?: unknown; expectedUpdatedAt?: unknown };
-          if (body?.confirmed !== true || !Number.isSafeInteger(body.expectedUpdatedAt) || Number(body.expectedUpdatedAt) < 0) {
-            sendJson(response, 400, { error: 'invalid_queued_confirmation', message: 'Confirm the selected queued message before sending' });
-            return true;
-          }
-          expectedUpdatedAt = Number(body.expectedUpdatedAt);
+        const body = await readJsonBody(request, 4096) as { confirmed?: unknown; expectedUpdatedAt?: unknown };
+        if (body?.confirmed !== true || !Number.isSafeInteger(body.expectedUpdatedAt) || Number(body.expectedUpdatedAt) < 0) {
+          sendJson(response, 400, { error: 'invalid_queued_confirmation', message: 'Confirm the selected queued message before sending' });
+          return true;
         }
-        await sendHeldConversationMessage(ctx, nextTurnSend.id, nextTurnSend.itemId, overriddenBy, expectedUpdatedAt);
+        await sendHeldConversationMessage(ctx, nextTurnSend.id, nextTurnSend.itemId, overriddenBy, Number(body.expectedUpdatedAt));
         sendJson(response, 200, { ok: true });
       } catch (error) {
         if (error instanceof ThreadCreateError) {

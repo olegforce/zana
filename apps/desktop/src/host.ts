@@ -6808,7 +6808,7 @@ export async function sendQueuedMessageNow(win: BrowserWindow, threadId: unknown
   const response = await fetch(new URL(`${queuePath}/${encodeURIComponent(item.id)}/send`, base), {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-zcc-ui-send-proof': proof },
-    body: '{}', signal: AbortSignal.timeout(15_000)
+    body: JSON.stringify({ confirmed: true, expectedUpdatedAt: item.updatedAt }), signal: AbortSignal.timeout(15_000)
   });
   const result = await response.json() as { ok?: boolean; error?: string; message?: string };
   if (!response.ok || result.ok !== true) throw new Error(result.message ?? result.error ?? 'Send now failed');

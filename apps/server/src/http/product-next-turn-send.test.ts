@@ -50,9 +50,11 @@ function queue(target = threadId) {
     payload: JSON.stringify({ kind: 'send', mode: 'queue-if-active', input: 'selected message' })
   });
 }
-function send(id: string, callerHeaders?: Record<string, string>) {
+function send(id: string, callerHeaders?: Record<string, string>, body: unknown = {
+  confirmed: true, expectedUpdatedAt: getDeferredThreadMessage(server.ctx.db, { threadId, id })?.updatedAt ?? 0
+}) {
   return fetch(`${server.url}api/v1/threads/${threadId}/next-turn/${id}/send`, {
-    method: 'POST', headers: { 'content-type': 'application/json', ...callerHeaders }, body: '{}'
+    method: 'POST', headers: { 'content-type': 'application/json', ...callerHeaders }, body: JSON.stringify(body)
   });
 }
 function uiSend(id: string) {
@@ -78,9 +80,11 @@ it('sends only the confirmed phone message while leaving its paused neighbors in
   expect(server.ctx.hostHub.callHostOnlineRpc).toHaveBeenCalledOnce();
 });
 
-it('rejects changed phone confirmations without dispatching or altering the queued row', async () => {
+it.each(['desktop', 'phone'])('rejects changed %s confirmations without dispatching or altering the queued row', async surface => {
   const selected = queue();
-  const response = await mobileSend(selected.id, selected.updatedAt - 1);
+  const response = surface === 'phone' ? await mobileSend(selected.id, selected.updatedAt - 1)
+    : await send(selected.id, { 'x-zcc-ui-send-proof': signUiSend(uiSecret, threadId, selected.id) },
+      { confirmed: true, expectedUpdatedAt: selected.updatedAt - 1 });
   expect(response.status).toBe(409);
   await expect(response.json()).resolves.toMatchObject({ error: 'queued-send-changed' });
   expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
@@ -90,6 +94,14 @@ it('rejects changed phone confirmations without dispatching or altering the queu
 it.each([{}, { confirmed: false, expectedUpdatedAt: 1 }, { confirmed: true }, { confirmed: true, expectedUpdatedAt: -1 }])('requires a valid phone confirmation body (%j)', async body => {
   const selected = queue();
   expect((await mobileSend(selected.id, selected.updatedAt, body)).status).toBe(400);
+  expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
+  expect(server.ctx.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
+});
+
+it('requires the confirmed revision after native desktop approval', async () => {
+  const selected = queue();
+  const response = await send(selected.id, { 'x-zcc-ui-send-proof': signUiSend(uiSecret, threadId, selected.id) }, {});
+  expect(response.status).toBe(400);
   expect(getDeferredThreadMessage(server.ctx.db, { threadId, id: selected.id })).toEqual(selected);
   expect(server.ctx.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
 });

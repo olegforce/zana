@@ -53,6 +53,7 @@ describe('native queued-send confirmation', () => {
     expect(options.message).not.toContain('Forged');
     expect(options.detail).not.toContain('Forged');
     expect(signUiSend).toHaveBeenCalledWith(expect.any(String), 'thread-1', 'selected');
+    expect(fetchMock.mock.calls.at(-1)![1]?.body).toBe(JSON.stringify({ confirmed: true, expectedUpdatedAt: 2 }));
     expect(fetchMock.mock.calls.map(([url]) => url.pathname)).toEqual([
       '/api/v1/threads/thread-1', '/api/v1/threads/thread-1/next-turn',
       '/api/v1/threads/thread-1/next-turn', '/api/v1/threads/thread-1/next-turn/selected/send'
