@@ -143,6 +143,7 @@ const scriptPath = process.argv[2];
 const script = scriptPath ? JSON.parse(readFileSync(scriptPath, "utf8")) : null;
 const scriptedTurns = script?.turns ?? null;
 const requestLogPath = script?.requestLogPath ?? null;
+let turnStartRequestCount = 0;
 const responseLogPath = script?.responseLogPath ?? null;
 const modelListFailOnceMarkerPath = script?.modelListFailOnceMarkerPath ?? null;
 /**
@@ -481,6 +482,11 @@ async function handleRequest(message) {
       return;
     }
     case "turn/start": {
+      turnStartRequestCount += 1;
+      if (script?.failTurnStartAt === turnStartRequestCount) {
+        respondError(id, -32603, "Fixture rejected turn start");
+        return;
+      }
       // A prompt the provider handles locally: accepted and answered, but with
       // no turn/started and no turn/completed, so nothing in the child's
       // output can open or settle a zcc turn (#1431).
@@ -553,10 +559,12 @@ async function handleRequest(message) {
       }
       if (openTurnId !== undefined) {
         openTurnIdsByThreadId.delete(params.threadId);
-        notify("turn/completed", {
-          threadId: params.threadId,
-          turn: { id: openTurnId, status: "interrupted" },
-        });
+        if (!script?.suppressInterruptSettlement) {
+          notify("turn/completed", {
+            threadId: params.threadId,
+            turn: { id: openTurnId, status: "interrupted" },
+          });
+        }
       }
       respond(id, {});
       return;

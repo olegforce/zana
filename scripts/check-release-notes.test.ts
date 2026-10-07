@@ -1,4 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MAX_NOTES_CHARS, checkReleaseNotes } from './check-release-notes.mjs';
 import { MAX_UPDATE_NOTE_CHARS } from '../apps/desktop/src/update-release-notes.js';
@@ -38,6 +41,35 @@ describe('checkReleaseNotes', () => {
     for (const name of readdirSync(dir).filter((n) => /^\d+\.\d+\.\d+\.md$/.test(n))) {
       const version = name.replace(/\.md$/, '');
       expect(checkReleaseNotes({ version, body: readFileSync(new URL(name, dir), 'utf8') }), name).toEqual([]);
+    }
+  });
+});
+
+describe('release-notes executable', () => {
+  it.each([
+    { name: 'valid release', body: GOOD, tag: 'v1.2.3', status: 0, output: 'present' },
+    { name: 'missing notes', body: null, tag: 'main', status: 1, output: 'missing docs/releases/1.2.3.md' },
+    { name: 'mismatched tag', body: GOOD, tag: 'v1.2.4', status: 1, output: 'does not match package.json version' },
+    { name: 'unsupported markup', body: `${GOOD}\n\n<img src="missing.png">`, tag: 'main', status: 1, output: 'raw HTML' }
+  ])('checks the package version and exits correctly for $name', ({ body, tag, status, output }) => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-release-notes-cli-'));
+    try {
+      mkdirSync(join(root, 'scripts'));
+      mkdirSync(join(root, 'docs', 'releases'), { recursive: true });
+      const script = join(root, 'scripts', 'check-release-notes.mjs');
+      copyFileSync(new URL('./check-release-notes.mjs', import.meta.url), script);
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '1.2.3' }));
+      if (body !== null) writeFileSync(join(root, 'docs', 'releases', '1.2.3.md'), body);
+      const result = spawnSync(process.execPath, [script], {
+        cwd: root, env: { ...process.env, GITHUB_REF_NAME: tag }, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(status);
+      expect(result.stdout + result.stderr).toContain(output);
+      if (status === 0) expect(result.stderr).toBe('');
+      else expect(result.stdout).toBe('');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
