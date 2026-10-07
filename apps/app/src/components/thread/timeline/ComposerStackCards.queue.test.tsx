@@ -124,6 +124,26 @@ it('retains the separate paused-queue Send all action', async () => {
   expect(api.sendNextTurn).not.toHaveBeenCalled();
 });
 
+it.each(['flush', 'delete'] as const)('blocks sending while a queue %s is pending, then restores actions', async operation => {
+  paused = true;
+  let resolve!: () => void;
+  const pending = () => new Promise<void>(done => { resolve = done; });
+  if (operation === 'flush') api.flushNextTurn.mockImplementation(pending);
+  else api.deleteNextTurn.mockImplementation(pending);
+  render(<QueuedMessagesCard threadId="thread-1" />);
+  await screen.findByText('First queued message');
+  if (operation === 'flush') fireEvent.click(screen.getByRole('button', { name: 'Send all' }));
+  else fireEvent.click(within(screen.getByText('First queued message').closest('li')!)
+    .getByRole('button', { name: 'Remove queued message' }));
+  for (const button of screen.getAllByRole('button')) expect((button as HTMLButtonElement).disabled).toBe(true);
+  for (const send of screen.getAllByRole('button', { name: 'Send now' })) fireEvent.click(send);
+  expect(api.sendNextTurn).not.toHaveBeenCalled();
+  items = operation === 'flush' ? [] : items.slice(1);
+  await act(async () => resolve());
+  if (operation === 'flush') expect(screen.queryByTestId('thread-queued-messages')).toBeNull();
+  else expect((screen.getByRole('button', { name: 'Send now' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 it('still removes a selected row independently', async () => {
   render(<QueuedMessagesCard threadId="thread-1" />);
   const first = (await screen.findByText('First queued message')).closest('li')!;

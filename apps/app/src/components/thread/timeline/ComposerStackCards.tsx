@@ -127,7 +127,6 @@ export function QueuedMessagesCard({ threadId }: { threadId: string }) {
               aria-busy={sendingId === item.id}
               disabled={flushing || sendingId !== null || deletingId !== null || item.status === 'dispatching'}
                onClick={() => {
-                if (flushing || sendingId || deletingId) return;
                 setSendingId(item.id);
                 setFlushError(null);
                 void product.threads.sendNextTurn(threadId, item.id)

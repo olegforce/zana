@@ -81,6 +81,15 @@ jobs:
         env:
           CI_BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
 
+      - name: Upload coverage reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-coverage
+          path: coverage/*/coverage-final.json
+          retention-days: 7
+          if-no-files-found: ignore
+
   # Every affected seam is exercised in the built app; failures fail CI.
   # Keep model-spending live attach suites outside unattended CI.
   e2e:
