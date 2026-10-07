@@ -217,7 +217,7 @@ import { MobileGatewayManager } from '@zana-ai/zcc-server/mobile/manager';
 import { MobileConnectionStore } from '@zana-ai/zcc-server/mobile/connection';
 import { MobileDeviceStore } from '@zana-ai/zcc-server/mobile/device-store';
 import { readMcpPort, writeMcpPort } from '@zana-ai/zcc-server';
-import { startControlPlane, type ControlPlaneHandle } from './control/control-plane.js';
+import { startControlPlane, type ControlPlaneHandle, type ControlPlaneDeps } from './control/control-plane.js';
 import { controlCredentialForSession, verifySessionControlCredential } from '@zana-ai/zcc-host-daemon/control-credential';
 import { ensureMcpConfigForProject, rebuildExtensionServers } from '@zana-ai/zcc-host-daemon/mcp-config';
 import { redeployBundledSkills, syncExtensionSkills, removeSkillsForExtension } from '@zana-ai/zcc-server/services/skills/skill-installer';
@@ -1281,6 +1281,28 @@ const savedStore: ISavedStore = createSavedStore();
 const localMetadataStore = { ...store, listProjects: () => localMetadataProjects(store.listProjects(), runtimeSupervisor?.hostId) };
 const libraryStore: ILibraryStore = new LibraryStore(() => localMetadataStore.listProjects());
 const scheduler = new SchedulerManager();
+export const scheduleAgentApi = {
+  list: () => scheduler.list(),
+  get: (id: string) => scheduler.get(id),
+  update: (id: string, patch: ScheduleUpdateInput) => scheduler.update(id, patch),
+  reload: (id: string) => scheduler.reload(id),
+  runNow: (id: string) => scheduler.runNow(id),
+  setEnabled: (id: string, enabled: boolean) => scheduler.setEnabled(id, enabled)
+};
+export const scheduleControlApi: Pick<ControlPlaneDeps, 'getSchedule' | 'reloadSchedule' | 'updateSchedule'> = {
+  getSchedule: async (id) => {
+    try { return { ok: true, value: scheduler.get(id) }; }
+    catch (error) { return { ok: false, code: 'GET_FAILED', message: String(error) }; }
+  },
+  reloadSchedule: async (id) => {
+    try { return { ok: true, value: await scheduler.reload(id) }; }
+    catch (error) { return { ok: false, code: 'RELOAD_FAILED', message: String(error) }; }
+  },
+  updateSchedule: async (id, patch) => {
+    try { return { ok: true, value: await scheduler.update(id, patch) }; }
+    catch (error) { return { ok: false, code: 'UPDATE_FAILED', message: String(error) }; }
+  }
+};
 // Persistent project goals: an event-driven loop that spawns a worker, evaluates
 // it, and re-spawns with feedback until the success criteria pass (or it caps
 // out / stalls). Deps wired at boot next to the scheduler (Rule 3).
@@ -2884,9 +2906,29 @@ const mobileGateway = new MobileGatewayManager({
   devices: new MobileDeviceStore(join(electronZccDataDir(), 'mobile', 'devices.json')),
   // Resolve after the runtime has selected its actual port (including fallback ports).
   upstream: productServerUrl,
-  signQueuedSend: (threadId, itemId) => signUiSend(ensureProductServerCredential(), threadId, itemId, Date.now(), 'mobile-ui')
+  signQueuedSend: signMobileQueuedSend
 });
 let runtimeSupervisor: RuntimeSupervisor | null = null;
+export function discoveryForRegisteredLaunch(
+  supervisor: Pick<RuntimeSupervisor, 'cliDiscovery' | 'hostId'> | null,
+  project: Pick<Project, 'id' | 'remote' | 'hostId'>,
+  launch: { worktree?: unknown; scratch?: unknown; cwd: string },
+  request: Pick<CreateTerminalRequest, 'hostId'>,
+  profile: CreateTerminalRequest['profile'],
+  nativeAgentDiscoveryEnabled: boolean
+) {
+  return supervisor && (project.remote ? Boolean(project.hostId) : !launch.worktree && !launch.scratch)
+    ? createHostCliDiscovery(rpc => supervisor.cliDiscovery(rpc), {
+        projectId: project.id, hostId: project.remote ? project.hostId : request.hostId ?? project.hostId ?? supervisor.hostId,
+        ...(project.remote ? {} : { cwd: launch.cwd }), profile,
+        nativeAgentDiscoveryEnabled
+      })
+    : undefined;
+}
+
+export function signMobileQueuedSend(threadId: string, itemId: string): string {
+  return signUiSend(ensureProductServerCredential(), threadId, itemId, Date.now(), 'mobile-ui');
+}
 const libraryNotifications = createSnapshotNotifications(async () => {
   if (!runtimeSupervisor) throw new Error('Library runtime is unavailable');
   return runtimeSupervisor.libraryDocument({ action: 'snapshot' }) as Promise<import('@zana-ai/zcc-domain/product').LibrarySnapshot>;
@@ -4091,13 +4133,7 @@ async function launchAuthorizedTerminal(
   if (!selection.ok) return { ok: false, code: selection.code, message: selection.message };
   // Discovery follows the checkout; the SSH PTY still belongs to this machine.
   // Legacy unbound SSH and main-owned scratch/worktrees keep their existing path.
-  const hostDiscovery = runtimeSupervisor && (project.remote ? Boolean(project.hostId) : !effectiveLaunch.worktree && !effectiveLaunch.scratch)
-    ? createHostCliDiscovery(request => runtimeSupervisor!.cliDiscovery(request), {
-        projectId: project.id, hostId: project.remote ? project.hostId : req.hostId ?? project.hostId ?? runtimeSupervisor.hostId,
-        ...(project.remote ? {} : { cwd: effectiveLaunch.cwd }), profile: selection.profile,
-        nativeAgentDiscoveryEnabled: config.nativeAgentDiscoveryEnabled === true
-      })
-    : undefined;
+  const hostDiscovery = discoveryForRegisteredLaunch(runtimeSupervisor, project, effectiveLaunch, req, selection.profile, config.nativeAgentDiscoveryEnabled === true);
   const installedVersion = hostDiscovery?.installedVersion ?? memoizeInstalledVersion(
     (adapterId) => installedHarnessVersion(config, adapterId)
   );
@@ -8322,14 +8358,7 @@ async function bootstrapNormal() {
     // twin of the Scheduler UI. Main's SchedulerManager is the authority
     // (Rule 1) — tools never read a renderer-supplied catalogue. Scope
     // filtering happens in the tool (route projectId, optional allProjects).
-    scheduleAgentApi: {
-      list: () => scheduler.list(),
-      get: (id) => scheduler.get(id),
-      update: (id, patch) => scheduler.update(id, patch),
-      reload: (id) => scheduler.reload(id),
-      runNow: (id) => scheduler.runNow(id),
-      setEnabled: (id, enabled) => scheduler.setEnabled(id, enabled)
-    }
+    scheduleAgentApi
   })
     .then(async (handle) => {
       mcpServer = handle;
@@ -8684,18 +8713,7 @@ async function bootstrapNormal() {
       return { ok: true, delivered, handle: targetLabel, id: msg.id };
     },
     listSchedules: () => scheduler.list(),
-    getSchedule: async (id) => {
-      try { return { ok: true, value: scheduler.get(id) }; }
-      catch (error) { return { ok: false, code: 'GET_FAILED', message: String(error) }; }
-    },
-    reloadSchedule: async (id) => {
-      try { return { ok: true, value: await scheduler.reload(id) }; }
-      catch (error) { return { ok: false, code: 'RELOAD_FAILED', message: String(error) }; }
-    },
-    updateSchedule: async (id, patch) => {
-      try { return { ok: true, value: await scheduler.update(id, patch) }; }
-      catch (error) { return { ok: false, code: 'UPDATE_FAILED', message: String(error) }; }
-    },
+    ...scheduleControlApi,
     runScheduleNow: async (id) => {
       try {
         return { ok: true, value: await scheduler.runNow(id) };
