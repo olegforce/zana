@@ -736,10 +736,20 @@ function httpProduct(): Pick<
           method: 'POST',
           body: JSON.stringify({ force })
         }),
-      sendNextTurn: async (threadId: string, itemId: string) =>
-        apiJson(`/threads/${encodeURIComponent(threadId)}/next-turn/${encodeURIComponent(itemId)}/send`, {
-          method: 'POST', body: '{}'
-        }),
+      sendNextTurn: async (threadId: string, itemId: string) => {
+        if (hasDesktopBridge()) return window.cc.threads.sendNextTurn(threadId, itemId);
+        const path = `/threads/${encodeURIComponent(threadId)}/next-turn`;
+        const queue = await apiJson<{ items: Array<{ id: string; text: string; status: string; updatedAt: number }> }>(path);
+        const item = queue.items.find(row => row.id === itemId);
+        if (!item || !['queued', 'failed'].includes(item.status)) throw new Error('Queued message is unavailable');
+        const preview = item.text.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!window.confirm(`Send this queued message now?\n\n${preview.slice(0, 240)}${preview.length > 240 ? '…' : ''}`)) {
+          throw new Error('Send now was cancelled');
+        }
+        return apiJson(`${path}/${encodeURIComponent(itemId)}/send`, {
+          method: 'POST', body: JSON.stringify({ confirmed: true, expectedUpdatedAt: item.updatedAt })
+        });
+      },
       deleteNextTurn: async (threadId: string, itemId: string) =>
         apiJson(`/threads/${encodeURIComponent(threadId)}/next-turn/${encodeURIComponent(itemId)}`, {
           method: 'DELETE'

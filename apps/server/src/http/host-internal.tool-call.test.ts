@@ -114,7 +114,10 @@ describe('host internal plugin tool-call', () => {
       turnId: 'turn-1', callId: 'call-1', tool: 'plugin_query',
       arguments: { desktopPresentation: true, threadId: 'forged-thread' }
     }), captured.response, {
-      config: { getConfig: () => ({}) }, db: {}, plugins: { invokeAgentTool }
+      config: { getConfig: () => ({}) }, db: {}, plugins: {
+        invokeAgentTool,
+        decideToolPolicy: vi.fn(async () => ({ action: 'allow' }))
+      }
     } as unknown as ProductHttpContext);
     expect(captured.status).toBe(200);
     expect(invokeAgentTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -130,10 +133,11 @@ describe('host internal plugin tool-call', () => {
       success: true,
       contentItems: [{ type: 'inputText', text: '{"ok":true}' }]
     }));
+    const decideToolPolicy = vi.fn(async () => ({ action: 'allow' as const }));
     const ctx = {
       config: { getConfig: () => ({}) },
       db: {},
-      plugins: { invokeAgentTool }
+      plugins: { invokeAgentTool, decideToolPolicy }
     } as unknown as ProductHttpContext;
     const captured = captureResponse();
     const handled = await handleHostInternalHttp(
@@ -163,6 +167,25 @@ describe('host internal plugin tool-call', () => {
         projectId: 'proj-1'
       })
     });
+  });
+
+  it('fails closed when a partial plugin service lacks tool policy support', async () => {
+    vi.mocked(getHost).mockReturnValue({ id: 'host-1', hostKeyHash: 'hash' } as never);
+    vi.mocked(getConversationThread).mockReturnValue(thread as never);
+    const invokeAgentTool = vi.fn();
+    const captured = captureResponse();
+    await handleHostInternalHttp(request({
+      sessionId: 'inst-1', threadId: thread.id, providerThreadId: 'prov-1',
+      turnId: 'turn-1', callId: 'call-1', tool: 'sf_soql'
+    }), captured.response, {
+      config: { getConfig: () => ({}) }, db: {}, plugins: { invokeAgentTool }
+    } as unknown as ProductHttpContext);
+    expect(captured.status).toBe(200);
+    expect(captured.body).toMatchObject({
+      success: false,
+      contentItems: [{ type: 'inputText', text: expect.stringContaining('decideToolPolicy') }]
+    });
+    expect(invokeAgentTool).not.toHaveBeenCalled();
   });
 
   it('rejects a browser Origin and a thread owned by another host', async () => {
@@ -375,6 +398,7 @@ describe('host internal plugin tool-call', () => {
     const invokeAgentTool = vi.fn(async () => {
       throw new Error('apex timeout');
     });
+    const decideToolPolicy = vi.fn(async () => ({ action: 'allow' as const }));
     const failed = captureResponse();
     await handleHostInternalHttp(
       request({
@@ -389,7 +413,7 @@ describe('host internal plugin tool-call', () => {
       {
         config: { getConfig: () => ({}) },
         db: {},
-        plugins: { invokeAgentTool }
+        plugins: { invokeAgentTool, decideToolPolicy }
       } as unknown as ProductHttpContext
     );
     expect(failed.status).toBe(200);
@@ -408,6 +432,7 @@ describe('host internal plugin tool-call', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       return { success: true, contentItems: [] };
     });
+    const decideToolPolicy = vi.fn(async () => ({ action: 'allow' as const }));
     const req = request({
       sessionId: 'inst-1',
       threadId: thread.id,
@@ -421,7 +446,7 @@ describe('host internal plugin tool-call', () => {
     const pending = handleHostInternalHttp(req, captured.response, {
       config: { getConfig: () => ({}) },
       db: {},
-      plugins: { invokeAgentTool }
+      plugins: { invokeAgentTool, decideToolPolicy }
     } as unknown as ProductHttpContext);
     await vi.waitFor(() => expect(invokeAgentTool).toHaveBeenCalled());
     req.emit('close');

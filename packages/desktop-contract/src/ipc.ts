@@ -1,4 +1,5 @@
 export const IPC = {
+  uiSend: 'threads:sendNextTurnFromUi',
   sharedClient: { list: 'sharedClient:list', signIn: 'sharedClient:signIn', select: 'sharedClient:select', local: 'sharedClient:local', signOut: 'sharedClient:signOut' },
   startup: {
     state: 'startup:state',
@@ -710,7 +711,8 @@ export const IPC = {
     revealDir: 'personas:revealDir',
     save: 'personas:save',
     duplicate: 'personas:duplicate',
-    delete: 'personas:delete'
+    delete: 'personas:delete',
+    contribute: 'personas:contribute'
   },
   teams: {
     list: 'teams:list',
@@ -725,7 +727,8 @@ export const IPC = {
     launchAutonomous: 'teams:launchAutonomous',
     stopAutonomous: 'teams:stopAutonomous',
     exportBundle: 'teams:exportBundle',
-    importBundle: 'teams:importBundle'
+    importBundle: 'teams:importBundle',
+    contribute: 'teams:contribute'
   },
   /** In-memory autonomous team runs (orchestrator + workers driven to a goal). */
   autonomousRuns: {

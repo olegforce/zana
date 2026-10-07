@@ -5,6 +5,7 @@ import { assertPlanImplementationReady, assertPlanRevision } from './conversatio
 import { withConversationSend, withConversationSendCancellation, type ConversationSendLease } from './conversation-send-guard.js';
 import {
   archiveConversationThread,
+  consumeDispatchAdmissionOverride,
   createConversationThread,
   getConversationThread,
   getEnvironment,
@@ -16,6 +17,7 @@ import {
   unarchiveConversationThread,
   type ConversationThreadRow
 } from '@zana-ai/zcc-db';
+import { randomUUID } from 'node:crypto';
 import {
   buildForkTranscriptSeed,
   canCloneProviderSession,
@@ -24,6 +26,7 @@ import {
   resolveConversationForkPoint
 } from './conversation-fork-history.js';
 import {
+  DeferredAdmissionWait,
   deferConversationSend,
   dropDeferredConversationMessages,
   flushDeferredConversationMessages,
@@ -48,7 +51,7 @@ import {
 import { derivedProviderOptionsForCommand } from './derived-provider-options.js';
 import { attachmentMarkersFromInput, hostPromptInputFromInput, resolvePromptAttachmentPath } from '../projects/attachments.js';
 import { resolveActivePlanTurn } from './conversation-timeline.js';
-import { emitPluginThreadEvent } from '../../plugins/thread-events.js';
+import { emitDispatchOverrideAudit, emitPluginThreadEvent } from '../../plugins/thread-events.js';
 import { appendClientTurnRequested } from './client-turn-requested.js';
 import { recoverConversationProviderThreadId } from './conversation-provider-identity.js';
 import { destroyEnvironmentIfIdle } from '../environments/environment-cleanup.js';
@@ -81,6 +84,7 @@ import {
   recordThreadExecutionMode
 } from './conversation-plan.js';
 import { applyLoggedConversationLifecycleEvent } from './conversation-lifecycle-outcome.js';
+import { admitDispatch } from './dispatch-service.js';
 import { findOpenConversationTurn } from './conversation-host-recovery.js';
 import {
   ensureConversationThreadIsWritable,
@@ -110,7 +114,7 @@ export async function sendConversationTurn(
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
   },
-  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number } = {}
+  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean } = {}
 ): Promise<ConversationThreadRow> {
   return withConversationSend(ctx.db, threadId, lease => sendConversationTurnWithLease(lease, ctx, threadId, input, mode, execution, options));
 }
@@ -130,7 +134,7 @@ async function sendConversationTurnWithLease(
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
   },
-  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number } = {}
+  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean } = {}
 ): Promise<ConversationThreadRow> {
   const thread = getConversationThread(ctx.db, threadId);
   if (!thread) {
@@ -139,6 +143,38 @@ async function sendConversationTurnWithLease(
   let live = recoverConversationProviderThreadId(ctx.db, thread);
   if (options.planRevision !== undefined) assertPlanImplementationReady(ctx, live, options.planRevision);
   ensureConversationThreadIsWritable(live);
+  if (!options.skipAdmission) {
+    const outcome = await admitDispatch(ctx, {
+      threadId: live.id,
+      projectId: live.projectId
+    }, () => {
+      lease.assertCurrent();
+      const current = getConversationThread(ctx.db, threadId);
+      if (!current) throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
+      ensureConversationThreadIsWritable(current);
+    });
+    if (outcome.decision.action === 'reject') {
+      throw new ThreadCreateError(409, 'dispatch_rejected', outcome.decision.message);
+    }
+    if (outcome.decision.action === 'wait') {
+      const admission = {
+        generation: outcome.generation,
+        overrideable: outcome.decision.overrideable,
+        reason: outcome.decision.reason,
+        pluginId: outcome.pluginId
+      };
+      if (options.drain) throw new DeferredAdmissionWait(admission);
+      deferConversationSend(ctx, {
+        threadId: live.id,
+        input,
+        mode,
+        execution,
+        admission
+      });
+      ctx.hub.emit('threads:updated', conversationThreadView(ctx, live));
+      return live;
+    }
+  }
   if (!live.environmentId) {
     throw new ThreadCreateError(409, 'environment_not_ready', 'thread has no environment');
   }
@@ -757,15 +793,52 @@ export async function flushHeldConversationSends(
   }
 }
 
+/**
+ * The HTTP route verifies a single-use approval from desktop main or the
+ * authenticated phone gateway before entering this override path. Agent
+ * session credentials cannot authorize it; the renderer never holds the signer.
+ */
 export async function sendHeldConversationMessage(
   ctx: ProductHttpContext,
   threadId: string,
-  itemId: string
+  itemId: string,
+  overriddenBy: string = 'desktop-ui',
+  expectedUpdatedAt?: number
 ): Promise<void> {
   try {
     await sendDeferredConversationMessage(ctx, threadId, itemId, async (payload) => {
-      await sendConversationTurn(ctx, threadId, payload.input, payload.mode, payload.execution, { drain: true });
-    });
+      if (!payload.admission) {
+        await sendConversationTurn(ctx, threadId, payload.input, payload.mode, payload.execution, { drain: true, skipAdmission: true });
+        return;
+      }
+      if (!payload.admission.overrideable) {
+        throw new ThreadCreateError(409, 'dispatch_not_overrideable', 'This queued message cannot be sent now');
+      }
+      const admission = payload.admission;
+      const consumed = consumeDispatchAdmissionOverride(ctx.db, { threadId, generation: admission.generation });
+      const thread = getConversationThread(ctx.db, threadId);
+      if (thread) {
+        emitDispatchOverrideAudit(ctx, {
+          dispatchId: randomUUID(),
+          threadId,
+          projectId: thread.projectId,
+          overriddenBy,
+          pluginId: admission.pluginId,
+          reason: admission.reason,
+          priorGeneration: admission.generation,
+          timestamp: Date.now(),
+          outcome: consumed ? 'accepted' : 'stale'
+        });
+      }
+      if (!consumed) {
+        throw new ThreadCreateError(
+          409,
+          'dispatch_generation_stale',
+          'This queued message is stale; a newer wait superseded it'
+        );
+      }
+      await sendConversationTurn(ctx, threadId, payload.input, payload.mode, payload.execution, { drain: true, skipAdmission: true });
+    }, expectedUpdatedAt);
   } finally {
     const thread = getConversationThread(ctx.db, threadId);
     if (thread) ctx.hub.emit('threads:updated', conversationThreadView(ctx, thread));

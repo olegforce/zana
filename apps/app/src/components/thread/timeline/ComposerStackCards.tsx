@@ -126,7 +126,7 @@ export function QueuedMessagesCard({ threadId }: { threadId: string }) {
               data-testid="thread-queued-item-send-now"
               aria-busy={sendingId === item.id}
               disabled={flushing || sendingId !== null || deletingId !== null || item.status === 'dispatching'}
-              onClick={() => {
+               onClick={() => {
                 if (flushing || sendingId || deletingId) return;
                 setSendingId(item.id);
                 setFlushError(null);
@@ -169,10 +169,10 @@ export function QueuedMessagesCard({ threadId }: { threadId: string }) {
             >
               <Square size={14} fill="currentColor" aria-hidden="true" />
             </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+           </li>
+         ))}
+       </ul>
+     </section>
   );
 }
 

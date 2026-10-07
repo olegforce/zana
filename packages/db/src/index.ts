@@ -166,6 +166,7 @@ export {
   postponeDeferredThreadRetry,
   recoverInterruptedDeferredThreadMessages,
   markDeferredThreadMessageDispatching,
+  holdDeferredThreadMessage,
   markDeferredThreadMessageFailed,
   pauseDeferredThreadMessagesForThread,
   requeueDeferredThreadMessagesForThread,
@@ -173,6 +174,13 @@ export {
   type DeferredThreadMessageRow,
   type NextTurnSendStatus
 } from './data/deferred-thread-messages.js';
+export {
+  clearDispatchAdmissionGeneration,
+  consumeDispatchAdmissionOverride,
+  getDispatchAdmissionGeneration,
+  recordDispatchAdmissionWait,
+  type DispatchAdmissionGenerationRow
+} from './data/dispatch-admission-generations.js';
 export {
   addThreadPlanReference,
   appendThreadPlanRevision,
