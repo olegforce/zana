@@ -72,17 +72,18 @@ export function checkReleaseNotes({ version, body, tag }) {
   return problems;
 }
 
-function main() {
-  const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+export function runReleaseNotesGuard({ root = repoRoot, tag = process.env.GITHUB_REF_NAME, log = console.log, error = console.error } = {}) {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const version = pkg.version;
-  const notesFile = join(repoRoot, 'docs', 'releases', `${version}.md`);
+  const notesFile = join(root, 'docs', 'releases', `${version}.md`);
   const body = existsSync(notesFile) ? readFileSync(notesFile, 'utf8') : null;
-  const problems = checkReleaseNotes({ version, body, tag: process.env.GITHUB_REF_NAME });
+  const problems = checkReleaseNotes({ version, body, tag });
   if (problems.length > 0) {
-    console.error(`\n✗ Release-notes guard:\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
-    process.exit(1);
+    error(`\n✗ Release-notes guard:\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
+    return 1;
   }
-  console.log(`✓ Release-notes guard: docs/releases/${version}.md present (${body.trim().length} chars).`);
+  log(`✓ Release-notes guard: docs/releases/${version}.md present (${body.trim().length} chars).`);
+  return 0;
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) main();
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) process.exitCode = runReleaseNotesGuard();

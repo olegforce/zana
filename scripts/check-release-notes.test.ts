@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MAX_NOTES_CHARS, checkReleaseNotes } from './check-release-notes.mjs';
+import { MAX_NOTES_CHARS, checkReleaseNotes, runReleaseNotesGuard } from './check-release-notes.mjs';
 import { MAX_UPDATE_NOTE_CHARS } from '../apps/desktop/src/update-release-notes.js';
 
 const GOOD = '# What’s new in 1.2.3\n\n**Headline.** A sentence long enough to count as real release notes for this version.\n\n- Item with `<tag>` and `a | b` in code.';
@@ -60,6 +60,9 @@ describe('release-notes executable', () => {
       copyFileSync(new URL('./check-release-notes.mjs', import.meta.url), script);
       writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '1.2.3' }));
       if (body !== null) writeFileSync(join(root, 'docs', 'releases', '1.2.3.md'), body);
+      const messages: string[] = [];
+      expect(runReleaseNotesGuard({ root, tag, log: (line: string) => messages.push(line), error: (line: string) => messages.push(line) })).toBe(status);
+      expect(messages.join('\n')).toContain(output);
       const result = spawnSync(process.execPath, [script], {
         cwd: root, env: { ...process.env, GITHUB_REF_NAME: tag }, encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024
       });
