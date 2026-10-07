@@ -222,6 +222,37 @@ it('awaits the shared queue store through the live plugin SDK callback', async (
   await expect(plugins.callRpc('queue-reader', 'queue', { threadId: 'thread' })).resolves.toEqual([{ id: queued.id }]);
 });
 
+it('authorizes plugin queue writes against the registered thread and normalizes attachment provenance', async () => {
+  const dataDir = tempDir(), pluginRoot = tempDir(), bundledRoot = tempDir();
+  writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ name: 'queue-writer', version: '0.1.0',
+    engines: { zcc: '>=1.0.0', zccPluginSdk: '>=0.1.0' },
+    zcc: { name: 'Queue writer', description: 'Queue write regression', branding: { icon: 'Puzzle' }, server: './server.mjs' } }));
+  writeFileSync(join(pluginRoot, 'server.mjs'), `export default api => {
+    api.rpc.method('create', args => api.sdk.threads.queuedMessages.create(args));
+  };`);
+  server = await startProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+  const { createConversationThread, createEnvironment, upsertHost } = await import('@zana-ai/zcc-db');
+  const host = upsertHost(server.ctx.db, { name: 'Queue host', hostKeyHash: 'queue-host' });
+  const environment = createEnvironment(server.ctx.db, { projectId: 'queue-project', hostId: host.id,
+    path: tempDir(), workspaceProvisionType: 'unmanaged', status: 'ready' });
+  const thread = createConversationThread(server.ctx.db, { projectId: 'queue-project', hostId: host.id,
+    environmentId: environment.id, providerId: 'codex' });
+  const plugins = await attachProductPluginService(server.ctx, { bundledRoot });
+  await plugins.install(pluginRoot);
+  await expect(plugins.callRpc('queue-writer', 'create', { threadId: 'missing', input: [{ type: 'text', text: 'Do work' }] }))
+    .rejects.toThrow('Thread is not registered');
+  await expect(plugins.callRpc('queue-writer', 'create', { threadId: thread.id,
+    input: [{ type: 'localImage', path: '/tmp/foreign.png', hostId: 'other-machine' }] }))
+    .rejects.toThrow('belongs to another machine');
+  const created = await plugins.callRpc('queue-writer', 'create', { threadId: thread.id,
+    input: [{ type: 'localImage', path: '/tmp/owned.png', hostId: host.id }] });
+  expect(created).toMatchObject({ id: expect.any(String) });
+  const { listQueuedMessages } = await import('../services/threads/queued-messages.js');
+  const queue = await listQueuedMessages(dataDir, thread.id);
+  expect(queue).toHaveLength(1);
+  expect(queue[0].content).toEqual([{ type: 'localImage', path: '/tmp/owned.png' }]);
+});
+
 function writeInteractionsPlugin(dir: string, pluginId: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(

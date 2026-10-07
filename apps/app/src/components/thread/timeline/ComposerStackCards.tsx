@@ -83,7 +83,7 @@ export function QueuedMessagesCard({ threadId }: { threadId: string }) {
             className="thread-queued-flush"
             data-testid="thread-queued-send-now"
             aria-busy={flushing}
-            disabled={sendingId !== null || deletingId !== null}
+            disabled={flushing || sendingId !== null || deletingId !== null}
             onClick={() => {
               if (flushing || sendingId || deletingId) return;
               setFlushing(true);

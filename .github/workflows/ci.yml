@@ -65,16 +65,16 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Unit tests with coverage
-        run: pnpm exec vitest run --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage/root
+        run: pnpm exec vitest run --coverage --coverage.reportOnFailure --coverage.reporter=json --coverage.reportsDirectory=coverage/root
 
       - name: Tasks tests with package configuration and coverage
-        run: pnpm exec vitest run --config plugins/tasks/vitest.config.ts --coverage --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/tasks"
+        run: pnpm exec vitest run --config plugins/tasks/vitest.config.ts --coverage --coverage.reportOnFailure --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/tasks"
 
       - name: Pi provider tests with package configuration and coverage
-        run: pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/pi"
+        run: pnpm --dir plugins/provider-pi exec vitest run --config vitest.config.ts --coverage --coverage.reportOnFailure --coverage.reporter=json --coverage.reportsDirectory="$GITHUB_WORKSPACE/coverage/pi"
 
       - name: Release package coverage
-        run: pnpm exec vitest run --config vitest.release-coverage.config.ts --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage/release
+        run: pnpm exec vitest run --config vitest.release-coverage.config.ts --coverage --coverage.reportOnFailure --coverage.reporter=json --coverage.reportsDirectory=coverage/release
 
       - name: Enforce changed-code coverage
         run: node scripts/ci-verification.mjs --coverage coverage/root/coverage-final.json coverage/tasks/coverage-final.json coverage/pi/coverage-final.json coverage/release/coverage-final.json
