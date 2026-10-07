@@ -280,6 +280,20 @@ describe('ClaudeCodeProvider.title', () => {
 describe('ClaudeCodeProvider.buildRemoteCommand', () => {
   const p = new ClaudeCodeProvider();
   const remote: ProjectRemote = { host: 'devbox', user: 'sfwork', remotePath: '/home/sfwork/core' };
+  it('preserves a runnable remote command when a model contribution has no CLI arguments', () => {
+    const provider = new ClaudeCodeProvider();
+    const contribution = vi.spyOn(provider, 'modelContribution').mockReturnValue({} as ReturnType<ClaudeCodeProvider['modelContribution']>);
+    try {
+      const { cmd } = provider.buildRemoteCommand({ profile: 'claude', config: CONFIG, remote,
+        harnessRouting: { schemaVersion: 1, byAdapter: { claude: { modelTargetId: 'opus' } } }
+      });
+      expect(contribution).toHaveBeenCalledWith('opus', undefined);
+      expect(cmd).toContain("exec 'claude'");
+      expect(cmd).not.toContain("'--model'");
+      expect(cmd).not.toContain('undefined');
+    } finally { contribution.mockRestore(); }
+  });
+
   it('carries a picked live catalog model into SSH argv after inherited model flags', () => {
     const { cmd } = p.buildRemoteCommand({ profile: 'claude', config: CONFIG, remote,
       projectSettings: { model: 'sonnet' },
