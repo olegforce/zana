@@ -42,6 +42,7 @@ it('refreshes plugin policy and publishes the owner config through utility-proce
   const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   h.context = { db: {}, hub: { emit: h.emit, subscribe: () => () => undefined }, config: { getConfig: () => h.config } };
   let id = 0;
+  let stopped = false;
   const publish = async (channel: string, args: unknown[] = []) => {
     const requestId = `config-event-${++id}`;
     parent.emit('message', { data: { type: 'request', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION,
@@ -73,11 +74,14 @@ it('refreshes plugin policy and publishes the owner config through utility-proce
     expect(h.refresh).toHaveBeenCalledTimes(2);
     parent.emit('message', { data: { type: 'stop' } });
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    stopped = true;
     expect(h.close).toHaveBeenCalledOnce();
     expect(h.databaseClose).toHaveBeenCalledOnce();
   } finally {
-    parent.emit('message', { data: { type: 'stop' } });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    if (!stopped) {
+      parent.emit('message', { data: { type: 'stop' } });
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    }
     exit.mockRestore();
     if (descriptor) Object.defineProperty(process, 'parentPort', descriptor);
     else Reflect.deleteProperty(process, 'parentPort');
