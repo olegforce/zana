@@ -11,6 +11,7 @@ import {
 import {
   getConversationThread,
   getEnvironment,
+  getPrimaryHost,
   listConversationThreadEventsWindow,
   queryConversationThreads
 } from '@zana-ai/zcc-db';
@@ -55,9 +56,10 @@ export async function productPushInbox(
 }
 
 export function productListProjects(
-  ctx: Pick<ProductHttpContext, 'projects'>
+  ctx: Pick<ProductHttpContext, 'projects'> & Partial<Pick<ProductHttpContext, 'db'>>
 ): PluginSdkProject[] {
-  return ctx.projects.list().map((row) => ({ id: row.id, name: row.name, path: row.path, ...(row.icon ? { icon: row.icon } : {}), ...(row.quickAgent === true ? { quickAgent: true } : {}) }));
+  const localHostId = ctx.db ? getPrimaryHost(ctx.db)?.id : undefined;
+  return ctx.projects.list().map((row) => ({ id: row.id, name: row.name, path: row.path, local: !row.remote && (!row.hostId || row.hostId === localHostId), ...(row.icon ? { icon: row.icon } : {}), ...(row.quickAgent === true ? { quickAgent: true } : {}) }));
 }
 
 /**

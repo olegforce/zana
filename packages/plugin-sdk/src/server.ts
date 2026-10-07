@@ -561,6 +561,8 @@ export interface PluginSdkAssistant {
 }
 
 export interface PluginSdkProject {
+  /** Host attestation that this path belongs to the local execution host. Absence means unknown. */
+  local?: boolean;
   icon?: ProjectIcon;
   /** Host-owned marker for the built-in Default Project; independent of its name. */
   quickAgent?: boolean;

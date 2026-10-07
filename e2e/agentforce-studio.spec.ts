@@ -9,6 +9,7 @@ import { VISUALIZER_FLOW } from '../plugins/salesforce/src/flow-visualizer-fixtu
 import { flowSnapshotXml } from '../plugins/salesforce/lib/flow-visualizer.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const toolbarFile = 'force-app/main/default/aiAuthoringBundles/Customer_Service_Agent_With_A_Long_Name/Customer_Service_Agent_With_A_Long_Name.agent';
 // Replace only the upstream network in the installed fixture. The real transport,
 // session service, plugin RPC, Monaco iframe and Electron UI all run unchanged.
 const test = base.extend({
@@ -114,6 +115,8 @@ console.log(JSON.stringify({ status:0, result }));
     mkdirSync(join(home, 'dx', 'force-app'), { recursive: true });
     writeFileSync(join(home, 'dx', 'sfdx-project.json'), JSON.stringify({ packageDirectories: [{ path: 'force-app', default: true }] }));
     writeFileSync(join(home, 'dx', 'force-app', 'Support.agent'), AGENT_SCRIPT_EXAMPLES[0].source);
+    mkdirSync(join(home, 'dx', 'force-app/main/default/aiAuthoringBundles/Customer_Service_Agent_With_A_Long_Name'), { recursive: true });
+    writeFileSync(join(home, 'dx', toolbarFile), AGENT_SCRIPT_EXAMPLES[0].source);
     writeFileSync(join(home, 'dx', 'force-app', 'Orders.agent'), ACTION_AGENT);
     mkdirSync(join(home, 'dx', 'force-app', 'main', 'default', 'classes'), { recursive: true });
     mkdirSync(join(home, 'dx', 'force-app', 'main', 'default', 'flows'), { recursive: true });
@@ -132,6 +135,60 @@ async function openTool(studio: import('@playwright/test').Locator, name: string
   await studio.getByRole('button', { name: 'Add side panel tab', exact: true }).click();
   await studio.getByRole('button', { name: new RegExp(`^${name}`) }).click();
 }
+
+test('Agentforce document toolbar: long paths, save state and narrow light/dark layouts', async ({ app, home }, testInfo) => {
+  const page = app.window;
+  expect(await page.evaluate(() => window.cc.extensions.install({ kind: 'bundled', id: 'salesforce' }))).toMatchObject({ ok: true });
+  const trust = page.getByRole('button', { name: 'Install with full trust' });
+  if (await trust.isVisible().catch(() => false)) await trust.click();
+  await expect.poll(() => page.evaluate(async () => (await window.cc.pluginApps.list()).find(p => p.id === 'salesforce')?.status), { timeout: 30_000 }).toMatch(/running|needs-configuration/);
+  const projectId = await page.evaluate(async path => {
+    const added = await window.cc.projects.add(path); if (!added.ok) throw Error(added.message); return added.value.id;
+  }, join(home, 'dx'));
+  await page.evaluate(async id => {
+    await window.cc.pluginApps.setSettings('salesforce', { defaultOrg: 'studio' });
+    history.pushState({}, '', `/projects/${id}`); window.dispatchEvent(new PopStateEvent('popstate'));
+  }, projectId);
+  await page.getByRole('navigation', { name: 'dx navigation' }).getByRole('button', { name: 'Salesforce', exact: true }).click();
+  await page.getByTestId('salesforce-workbench').getByRole('tab', { name: 'Agentforce', exact: true }).click();
+  const studio = page.getByTestId('salesforce-agent-script-panel');
+  const frame = page.frameLocator('iframe[title="Agentforce playground"]');
+  await expect(frame.getByTestId('agent-script-ide')).toBeVisible();
+  const explorer = studio.getByTestId('salesforce-agent-script-explorer');
+  for (const folder of ['default', 'aiAuthoringBundles', 'Customer_Service_Agent_With_A_Long_Name']) await explorer.getByRole('button', { name: folder, exact: true }).click();
+  await studio.getByTestId(`salesforce-agent-script-file:${toolbarFile}`).click();
+  await expect(studio.locator('.af-document-name')).toHaveText('Customer_Service_Agent_With_A_Long_Name.agent');
+  await expect(studio.getByLabel('Agentforce file', { exact: true })).toHaveAttribute('title', toolbarFile);
+  await expect(studio.locator('.af-draft-state')).toHaveText('Saved');
+  await expect(studio.locator('.af-document-bar').getByText('Saved', { exact: true })).toHaveCount(1);
+  await studio.locator('.af-tools').getByRole('button', { name: 'Hide side panel' }).click();
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    for (const width of [1440, 760]) {
+      await page.setViewportSize({ width, height: 900 });
+      const bar = studio.locator('.af-document-bar');
+      expect(await bar.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await expect(bar.getByRole('button', { name: 'Save Agentforce file' })).toBeVisible();
+      await expect(bar.getByRole('button', { name: 'Save as…' })).toBeVisible();
+      const title = (await studio.locator('.af-document-name').boundingBox())!;
+      const path = (await studio.locator('.af-document-folder').boundingBox())!;
+      expect(path.y).toBeGreaterThan(title.y);
+      await page.screenshot({ path: testInfo.outputPath(`document-toolbar-${theme}-${width}.png`) });
+    }
+  }
+  await frame.locator('.monaco-editor').click({ position: { x: 120, y: 45 } });
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+  await page.keyboard.insertText('# toolbar save verification\n');
+  await expect(studio.locator('.af-draft-state')).toHaveText('Unsaved draft');
+  await studio.getByRole('button', { name: 'Save Agentforce file' }).click();
+  await expect(studio.locator('.af-draft-state')).toHaveText('Saved');
+  expect(readFileSync(join(home, 'dx', toolbarFile), 'utf8')).toContain('# toolbar save verification');
+  await studio.getByRole('button', { name: 'Save as…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Save agent to project' });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
 
 test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellation and evidence', async ({ app, home }, testInfo) => {
   const page = app.window;
@@ -170,7 +227,7 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   const editorBox = await studio.locator('iframe[title="Agentforce playground"]').boundingBox();
   const workbenchBox = await workbench.boundingBox();
   // Navigation and file controls use at most two compact rows above the code.
-  expect(editorBox!.y - workbenchBox!.y).toBeLessThanOrEqual(94);
+  expect(editorBox!.y - workbenchBox!.y).toBeLessThanOrEqual(110);
   const codeBox = await frame.locator('.monaco-editor').boundingBox();
   expect(codeBox!.height).toBeGreaterThan(editorBox!.height - 40);
   const explorerBox = await studio.getByTestId('salesforce-agent-script-explorer').boundingBox();
@@ -211,7 +268,8 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   await saveDialog.getByRole('button', { name: 'Save new file' }).click();
   await expect(saveDialog).toHaveCount(0);
   await expect(studio.getByTestId('salesforce-agent-script-file:DraftCopy.afscript')).toBeVisible();
-  await expect(studio.getByTestId('salesforce-agent-script-save')).toHaveText('Saved');
+  await expect(studio.getByTestId('salesforce-agent-script-save')).toHaveText('Save');
+  await expect(studio.locator('.af-draft-state')).toHaveText('Saved');
   expect(readFileSync(join(home, 'dx/DraftCopy.afscript'), 'utf8')).toContain('# unsaved studio draft');
   await page.screenshot({ path: testInfo.outputPath('studio-saved-draft.png') });
   // A recovered draft retains the original checksum, so external edits cannot be overwritten.
