@@ -166,4 +166,16 @@ describe('CLI Agent project-owned discovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Launch agent' }));
     await waitFor(() => expect(h.createTerminal).toHaveBeenCalledWith('local', 'codex', 80, 24, expect.objectContaining({ hostId: 'primary-host' })));
   });
+
+  it('lets a native-only harness own its model selection without offering model reload', async () => {
+    h.remembered = 'codex'; h.rememberedModel = 'old-model';
+    h.descriptors[0] = { ...h.descriptors[0], modelSelection: 'native-only' };
+    render(composer(h.projects[0]));
+    await waitFor(() => expect(h.modelProps!.onReloadModels).toBeUndefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Launch agent' }));
+    await waitFor(() => expect(h.createTerminal).toHaveBeenCalledWith('local', 'codex', 80, 24, expect.objectContaining({
+      harnessRouting: { schemaVersion: 1, byAdapter: { codex: { executionState: 'accept-edits' } } }
+    })));
+    expect(h.reloadProvider).not.toHaveBeenCalled();
+  });
 });
