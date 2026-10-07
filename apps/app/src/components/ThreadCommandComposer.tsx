@@ -902,10 +902,6 @@ export function ThreadCommandComposer({
           triggerKind={field.triggerKind}
           onApply={field.applySuggestion}
         />
-        {(options.serviceTierOptions ?? []).length > 1 && <label>Service tier <select aria-label="Service tier" value={serviceTier ?? 'default'}
-          onChange={event => setChosenServiceTier(event.target.value)}>
-          {(options.serviceTierOptions ?? []).map(tier => <option key={tier.id} value={tier.id}>{tier.label}</option>)}
-        </select></label>}
         {field.restoredAttachments.map((part, index) => <span key={index} className="thread-command-location">
           {'path' in part ? part.path.split(/[\\/]/).at(-1) : 'Image'}
           <button type="button" aria-label="Remove restored attachment" onClick={() => field.removeRestoredAttachment(index)}>×</button>
