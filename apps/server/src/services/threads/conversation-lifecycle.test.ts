@@ -2137,7 +2137,9 @@ describe('dispatch admission override (OBL-003)', () => {
   it.each(['stop', 'archive'])('does not queue a late admission wait after %s cancelled the send', async action => {
     let resolve!: (value: unknown) => void;
     const admit = vi.fn(() => new Promise(done => { resolve = done; }));
-    const context = { ...ctx(vi.fn(async () => ({}))), plugins: { admitDispatch: admit } } as unknown as ProductHttpContext;
+    const context = { ...ctx(vi.fn(async () => ({}))), plugins: {
+      admitDispatch: admit, emitThreadEvent: vi.fn().mockResolvedValue(undefined)
+    } } as unknown as ProductHttpContext;
     vi.mocked(recordDispatchAdmissionWait).mockClear();
     const pending = sendConversationTurn(context, thread.id, 'cancelled prompt');
     const rejected = expect(pending).rejects.toMatchObject({ code: 'send_cancelled' });

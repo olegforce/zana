@@ -36,7 +36,7 @@ describe('workbench', () => {
     const landing = screen.getByText('Start from a template').parentElement!;
     fireEvent.click(await within(landing).findByRole('radio', { name: /Decision record/ }));
     const dialog = screen.getByRole('dialog', { name: 'New design doc' });
-    expect(within(dialog).getByRole('radio', { name: /Decision record/ }).getAttribute('aria-checked')).toBe('true');
+    expect((await within(dialog).findByRole('radio', { name: /Decision record/ })).getAttribute('aria-checked')).toBe('true');
     const create = within(dialog).getByRole('button', { name: 'Create' }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     fireEvent.change(within(dialog).getByPlaceholderText('e.g. Offline sync for the mobile app'), { target: { value: 'Use SQLite' } });
