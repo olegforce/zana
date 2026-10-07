@@ -114,7 +114,7 @@ export async function sendConversationTurn(
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
   },
-  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean } = {}
+  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean; retainQueuedRow?: boolean } = {}
 ): Promise<ConversationThreadRow> {
   return withConversationSend(ctx.db, threadId, lease => sendConversationTurnWithLease(lease, ctx, threadId, input, mode, execution, options));
 }
@@ -134,7 +134,7 @@ async function sendConversationTurnWithLease(
     claudeCodePermissionMode?: 'plan';
     providerOptions?: Record<string, unknown>;
   },
-  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean } = {}
+  options: { drain?: boolean; resumeQueue?: boolean; compact?: boolean; planRevision?: number; skipAdmission?: boolean; retainQueuedRow?: boolean } = {}
 ): Promise<ConversationThreadRow> {
   const thread = getConversationThread(ctx.db, threadId);
   if (!thread) {
@@ -163,7 +163,7 @@ async function sendConversationTurnWithLease(
         reason: outcome.decision.reason,
         pluginId: outcome.pluginId
       };
-      if (options.drain) throw new DeferredAdmissionWait(admission);
+      if (options.retainQueuedRow) throw new DeferredAdmissionWait(admission);
       deferConversationSend(ctx, {
         threadId: live.id,
         input,
@@ -785,7 +785,7 @@ export async function flushHeldConversationSends(
   if (options.force) resumeConversationQueue(ctx, threadId);
   try {
     await flushDeferredConversationMessages(ctx, threadId, async (payload) => {
-      await sendConversationTurn(ctx, threadId, payload.input, payload.mode, payload.execution, { drain: true });
+      await sendConversationTurn(ctx, threadId, payload.input, payload.mode, payload.execution, { drain: true, retainQueuedRow: true });
     }, options);
   } finally {
     const thread = getConversationThread(ctx.db, threadId);

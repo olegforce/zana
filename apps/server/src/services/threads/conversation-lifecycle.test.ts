@@ -2120,9 +2120,18 @@ describe('dispatch admission override (OBL-003)', () => {
     const context = { ...ctx(vi.fn()), plugins: { admitDispatch: vi.fn().mockResolvedValue({
       action: 'wait', reason: 'capacity', overrideable: true
     }) } } as unknown as ProductHttpContext;
-    await expect(sendConversationTurn(context, thread.id, 'held', 'auto', undefined, { drain: true }))
+    await expect(sendConversationTurn(context, thread.id, 'held', 'auto', undefined, { drain: true, retainQueuedRow: true }))
       .rejects.toMatchObject({ name: 'DeferredAdmissionWait', admission: { reason: 'capacity', overrideable: true } });
     expect(createDeferredThreadMessage).not.toHaveBeenCalled();
+  });
+
+  it('still queues a waiting plan or parent send that has no claimed deferred row', async () => {
+    const context = { ...ctx(vi.fn()), plugins: { admitDispatch: vi.fn().mockResolvedValue({
+      action: 'wait', reason: 'capacity', overrideable: true
+    }) } } as unknown as ProductHttpContext;
+    await expect(sendConversationTurn(context, thread.id, 'system prompt', 'auto', undefined, { drain: true }))
+      .resolves.toMatchObject({ id: thread.id });
+    expect(createDeferredThreadMessage).toHaveBeenCalledOnce();
   });
 
   it.each(['stop', 'archive'])('does not queue a late admission wait after %s cancelled the send', async action => {
