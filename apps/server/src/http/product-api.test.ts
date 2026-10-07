@@ -3215,7 +3215,7 @@ describe('async history and queue HTTP responsiveness', () => {
         const response = await fetch(`${server.url}api/v1/config`, { method: 'PATCH',
           headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pluginSafeMode: flag }) });
         expect(response.status).toBe(200);
-        expect((await response.json()).pluginSafeMode).toBe(flag);
+        expect((await response.json()).config.pluginSafeMode).toBe(flag);
         expect(refreshSafeMode).toHaveBeenCalledTimes(expectedCalls);
       }
     } finally { server.ctx.plugins = original; }

@@ -76,7 +76,7 @@ it('adopts an orphaned browser tab through authenticated host RPC and emits afte
     await connection.ready;
     connection.send(JSON.stringify({ type: 'host.event', protocolVersion: HOST_RPC_PROTOCOL_VERSION,
       hostId, instanceId, batchId, events: [{ kind: 'desktop.browser.changed', threadId: live.id,
-        payload: { instanceId: currentWindow, generation, threadId: live.id, tabs: [{ tabId, threadId: live.id,
+        payload: { type: 'desktop-browser.changed', instanceId: currentWindow, generation, threadId: live.id, tabs: [{ tabId, threadId: live.id,
           title: 'Recovered', url: 'https://example.test/', control: null,
           profile: { kind: 'automation', id: 'recovery-profile' }, presentation: 'hidden' }] }
       }]

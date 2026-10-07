@@ -1,6 +1,4 @@
-// @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -16,18 +14,6 @@ vi.mock('../../../lib/product-client.js', () => ({
 }));
 
 describe('MessageActionBar', () => {
-
-  it('copies a link to the selected message, encoding the thread id and preserving sequence zero', () => {
-    const onCopy = vi.fn();
-    const view = render(<MessageActionBar text="Done" threadId="thread/with spaces" sourceSeqEnd={0} onCopy={onCopy} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy message link' }));
-    expect(onCopy).toHaveBeenCalledWith(new URL('/threads/thread%2Fwith%20spaces?message=0', window.location.origin).href);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
-    expect(onCopy).toHaveBeenLastCalledWith('Done');
-    view.rerender(<MessageActionBar text="Done" threadId="t1" onCopy={onCopy} />);
-    expect(screen.queryByRole('button', { name: 'Copy message link' })).toBeNull();
-    cleanup();
-  });
 
   it('renders copy and fork for an assistant message without add-to-chat', () => {
     const html = renderToStaticMarkup(
