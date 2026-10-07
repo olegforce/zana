@@ -146,6 +146,13 @@ export const BUILTIN_PLUGINS: BundledPluginDefinition[] = [
 export const OFFICIAL_PLUGINS: BundledPluginDefinition[] = [
   { name: 'prompt-library', pluginId: 'prompt-library', autoInstall: false, defaultEnabled: true, category: 'Context & knowledge' },
   {
+    name: 'design-docs',
+    pluginId: 'design-docs',
+    autoInstall: false,
+    defaultEnabled: true,
+    category: 'Context & knowledge'
+  },
+  {
     name: 'provider-afcode',
     pluginId: 'provider-afcode',
     autoInstall: false,
