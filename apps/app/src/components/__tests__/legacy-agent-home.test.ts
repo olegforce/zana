@@ -80,6 +80,12 @@ describe('threadPermissionMode', () => {
 });
 
 describe('resolveCliAgentFamily', () => {
+  it('preserves a configured default during an empty roster and leaves an unconfigured roster blank', () => {
+    const input = { currentFamilyId: '', rememberedFamilyId: null, availableFamilyIds: [], effectiveDefaultFamilyId: 'codex' };
+    expect(resolveCliAgentFamily(input)).toBe('codex');
+    expect(resolveCliAgentFamily({ ...input, effectiveDefaultFamilyId: null })).toBe('');
+    expect(resolveCliAgentFamily({ ...input, availableFamilyIds: ['opencode'], effectiveDefaultFamilyId: null })).toBe('');
+  });
   it('uses an offered remote harness when the local default is absent, while retaining valid preferences', () => {
     const input = { currentFamilyId: '', rememberedFamilyId: null, effectiveDefaultFamilyId: 'claude',
       availableFamilyIds: ['opencode', 'codex'], fallbackToAvailable: true };

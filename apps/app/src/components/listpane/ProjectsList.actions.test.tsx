@@ -12,11 +12,12 @@ const h = vi.hoisted(() => ({
   ] as Project[],
   actions: [] as PluginProjectMenuActionRegistration[],
   createActions: [],
-  run: vi.fn()
+  run: vi.fn(),
+  loadProjects: vi.fn(async () => undefined)
 }));
 
 vi.mock('../../store.js', () => ({
-  useData: (select: (state: unknown) => unknown) => select({ projects: h.projects, terminals: {}, projectNavigationOrganization: 'sessions' }),
+  useData: (select: (state: unknown) => unknown) => select({ projects: h.projects, terminals: {}, projectNavigationOrganization: 'sessions', loadProjects: h.loadProjects }),
   useUi: (select: (state: unknown) => unknown) => select({
     selectedProjectId: null, focusedProjectId: null, selectedTabId: {}, unread: {}, projectExpanded: {},
     hideIdleProjects: false, collapsedSections: {}
@@ -79,6 +80,27 @@ afterEach(() => {
 });
 
 describe('project plugin action titles', () => {
+  it('closes the project menu and prevents duplicate reloads until refresh finishes', async () => {
+    const pending = deferred<void>();
+    h.loadProjects.mockReturnValueOnce(pending.promise);
+    renderList();
+    openMenu('First');
+    expect(document.querySelector('.project-menu')).not.toBeNull();
+    const reload = screen.getByRole('button', { name: 'Reload project list' });
+    fireEvent.click(reload);
+    expect(document.querySelector('.project-menu')).toBeNull();
+    expect(reload.hasAttribute('disabled')).toBe(true);
+    expect(reload.querySelector('.spin')).not.toBeNull();
+    fireEvent.click(reload);
+    expect(h.loadProjects).toHaveBeenCalledOnce();
+    await act(async () => { pending.resolve(); });
+    expect(reload.hasAttribute('disabled')).toBe(false);
+    expect(reload.querySelector('.spin')).toBeNull();
+    fireEvent.click(reload);
+    await waitFor(() => expect(h.loadProjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reload.hasAttribute('disabled')).toBe(false));
+  });
+
   it('keeps async action disabled until resolved, truncates title, then runs on selected project', async () => {
     const pending = deferred<string>();
     const titleForProject = vi.fn(() => pending.promise);

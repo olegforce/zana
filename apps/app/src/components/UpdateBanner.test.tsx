@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-type Status = { kind: string; version?: string; releaseNotes?: Array<{ version: string; markdown: string }> };
+type Status = { kind: string; version?: string; releaseNotes?: Array<{ version?: string; markdown: string }> };
 const updates = vi.hoisted(() => ({ status: { kind: 'available', version: '2.3.4' } as Status, progress: null }));
 const openWith = vi.hoisted(() => vi.fn());
 vi.mock('../store.js', () => ({
@@ -35,6 +35,15 @@ describe('UpdateBanner release notes', () => {
     updates.status = { kind: 'downloaded', version: '2.3.4', releaseNotes: notes };
     render(<UpdateBanner />);
     expect(screen.getByRole('button', { name: 'What’s new' })).toBeTruthy();
+  });
+
+  it.each(['2.3.4', undefined])('uses note metadata when the offered version is absent (%s)', noteVersion => {
+    const unversioned = [{ version: noteVersion, markdown: '# Update details' }];
+    updates.status = { kind: 'available', releaseNotes: unversioned };
+    render(<UpdateBanner />);
+    fireEvent.click(screen.getByRole('button', { name: 'What’s new' }));
+    expect(openWith).toHaveBeenCalledWith(unversioned, noteVersion ?? null, { preview: true });
+    expect((screen.getByRole('button', { name: 'Skip' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('hides the action when the feed carried no notes', () => {

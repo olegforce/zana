@@ -14,6 +14,19 @@ vi.mock('electron', () => ({
 const { normalizeConfig, normalizeProjectSettings, store } = await import('../store.js');
 const { AUTO_CLOSE_IDLE_DEFAULTS } = await import('@zana-ai/zcc-domain/product');
 
+describe('normalizeConfig — provider tiers and plugin safe mode', () => {
+  it.each([true, false])('preserves explicitly configured booleans (%s)', value => {
+    expect(normalizeConfig({ providerServiceTiersDisabled: value, pluginSafeMode: value })).toMatchObject({
+      providerServiceTiersDisabled: value, pluginSafeMode: value
+    });
+  });
+  it('omits malformed settings so they cannot enable a feature through coercion', () => {
+    const normalized = normalizeConfig({ providerServiceTiersDisabled: 'true' as never, pluginSafeMode: 1 as never });
+    expect(normalized).not.toHaveProperty('providerServiceTiersDisabled');
+    expect(normalized).not.toHaveProperty('pluginSafeMode');
+  });
+});
+
 describe('normalizeConfig — global Claude launch settings', () => {
   it('trims, deduplicates, and preserves supported values', () => {
     const result = normalizeConfig({
