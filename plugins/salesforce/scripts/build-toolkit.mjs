@@ -1,11 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createRequire, builtinModules } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { readFile, readdir, mkdir, cp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(pluginRoot, 'package.json'));
+
+/** Only runtime built-ins may remain outside the isolated toolkit bundle. */
+export function assertToolkitImports(outputs) {
+  for (const item of Object.values(outputs)) for (const dependency of item.imports) {
+    // Node 22's builtinModules omits prefix-only modules such as node:sqlite.
+    if (dependency.external && !isBuiltin(dependency.path)) throw Error(`Unbundled toolkit dependency: ${dependency.path}`);
+  }
+}
 
 /** Keep the SDK's import.meta.url assets separate from the host's server bundle. */
 export async function buildToolkitRuntime(output = join(pluginRoot, 'toolkit-runtime')) {
@@ -15,7 +23,7 @@ export async function buildToolkitRuntime(output = join(pluginRoot, 'toolkit-run
   const catalog = await readFile(join(pluginRoot, 'vendor/catalog.json'));
   if (createHash('sha256').update(catalog).digest('hex') !== manifest.assets.find(a => a.name.endsWith('-catalog.json')).sha256) throw Error('Toolkit catalog integrity mismatch');
   const lockHash = createHash('sha256').update(await readFile(join(pluginRoot, '../../pnpm-lock.yaml'))).digest('hex');
-  const stamp = `${manifest.sourceCommit}:${lockHash}:7`;
+  const stamp = `${manifest.sourceCommit}:${lockHash}:8`;
   if (await readFile(join(output, 'build-stamp'), 'utf8').catch(() => '') === stamp && await stat(join(output, 'sdk.mjs')).catch(() => null)) return;
   const stage = `${output}.stage-${randomUUID()}`;
   await mkdir(stage, { recursive: true });
@@ -66,10 +74,7 @@ export async function buildToolkitRuntime(output = join(pluginRoot, 'toolkit-run
         }
       }], logLevel: 'warning'
     });
-    const builtins = new Set(builtinModules.map(name => name.replace(/^node:/, '')));
-    for (const item of Object.values(result.metafile.outputs)) for (const dependency of item.imports) {
-      if (dependency.external && !builtins.has(dependency.path.replace(/^node:/, ''))) throw Error(`Unbundled toolkit dependency: ${dependency.path}`);
-    }
+    assertToolkitImports(result.metafile.outputs);
     await cp(join(packageRoot, 'dist/assets'), join(stage, 'assets'), { recursive: true });
     for (const [root, id] of resourcePackages) await copyResources(root, join(stage, 'resources', id));
     await writeBundledNotices(result.metafile.inputs, stage);

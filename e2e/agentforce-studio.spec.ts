@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, cpSyn
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base, expect } from './fixtures/app.js';
+import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
 import { AGENT_SCRIPT_EXAMPLES } from '../plugins/salesforce/lib/agent-script-model.js';
 import { ACTION_AGENT, ACTION_APEX, ACTION_FLOW, ACTION_FLOW_XML } from '../plugins/salesforce/src/action-fixtures.js';
 import { VISUALIZER_FLOW } from '../plugins/salesforce/src/flow-visualizer-fixtures.js';
@@ -173,7 +174,7 @@ test('Agentforce document toolbar: long paths, save state and narrow light/dark 
       const title = (await studio.locator('.af-document-name').boundingBox())!;
       const path = (await studio.locator('.af-document-folder').boundingBox())!;
       expect(path.y).toBeGreaterThan(title.y);
-      await page.screenshot({ path: testInfo.outputPath(`document-toolbar-${theme}-${width}.png`) });
+      await captureElectronScreenshot(app.electron, page, testInfo.outputPath(`document-toolbar-${theme}-${width}.png`));
     }
   }
   await frame.locator('.monaco-editor').click({ position: { x: 120, y: 45 } });
@@ -233,12 +234,12 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   const explorerBox = await studio.getByTestId('salesforce-agent-script-explorer').boundingBox();
   expect(explorerBox!.x).toBeGreaterThan(editorBox!.x + editorBox!.width - 1);
   await studio.getByRole('button', { name: 'Add side panel tab' }).click();
-  await page.screenshot({ path: testInfo.outputPath('studio-add-tools.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-add-tools.png'));
   await studio.getByRole('button', { name: /^Graph view/ }).click();
   const graph = page.frameLocator('iframe[title="AgentScript graph"]');
   await expect(graph.getByText('Conversation map')).toBeVisible();
   await expect(frame.locator('.view-lines')).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('studio-editor-graph-dark.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-editor-graph-dark.png'));
   await studio.locator('.af-tools').getByRole('button', { name: 'Hide side panel' }).click();
   await expect(studio.locator('.af-tools')).toBeHidden();
   await expect(frame.locator('.view-lines')).toBeVisible();
@@ -271,7 +272,7 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   await expect(studio.getByTestId('salesforce-agent-script-save')).toHaveText('Save');
   await expect(studio.locator('.af-draft-state')).toHaveText('Saved');
   expect(readFileSync(join(home, 'dx/DraftCopy.afscript'), 'utf8')).toContain('# unsaved studio draft');
-  await page.screenshot({ path: testInfo.outputPath('studio-saved-draft.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-saved-draft.png'));
   // A recovered draft retains the original checksum, so external edits cannot be overwritten.
   await frame.locator('.monaco-editor').click({ position: { x: 120, y: 45 } });
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
@@ -303,7 +304,7 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   await lab.getByLabel('Rehearsal message', { exact: true }).fill('Where is my order?');
   await lab.getByRole('button', { name: 'Send rehearsal message' }).click();
   await expect(lab.getByText(/Could you share your order number/)).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('studio-rehearse-dark.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-rehearse-dark.png'));
   await lab.getByLabel('Rehearsal message', { exact: true }).fill('Long response');
   await lab.getByRole('button', { name: 'Send rehearsal message' }).click();
   await expect(lab.getByTestId('agentforce-lab-transcript')).toContainText('END_OF_RESPONSE');
@@ -317,12 +318,12 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   await expect(lab.getByText('Run complete')).toBeVisible({ timeout: 30_000 });
   await expect(lab.getByText('Criteria met')).toBeVisible();
   await lab.getByRole('region', { name: 'AI evaluation' }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath('studio-test-dark.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-test-dark.png'));
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await expect(frame.getByTestId('agent-script-ide')).toHaveClass(/light/);
   await expect.poll(keywordColor).toBe('rgb(5, 80, 174)');
   await lab.getByRole('region', { name: 'AI evaluation' }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath('studio-test-light.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-test-light.png'));
   await lab.getByRole('button', { name: /AI rehearsal/ }).click();
   await lab.getByRole('button', { name: /Run AI role-play/ }).click();
   await expect(lab.getByText('Run complete')).toBeVisible({ timeout: 30_000 });
@@ -339,7 +340,7 @@ test('Agentforce Studio: edit, Preview API conversation, AI role-play, cancellat
   await expect(frame.locator('.view-lines')).toBeVisible();
   await expect(studio.locator('.af-workspace')).toHaveCSS('flex-direction', 'column');
   expect(await studio.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: testInfo.outputPath('studio-narrow-light.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('studio-narrow-light.png'));
   const requests = JSON.parse(readFileSync(join(home, 'sfap-requests.json'), 'utf8')) as Array<{ path: string; body: Record<string, any> }>;
   expect(requests.find(r => r.path.endsWith('/authoring/scripts'))?.body.assets[0].content).toContain('# unsaved studio draft');
   expect(requests.filter(r => r.path.endsWith('/preview/sessions')).every(r => r.body.enableSimulationMode === true)).toBe(true);
@@ -411,7 +412,7 @@ test('Agentforce action explorer: real source RPC, Apex colors, Flow map and pre
   await openTool(studio, 'Preview');
   await expect(lab.getByText('Conversation ready')).toBeVisible();
   await openTool(studio, 'Actions');
-  await page.screenshot({ path: testInfo.outputPath('actions-apex-dark.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('actions-apex-dark.png'));
   await detail.getByRole('button', { name: 'Org · studio' }).click();
   await expect(detail.getByText('studio · Deployed Apex')).toBeVisible();
   await source.locator('.monaco-editor').click({ position: { x: 120, y: 45 } });
@@ -439,7 +440,7 @@ test('Agentforce action explorer: real source RPC, Apex colors, Flow map and pre
   await expect(flow.getByText('Fault', { exact: true }).first()).toBeVisible();
   await expect(flow.getByRole('button', { name: /Collapse All/ })).toBeVisible();
   await expect(flow.getByRole('button', { name: 'Select components to edit with AI' })).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath('actions-flow-dark.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('actions-flow-dark.png'));
   await detail.getByRole('button', { name: 'Org · studio' }).click();
   await expect(detail.getByText('studio · Active Flow · v7')).toBeVisible();
   await expect(flow.locator('svg text').filter({ hasText: /^Within 30 days$/ })).toBeVisible();
@@ -448,7 +449,7 @@ test('Agentforce action explorer: real source RPC, Apex colors, Flow map and pre
   await expect(detail.getByText('studio · Deployed Apex')).toBeVisible();
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await expect.poll(keywordColor).toBe('rgb(166, 38, 164)');
-  await page.screenshot({ path: testInfo.outputPath('actions-apex-light.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('actions-apex-light.png'));
   await openTool(studio, 'File explorer');
   await openTool(studio, 'Graph view');
   await page.frameLocator('iframe[title="AgentScript graph"]').getByRole('button', { name: 'Inspect refund', exact: true }).click();
@@ -456,7 +457,7 @@ test('Agentforce action explorer: real source RPC, Apex colors, Flow map and pre
   await expect(detail.getByRole('heading', { name: 'CheckReturn' })).toBeVisible();
   await app.electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 850));
   expect(await studio.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: testInfo.outputPath('actions-flow-narrow-light.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('actions-flow-narrow-light.png'));
   await detail.getByRole('button', { name: 'Last preview' }).click();
   await expect(detail.getByText('No action trace available')).toBeVisible();
   expect(await studio.innerText()).not.toContain('PRIVATE_TOKEN');
@@ -500,7 +501,7 @@ test('Salesforce Flow visualizer: official canvas, branches, details, themes and
   await expect(flow.getByText('Each order item', { exact: true })).toBeVisible();
   await flow.getByText('Return eligible?', { exact: true }).click();
   await expect(flow.getByText('Element Details', { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('flow-official-details-dark.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('flow-official-details-dark.png'));
   await flow.getByRole('button', { name: 'Close', exact: true }).click();
   await flow.getByRole('button', { name: 'Collapse All', exact: true }).click();
   await expect(flow.getByRole('button', { name: 'Expand All', exact: true })).toBeVisible();
@@ -508,11 +509,11 @@ test('Salesforce Flow visualizer: official canvas, branches, details, themes and
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await expect(frame).toHaveAttribute('src', /light\.html$/);
   await expect(flow.getByText('Each order item', { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('flow-official-light.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('flow-official-light.png'));
   await app.electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 850));
   expect(await studio.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await expect(flow.getByRole('button', { name: 'Collapse All', exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('flow-official-narrow-light.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('flow-official-narrow-light.png'));
   // Focus a control inside the sandbox: Escape must cross the frame boundary.
   await flow.getByRole('button', { name: 'Zoom out', exact: true }).click();
   await page.keyboard.press('Escape');
@@ -572,7 +573,7 @@ test('Agentforce Studio: browse org source versions, retrieve and preserve local
   expect(retrievals[0].args).toContain('AiAuthoringBundle:Support_v1');
   expect(retrievals[0].home).toBe(home);
   expect(existsSync(retrievals[0].cwd)).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath('org-agent-source-browser.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('org-agent-source-browser.png'));
   await agents.getByRole('textbox', { name: 'Search org agents' }).fill('Unavailable');
   await agents.getByRole('button', { name: 'Retrieve & open' }).click();
   await expect(agents.getByRole('alert')).toHaveText('Source access denied');
@@ -607,7 +608,7 @@ test('Agentforce Studio: create local agents and control the visible workbench t
   await dialog.getByLabel('Purpose', { exact: false }).fill('Help customers with clear, concise answers.');
   await expect(dialog.getByLabel('API name')).toHaveValue('Customer_support');
   await expect(dialog).toContainText('agentforce-drafts/force-app/main/default/aiAuthoringBundles');
-  await page.screenshot({ path: testInfo.outputPath('new-agent-dialog.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('new-agent-dialog.png'));
   await dialog.getByRole('button', { name: 'Create agent', exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(editor.locator('.view-lines')).toContainText('Customer_support');
@@ -665,7 +666,7 @@ test('Agentforce Studio: create local agents and control the visible workbench t
   await studio.getByRole('button', { name: 'Save Agentforce file' }).click();
   await expect.poll(() => readFileSync(join(projectRoot, created.file.path), 'utf8')).toContain('HUMAN_EDIT');
   expect(await command(agentView, 'file.open', { path: draftPath })).toMatchObject({ ok: true });
-  await page.screenshot({ path: testInfo.outputPath('new-agent-controlled-graph.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('new-agent-controlled-graph.png'));
   const query = await action('query.execute', { query: 'SELECT Id, Name FROM Account LIMIT 1' });
   expect(query).toMatchObject({ ok: true, resultId: expect.any(String) });
   expect(await command(await view('workbench'), 'view.open', { view: 'data' })).toMatchObject({ ok: true, viewState: { view: 'data' } });
@@ -693,7 +694,7 @@ test('Salesforce readiness: local authoring without CLI, project org selection a
   await expect(workbench.getByText('Local authoring ready', { exact: true })).toBeVisible();
   await expect(workbench.getByRole('heading', { name: 'Org connections unavailable' })).toBeVisible();
   await expect(workbench.getByText('Salesforce CLI (sf) was not found on PATH. Install it, then check again.', { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('salesforce-local-ready-without-cli.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-local-ready-without-cli.png'));
   await workbench.getByRole('button', { name: /Build an agent/ }).click();
   const studio = page.getByTestId('salesforce-agent-script-panel');
   const editor = page.frameLocator('iframe[title="Agentforce playground"]');
@@ -733,7 +734,7 @@ test('Salesforce readiness: local authoring without CLI, project org selection a
   await expect(workbench.getByRole('heading', { name: 'Reconnect your org' })).toBeVisible();
   await page.setViewportSize({ width: 760, height: 900 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-  await page.screenshot({ path: testInfo.outputPath('salesforce-reconnect-narrow-light.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-reconnect-narrow-light.png'));
   writeFileSync(statePath, 'failed');
   await workbench.getByRole('button', { name: 'Check again' }).click();
   await expect(workbench.getByRole('heading', { name: 'Org connections unavailable' })).toBeVisible();
@@ -769,7 +770,7 @@ test('Salesforce illustrated states: editor and agents loading, empty results, r
     const editorLoading = page.getByRole('status').filter({ hasText: 'Opening your editor…' });
     await expect(editorLoading).toBeVisible();
     await expect(editorLoading.locator('.sf-state-art')).toHaveAttribute('aria-hidden', 'true');
-    await page.screenshot({ path: testInfo.outputPath('salesforce-editor-loading.png') });
+    await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-editor-loading.png'));
     releaseEditor();
     await expect(editorLoading).toHaveCount(0);
     const studio = page.getByTestId('salesforce-agent-script-panel');
@@ -779,7 +780,7 @@ test('Salesforce illustrated states: editor and agents loading, empty results, r
     const animatedLine = loading.locator('.sf-state-window-body span').first();
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(animatedLine).toHaveCSS('animation-name', 'sf-state-line');
-    await page.screenshot({ path: testInfo.outputPath('salesforce-agents-loading-dark.png') });
+    await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-agents-loading-dark.png'));
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(animatedLine).toHaveCSS('animation-name', 'none');
     writeFileSync(metadataState, 'empty');
@@ -787,19 +788,19 @@ test('Salesforce illustrated states: editor and agents loading, empty results, r
     await studio.getByRole('button', { name: 'Create a local agent' }).click();
     await expect(page.getByRole('dialog', { name: 'New agent' })).toBeVisible();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await page.screenshot({ path: testInfo.outputPath('salesforce-agents-empty-dark.png') });
+    await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-agents-empty-dark.png'));
     writeFileSync(metadataState, 'denied');
     await studio.getByRole('button', { name: 'Refresh agents' }).click();
     await expect(studio.getByRole('alert')).toContainText('Metadata API access denied');
     await expect(studio.getByRole('button', { name: 'Create a local agent' })).toBeEnabled();
     await page.setViewportSize({ width: 760, height: 900 });
     await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-    await page.screenshot({ path: testInfo.outputPath('salesforce-agents-unavailable-narrow-light.png') });
+    await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-agents-unavailable-narrow-light.png'));
     const state = studio.locator('.sf-state[data-kind=error]');
     expect(await state.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await workbench.getByRole('tab', { name: 'Data', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Run a query to see records.' })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('salesforce-data-empty-light.png') });
+    await captureElectronScreenshot(app.electron, page, testInfo.outputPath('salesforce-data-empty-light.png'));
     expect(errors).toEqual([]);
   } finally { releaseEditor(); writeFileSync(metadataState, 'empty'); }
 });

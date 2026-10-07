@@ -353,6 +353,9 @@ export function ProjectsList({
   // the gesture visible feedback.
   const handleRefresh = async () => {
     if (refreshing) return;
+    setMenu(null);
+    setSidebarAddOpen(false);
+    setSidebarOrganizeOpen(false);
     setRefreshing(true);
     try {
       await loadProjects();
@@ -970,12 +973,7 @@ export function ProjectsList({
                 aria-label="Reload project list"
                 title="Refresh projects"
                 disabled={refreshing}
-                onClick={() => {
-                  setMenu(null);
-                  setSidebarAddOpen(false);
-                  setSidebarOrganizeOpen(false);
-                  void handleRefresh();
-                }}
+                onClick={() => void handleRefresh()}
               >
                 <RefreshCw size={14} className={refreshing ? 'spin' : undefined} aria-hidden="true" />
               </button>

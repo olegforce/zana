@@ -1,17 +1,16 @@
-import { mkdtemp, cp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { afterEach, expect, it } from 'vitest';
 import { toolkitRuntimeLoader } from '../lib/toolkit-runtime.js';
 import { AGENT_SCRIPT_EXAMPLES } from '../lib/agent-script-model.js';
+import { buildToolkitRuntime } from '../scripts/build-toolkit.mjs';
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
 it('executes real SDK with packaged assets outside the source tree and reads evidence', async () => {
-  execFileSync(process.execPath, ['plugins/salesforce/scripts/build-toolkit.mjs'], { timeout: 120_000 });
   const dir = await mkdtemp(join(tmpdir(), 'sf-runtime-isolated-')); dirs.push(dir);
-  await cp(resolve('plugins/salesforce/toolkit-runtime'), join(dir, 'toolkit-runtime'), { recursive: true });
+  await buildToolkitRuntime(join(dir, 'toolkit-runtime'));
   const workspace = join(dir, 'project'); await mkdir(workspace);
   await writeFile(join(workspace, 'broken.js'), 'import { LightningElement } from "lwc"; export default class Bad extends LightningElement { render( }');
   await writeFile(join(workspace, 'Example.agent'), AGENT_SCRIPT_EXAMPLES[0].source);
