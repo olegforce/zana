@@ -57,12 +57,6 @@ export function ExperimentalView({
           onChange={(v) => onUpdate({ feedNoiseClassifierEnabled: v })}
         />
         <CheckboxField
-          label="CLI Agent host catalog"
-          help="Use the live host harness list for local CLI Agents. Remote projects always use their remote host daemon for harness and model discovery."
-          checked={config.cliRemoteHostCatalogEnabled ?? false}
-          onChange={(v) => onUpdate({ cliRemoteHostCatalogEnabled: v })}
-        />
-        <CheckboxField
           label="Keep agent terminals in ZCC"
           help="When an agent would open Terminal.app, iTerm, or another standalone terminal, open a ZCC shell in this thread’s side panel instead. Off by default. Applies to new sessions only."
           checked={config.inAppAgentTerminalsEnabled ?? false}

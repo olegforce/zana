@@ -432,11 +432,8 @@ describe('normalizeConfig — catch-up summary flags', () => {
     expect(normalizeConfig({ inAppAgentTerminalsEnabled: 'yes' }).inAppAgentTerminalsEnabled).toBeUndefined();
   });
 
-  it('passes through a boolean cliRemoteHostCatalogEnabled, drops non-booleans', () => {
-    expect(normalizeConfig({ cliRemoteHostCatalogEnabled: true }).cliRemoteHostCatalogEnabled).toBe(true);
-    expect(normalizeConfig({ cliRemoteHostCatalogEnabled: false }).cliRemoteHostCatalogEnabled).toBe(false);
-    // @ts-expect-error intentional bad input
-    expect(normalizeConfig({ cliRemoteHostCatalogEnabled: 'yes' }).cliRemoteHostCatalogEnabled).toBeUndefined();
+  it('drops the retired cliRemoteHostCatalogEnabled flag from saved configs', () => {
+    expect(normalizeConfig({ cliRemoteHostCatalogEnabled: true } as never)).not.toHaveProperty('cliRemoteHostCatalogEnabled');
   });
 
   it('passes through boolean composer launch-surface flags, drops non-booleans', () => {

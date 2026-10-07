@@ -58,7 +58,6 @@ import { PopoverPicklist } from './ui/PopoverPicklist.js';
 import { TextArgsField } from './settings/FormFields.js';
 import {
   assembleCliLaunchPrompt,
-  availableAgentHarnesses,
   applyLaunchPatch,
   cliAgentCatalogProviders,
   cliAgentFamilyIdsFromCatalog,
@@ -137,7 +136,6 @@ export function LegacyAgentHomeComposer({
   const harnessMastracodeEnabled = useData((s) => s.harnessMastracodeEnabled);
   const harnessAfcodeEnabled = useData((s) => s.harnessAfcodeEnabled);
   const nativeAgentDiscoveryEnabled = useData((s) => s.nativeAgentDiscoveryEnabled);
-  const cliRemoteHostCatalogEnabled = useData((s) => s.cliRemoteHostCatalogEnabled);
   const selectTab = useUi((s) => s.selectTab);
   const pushToast = useUi((s) => s.pushToast);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
@@ -189,18 +187,15 @@ export function LegacyAgentHomeComposer({
   const descriptorGeneration = useRef(0);
   const launchRef = useRef<() => void>(() => undefined);
   const launchProjects = useMemo(() => composerProjectOptions(projects), [projects]);
-  const harnesses = useMemo(() => availableAgentHarnesses(descriptors), [descriptors]);
-  const harnessesRef = useRef(harnesses);
   const familyIdRef = useRef(familyId);
   const selectionProvenanceRef = useRef(selectionProvenance);
-  harnessesRef.current = harnesses;
   familyIdRef.current = familyId;
   selectionProvenanceRef.current = selectionProvenance;
   const project = pinnedProject ?? launchProjects.find((candidate) => candidate.id === projectId);
   const hosts = useHosts();
-  const catalogScope = cliAgentCatalogScope(project, hosts, cliRemoteHostCatalogEnabled);
+  const catalogScope = cliAgentCatalogScope(project, hosts);
   const executionHostId = catalogScope.executionHostId;
-  const selectedHarness = (project?.remote ? descriptors : harnesses).find((descriptor) => descriptor.id === familyId);
+  const selectedHarness = descriptors.find((descriptor) => descriptor.id === familyId);
   const unrestrictedId = unrestrictedProfileId(selectedHarness?.profiles);
 
   useEffect(() => {
@@ -209,7 +204,6 @@ export function LegacyAgentHomeComposer({
   }, [familyId]);
   const catalogHostId = catalogScope.hostId;
   const hostCatalog = threadModelCatalogForHost(catalogHostId, catalogScope.projectId);
-  const useHostHarnesses = catalogScope.useHostHarnesses;
   const catalog = useSyncExternalStore(hostCatalog.subscribe, hostCatalog.getSnapshot, hostCatalog.getSnapshot);
   const selectedProviderId = (familyId && threadProviderIdForFamily(familyId)) || '';
   const catalogEntry = selectedProviderId ? catalog.byProvider[selectedProviderId] : undefined;
@@ -440,9 +434,7 @@ export function LegacyAgentHomeComposer({
       setSelectionMessage(null);
       return;
     }
-    const availableFamilyIds: string[] = useHostHarnesses
-      ? (catalog.providers.length > 0 ? cliAgentFamilyIdsFromCatalog(catalog.providers) : [])
-      : harnesses.map((row) => row.id);
+    const availableFamilyIds = cliAgentFamilyIdsFromCatalog(catalog.providers);
     const rememberedFamily = familyForThreadProviderId(rememberedProviderId() ?? '');
     const currentFamilyId = familyIdRef.current;
     const stickyFamilyId = selectionProvenanceRef.current === 'explicit' ? currentFamilyId : '';
@@ -485,9 +477,7 @@ export function LegacyAgentHomeComposer({
     if (!currentFamilyId && !kept) setSelectionState('loading');
     void product.harness.effectiveDefault(projectId).then((result: EffectiveHarnessDefaultResult) => {
       if (generation !== selectionGeneration.current) return;
-      const liveIds = useHostHarnesses
-        ? (catalog.providers.length > 0 ? cliAgentFamilyIdsFromCatalog(catalog.providers) : [])
-        : harnessesRef.current.map((row) => row.id);
+      const liveIds = cliAgentFamilyIdsFromCatalog(catalog.providers);
       const currentFamily = familyIdRef.current;
       const remembered = familyForThreadProviderId(rememberedProviderId() ?? '');
       const stickyFamily = selectionProvenanceRef.current === 'explicit' ? currentFamily : '';
@@ -533,7 +523,6 @@ export function LegacyAgentHomeComposer({
     });
   }, [
     projectId,
-    harnesses,
     project?.launchDefault,
     project?.defaultAgents,
     project?.defaultPersonas,
@@ -546,7 +535,6 @@ export function LegacyAgentHomeComposer({
     harnessGrokEnabled,
     harnessMastracodeEnabled,
     harnessAfcodeEnabled,
-    useHostHarnesses,
     catalogScope.ready,
     catalog.providers
   ]);
@@ -712,19 +700,7 @@ export function LegacyAgentHomeComposer({
   };
 
   const harnessProviderOptions = composerProvidersFromCatalog(
-    useHostHarnesses
-      ? cliAgentCatalogProviders(catalog.providers)
-      : harnesses.flatMap((descriptor) => {
-        const providerId = threadProviderIdForFamily(descriptor.id);
-        if (!providerId) return [];
-        const fallback = fallbackProviderOption(providerId);
-        return [{
-          id: providerId,
-          displayName: descriptor.label,
-          permissionModes: fallback.permissionModes,
-          composerActions: fallback.composerActions
-        }];
-      }),
+    cliAgentCatalogProviders(catalog.providers),
     false,
     'claude-code'
   ).filter((row) => !project?.remote || (catalogScope.ready && catalog.providers.some(provider => provider.id === row.id)))

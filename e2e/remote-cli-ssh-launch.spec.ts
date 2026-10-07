@@ -46,7 +46,7 @@ for(const signal of ['SIGTERM','SIGHUP','SIGINT']) process.on(signal,()=>{child.
     const app = await launchApp(home, { allowLiveClaude: true,
       env: { PATH: `${bin}:${remoteBin}:${process.env.PATH}`, SHELL: loginShell, ZDOTDIR: home },
       initialConfig: { lastProjectId: 'ssh-project', defaultHarness: 'claude', claudeBinary: join(remoteBin, 'claude'),
-        cliRemoteHostCatalogEnabled: bound, tmuxScope: 'off', remoteMcpEnabled: false } });
+        tmuxScope: 'off', remoteMcpEnabled: false } });
     try {
       const win = app.window;
       win.setDefaultTimeout(30_000);

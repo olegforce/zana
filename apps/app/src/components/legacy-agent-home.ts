@@ -205,17 +205,6 @@ export function cliAgentProfileSource(
   return 'seeded-default';
 }
 
-export function availableAgentHarnesses<T extends {
-  agentDefaultEligible: boolean;
-  availability: { enabled: boolean; installed: boolean };
-}>(descriptors: readonly T[]): T[] {
-  return descriptors.filter((descriptor) =>
-    descriptor.agentDefaultEligible
-    && descriptor.availability.enabled
-    && descriptor.availability.installed
-  );
-}
-
 export function isAbsoluteLocalPath(path: string): boolean {
   return path.startsWith('/') || /^[a-zA-Z]:[\\/]/u.test(path);
 }

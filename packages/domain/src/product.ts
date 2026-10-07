@@ -2468,12 +2468,6 @@ export interface AppConfig {
    */
   cliRemoteToolProxyEnabled?: boolean;
   /**
-   * EXPERIMENTAL — local CLI Agent harness pickers use the host's live roster
-   * instead of local `harness.descriptors`. SSH projects always use their bound
-   * remote daemon for harness/model discovery, regardless of this flag.
-   */
-  cliRemoteHostCatalogEnabled?: boolean;
-  /**
    * Master switch for the EXPERIMENTAL Follow-ups feature: when ON, the
    * "Follow-ups" project-scoped nav tab appears (durable parked questions from
    * idle-triage and other origins). Under evaluation, so it's hidden by default

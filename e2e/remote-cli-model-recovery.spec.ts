@@ -81,7 +81,7 @@ process.stdout.write('Connect install log '.repeat(3000)+' COMPLETE-CONNECT-LOG\
       env: { PATH: `${bin}:${process.env.PATH}`, SHELL: loginShell, ZDOTDIR: home },
       initialConfig: { lastProjectId: 'remote-fixture', defaultHarness: 'claude', claudeBinary: join(home, 'missing-local-claude'),
         harnessOpenCodeEnabled: false, opencodeBinary: join(home, 'missing-local-opencode'), nativeAgentDiscoveryEnabled: true,
-        cliRemoteHostCatalogEnabled: false, tmuxScope: 'off', remoteMcpEnabled: false,
+        tmuxScope: 'off', remoteMcpEnabled: false,
         ...(agentDefault ? { harnessRouting: { schemaVersion: 1, byAdapter: { opencode: { modelTargetId: 'obsolete/global-model' } } } } : {}) } });
     expect(await app.electron.evaluate(() => process.env.PATH)).toContain(bin);
     const win = app.window; win.setDefaultTimeout(15_000); origin = new URL(win.url()).origin;

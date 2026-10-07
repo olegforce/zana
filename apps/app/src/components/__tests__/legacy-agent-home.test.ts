@@ -4,7 +4,6 @@ import {
   absolutePathMentions,
   applyLaunchPatch,
   assembleCliLaunchPrompt,
-  availableAgentHarnesses,
   composerDropProjectRoot,
   availableModelsToPickerOptions,
   cliAgentCatalogProviders,
@@ -33,17 +32,6 @@ import {
   withExecutionState,
   writeCliExtraArgs
 } from '../legacy-agent-home.js';
-
-describe('availableAgentHarnesses', () => {
-  it('keeps only enabled, installed, agent-eligible adapters', () => {
-    expect(availableAgentHarnesses([
-      { id: 'claude', agentDefaultEligible: true, availability: { enabled: true, installed: true } },
-      { id: 'cursor', agentDefaultEligible: false, availability: { enabled: true, installed: true } },
-      { id: 'codex', agentDefaultEligible: true, availability: { enabled: false, installed: true } },
-      { id: 'pi', agentDefaultEligible: true, availability: { enabled: true, installed: false } }
-    ]).map((row) => row.id)).toEqual(['claude']);
-  });
-});
 
 describe('PROFILE_BY_FAMILY', () => {
   it('maps every harness family to its default launch profile', () => {

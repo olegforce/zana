@@ -1081,9 +1081,6 @@ export function normalizeConfig(input: Partial<AppConfig>): Partial<AppConfig> {
   if (typeof input.cliRemoteToolProxyEnabled === 'boolean') {
     normalized.cliRemoteToolProxyEnabled = input.cliRemoteToolProxyEnabled;
   }
-  if (typeof input.cliRemoteHostCatalogEnabled === 'boolean') {
-    normalized.cliRemoteHostCatalogEnabled = input.cliRemoteHostCatalogEnabled;
-  }
   if (typeof input.followUpsEnabled === 'boolean') {
     normalized.followUpsEnabled = input.followUpsEnabled;
   }

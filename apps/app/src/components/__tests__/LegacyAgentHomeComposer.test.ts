@@ -24,7 +24,7 @@ describe('LegacyAgentHomeComposer', () => {
     expect(source).toContain('modelOptions={availableModelsToPickerOptions(models)}');
     expect(source).toContain('moreModelOptions={availableModelsToPickerOptions(moreModelOptions)}');
     expect(source).toContain('const preferHostModels = true');
-    expect(source).toContain('const catalogScope = cliAgentCatalogScope(project, hosts, cliRemoteHostCatalogEnabled)');
+    expect(source).toContain('const catalogScope = cliAgentCatalogScope(project, hosts)');
     expect(source).toContain('RemoteComposerConnection');
     expect(source).not.toContain('HostMachinePicker');
     expect(source).toContain('hostId: executionHostId');
@@ -32,7 +32,9 @@ describe('LegacyAgentHomeComposer', () => {
     expect(source).toContain('hostCatalog.ensureProvider');
     expect(source).toContain('threadModelCatalogForHost');
     expect(source).not.toContain('prefetchThreadModelCatalog');
-    expect(source).toContain('cliRemoteHostCatalogEnabled');
+    expect(source).not.toContain('cliRemoteHostCatalogEnabled');
+    expect(source).not.toContain('useHostHarnesses');
+    expect(source).not.toContain('availableAgentHarnesses');
     expect(source).toContain('cliAgentCatalogProviders');
     expect(source).toContain('cliAgentFamilyIdsFromCatalog');
     expect(source).toContain('preferHostModels');
@@ -238,14 +240,14 @@ describe('LegacyAgentHomeComposer', () => {
     expect(source).toContain('void hostCatalog.ensure()');
     expect(source).toContain('[hostCatalog, catalogHostId, hosts.length, catalogScope.ready]');
     expect(source).toContain('if (!catalogScope.ready || (!catalogHostId && hosts.length === 0)) return');
-    expect(source).toContain('const catalogScope = cliAgentCatalogScope(project, hosts, cliRemoteHostCatalogEnabled)');
+    expect(source).toContain('const catalogScope = cliAgentCatalogScope(project, hosts)');
     expect(source).toContain('RemoteComposerConnection');
     expect(source).not.toContain('HostMachinePicker');
     expect(source).toContain('hostId: executionHostId');
     expect(source).toContain('&& remoteHarnessReady');
     expect(source).not.toContain('threadModelCatalogForHost(undefined)');
     expect(source).not.toContain('prefetchThreadModelCatalog');
-    expect(source).toContain('useHostHarnesses\n      ? cliAgentCatalogProviders(catalog.providers)');
+    expect(source).toContain('composerProvidersFromCatalog(\n    cliAgentCatalogProviders(catalog.providers),');
     expect(source).not.toContain('cliRemoteHostCatalogEnabled && isRemoteWorkspaceProject(project)');
     expect(source).not.toContain('!isRemoteWorkspaceProject(project) || cliRemoteHostCatalogEnabled');
   });
