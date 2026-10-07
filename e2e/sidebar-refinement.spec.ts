@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures/app.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
 
 test('Projects header refresh reloads out-of-band changes without an overflow menu', async ({ app, home }) => {
   const win = app.window;
@@ -79,6 +80,7 @@ test('sidebar project search, keyboard actions, and Settings stay usable in both
   await expect(win.getByRole('button', { name: 'Rename', exact: true })).toBeVisible();
   await win.keyboard.press('Escape');
 
+  await win.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
   for (const theme of ['light', 'dark'] as const) {
     await win.evaluate((value) => window.cc.config.set({ theme: value }), theme);
     await expect(win.locator('html')).toHaveAttribute('data-theme', theme);
@@ -86,7 +88,7 @@ test('sidebar project search, keyboard actions, and Settings stay usable in both
     await expect(settings).toHaveText('Settings');
     await expect(settings).toBeInViewport();
     expect(await rail.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-    await win.screenshot({ path: testInfo.outputPath(`sidebar-${theme}.png`), animations: 'disabled' });
+    await captureElectronScreenshot(app.electron, win, testInfo.outputPath(`sidebar-${theme}.png`));
   }
   await rail.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(win.getByRole('navigation', { name: 'Settings navigation' })).toBeVisible();

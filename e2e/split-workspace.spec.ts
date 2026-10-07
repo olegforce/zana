@@ -2,6 +2,7 @@ import { test, expect, isAppRendererUrl } from './fixtures/app.js';
 import type { Locator, Page } from '@playwright/test';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
 
 async function beginDrag(page: Page, source: Locator, target: Locator, x = 0.9, y = 0.5) {
   const from = await source.boundingBox();
@@ -104,7 +105,7 @@ test('shell splits: drag, cancel, resize, move, maximize and reload', async ({ a
   await page.locator('[contenteditable="true"]').first().fill('Draft survives split changes');
   await beginDrag(page, nav(page, 'Inbox'), workspace);
   await expect(page.locator('.split-drag-overlay-label')).toHaveText('Split right');
-  await page.screenshot({ path: testInfo.outputPath('split-drop-preview.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('split-drop-preview.png'));
   await page.mouse.up();
   await expect(workspace).toHaveAttribute('data-split', 'true');
   await expect(workspace.locator('.split-pane')).toHaveCount(2);
@@ -166,7 +167,7 @@ test('shell splits: drag, cancel, resize, move, maximize and reload', async ({ a
   await page.mouse.up();
   await expect(workspace.locator('.split-tree').first()).toHaveClass(/split-tree--row/);
   await expect(page.locator('[contenteditable="true"]').first()).toHaveText('Draft survives split changes');
-  await page.screenshot({ path: testInfo.outputPath('split-workspace.png') });
+  await captureElectronScreenshot(app.electron, page, testInfo.outputPath('split-workspace.png'));
   await page.setViewportSize({ width: 680, height: 900 });
   await expect(workspace).toHaveAttribute('data-split', 'false');
   await expect(page.locator('[contenteditable="true"]').first()).toBeVisible();
