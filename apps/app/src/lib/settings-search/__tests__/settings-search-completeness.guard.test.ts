@@ -175,9 +175,20 @@ function haystack(entries: readonly SettingsSearchEntry[]): string[] {
   return out;
 }
 
+/** Whole-word containment, so "add" is not satisfied by "address". */
+function containsWords(hay: string, needle: string): boolean {
+  for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + 1)) {
+    const before = at === 0 || !/[\p{L}\p{N}]/u.test(hay[at - 1]);
+    const end = at + needle.length;
+    const after = end === hay.length || !/[\p{L}\p{N}]/u.test(hay[end]);
+    if (before && after) return true;
+  }
+  return false;
+}
+
 export function findUncovered(literals: readonly string[], entries: readonly SettingsSearchEntry[], allowed: ReadonlySet<string>): string[] {
   const hay = haystack(entries);
-  return literals.filter((l) => !allowed.has(l) && !hay.some((h) => h.includes(l)));
+  return literals.filter((l) => !allowed.has(l) && !hay.some((h) => containsWords(h, l)));
 }
 
 function allowedFor(section: string): Set<string> {
@@ -272,6 +283,12 @@ describe('settings-search completeness guard', () => {
       const lits = collectLiterals('<Field label="Thème" help="Pick one"><option>Dark</option></Field>');
       const covered = [entry({ label: 'theme', help: 'Please PICK one now', options: ['dark'] })];
       expect(findUncovered(lits, covered, new Set())).toEqual([]);
+    });
+
+    it('does not let a literal hide inside a longer word', () => {
+      const lits = collectLiterals('<Field label="Add"/>');
+      expect(findUncovered(lits, [entry({ label: 'Address book' })], new Set())).toEqual(['add']);
+      expect(findUncovered(lits, [entry({ help: 'Add a thing' })], new Set())).toEqual([]);
     });
 
     it('lets the allowlist exclude a literal', () => {

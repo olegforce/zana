@@ -45,7 +45,8 @@ function prefersReducedMotion(): boolean {
 export function revealElement(el: HTMLElement): void {
   el.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
   el.classList.add(FLASH_CLASS);
-  el.querySelector<HTMLElement>(FOCUSABLE)?.focus({ preventScroll: true });
+  // ToggleSwitch puts the target attribute on the control itself.
+  (el.matches(FOCUSABLE) ? el : el.querySelector<HTMLElement>(FOCUSABLE))?.focus({ preventScroll: true });
   window.setTimeout(() => el.classList.remove(FLASH_CLASS), FLASH_MS);
 }
 

@@ -113,6 +113,18 @@ describe('focused Settings navigation', () => {
     expect(screen.getByTestId('hash').textContent).toBe('');
   });
 
+  it('scrolls the active option into view and ignores Enter during IME composition', () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    mount();
+    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(search, { target: { value: 'terminal' } });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+    fireEvent.keyDown(search, { key: 'Enter', isComposing: true });
+    expect(screen.getByTestId('location').textContent).not.toBe('/settings/terminal');
+  });
+
   it('highlights snippet hits with <mark>, shows Current values, and routes project entries via project context', async () => {
     const reg = await import('../../lib/settings-search/registry.js');
     const off = reg.registerSettingsSearchProvider(() => [

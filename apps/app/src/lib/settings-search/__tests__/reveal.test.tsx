@@ -50,6 +50,13 @@ describe('revealElement', () => {
     vi.advanceTimersByTime(FLASH_MS);
     expect(row.classList.contains(FLASH_CLASS)).toBe(false);
   });
+  it('focuses the target itself when it is the control (ToggleSwitch)', () => {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-settings-target', 'toggle');
+    document.body.appendChild(btn);
+    revealElement(btn);
+    expect(document.activeElement).toBe(btn);
+  });
   it('skips smooth scrolling under prefers-reduced-motion', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
     revealElement(mountRow('b'));

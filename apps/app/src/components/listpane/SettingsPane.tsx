@@ -1,6 +1,6 @@
 import { ArrowLeft, FolderCog, Search, X } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMemo, useState, useId } from 'react';
+import { useEffect, useMemo, useState, useId } from 'react';
 import { useData, useUi } from '../../store.js';
 import { SETTINGS_SECTIONS, SETTINGS_GROUPS, SETTINGS_SUBSECTIONS } from '@/views/settings/settings-navigation';
 import { SidebarResizer } from '../SidebarResizer.js';
@@ -76,6 +76,10 @@ export function SettingsPane() {
   const flat = useMemo(() => pages.flatMap((p) => p.hits), [pages]);
   const activeHit = flat[Math.min(active, flat.length - 1)];
   const optionId = (hit: SettingsSearchHit) => `${listId}-${hit.entry.id}`;
+  const activeOptionId = searching && activeHit ? optionId(activeHit) : undefined;
+  useEffect(() => {
+    if (activeOptionId) document.getElementById(activeOptionId)?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeOptionId]);
   const parentLabel = (id: string) => buildCorpus(snapshot).entries.find((r) => r.entry.id === id)?.entry.label;
 
   const open = (hit: SettingsSearchHit) => {
@@ -149,8 +153,9 @@ export function SettingsPane() {
           aria-label="Search settings"
           placeholder="Search settings…"
           value={query}
-          aria-controls={searching ? listId : undefined}
-          aria-activedescendant={searching && activeHit ? optionId(activeHit) : undefined}
+          aria-autocomplete="list"
+          aria-controls={searching && flat.length > 0 ? listId : undefined}
+          aria-activedescendant={activeOptionId}
           onFocus={() => setSearchFocused(true)}
           onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {
@@ -163,7 +168,7 @@ export function SettingsPane() {
             } else if (searching && flat.length > 0 && event.key === 'ArrowUp') {
               event.preventDefault();
               setActive((i) => Math.max(i - 1, 0));
-            } else if (searching && event.key === 'Enter' && activeHit) {
+            } else if (searching && event.key === 'Enter' && activeHit && !event.nativeEvent.isComposing) {
               event.preventDefault();
               open(activeHit);
             }
