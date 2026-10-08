@@ -174,14 +174,31 @@ let last:
       entries: readonly SettingsSearchEntry[];
       providers: readonly SettingsSearchProvider[];
       sourcesVersion: number;
+      revisions: ReadonlyArray<readonly unknown[]>;
       corpus: Corpus;
     }
   | undefined;
 
+const NO_REVISION: readonly unknown[] = [];
+
+function readRevisions(providers: readonly SettingsSearchProvider[]): Array<readonly unknown[]> {
+  return providers.map((provider) => {
+    try {
+      return provider.revision?.() ?? NO_REVISION;
+    } catch {
+      return NO_REVISION;
+    }
+  });
+}
+
+function sameRevisions(a: ReadonlyArray<readonly unknown[]>, b: ReadonlyArray<readonly unknown[]>): boolean {
+  return a.length === b.length && a.every((ra, i) => ra.length === b[i].length && ra.every((v, j) => Object.is(v, b[i][j])));
+}
+
 /**
  * Static text is normalised once per entries array; values and provider output
- * are re-derived only when the snapshot identity, the provider set, or the
- * sources version (a provider's underlying data changed) moves.
+ * are re-derived only when the snapshot identity, the provider set, a provider's
+ * `revision`, or the sources version (an async source landed) changes.
  */
 export function buildCorpus(
   snapshot: SettingsValueSnapshot,
@@ -189,12 +206,14 @@ export function buildCorpus(
   providers: readonly SettingsSearchProvider[] = getSettingsSearchProviders()
 ): Corpus {
   const sourcesVersion = getSettingsSearchSourcesVersion();
+  const revisions = readRevisions(providers);
   if (
     last &&
     last.snapshot === snapshot &&
     last.entries === entries &&
     last.providers === providers &&
-    last.sourcesVersion === sourcesVersion
+    last.sourcesVersion === sourcesVersion &&
+    sameRevisions(last.revisions, revisions)
   ) {
     return last.corpus;
   }
@@ -225,6 +244,6 @@ export function buildCorpus(
   }
 
   const corpus: Corpus = { entries: rows, vocab };
-  last = { snapshot, entries, providers, sourcesVersion, corpus };
+  last = { snapshot, entries, providers, sourcesVersion, revisions, corpus };
   return corpus;
 }

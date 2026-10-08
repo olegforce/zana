@@ -183,13 +183,20 @@ describe('useSettingsTargetReveal', () => {
   });
 
   it('returns to idle once the reveal finishes, so a later collapse sticks and a repeat jump re-opens', () => {
-    mountRow('agents.row');
+    const first = mountRow('agents.row');
     const { result, rerender } = run('agents.row');
     act(() => { vi.advanceTimersByTime(20); });
     expect(result.current).toEqual({ target: null, reveal: null });
-    // A repeat jump to the same row publishes the target again (null -> id is a change for consumers).
+    // Repeat jump while the row is collapsed (not mounted): the target is
+    // published again, which is what makes a collapsible re-open...
+    first.remove();
     rerender({ anchor: null });
     rerender({ anchor: 'agents.row' });
+    expect(result.current.target).toBe('agents.row');
+    // ...and once the row appears it is revealed and the state returns to idle.
+    mountRow('agents.row');
+    act(() => { vi.advanceTimersByTime(40); });
+    expect(result.current).toEqual({ target: null, reveal: null });
     expect(setAnchor).toHaveBeenLastCalledWith(null);
   });
 

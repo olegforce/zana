@@ -1,5 +1,5 @@
 import { usePersonas, useTeams } from '../../../stores/live.js';
-import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
+import { registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider } from '../types';
 
 /** Row target for one persona or squad (rendered on its list row in PersonasView / SquadsView). */
@@ -35,22 +35,10 @@ export const cataloguesSearchProvider: SettingsSearchProvider = () => {
   return out;
 };
 
-/**
- * Register the provider and bump the sources version when the persona or squad
- * lists change, so the corpus picks up renamed or new entries. The returned
- * function releases both subscriptions (Rule 3).
- */
+/** The corpus rebuilds when either list changes identity (renamed, added, removed). */
+cataloguesSearchProvider.revision = () => [usePersonas.getState().personas, useTeams.getState().teams];
+
+/** Register the provider; nothing to subscribe to (see `revision`). Release on shutdown (Rule 3). */
 export function registerCataloguesSearchProvider(): () => void {
-  const off = registerSettingsSearchProvider(cataloguesSearchProvider);
-  const stopPersonas = usePersonas.subscribe((state, prev) => {
-    if (state.personas !== prev.personas) notifySettingsSearchSourcesChanged();
-  });
-  const stopTeams = useTeams.subscribe((state, prev) => {
-    if (state.teams !== prev.teams) notifySettingsSearchSourcesChanged();
-  });
-  return () => {
-    stopPersonas();
-    stopTeams();
-    off();
-  };
+  return registerSettingsSearchProvider(cataloguesSearchProvider);
 }

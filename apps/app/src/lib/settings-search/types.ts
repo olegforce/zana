@@ -40,8 +40,16 @@ export interface SettingsValueSnapshot {
   machines?: readonly { name: string; host?: string }[];
 }
 
-/** Runtime sources (keyboard, harness, plugins, machines, catalogues). */
-export type SettingsSearchProvider = (s: SettingsValueSnapshot) => readonly SettingsSearchEntry[];
+/**
+ * Runtime sources (keyboard, harness, plugins, machines, catalogues). The
+ * optional `revision` returns the identities of the data the provider reads
+ * (cheap, no side effects); the corpus rebuilds when any of them changes, so a
+ * provider stays fresh without subscribing to anything.
+ */
+export interface SettingsSearchProvider {
+  (s: SettingsValueSnapshot): readonly SettingsSearchEntry[];
+  revision?: () => readonly unknown[];
+}
 
 /** Highlight ranges are `[start, end)` offsets into `text`. */
 export interface SettingsSnippet {

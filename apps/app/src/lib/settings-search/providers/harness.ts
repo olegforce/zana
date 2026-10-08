@@ -1,8 +1,8 @@
 import type { AppConfig, HarnessFamily, HarnessVerifyResult } from '@zana-ai/zcc-domain/product';
 import type { HarnessAdapterDescriptor } from '@zana-ai/zcc-domain/harness-adapter';
 import { useData } from '@/store';
-import { getThreadModelCatalog, subscribeThreadModelCatalog } from '@/components/thread/pickers/thread-model-catalog';
-import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
+import { getThreadModelCatalog } from '@/components/thread/pickers/thread-model-catalog';
+import { registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider, SettingsValueSnapshot } from '../types';
 
 // Runtime source for the AI Harness page: one row per harness family plus the
@@ -224,27 +224,22 @@ export function threadProviderEntries(
   });
 }
 
-/** Reads live store state; `registerHarnessSearchProvider` keeps the corpus in step with it. */
+/** Reads live store state; `revision` keeps the corpus in step with it. */
 export const harnessSearchProvider: SettingsSearchProvider = () => [
   ...harnessRowEntries(useData.getState().harnessStatus),
   ...threadProviderEntries([], getThreadModelCatalog())
 ];
 
 /**
- * Register the provider and bump the sources version when its inputs change:
- * the boot harness probe resolves asynchronously and the Modern model catalogue
- * refreshes in the background, so a search opened early must not stay stale.
- * The returned function releases both subscriptions (Rule 3).
+ * The corpus rebuilds when any input changes identity: the probed harness status
+ * (the boot probe resolves after a search may already be open), the Modern model
+ * catalogue snapshot, and the descriptors the page reported. Deliberately NOT a
+ * subscription: a catalogue listener would keep the catalogue's background
+ * refresh loop running for the whole session.
  */
+harnessSearchProvider.revision = () => [useData.getState().harnessStatus, getThreadModelCatalog(), descriptorCache];
+
+/** Register the provider; nothing to subscribe to (see `revision`). Release on shutdown (Rule 3). */
 export function registerHarnessSearchProvider(): () => void {
-  const off = registerSettingsSearchProvider(harnessSearchProvider);
-  const stopStatus = useData.subscribe((state, prev) => {
-    if (state.harnessStatus !== prev.harnessStatus) notifySettingsSearchSourcesChanged();
-  });
-  const stopCatalog = subscribeThreadModelCatalog(notifySettingsSearchSourcesChanged);
-  return () => {
-    stopStatus();
-    stopCatalog();
-    off();
-  };
+  return registerSettingsSearchProvider(harnessSearchProvider);
 }

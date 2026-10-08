@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,9 +69,20 @@ describe('groupHitsByPage', () => {
     expect(pages.flatMap((p) => p.hits)[0].entry.id).toBe('harness.model');
   });
 
-  it('keeps rank order inside a page', () => {
-    const pages = groupHitsByPage([hit('a', 'terminal', 1), hit('b', 'agents', 1), hit('c', 'terminal', 2)]);
+  it('never lets a fuzzy row of an earlier page sit above an exact row of a later page', () => {
+    // Engine order: exact harness, exact project, then a typo hit on harness.
+    const engine = [hit('harness.a', 'harness', 1), hit('project.b', 'project', 1), hit('harness.c', 'harness', 3)];
+    const pages = groupHitsByPage(engine);
+    expect(pages.map((p) => [p.section, p.close])).toEqual([['harness', false], ['project', false], ['harness', true]]);
+    // The flattened list (what arrows walk and Enter opens) is exactly the engine's order.
+    expect(pages.flatMap((p) => p.hits).map((h) => h.entry.id)).toEqual(['harness.a', 'project.b', 'harness.c']);
+    expect(new Set(pages.map((p) => p.key)).size).toBe(pages.length);
+  });
+
+  it('keeps rank order inside a page and band', () => {
+    const pages = groupHitsByPage([hit('a', 'terminal', 1), hit('b', 'agents', 1), hit('c', 'terminal', 1), hit('d', 'terminal', 2)]);
     expect(pages[0].hits.map((h) => h.entry.id)).toEqual(['a', 'c']);
+    expect(pages.at(-1)).toMatchObject({ section: 'terminal', close: true });
   });
 });
 
@@ -145,10 +156,12 @@ describe('focused Settings navigation', () => {
     const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'lazyquokka' } });
     expect(screen.getByText('No matching settings')).toBeTruthy();
-    const off = reg.registerSettingsSearchProvider(() => [
-      { id: 'lazy.quokka', section: 'agents', label: 'Lazy quokka thing', kind: 'setting' }
-    ]);
+    let landed: Array<{ id: string; section: string; label: string; kind: 'setting' }> = [];
+    const off = reg.registerSettingsSearchProvider(() => landed);
     fireEvent.focus(search);
+    // Same path as the plugin prefetch: data lands asynchronously, then signals.
+    landed = [{ id: 'lazy.quokka', section: 'agents', label: 'Lazy quokka thing', kind: 'setting' }];
+    act(() => reg.notifySettingsSearchSourcesChanged());
     expect(await screen.findByTestId('settings-result-lazy.quokka')).toBeTruthy();
     off();
   });

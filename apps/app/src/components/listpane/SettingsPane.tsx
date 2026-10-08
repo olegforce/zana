@@ -30,20 +30,39 @@ function sectionTitle(section: string): string {
   return SETTINGS_SECTIONS.find((s) => s.id === section)?.label ?? section;
 }
 
+export interface SettingsResultPage {
+  key: string;
+  section: string;
+  title: string;
+  hits: SettingsSearchHit[];
+  /** In the "Close matches" band (letters-in-order / typo hits). */
+  close: boolean;
+}
+
 /**
- * Group ranked hits by page. Pages appear in the order of their best hit (Map
- * insertion order follows the engine's ranking), so an exact match on a later
- * page is never pushed below a typo match on an earlier one, and the first row,
- * the one Enter opens, is always the top-ranked hit.
+ * Group ranked hits by page in two bands: exact (tier 1) pages first, then
+ * "close matches" (tiers 2 and 3). Within a band, pages appear in the order of
+ * their best hit (Map insertion order follows the engine's ranking). So the
+ * flattened list, which the arrow keys walk and Enter opens, never puts a fuzzy
+ * row above an exact one, not even across pages.
  */
-export function groupHitsByPage(hits: readonly SettingsSearchHit[]): Array<{ section: string; title: string; hits: SettingsSearchHit[] }> {
-  const groups = new Map<string, SettingsSearchHit[]>();
+export function groupHitsByPage(hits: readonly SettingsSearchHit[]): SettingsResultPage[] {
+  const bands = [new Map<string, SettingsSearchHit[]>(), new Map<string, SettingsSearchHit[]>()];
   for (const hit of hits) {
-    const list = groups.get(hit.entry.section) ?? [];
+    const band = bands[hit.tier === 1 ? 0 : 1];
+    const list = band.get(hit.entry.section) ?? [];
     list.push(hit);
-    groups.set(hit.entry.section, list);
+    band.set(hit.entry.section, list);
   }
-  return [...groups.entries()].map(([section, list]) => ({ section, title: sectionTitle(section), hits: list }));
+  return bands.flatMap((band, i) =>
+    [...band.entries()].map(([section, list]) => ({
+      key: `${i}:${section}`,
+      section,
+      title: sectionTitle(section),
+      hits: list,
+      close: i === 1
+    }))
+  );
 }
 
 function Highlighted({ snippet }: { snippet: SettingsSnippet }) {
@@ -179,8 +198,11 @@ export function SettingsPane() {
           <p className="settings-search-empty" role="status">No matching settings</p>
         ) : (
           <div className="settings-results" role="listbox" id={listId} aria-label="Settings search results">
-            {pages.map((page) => (
-              <div key={page.section} className="settings-group" role="group" aria-label={page.title}>
+            {pages.map((page, index) => (
+              <div key={page.key} className="settings-group" role="group" aria-label={page.close ? `${page.title} (close matches)` : page.title}>
+                {page.close && index > 0 && !pages[index - 1].close ? (
+                  <div className="settings-group-label settings-results-close" role="presentation">Close matches</div>
+                ) : null}
                 <div className="settings-group-label">{page.title}</div>
                 {page.hits.map((hit) => (
                   <div

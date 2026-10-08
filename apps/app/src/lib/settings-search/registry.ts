@@ -78,13 +78,16 @@ function bumpSourcesVersion(): void {
   for (const listener of sourcesListeners) listener();
 }
 
-/** Register a runtime source. Returns an unregister function (release on shutdown). */
+/**
+ * Register a runtime source. Returns an unregister function (release on shutdown).
+ * Registration does not notify: the provider-array identity already invalidates
+ * the corpus, and registering happens lazily on the first search (inside render),
+ * where notifying subscribers would schedule an update mid-render.
+ */
 export function registerSettingsSearchProvider(provider: SettingsSearchProvider): () => void {
   providers = [...providers, provider];
-  bumpSourcesVersion();
   return () => {
     providers = providers.filter((p) => p !== provider);
-    bumpSourcesVersion();
   };
 }
 
@@ -94,9 +97,9 @@ export function getSettingsSearchProviders(): readonly SettingsSearchProvider[] 
 }
 
 /**
- * A provider calls this when the data it reads changed (a store update, a fetch
- * that landed). The corpus cache keys on the version, and open searches
- * re-run through `subscribeSettingsSearchSources`.
+ * An ASYNC source calls this when its data lands (plugin settings fetched), so an
+ * open search re-ranks through `subscribeSettingsSearchSources`. Synchronous store
+ * data needs no signal: providers expose it through `revision` instead.
  */
 export function notifySettingsSearchSourcesChanged(): void {
   bumpSourcesVersion();

@@ -859,9 +859,10 @@ function ExtensionDetail({ row }: { row: HubRow }) {
       .catch(() => {});
   }, [module.id]);
 
-  // Keyed on the URL too: a second search jump to another setting of the plugin
-  // already open changes only the query, and must still reveal it.
-  const { search: locationSearch, hash: locationHash } = useLocation();
+  // Keyed on the navigation too: a jump to another setting of the plugin already
+  // open changes only the query, and re-opening the SAME result (identical URL)
+  // is still a new navigation (`key`), so both reveal again.
+  const { search: locationSearch, hash: locationHash, key: locationKey } = useLocation();
   useEffect(() => {
     if (locationHash !== '#plugin-configure') return;
     document.getElementById('plugin-configure')?.scrollIntoView({ block: 'start' });
@@ -870,7 +871,7 @@ function ExtensionDetail({ row }: { row: HubRow }) {
     const label = new URLSearchParams(locationSearch).get(PLUGIN_SETTING_PARAM);
     if (!label) return;
     return revealPluginSetting(label);
-  }, [module.id, locationSearch, locationHash]);
+  }, [module.id, locationSearch, locationHash, locationKey]);
 
   const catalogEntry = catalog.find((item) => item.id === module.id) ?? null;
 

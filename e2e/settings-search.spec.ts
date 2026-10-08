@@ -216,6 +216,17 @@ test('plugin-defined settings are searchable, land on #plugin-configure and neve
       await window.cc.pluginApps.setSettings(secretId, { accessPhrase: phrase });
     }, [SECRET_ID, VALUES.secret.secretValue]);
 
+    // Production boundary (preload -> IPC -> main): the search read is redacted
+    // in main, so the secret never reaches the renderer. Positive control: the
+    // Configure page's plain read still carries it.
+    const reads = await win.evaluate(async (secretId) => ({
+      search: JSON.stringify(await window.cc.pluginApps.getSettings(secretId, { omitSecrets: true })),
+      configure: JSON.stringify(await window.cc.pluginApps.getSettings(secretId))
+    }), SECRET_ID);
+    expect(reads.search).not.toContain(VALUES.secret.secretValue);
+    expect(reads.search).toContain('accessPhrase');
+    expect(reads.configure).toContain(VALUES.secret.secretValue);
+
     const search = await openSettings(win);
     await search.fill('quokka');
     const hit = win.getByRole('option').filter({ hasText: VALUES.normal.stringLabel }).first();

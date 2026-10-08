@@ -1,27 +1,43 @@
-import { describe, expect, it } from 'vitest';
-import { useData } from '@/store';
-import { getSettingsSearchProviders, getSettingsSearchSourcesVersion } from '../registry';
-import { harnessSearchProvider, registerHarnessSearchProvider } from '../providers/harness';
+import { describe, expect, it, vi } from 'vitest';
 
-describe('harness provider registration', () => {
-  it('bumps the sources version when probed harness status lands, ignores other churn, and releases on dispose', () => {
+const catalog = vi.hoisted(() => ({ subscribe: vi.fn(() => () => {}) }));
+vi.mock('@/components/thread/pickers/thread-model-catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/thread/pickers/thread-model-catalog')>()),
+  subscribeThreadModelCatalog: catalog.subscribe
+}));
+
+import { useData } from '@/store';
+import { buildCorpus } from '../corpus';
+import { getSettingsSearchProviders, getSettingsSearchSourcesVersion } from '../registry';
+import { harnessSearchProvider, registerHarnessSearchProvider, rememberHarnessDescriptors } from '../providers/harness';
+
+const snapshot = { config: {} as never };
+
+describe('harness provider freshness', () => {
+  it('follows harness status and reported descriptors through revision, never by subscribing', () => {
     const before = getSettingsSearchProviders();
+    const v0 = getSettingsSearchSourcesVersion();
     const dispose = registerHarnessSearchProvider();
     try {
       expect(getSettingsSearchProviders()).toContain(harnessSearchProvider);
-      const v0 = getSettingsSearchSourcesVersion();
-      // The boot probe resolves after a search may already be open.
+      const first = buildCorpus(snapshot);
+      expect(buildCorpus(snapshot)).toBe(first);
+      // The boot probe resolves after a search may already be open: a new status
+      // array is enough for the next search to rebuild, with no listener.
       useData.setState({ harnessStatus: [...useData.getState().harnessStatus] });
-      const v1 = getSettingsSearchSourcesVersion();
-      expect(v1).toBeGreaterThan(v0);
+      const second = buildCorpus(snapshot);
+      expect(second).not.toBe(first);
       useData.setState({ projects: [...useData.getState().projects] }); // unrelated store churn
-      expect(getSettingsSearchSourcesVersion()).toBe(v1);
+      expect(buildCorpus(snapshot)).toBe(second);
+      rememberHarnessDescriptors([]); // the page reported its descriptors
+      expect(buildCorpus(snapshot)).not.toBe(second);
+      // A catalogue listener would keep its background refresh loop alive all session.
+      expect(catalog.subscribe).not.toHaveBeenCalled();
+      expect(getSettingsSearchSourcesVersion()).toBe(v0);
     } finally {
+      rememberHarnessDescriptors(null);
       dispose();
     }
     expect(getSettingsSearchProviders()).toEqual(before);
-    const afterDispose = getSettingsSearchSourcesVersion();
-    useData.setState({ harnessStatus: [] });
-    expect(getSettingsSearchSourcesVersion()).toBe(afterDispose);
   });
 });

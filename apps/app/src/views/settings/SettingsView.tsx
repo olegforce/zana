@@ -1,7 +1,7 @@
 import { product } from '../../lib/product-client.js';
 import { DelayedStencilList } from '../../components/ui/Skeleton.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { RevealContext, useSettingsTargetReveal } from '@/lib/settings-search/reveal';
 import { buildSettingsSnapshot } from '@/lib/settings-search/snapshot';
 import { SETTINGS_SECTIONS } from './settings-navigation.js';
@@ -95,13 +95,17 @@ export function SettingsView() {
   // has rendered: reveal container, scroll, flash, focus (see reveal.ts).
   const snapshot = useMemo(() => buildSettingsSnapshot({ config, project: null, machines: null }), [config]);
   const navigate = useNavigate();
-  const navigateRef = useRef(navigate);
-  navigateRef.current = navigate;
+  const location = useLocation();
+  const routeRef = useRef({ navigate, location });
+  useEffect(() => {
+    routeRef.current = { navigate, location };
+  }, [navigate, location]);
   // Stable identity (the reveal effect depends on it): drop a handled `#target`
-  // without adding a history entry.
+  // from the ROUTER location (keeping its state), without a history entry.
   const clearSettingsHash = useCallback(() => {
-    if (!window.location.hash) return;
-    void navigateRef.current({ pathname: window.location.pathname, search: window.location.search }, { replace: true });
+    const { navigate: go, location: at } = routeRef.current;
+    if (!at.hash) return;
+    void go({ pathname: at.pathname, search: at.search }, { replace: true, state: at.state });
   }, []);
   const revealState = useSettingsTargetReveal({
     tab,

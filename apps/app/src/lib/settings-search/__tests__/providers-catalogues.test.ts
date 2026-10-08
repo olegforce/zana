@@ -3,6 +3,7 @@ import type { Persona, Team } from '@zana-ai/zcc-domain/product';
 import { usePersonas, useTeams } from '../../../stores/live';
 import { searchSettings } from '../index';
 import { getSettingsSearchProviders, getSettingsSearchSourcesVersion } from '../registry';
+import { buildCorpus } from '../corpus';
 import { cataloguesSearchProvider, registerCataloguesSearchProvider } from '../providers/catalogues';
 
 const config = { config: {} as never };
@@ -37,27 +38,28 @@ describe('catalogues provider', () => {
     expect(cataloguesSearchProvider(config)).toEqual([]);
   });
 
-  it('bumps the sources version on list changes (not other store churn) and releases subscriptions on dispose', () => {
+  it('stays fresh through revision (no subscriptions, no notifications) and releases on dispose', () => {
     const before = getSettingsSearchProviders();
-    const dispose = registerCataloguesSearchProvider();
-    const registered = getSettingsSearchProviders();
-    expect(registered).toContain(cataloguesSearchProvider);
     const v0 = getSettingsSearchSourcesVersion();
-    usePersonas.setState({ personas: [persona('n', 'New one')] });
-    const v1 = getSettingsSearchSourcesVersion();
-    expect(v1).toBeGreaterThan(v0);
-    useTeams.setState({ teams: [team('x', 'Squad X')] });
-    expect(getSettingsSearchSourcesVersion()).toBeGreaterThan(v1);
-    // Registered once: data changes move the version, not the provider set.
-    expect(getSettingsSearchProviders()).toBe(registered);
-    const v2 = getSettingsSearchSourcesVersion();
-    usePersonas.setState({ ...usePersonas.getState() }); // same list identity
-    expect(getSettingsSearchSourcesVersion()).toBe(v2);
-    dispose();
+    const dispose = registerCataloguesSearchProvider();
+    try {
+      expect(getSettingsSearchProviders()).toContain(cataloguesSearchProvider);
+      const first = buildCorpus(config);
+      expect(buildCorpus(config)).toBe(first); // same lists: memoised
+      usePersonas.setState({ personas: [persona('n', 'Fresh reviewer')] });
+      // A new list identity rebuilds the corpus with no signal at all...
+      expect(searchSettings('fresh reviewer', config).map((h) => h.entry.id)).toContain('personas.persona.n');
+      const second = buildCorpus(config);
+      usePersonas.setState({ ...usePersonas.getState() }); // ...while other churn (same list) does not.
+      expect(buildCorpus(config)).toBe(second);
+      useTeams.setState({ teams: [team('x', 'Squad X')] });
+      expect(buildCorpus(config)).not.toBe(second);
+      // Never touches the async-source signal (that is for fetched data only).
+      expect(getSettingsSearchSourcesVersion()).toBe(v0);
+    } finally {
+      dispose();
+    }
     expect(getSettingsSearchProviders()).toEqual(before);
-    const afterDispose = getSettingsSearchSourcesVersion();
-    usePersonas.setState({ personas: [] });
-    expect(getSettingsSearchSourcesVersion()).toBe(afterDispose);
   });
 
   it('gives each persona and squad a row target the list renders', () => {

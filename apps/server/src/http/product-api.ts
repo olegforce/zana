@@ -1,4 +1,5 @@
 import { normalizePortableAttachments } from '../services/projects/portable-attachments.js';
+import { withoutSecretValues } from '../plugins/plugin-settings-redaction.js';
 import { handlePreviewsApi } from './previews-api.js';
 import { libraryDocumentOperation } from '../services/library/library-documents.js';
 import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
@@ -262,21 +263,6 @@ async function handlePluginAppRpc(
     const message = error instanceof Error ? error.message : String(error);
     sendJson(response, pluginAppErrorStatus(message), { error: message });
   }
-}
-
-type PluginSettingsWire = ReturnType<NonNullable<ProductHttpContext['plugins']>['getSettings']>;
-
-/**
- * Drop every `secret: true` value, keeping the descriptors. Callers that only
- * need labels and non-secret values (Settings search) ask for this so stored
- * secrets never cross to the renderer just to be discarded there (Rule 1).
- */
-export function withoutSecretValues(snapshot: PluginSettingsWire): PluginSettingsWire {
-  const values = { ...snapshot.values };
-  for (const [key, descriptor] of Object.entries(snapshot.descriptors)) {
-    if ('secret' in descriptor && descriptor.secret === true) delete values[key];
-  }
-  return { descriptors: snapshot.descriptors, values };
 }
 
 async function handlePluginAppSettingsGet(
