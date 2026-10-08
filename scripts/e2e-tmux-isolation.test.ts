@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +6,14 @@ import { afterEach, expect, it } from 'vitest';
 import { cleanupTmuxEnvironment, isolateTmuxEnvironment } from '../e2e/fixtures/tmux-isolation.js';
 
 const homes: string[] = [];
-const tmuxAvailable = spawnSync('tmux', ['-V'], { stdio: 'ignore' }).status === 0;
+const tmuxInstalled = process.platform !== 'win32' && (() => {
+  try {
+    execFileSync('tmux', ['-V'], { stdio: 'ignore', timeout: 3_000 });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 function home() {
   const path = mkdtempSync(join(tmpdir(), 'zcc-tmux-test-'));
   homes.push(path);
@@ -36,7 +43,7 @@ it('pins a private server across app restarts even when HOME is preserved', asyn
   expect(isolateTmuxEnvironment(path, inherited).TMUX_TMPDIR).not.toBe(first.TMUX_TMPDIR);
 });
 
-it.skipIf(process.platform === 'win32' || !tmuxAvailable)('one real tmux reaper and cleanup cannot see or stop another app’s worker', async () => {
+it.skipIf(!tmuxInstalled)('one real tmux reaper and cleanup cannot see or stop another app’s worker', async () => {
   const a = home(); const b = home();
   const envA = isolateTmuxEnvironment(a, process.env);
   const envB = isolateTmuxEnvironment(b, process.env);

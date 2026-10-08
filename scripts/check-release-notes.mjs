@@ -21,9 +21,9 @@
  *
  * Exit 0 = notes OK; exit 1 = a problem (with a message naming the file to fix).
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
@@ -87,7 +87,10 @@ export function runReleaseNotesGuard({ root = repoRoot, tag = process.env.GITHUB
 }
 
 /** Entry point seam stays unit-testable while preserving direct CLI behavior. */
-export function runReleaseNotesCli(isMain = import.meta.main, run = runReleaseNotesGuard) {
+export function runReleaseNotesCli(
+  isMain = Boolean(process.argv[1]) && pathToFileURL(realpathSync(resolve(process.argv[1]))).href === import.meta.url,
+  run = runReleaseNotesGuard,
+) {
   if (isMain) process.exitCode = run();
 }
 
