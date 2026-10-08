@@ -13,7 +13,7 @@ import { Field, Section } from '@/components/settings/FormFields';
 import { useHosts } from '../../hooks/useHosts.js';
 import { HostSshIdentityDialog } from '../../components/HostSshIdentityDialog.js';
 import { AddMachineDialog } from './AddMachineDialog.js';
-import { MachineCard } from './MachineCard.js';
+import { MachineCard, SearchTarget } from './MachineCard.js';
 import {
   defaultSshHost,
   sshHostOptionsFromProjects,
@@ -202,10 +202,12 @@ export function MachinesSettingsView({
     <>
       <Section
         anchorId="machines"
+        searchId="machines.pairing"
         title="Machines"
         help="Pair another computer so projects and agents can run there. SSH remotes stay a separate path — they use this machine’s daemon to ssh in. Connected machines follow the server version automatically; Codex, Claude Code, and the other harness CLIs update from the rows below (npm installs can take a few minutes)."
       >
         <Field
+          searchId="machines.public-app-url"
           label="Public app URL"
           help={`Origin remotes use to enroll. Official builds bake this. For local/dev, ${REMOTE_MACHINE_CONNECTION_HINT}`}
           mono
@@ -221,10 +223,12 @@ export function MachinesSettingsView({
           />
         </Field>
         <div className="machines-toolbar">
-          <button type="button" className="settings-btn" onClick={() => setAdding(true)}>
-            <Plus size={13} aria-hidden="true" />
-            Add a machine
-          </button>
+          <SearchTarget searchId="machines.add-machine">
+            <button type="button" className="settings-btn" onClick={() => setAdding(true)}>
+              <Plus size={13} aria-hidden="true" />
+              Add a machine
+            </button>
+          </SearchTarget>
           {actionable.length > 0 ? (
             <button
               type="button"
