@@ -69,6 +69,8 @@ export function SettingsPane() {
   const [query, setQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [active, setActive] = useState(0);
+  // Bumped when lazily fetched sources (plugin settings) arrive, so an open query re-ranks with them.
+  const [sourcesTick, setSourcesTick] = useState(0);
   const navigate = useNavigate();
   const listId = useId();
   const searching = query.trim().length > 0;
@@ -77,7 +79,7 @@ export function SettingsPane() {
     if (!searching) return [];
     ensureSettingsSearchProviders();
     return searchSettings(query, snapshot);
-  }, [searching, query, snapshot]);
+  }, [searching, query, snapshot, sourcesTick]);
   const pages = useMemo(() => groupHitsByPage(hits), [hits]);
   const flat = useMemo(() => pages.flatMap((p) => p.hits), [pages]);
   const activeHit = flat[Math.min(active, flat.length - 1)];
@@ -160,7 +162,10 @@ export function SettingsPane() {
           aria-autocomplete="list"
           aria-controls={searching && flat.length > 0 ? listId : undefined}
           aria-activedescendant={activeOptionId}
-          onFocus={() => { setSearchFocused(true); void ensureSettingsSearchProviders().prefetchPluginSettings(); }}
+          onFocus={() => {
+            setSearchFocused(true);
+            void ensureSettingsSearchProviders().prefetchPluginSettings().then(() => setSourcesTick((n) => n + 1));
+          }}
           onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {
             if (event.key === 'Escape' && query) {

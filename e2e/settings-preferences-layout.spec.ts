@@ -22,7 +22,7 @@ test('Settings presents grouped preferences and keeps search, persistence, and r
   const inner = panel.locator('.settings-inner');
   const innerBox = (await inner.boundingBox())!;
   const panelBox = (await panel.boundingBox())!;
-  expect(innerBox.width).toBeLessThanOrEqual(800);
+  expect(innerBox.width).toBeLessThanOrEqual(800.5); // sub-pixel layout can report 800.00003
   const contentRatio = await panel.evaluate((el) => el.clientWidth / el.getBoundingClientRect().width);
   const contentRight = panelBox.x + panelBox.width * contentRatio;
   expect(Math.abs((innerBox.x - panelBox.x) - (contentRight - innerBox.x - innerBox.width))).toBeLessThan(3);
@@ -40,7 +40,7 @@ test('Settings presents grouped preferences and keeps search, persistence, and r
 
   const search = win.getByRole('textbox', { name: 'Search settings' });
   await search.fill('dark');
-  await win.getByTestId('settings-nav-global-appearance').click();
+  await win.getByTestId('settings-result-global.theme').click();
   await expect(heading).toBeInViewport();
   await search.fill('zz-no-settings-match');
   await expect(win.getByRole('status').filter({ hasText: 'No matching settings' })).toBeVisible();

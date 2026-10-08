@@ -116,6 +116,20 @@ describe('focused Settings navigation', () => {
     expect(screen.getByTestId('hash').textContent).toBe('');
   });
 
+  it('re-ranks an open query once lazily fetched sources arrive', async () => {
+    const reg = await import('../../lib/settings-search/registry.js');
+    mount();
+    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(search, { target: { value: 'lazyquokka' } });
+    expect(screen.getByText('No matching settings')).toBeTruthy();
+    const off = reg.registerSettingsSearchProvider(() => [
+      { id: 'lazy.quokka', section: 'agents', label: 'Lazy quokka thing', kind: 'setting' }
+    ]);
+    fireEvent.focus(search);
+    expect(await screen.findByTestId('settings-result-lazy.quokka')).toBeTruthy();
+    off();
+  });
+
   it('scrolls the active option into view and ignores Enter during IME composition', () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;

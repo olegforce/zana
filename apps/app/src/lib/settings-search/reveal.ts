@@ -25,6 +25,14 @@ export function useRevealAdvanced(): boolean {
   return useContext(RevealContext).reveal === 'advanced';
 }
 
+/** False while any ancestor is `hidden` or `display: none` (e.g. an inactive tab panel): nothing to scroll to yet. */
+export function isShown(el: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    if (node.hidden || window.getComputedStyle(node).display === 'none') return false;
+  }
+  return true;
+}
+
 export function findTarget(id: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-settings-target="${CSS.escape(id)}"]`);
 }
@@ -95,7 +103,7 @@ export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor }: Ar
     const attempt = () => {
       if (cancelled) return;
       const row = targetId ? findTarget(targetId) : null;
-      if (row) {
+      if (row && isShown(row)) {
         revealElement(row);
         return finish();
       }

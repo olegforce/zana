@@ -181,3 +181,36 @@ describe('useSettingsTargetReveal', () => {
     expect(renderHook(() => useRevealAdvanced()).result.current).toBe(false);
   });
 });
+
+describe('isShown / hidden containers', () => {
+  it('reports hidden and display:none ancestors', async () => {
+    const { isShown } = await import('../reveal');
+    const wrap = document.createElement('div');
+    const row = document.createElement('div');
+    wrap.appendChild(row);
+    document.body.appendChild(wrap);
+    expect(isShown(row)).toBe(true);
+    wrap.hidden = true;
+    expect(isShown(row)).toBe(false);
+    wrap.hidden = false;
+    wrap.style.display = 'none';
+    expect(isShown(row)).toBe(false);
+  });
+
+  it('waits for a target in a hidden tab panel to be shown before revealing', () => {
+    const panel = document.createElement('div');
+    panel.hidden = true;
+    document.body.appendChild(panel);
+    const row = document.createElement('div');
+    row.setAttribute('data-settings-target', 'agents.row');
+    panel.appendChild(row);
+    run('agents.row');
+    vi.advanceTimersByTime(200);
+    expect(row.classList.contains(FLASH_CLASS)).toBe(false);
+    expect(setAnchor).not.toHaveBeenCalled();
+    panel.hidden = false;
+    vi.advanceTimersByTime(100);
+    expect(row.classList.contains(FLASH_CLASS)).toBe(true);
+    expect(setAnchor).toHaveBeenCalledWith(null);
+  });
+});
