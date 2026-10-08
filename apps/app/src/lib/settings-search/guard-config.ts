@@ -4,14 +4,10 @@ import type { SettingsTab } from '@/store';
  * Settings-search guard configuration (design §3.5). Test-only: nothing in the
  * runtime bundle imports this file.
  *
- * Enforcement is page-by-page: a section is checked ONLY once
- * `entries/<section>.ts` exists, so each page unit switches its section on just
- * by adding that file. The final review flips `REQUIRE_ALL_SECTIONS` to `true`,
- * which additionally requires an entries file for every `SETTINGS_SECTIONS` id
- * plus `project`, and fails on any scanned source file that is mapped to no
- * section (and not allow-listed).
+ * Every `SETTINGS_SECTIONS` id plus `project` must have an `entries/<section>.ts`
+ * file, every literal in that section's sources must be covered by its entries,
+ * and every scanned source file must be mapped to a section (or allow-listed).
  */
-export const REQUIRE_ALL_SECTIONS = true;
 
 export type SearchSection = SettingsTab | 'project';
 

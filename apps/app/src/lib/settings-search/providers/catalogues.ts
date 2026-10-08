@@ -1,6 +1,10 @@
 import { usePersonas, useTeams } from '../../../stores/live.js';
-import { registerSettingsSearchProvider } from '../registry';
+import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider } from '../types';
+
+/** Row target for one persona or squad (rendered on its list row in PersonasView / SquadsView). */
+export const personaSearchId = (id: string) => `personas.persona.${id}`;
+export const squadSearchId = (id: string) => `squads.squad.${id}`;
 
 /**
  * Persona and Squad names + descriptions from the stores the renderer already
@@ -10,7 +14,7 @@ export const cataloguesSearchProvider: SettingsSearchProvider = () => {
   const out: SettingsSearchEntry[] = [];
   for (const persona of usePersonas.getState().personas) {
     out.push({
-      id: `personas.persona.${persona.id}`,
+      id: personaSearchId(persona.id),
       section: 'personas',
       label: persona.name,
       help: persona.description,
@@ -20,7 +24,7 @@ export const cataloguesSearchProvider: SettingsSearchProvider = () => {
   }
   for (const team of useTeams.getState().teams) {
     out.push({
-      id: `squads.squad.${team.id}`,
+      id: squadSearchId(team.id),
       section: 'squads',
       label: team.name,
       help: team.description,
@@ -32,18 +36,18 @@ export const cataloguesSearchProvider: SettingsSearchProvider = () => {
 };
 
 /**
- * Register the provider and re-register on every store change so the corpus
- * (cached on provider-set identity) picks up renamed or new personas and squads.
- * The returned function releases both subscriptions (Rule 3).
+ * Register the provider and bump the sources version when the persona or squad
+ * lists change, so the corpus picks up renamed or new entries. The returned
+ * function releases both subscriptions (Rule 3).
  */
 export function registerCataloguesSearchProvider(): () => void {
-  let off = registerSettingsSearchProvider(cataloguesSearchProvider);
-  const invalidate = () => {
-    off();
-    off = registerSettingsSearchProvider(cataloguesSearchProvider);
-  };
-  const stopPersonas = usePersonas.subscribe(invalidate);
-  const stopTeams = useTeams.subscribe(invalidate);
+  const off = registerSettingsSearchProvider(cataloguesSearchProvider);
+  const stopPersonas = usePersonas.subscribe((state, prev) => {
+    if (state.personas !== prev.personas) notifySettingsSearchSourcesChanged();
+  });
+  const stopTeams = useTeams.subscribe((state, prev) => {
+    if (state.teams !== prev.teams) notifySettingsSearchSourcesChanged();
+  });
   return () => {
     stopPersonas();
     stopTeams();

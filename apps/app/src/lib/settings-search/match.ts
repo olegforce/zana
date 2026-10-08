@@ -139,11 +139,21 @@ function wordRanges(text: string, word: string, near: ReadonlySet<string>): Arra
   return ranges;
 }
 
+/** Sorted, non-overlapping ranges: words like `auto` and `automatic` overlap in the same text. */
+export function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out: Array<[number, number]> = [];
+  for (const [start, end] of sorted) {
+    const prev = out[out.length - 1];
+    if (prev && start <= prev[1]) prev[1] = Math.max(prev[1], end);
+    else out.push([start, end]);
+  }
+  return out;
+}
+
 function buildSnippet(ce: CorpusEntry, words: readonly string[], nears: readonly ReadonlySet<string>[]): SettingsSnippet | undefined {
   if (!ce.help) return undefined;
-  const hits = words
-    .flatMap((w, i) => wordRanges(ce.help, w, nears[i]))
-    .sort((a, b) => a[0] - b[0]);
+  const hits = mergeRanges(words.flatMap((w, i) => wordRanges(ce.help, w, nears[i])));
   if (hits.length === 0) return undefined;
   const start = Math.max(0, hits[0][0] - SNIPPET_RADIUS);
   const end = Math.min(ce.help.length, hits[0][1] + SNIPPET_RADIUS);

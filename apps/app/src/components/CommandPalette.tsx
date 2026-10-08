@@ -24,6 +24,8 @@ import { buildThreadPaletteItems } from './palette/threadItems.js';
 import { CATEGORY_LABELS, MAX_SETTINGS_RESULTS, searchPaletteItems, type PaletteScope, type ScoredRow } from './palette/searchItems.js';
 import { useSettingsSnapshot } from '../lib/settings-search/snapshot.js';
 import { settingsPaletteItems } from '../lib/settings-search/palette.js';
+import { ensureSettingsSearchProviders } from '../lib/settings-search/runtime.js';
+import { getSettingsSearchSourcesVersion, subscribeSettingsSearchSources } from '../lib/settings-search/registry.js';
 import { PaletteFrame, paletteOptionProps } from './palette/PaletteFrame.js';
 import { favoritePaletteKeys } from './palette/favoriteItems.js';
 
@@ -350,13 +352,21 @@ export function CommandPalette({ onClose }: Props) {
   const settingsActive = !fileMode && !launchMode && !slashMode && query.trim() !== '' && (scope === 'all' || scope === 'settings');
   const settingsProjectId = route.focusedProjectId ?? selectedProject?.id ?? null;
   const settingsSnapshot = useSettingsSnapshot(settingsProjectId, settingsActive);
+  const setSettingsAnchor = useUi((s) => s.setSettingsAnchor);
+  // Same corpus as the Settings rail: fetch plugin-defined settings when a
+  // Settings query starts, and re-rank when any runtime source changes.
+  const settingsSourcesVersion = useSyncExternalStore(subscribeSettingsSearchSources, getSettingsSearchSourcesVersion);
+  useEffect(() => {
+    if (settingsActive) void ensureSettingsSearchProviders().prefetchPluginSettings();
+  }, [settingsActive]);
   const settingsItems = useMemo(() => settingsActive
     ? settingsPaletteItems(query, settingsSnapshot, {
       limit: MAX_SETTINGS_RESULTS,
       projectId: settingsProjectId,
-      navigate: (path) => { onClose(); void navigate(path); }
+      navigate: (path) => { onClose(); void navigate(path); },
+      setAnchor: setSettingsAnchor
     })
-    : [], [settingsActive, query, settingsSnapshot, settingsProjectId, onClose, navigate]);
+    : [], [settingsActive, query, settingsSnapshot, settingsProjectId, onClose, navigate, setSettingsAnchor, settingsSourcesVersion]);
   const search = useMemo(
     () => searchPaletteItems(items, query, scope, getRecents(), Date.now(), settingsItems),
     [items, query, scope, settingsItems]

@@ -7,7 +7,7 @@ vi.mock('../../../plugins/plugin-slots.js', () => ({ listSettingsSections: () =>
 vi.mock('../../product-client.js', () => ({ product: { pluginApps: {} } }));
 
 import { searchSettings } from '../index';
-import { getSettingsSearchProviders } from '../registry';
+import { getSettingsSearchProviders, getSettingsSearchSourcesVersion } from '../registry';
 import { findSecretValueViolations } from '../secrets';
 import {
   PLUGIN_SETTING_PARAM,
@@ -134,17 +134,36 @@ describe('plugin settings provider', () => {
     expect((pluginSettingsSearchProvider(config)[0]).label).toBe('p9');
   });
 
-  it('registers, invalidates on new data, and disposes', async () => {
+  it('registers once, bumps the sources version when new data lands, and disposes', async () => {
     const before = getSettingsSearchProviders();
     const reg = registerPluginSettingsProvider(api());
     const registered = getSettingsSearchProviders();
     expect(registered).toContain(pluginSettingsSearchProvider);
+    const v0 = getSettingsSearchSourcesVersion();
     await reg.prefetch();
-    const after = getSettingsSearchProviders();
-    expect(after).not.toBe(registered);
-    expect(after).toContain(pluginSettingsSearchProvider);
+    expect(getSettingsSearchSourcesVersion()).toBeGreaterThan(v0);
+    expect(getSettingsSearchProviders()).toBe(registered);
     reg.dispose();
     expect(getSettingsSearchProviders()).toEqual(before);
+  });
+
+  it('asks the server to omit secret values (they never reach the renderer for search)', async () => {
+    const a = api();
+    await prefetchPluginSettings(a);
+    expect(a.getSettings).toHaveBeenCalled();
+    for (const call of (a.getSettings as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[1]).toEqual({ omitSecrets: true });
+    }
+  });
+
+  it('evicts plugins that are no longer enabled', async () => {
+    const a = api();
+    await prefetchPluginSettings(a);
+    expect(pluginSettingsSearchProvider(config).length).toBeGreaterThan(0);
+    const v0 = getSettingsSearchSourcesVersion();
+    await prefetchPluginSettings({ list: vi.fn().mockResolvedValue([]), getSettings: vi.fn() });
+    expect(pluginSettingsSearchProvider(config).filter((e) => e.id.startsWith('plugin.') && !e.id.includes('.section.'))).toEqual([]);
+    expect(getSettingsSearchSourcesVersion()).toBeGreaterThan(v0);
   });
 
   it('builds a deep link from the route helper', () => {

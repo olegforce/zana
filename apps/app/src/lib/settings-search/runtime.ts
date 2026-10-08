@@ -1,4 +1,4 @@
-import { harnessSearchProvider } from './providers/harness';
+import { registerHarnessSearchProvider } from './providers/harness';
 import { keyboardSearchProvider } from './providers/keyboard';
 import { registerCataloguesSearchProvider } from './providers/catalogues';
 import { registerMachinesSearchProvider } from './providers/machines';
@@ -24,7 +24,7 @@ export function ensureSettingsSearchProviders(): RuntimeHandle {
   const plugins = registerPluginSettingsProvider();
   const releases = [
     registerSettingsSearchProvider(keyboardSearchProvider),
-    registerSettingsSearchProvider(harnessSearchProvider),
+    registerHarnessSearchProvider(),
     registerMachinesSearchProvider(),
     registerCataloguesSearchProvider(),
     plugins.dispose

@@ -14,7 +14,7 @@ import { DesktopOnlyPlugin } from './DesktopOnlyPlugin.js';
  */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   FolderOpen,
   ExternalLink,
@@ -859,15 +859,18 @@ function ExtensionDetail({ row }: { row: HubRow }) {
       .catch(() => {});
   }, [module.id]);
 
+  // Keyed on the URL too: a second search jump to another setting of the plugin
+  // already open changes only the query, and must still reveal it.
+  const { search: locationSearch, hash: locationHash } = useLocation();
   useEffect(() => {
-    if (typeof window === 'undefined' || window.location.hash !== '#plugin-configure') return;
+    if (locationHash !== '#plugin-configure') return;
     document.getElementById('plugin-configure')?.scrollIntoView({ block: 'start' });
     document.getElementById('plugin-configure')?.focus();
     // Opened from a Settings search result: flash and focus the matching field.
-    const label = new URLSearchParams(window.location.search).get(PLUGIN_SETTING_PARAM);
+    const label = new URLSearchParams(locationSearch).get(PLUGIN_SETTING_PARAM);
     if (!label) return;
     return revealPluginSetting(label);
-  }, [module.id]);
+  }, [module.id, locationSearch, locationHash]);
 
   const catalogEntry = catalog.find((item) => item.id === module.id) ?? null;
 

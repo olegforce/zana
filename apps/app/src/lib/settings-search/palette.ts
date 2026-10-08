@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { Settings } from 'lucide-react';
 import type { PaletteItem } from '@/components/palette/buildItems';
 import { searchSettings } from './index';
-import { settingsHitPath } from './links';
+import { openSettingsHit } from './links';
 import { ensureSettingsSearchProviders } from './runtime';
 import type { SettingsSearchHit, SettingsValueSnapshot } from './types';
 
@@ -25,7 +25,13 @@ export function settingsHitHint(hit: SettingsSearchHit): string {
 export function settingsPaletteItems(
   query: string,
   snapshot: SettingsValueSnapshot,
-  options: { limit: number; projectId?: string | null; navigate: (path: string) => void }
+  options: {
+    limit: number;
+    projectId?: string | null;
+    navigate: (path: string) => void;
+    /** Store setter for the pending reveal target (same contract as the Settings rail). */
+    setAnchor: (anchor: string | null) => void;
+  }
 ): PaletteItem[] {
   if (!query.trim()) return [];
   ensureSettingsSearchProviders();
@@ -36,6 +42,6 @@ export function settingsPaletteItems(
     hint: settingsHitHint(hit),
     category: 'Settings',
     source: 'core',
-    run: () => options.navigate(settingsHitPath(hit, options.projectId))
+    run: () => openSettingsHit(hit, { projectId: options.projectId, navigate: options.navigate, setAnchor: options.setAnchor })
   }));
 }

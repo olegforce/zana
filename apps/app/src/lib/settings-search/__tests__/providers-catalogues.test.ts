@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Persona, Team } from '@zana-ai/zcc-domain/product';
 import { usePersonas, useTeams } from '../../../stores/live';
 import { searchSettings } from '../index';
-import { getSettingsSearchProviders } from '../registry';
+import { getSettingsSearchProviders, getSettingsSearchSourcesVersion } from '../registry';
 import { cataloguesSearchProvider, registerCataloguesSearchProvider } from '../providers/catalogues';
 
 const config = { config: {} as never };
@@ -37,19 +37,33 @@ describe('catalogues provider', () => {
     expect(cataloguesSearchProvider(config)).toEqual([]);
   });
 
-  it('re-registers on store changes and releases subscriptions on dispose', () => {
+  it('bumps the sources version on list changes (not other store churn) and releases subscriptions on dispose', () => {
     const before = getSettingsSearchProviders();
     const dispose = registerCataloguesSearchProvider();
-    const first = getSettingsSearchProviders();
+    const registered = getSettingsSearchProviders();
+    expect(registered).toContain(cataloguesSearchProvider);
+    const v0 = getSettingsSearchSourcesVersion();
     usePersonas.setState({ personas: [persona('n', 'New one')] });
-    const second = getSettingsSearchProviders();
-    expect(second).not.toBe(first);
+    const v1 = getSettingsSearchSourcesVersion();
+    expect(v1).toBeGreaterThan(v0);
     useTeams.setState({ teams: [team('x', 'Squad X')] });
-    expect(getSettingsSearchProviders()).not.toBe(second);
+    expect(getSettingsSearchSourcesVersion()).toBeGreaterThan(v1);
+    // Registered once: data changes move the version, not the provider set.
+    expect(getSettingsSearchProviders()).toBe(registered);
+    const v2 = getSettingsSearchSourcesVersion();
+    usePersonas.setState({ ...usePersonas.getState() }); // same list identity
+    expect(getSettingsSearchSourcesVersion()).toBe(v2);
     dispose();
     expect(getSettingsSearchProviders()).toEqual(before);
-    const afterDispose = getSettingsSearchProviders();
+    const afterDispose = getSettingsSearchSourcesVersion();
     usePersonas.setState({ personas: [] });
-    expect(getSettingsSearchProviders()).toBe(afterDispose);
+    expect(getSettingsSearchSourcesVersion()).toBe(afterDispose);
+  });
+
+  it('gives each persona and squad a row target the list renders', () => {
+    usePersonas.setState({ personas: [persona('p1', 'Reviewer')] });
+    useTeams.setState({ teams: [team('t1', 'Ship it')] });
+    const ids = cataloguesSearchProvider(config).map((e) => e.id);
+    expect(ids).toEqual(['personas.persona.p1', 'squads.squad.t1']);
   });
 });

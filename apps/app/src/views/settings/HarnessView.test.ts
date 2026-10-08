@@ -170,7 +170,8 @@ describe('harness page entries', () => {
     expect(byId('harness.pi.thinking').value?.(s)).toBe('XHigh');
     expect(byId('harness.pi.provider').value?.(s)).toBe('anthropic');
     expect(byId('harness.pi.model').value?.(s)).toBe('m');
-    expect(byId('harness.claude.extra-args').value?.(s)).toEqual(['--x']);
+    // Free-form CLI args are never indexed (people paste --api-key and header JSON there).
+    expect(byId('harness.claude.extra-args').value).toBeUndefined();
     expect(byId('harness.opencode.discover-agents').value?.(s)).toBe('Off');
     expect(byId('harness.codex.sandbox').value?.(s)).toBeUndefined();
     expect(byId('harness.codex.approval').value?.(s)).toBeUndefined();

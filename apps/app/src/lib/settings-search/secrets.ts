@@ -1,8 +1,11 @@
 import type { SettingsSearchEntry } from './types';
 
-/** Entries matching this must not expose a `value` (design 3.7 rule 2). */
+/**
+ * Entries matching this must not expose a `value` (design 3.7 rule 2). Free-form
+ * CLI args and env blocks are included: that is where people paste keys and headers.
+ */
 export const SECRET_ENTRY_PATTERN =
-  /token|secret|password|passphrase|api[-_ ]?key|credential|cookie|auth|private[-_ ]?key|enroll/i;
+  /token|secret|password|passphrase|api[-_ ]?key|credential|cookie|auth|private[-_ ]?key|enroll|extra[-_ ]?args|\benv\b/i;
 
 /** Entry id -> reason it is safe to index the value despite matching the pattern. */
 export const SECRET_VALUE_ALLOWLIST: Readonly<Record<string, string>> = {};

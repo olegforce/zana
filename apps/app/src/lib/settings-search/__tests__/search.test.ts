@@ -3,8 +3,8 @@ import { typoDistance, typoMaxEdits } from '@zana-ai/zcc-fuzzy-match';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import { buildCorpus, fold, normalize } from '../corpus';
 import { searchSettings } from '../index';
-import { SETTINGS_SEARCH_MAX_RESULTS } from '../match';
-import { collectEntryModules, deriveNavEntries, getStaticEntries, getSettingsSearchProviders, registerSettingsSearchProvider } from '../registry';
+import { SETTINGS_SEARCH_MAX_RESULTS, mergeRanges } from '../match';
+import { collectEntryModules, deriveNavEntries, getStaticEntries, getSettingsSearchProviders, notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
 import { findSecretValueViolations, mayIndexValue } from '../secrets';
 import type { SettingsSearchEntry, SettingsSearchProvider, SettingsValueSnapshot } from '../types';
 
@@ -39,6 +39,16 @@ describe('normalisation', () => {
     expect(fold('Café').length).toBe(4);
     expect(normalize('  Hello\n  WORLD ')).toBe('hello world');
     expect(fold('é')).toBe('é'.length === 2 ? 'é' : 'e');
+  });
+});
+
+describe('non-Latin folding', () => {
+  it('keeps Hangul syllables intact (a decomposition into further letters is not a diacritic)', () => {
+    expect(fold('\uD55C\uAD6D')).toBe('\uD55C\uAD6D');
+    expect(fold('\uD55C\uAD6D').length).toBe(2);
+    // Before the fix each syllable folded to its first jamo, so unrelated names collided.
+    const hits = searchSettings('\uD55C\uAD6D', snap(), { entries: [e('a', '\uD55C\uAD6D server'), e('b', '\uD558\uB298')] });
+    expect(ids(hits)).toEqual(['a']);
   });
 });
 
@@ -105,6 +115,16 @@ describe('AND matching and diacritics', () => {
 });
 
 describe('snippets, cap and ordering', () => {
+  it('merges overlapping highlight ranges so no text renders twice', () => {
+    expect(mergeRanges([[4, 8], [0, 4], [0, 9], [12, 14]])).toEqual([[0, 9], [12, 14]]);
+    const [hit] = searchSettings('auto automatic', snap(), {
+      entries: [e('a', 'Zzz', { help: 'Closes agents automatically when idle.' })]
+    });
+    const { text, ranges } = hit.snippet!;
+    expect(ranges).toHaveLength(1);
+    expect(text.slice(ranges[0][0], ranges[0][1]).toLowerCase()).toBe('automatic');
+  });
+
   it('builds a windowed snippet with ranges', () => {
     const help = `${'lorem ipsum '.repeat(10)}the heartbeat interval controls pings ${'dolor sit '.repeat(10)}`;
     const [hit] = searchSettings('heartbeat', snap(), { entries: [e('a', 'Zzz', { help })] });
@@ -169,6 +189,24 @@ describe('values', () => {
     expect(searchSettings('beta', snap({ v: 'beta' }), { entries })).toHaveLength(1);
     expect(value).toHaveBeenCalledTimes(2);
     expect(buildCorpus(a, entries)).not.toBe(buildCorpus(snap({ v: 'alpha' }), entries));
+  });
+  it('rebuilds when a provider signals new data, even with the same snapshot and provider set', () => {
+    let rows: SettingsSearchEntry[] = [];
+    const none: SettingsSearchEntry[] = []; // stable identity: the cache keys on it
+    const off = registerSettingsSearchProvider(() => rows);
+    try {
+      const same = snap();
+      expect(searchSettings('harness late', same, { entries: none })).toEqual([]);
+      rows = [e('late', 'Harness late row')];
+      // Without a signal the memoised corpus is reused (stale by design)...
+      expect(buildCorpus(same, none)).toBe(buildCorpus(same, none));
+      expect(ids(searchSettings('harness late', same, { entries: none }))).toEqual([]);
+      notifySettingsSearchSourcesChanged();
+      // ...and the signal makes the next search see the new rows.
+      expect(ids(searchSettings('harness late', same, { entries: none }))).toEqual(['late']);
+    } finally {
+      off();
+    }
   });
   it('supports array values, truncates long ones and swallows accessor errors', () => {
     const list = [

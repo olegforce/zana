@@ -70,16 +70,46 @@ export function getStaticEntries(): readonly SettingsSearchEntry[] {
 }
 
 let providers: readonly SettingsSearchProvider[] = [];
+let sourcesVersion = 0;
+const sourcesListeners = new Set<() => void>();
+
+function bumpSourcesVersion(): void {
+  sourcesVersion += 1;
+  for (const listener of sourcesListeners) listener();
+}
 
 /** Register a runtime source. Returns an unregister function (release on shutdown). */
 export function registerSettingsSearchProvider(provider: SettingsSearchProvider): () => void {
   providers = [...providers, provider];
+  bumpSourcesVersion();
   return () => {
     providers = providers.filter((p) => p !== provider);
+    bumpSourcesVersion();
   };
 }
 
-/** New array identity on every (un)registration: the corpus cache keys on it. */
+/** New array identity on every (un)registration. */
 export function getSettingsSearchProviders(): readonly SettingsSearchProvider[] {
   return providers;
+}
+
+/**
+ * A provider calls this when the data it reads changed (a store update, a fetch
+ * that landed). The corpus cache keys on the version, and open searches
+ * re-run through `subscribeSettingsSearchSources`.
+ */
+export function notifySettingsSearchSourcesChanged(): void {
+  bumpSourcesVersion();
+}
+
+export function getSettingsSearchSourcesVersion(): number {
+  return sourcesVersion;
+}
+
+/** `useSyncExternalStore`-shaped subscription to source changes. */
+export function subscribeSettingsSearchSources(listener: () => void): () => void {
+  sourcesListeners.add(listener);
+  return () => {
+    sourcesListeners.delete(listener);
+  };
 }

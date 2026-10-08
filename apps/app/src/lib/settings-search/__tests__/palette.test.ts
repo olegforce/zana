@@ -26,12 +26,14 @@ describe('settings palette adapter', () => {
 
   it('returns nothing for a blank query', () => {
     const navigate = vi.fn();
-    expect(settingsPaletteItems('  ', { config: {} as AppConfig }, { limit: 5, navigate })).toEqual([]);
+    const setAnchor = vi.fn();
+    expect(settingsPaletteItems('  ', { config: {} as AppConfig }, { limit: 5, navigate, setAnchor })).toEqual([]);
   });
 
   it('maps engine hits to rows keyed by entry id that navigate on run, without help in keywords', () => {
     const navigate = vi.fn();
-    const items = settingsPaletteItems('heartbeat', { config: {} as AppConfig }, { limit: 60, navigate });
+    const setAnchor = vi.fn();
+    const items = settingsPaletteItems('heartbeat', { config: {} as AppConfig }, { limit: 60, navigate, setAnchor });
     expect(items.length).toBeGreaterThan(0);
     for (const item of items) {
       expect(item.key.startsWith('settings:')).toBe(true);
@@ -40,6 +42,9 @@ describe('settings palette adapter', () => {
     }
     items[0].run();
     expect(navigate).toHaveBeenCalledWith(expect.stringMatching(/^\/settings\//));
-    expect(settingsPaletteItems('heartbeat', { config: {} as AppConfig }, { limit: 2, navigate }).length).toBeLessThanOrEqual(2);
+    // Same open path as the rail: the target is set in the store too, so a
+    // repeat open of the result you are already on still reveals it.
+    expect(setAnchor).toHaveBeenCalledWith(items[0].key.replace(/^settings:/, ''));
+    expect(settingsPaletteItems('heartbeat', { config: {} as AppConfig }, { limit: 2, navigate, setAnchor }).length).toBeLessThanOrEqual(2);
   });
 });

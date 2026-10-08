@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { appSettingsNavCatalog, filterSettingsNav } from '@/lib/settings-nav-search';
+import { settingsNavGroups } from '@/lib/settings-nav-search';
 import { SETTINGS_GROUPS, SETTINGS_SECTIONS, SETTINGS_SUBSECTIONS } from '@/views/settings/SettingsView';
 
 describe('Settings subsection navigation', () => {
@@ -222,18 +222,11 @@ describe('Settings subsection navigation', () => {
   });
 
   it('keeps Settings navigation without installed-module jump links', () => {
-    // Behaviour-level: the rail offers exactly the registered sections and
-    // subsections, and no installed-module (extension) jump targets.
-    const catalog = appSettingsNavCatalog({ groups: SETTINGS_GROUPS, sections: SETTINGS_SECTIONS, subsections: SETTINGS_SUBSECTIONS });
-    const rail = filterSettingsNav('', catalog);
+    // Behaviour-level: the rail offers exactly the registered sections (plus
+    // Project settings), and no installed-module (extension) jump targets.
+    const rail = settingsNavGroups(SETTINGS_GROUPS, SETTINGS_SECTIONS);
     const railSections = rail.flatMap((group) => group.sections);
     expect(railSections.map((s) => s.id).sort()).toEqual([...SETTINGS_SECTIONS.map((s) => s.id), 'project'].sort());
-    for (const section of railSections) {
-      expect([...SETTINGS_SECTIONS.map((s) => s.id), 'project']).toContain(section.id);
-      for (const sub of section.subsections) {
-        expect(SETTINGS_SUBSECTIONS[section.id as keyof typeof SETTINGS_SUBSECTIONS]).toContainEqual(sub);
-      }
-    }
     expect(railSections.some((s) => s.id.startsWith('ext') || s.id.startsWith('plugin'))).toBe(false);
   });
 

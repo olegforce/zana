@@ -2,14 +2,15 @@ import type { PluginAppEntry, PluginSettingsSnapshot } from '@zana-ai/zcc-domain
 import { listSettingsSections } from '../../../plugins/plugin-slots.js';
 import { product } from '../../product-client.js';
 import { getPluginDetailRoutePath } from '../../route-paths.js';
-import { registerSettingsSearchProvider } from '../registry';
+import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider } from '../types';
 
 // Plugin-defined settings (`zcc.settings.define`) live on each plugin's hub
 // Configure page (guard tests keep them there), so results deep-link there.
 // Nothing here names a plugin: ids, names and descriptors all come from the
-// running plugin list (Rule 6). SECRET values never enter this module: they are
-// dropped before caching, not merely before indexing.
+// running plugin list (Rule 6). SECRET values are dropped by the server
+// (`?secrets=omit`) so they never reach the renderer for search; the local
+// filter below is defence in depth, applied before caching.
 
 export const PLUGIN_CONFIGURE_HASH = '#plugin-configure';
 /** Query param naming the field (by label) the hub should flash and focus. */
@@ -22,7 +23,7 @@ type StoredValue = PluginSettingsSnapshot['values'][string];
 
 export interface PluginSettingsApi {
   list(): Promise<PluginAppEntry[]>;
-  getSettings(pluginId: string): Promise<PluginSettingsSnapshot>;
+  getSettings(pluginId: string, options?: { omitSecrets?: boolean }): Promise<PluginSettingsSnapshot>;
 }
 
 /** An entry plus the route a result must open (the plugin page, not /settings). */
@@ -38,7 +39,6 @@ interface CachedPlugin {
 
 let cache = new Map<string, CachedPlugin>();
 let inflight: Promise<void> | null = null;
-const listeners = new Set<() => void>();
 
 /** Test hook: forget everything fetched this session. */
 export function resetPluginSettingsCache(): void {
@@ -68,9 +68,10 @@ async function inBatches<T>(items: readonly T[], work: (item: T) => Promise<void
 
 /**
  * Fetch descriptors for every enabled plugin (once per session) and refresh the
- * non-secret values when older than the TTL. Safe to call on every search-box
- * focus: concurrent calls share one request. Failures leave the cache as-is and
- * never throw.
+ * non-secret values when older than the TTL. Plugins that are no longer enabled
+ * (disabled or uninstalled) are evicted. Safe to call on every search-box focus:
+ * concurrent calls share one request. Failures leave the cache as-is and never
+ * throw.
  */
 export function prefetchPluginSettings(
   api: PluginSettingsApi = product.pluginApps,
@@ -85,11 +86,18 @@ export function prefetchPluginSettings(
       return;
     }
     let changed = false;
+    const enabled = new Set(apps.map((app) => app.id));
+    for (const id of [...cache.keys()]) {
+      if (!enabled.has(id)) {
+        cache.delete(id);
+        changed = true;
+      }
+    }
     await inBatches(apps, async (app) => {
       const prior = cache.get(app.id);
       if (prior && now() - prior.fetchedAt < PLUGIN_VALUES_TTL_MS) return;
       try {
-        const snap = await api.getSettings(app.id);
+        const snap = await api.getSettings(app.id, { omitSecrets: true });
         if (Object.keys(snap.descriptors).length === 0 && !prior) return;
         cache.set(app.id, {
           name: app.name,
@@ -102,7 +110,7 @@ export function prefetchPluginSettings(
         /* one broken plugin never blanks the rest */
       }
     });
-    if (changed) for (const listener of listeners) listener();
+    if (changed) notifySettingsSearchSourcesChanged();
   })().finally(() => {
     inflight = null;
   });
@@ -159,25 +167,17 @@ export const pluginSettingsSearchProvider: SettingsSearchProvider = () => {
 };
 
 /**
- * Register the provider. `prefetch` is meant for the search box's first focus;
- * when it brings new data the provider is re-registered so the corpus (cached
- * on provider-set identity) rebuilds. Dispose on shutdown (Rule 3).
+ * Register the provider. `prefetch` is meant for the first focus of a search
+ * surface (rail or palette); when it brings new data it bumps the sources
+ * version so the corpus rebuilds. Dispose on shutdown (Rule 3).
  */
 export function registerPluginSettingsProvider(api: PluginSettingsApi = product.pluginApps): {
   prefetch: () => Promise<void>;
   dispose: () => void;
 } {
-  let off = registerSettingsSearchProvider(pluginSettingsSearchProvider);
-  const invalidate = () => {
-    off();
-    off = registerSettingsSearchProvider(pluginSettingsSearchProvider);
-  };
-  listeners.add(invalidate);
+  const off = registerSettingsSearchProvider(pluginSettingsSearchProvider);
   return {
     prefetch: () => prefetchPluginSettings(api),
-    dispose: () => {
-      listeners.delete(invalidate);
-      off();
-    }
+    dispose: off
   };
 }

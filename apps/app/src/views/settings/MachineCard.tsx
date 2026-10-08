@@ -244,7 +244,7 @@ export function MachineCard({
           </p>
         </div>
         <div className="machine-card-actions">
-          <SearchTarget searchId="machines.permission-ceiling"><label className="machines-ceiling">
+          <label className="machines-ceiling" data-settings-target="machines.permission-ceiling">
             <span>Permission ceiling</span>
             <select
               value={host.maxPermissionMode}
@@ -257,18 +257,17 @@ export function MachineCard({
               <option value="auto">Auto</option>
               <option value="full">Full</option>
             </select>
-          </label></SearchTarget>
-          <SearchTarget searchId="machines.machine-actions">
-            <button
-              type="button"
-              className="settings-btn"
-              onClick={onRenameStart}
-              aria-label={`Rename ${host.name}`}
-            >
-              <Pencil size={13} aria-hidden="true" />
-              Rename
-            </button>
-          </SearchTarget>
+          </label>
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={onRenameStart}
+            aria-label={`Rename ${host.name}`}
+            data-settings-target="machines.machine-actions"
+          >
+            <Pencil size={13} aria-hidden="true" />
+            Rename
+          </button>
           {onRepairPairing && !host.isPrimary ? <button type="button" className="settings-btn" onClick={onRepairPairing}>Pair again</button> : null}
           {showReconnect ? (
             <button

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
+import { useContext } from 'react';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FLASH_CLASS, FLASH_MS, REVEAL_WAIT_MS, RevealContext, findAnchor, findTarget, revealElement, useRevealAdvanced, useSettingsTargetReveal } from '../reveal';
+import { FLASH_CLASS, FLASH_MS, REVEAL_WAIT_MS, RevealContext, findAnchor, findTarget, revealElement, useSettingsTargetReveal } from '../reveal';
 import { registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry } from '../types';
 
@@ -147,7 +148,7 @@ describe('useSettingsTargetReveal', () => {
 
   it('publishes reveal:advanced through RevealContext', () => {
     const off = registerSettingsSearchProvider(() => [{ id: 'editor.adv', section: 'editor', label: 'Adv', kind: 'setting', reveal: 'advanced' }]);
-    function Probe() { return <span data-testid="adv">{String(useRevealAdvanced())}</span>; }
+    function Probe() { return <span data-testid="adv">{String(useContext(RevealContext).reveal === 'advanced')}</span>; }
     function Host() {
       const state = useSettingsTargetReveal({ tab: 'editor', anchor: 'editor.adv', snapshot, setAnchor });
       return <RevealContext.Provider value={state}><Probe /></RevealContext.Provider>;
@@ -177,8 +178,36 @@ describe('useSettingsTargetReveal', () => {
     expect(setAnchor).not.toHaveBeenCalled();
   });
 
-  it('useRevealAdvanced is false outside a provider', () => {
-    expect(renderHook(() => useRevealAdvanced()).result.current).toBe(false);
+  it('RevealContext is idle outside a provider', () => {
+    expect(renderHook(() => useContext(RevealContext)).result.current).toEqual({ target: null, reveal: null });
+  });
+
+  it('returns to idle once the reveal finishes, so a later collapse sticks and a repeat jump re-opens', () => {
+    mountRow('agents.row');
+    const { result, rerender } = run('agents.row');
+    act(() => { vi.advanceTimersByTime(20); });
+    expect(result.current).toEqual({ target: null, reveal: null });
+    // A repeat jump to the same row publishes the target again (null -> id is a change for consumers).
+    rerender({ anchor: null });
+    rerender({ anchor: 'agents.row' });
+    expect(setAnchor).toHaveBeenLastCalledWith(null);
+  });
+
+  it('clears the URL hash after revealing a row, after the anchor fallback, and for whole-page results', () => {
+    const clearHash = vi.fn();
+    mountRow('agents.row');
+    run('agents.row', { clearHash });
+    act(() => { vi.advanceTimersByTime(20); });
+    expect(clearHash).toHaveBeenCalledTimes(1);
+    cleanup();
+    clearHash.mockClear();
+    run('agents.row', { clearHash }); // no row mounted now: falls back to the section anchor after the wait
+    act(() => { vi.advanceTimersByTime(REVEAL_WAIT_MS + 100); });
+    expect(clearHash).toHaveBeenCalledTimes(1);
+    cleanup();
+    clearHash.mockClear();
+    run('agents.section', { clearHash });
+    expect(clearHash).toHaveBeenCalledTimes(1);
   });
 });
 

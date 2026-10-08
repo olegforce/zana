@@ -1,17 +1,18 @@
 import { ArrowLeft, FolderCog, Search, X } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useState, useId } from 'react';
+import { useEffect, useMemo, useState, useId, useSyncExternalStore } from 'react';
 import { useData, useUi } from '../../store.js';
-import { SETTINGS_SECTIONS, SETTINGS_GROUPS, SETTINGS_SUBSECTIONS } from '@/views/settings/settings-navigation';
+import { SETTINGS_SECTIONS, SETTINGS_GROUPS } from '@/views/settings/settings-navigation';
 import { SidebarResizer } from '../SidebarResizer.js';
 import { useAppSettingsRouteMemory } from '../../hooks/useAppSettingsRouteMemory.js';
-import { getSettingsRoutePath, getSettingsTabRoutePath } from '../../lib/route-paths.js';
+import { getSettingsTabRoutePath } from '../../lib/route-paths.js';
 import { searchSettings, type SettingsSearchHit, type SettingsSnippet } from '../../lib/settings-search/index.js';
-import { settingsHitPath } from '../../lib/settings-search/links.js';
+import { openSettingsHit } from '../../lib/settings-search/links.js';
+import { getSettingsSearchSourcesVersion, subscribeSettingsSearchSources } from '../../lib/settings-search/registry.js';
 import { ensureSettingsSearchProviders } from '../../lib/settings-search/runtime.js';
 import { buildCorpus } from '../../lib/settings-search/corpus.js';
 import { useSettingsSnapshot } from '../../lib/settings-search/snapshot.js';
-import { appSettingsNavCatalog, filterSettingsNav } from '../../lib/settings-nav-search.js';
+import { settingsNavGroups } from '../../lib/settings-nav-search.js';
 import { useMobileNavDismiss } from '../mobile-nav-context.js';
 
 /**
@@ -24,14 +25,17 @@ import { useMobileNavDismiss } from '../mobile-nav-context.js';
  *
  * `SETTINGS_SECTIONS` is the shared source of truth for labels/icons/descs.
  */
-const SECTION_ORDER = new Map<string, number>(SETTINGS_SECTIONS.map((s, i) => [s.id, i]));
-
 function sectionTitle(section: string): string {
   if (section === 'project') return 'Project settings';
   return SETTINGS_SECTIONS.find((s) => s.id === section)?.label ?? section;
 }
 
-/** Group ranked hits by page in section order, keeping rank order inside a page. */
+/**
+ * Group ranked hits by page. Pages appear in the order of their best hit (Map
+ * insertion order follows the engine's ranking), so an exact match on a later
+ * page is never pushed below a typo match on an earlier one, and the first row,
+ * the one Enter opens, is always the top-ranked hit.
+ */
 export function groupHitsByPage(hits: readonly SettingsSearchHit[]): Array<{ section: string; title: string; hits: SettingsSearchHit[] }> {
   const groups = new Map<string, SettingsSearchHit[]>();
   for (const hit of hits) {
@@ -39,15 +43,15 @@ export function groupHitsByPage(hits: readonly SettingsSearchHit[]): Array<{ sec
     list.push(hit);
     groups.set(hit.entry.section, list);
   }
-  return [...groups.entries()]
-    .sort((a, b) => (SECTION_ORDER.get(a[0]) ?? 1e6) - (SECTION_ORDER.get(b[0]) ?? 1e6))
-    .map(([section, list]) => ({ section, title: sectionTitle(section), hits: list }));
+  return [...groups.entries()].map(([section, list]) => ({ section, title: sectionTitle(section), hits: list }));
 }
 
 function Highlighted({ snippet }: { snippet: SettingsSnippet }) {
   const parts: React.ReactNode[] = [];
   let at = 0;
-  snippet.ranges.forEach(([start, end], i) => {
+  snippet.ranges.forEach(([rawStart, end], i) => {
+    const start = Math.max(rawStart, at); // ranges arrive merged; never re-emit text
+    if (end <= start) return;
     if (start > at) parts.push(snippet.text.slice(at, start));
     parts.push(<mark key={i}>{snippet.text.slice(start, end)}</mark>);
     at = end;
@@ -69,8 +73,9 @@ export function SettingsPane() {
   const [query, setQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [active, setActive] = useState(0);
-  // Bumped when lazily fetched sources (plugin settings) arrive, so an open query re-ranks with them.
-  const [sourcesTick, setSourcesTick] = useState(0);
+  // Moves when a runtime source changes (plugin settings land, harness probe resolves),
+  // so an open query re-ranks with the new data.
+  const sourcesVersion = useSyncExternalStore(subscribeSettingsSearchSources, getSettingsSearchSourcesVersion);
   const navigate = useNavigate();
   const listId = useId();
   const searching = query.trim().length > 0;
@@ -79,7 +84,7 @@ export function SettingsPane() {
     if (!searching) return [];
     ensureSettingsSearchProviders();
     return searchSettings(query, snapshot);
-  }, [searching, query, snapshot, sourcesTick]);
+  }, [searching, query, snapshot, sourcesVersion]);
   const pages = useMemo(() => groupHitsByPage(hits), [hits]);
   const flat = useMemo(() => pages.flatMap((p) => p.hits), [pages]);
   const activeHit = flat[Math.min(active, flat.length - 1)];
@@ -91,24 +96,12 @@ export function SettingsPane() {
   const parentLabel = (id: string) => buildCorpus(snapshot).entries.find((r) => r.entry.id === id)?.entry.label;
 
   const open = (hit: SettingsSearchHit) => {
-    const { entry } = hit;
-    const anchor = entry.kind === 'section' || entry.href ? undefined : entry.id;
-    const path = settingsHitPath(hit, projectId);
-    setSettingsAnchor(anchor ?? null);
-    void navigate(path);
+    openSettingsHit(hit, { projectId, navigate: (path) => void navigate(path), setAnchor: setSettingsAnchor });
     dismissMobileNav?.();
   };
-  const catalog = useMemo(
-    () => appSettingsNavCatalog({
-      groups: SETTINGS_GROUPS,
-      sections: SETTINGS_SECTIONS,
-      subsections: SETTINGS_SUBSECTIONS
-    }),
-    []
-  );
-  const groups = useMemo(() => filterSettingsNav('', catalog), [catalog]);
+  const groups = useMemo(() => settingsNavGroups(SETTINGS_GROUPS, SETTINGS_SECTIONS), []);
 
-  const renderRow = (section: { id: string; label: string; subsections: Array<{ id: string; label: string }> }) => {
+  const renderRow = (section: { id: string; label: string }) => {
     const meta = SETTINGS_SECTIONS.find((row) => row.id === section.id);
     const Icon = meta?.icon ?? FolderCog;
     return (
@@ -125,21 +118,6 @@ export function SettingsPane() {
             <span className="settings-section-label">{section.label}</span>
           </span>
         </Link>
-        {section.subsections.length > 0 ? (
-          <div className="settings-subsection-list">
-            {section.subsections.map((sub) => (
-              <Link
-                key={sub.id}
-                to={getSettingsRoutePath(section.id, sub.id)}
-                className="settings-subsection-item"
-                data-testid={`settings-nav-${section.id}-${sub.id}`}
-                onClick={() => { setSettingsAnchor(sub.id); dismissMobileNav?.(); }}
-              >
-                {sub.label}
-              </Link>
-            ))}
-          </div>
-        ) : null}
       </div>
     );
   };
@@ -159,12 +137,14 @@ export function SettingsPane() {
           aria-label="Search settings"
           placeholder="Search settings…"
           value={query}
+          role="combobox"
+          aria-expanded={searching && flat.length > 0}
           aria-autocomplete="list"
           aria-controls={searching && flat.length > 0 ? listId : undefined}
           aria-activedescendant={activeOptionId}
           onFocus={() => {
             setSearchFocused(true);
-            void ensureSettingsSearchProviders().prefetchPluginSettings().then(() => setSourcesTick((n) => n + 1));
+            void ensureSettingsSearchProviders().prefetchPluginSettings();
           }}
           onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {

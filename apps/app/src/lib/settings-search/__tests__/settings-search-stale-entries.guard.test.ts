@@ -15,14 +15,21 @@ const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const ATTR = (name: string) =>
   new RegExp(`\\b${name}\\s*[=:]\\s*(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:'([^']+)'|"([^"]+)"|\`([^\`$]+)\`)\\s*\\})`, 'g');
 
-/** Static `searchId` / `anchorId` literals declared in one source text. */
+/**
+ * Static `searchId` / `anchorId` literals declared in one source text. A literal
+ * `data-settings-target` counts as a searchId too, so raw markup can carry the
+ * target attribute directly instead of being wrapped just to satisfy this guard.
+ */
 export function collectSourceIds(source: string): { searchIds: Set<string>; anchorIds: Set<string> } {
   const grab = (name: string) => {
     const out = new Set<string>();
     for (const m of source.matchAll(ATTR(name))) out.add(m.slice(1).find(Boolean) as string);
     return out;
   };
-  return { searchIds: grab('searchId'), anchorIds: grab('anchorId') };
+  return {
+    searchIds: new Set([...grab('searchId'), ...grab('data-settings-target')]),
+    anchorIds: grab('anchorId')
+  };
 }
 
 /** Entries whose id / anchor is missing from the given source ids. */
@@ -84,6 +91,13 @@ describe('settings-search stale-entry guard', () => {
       <Section anchorId={'auto-close-idle'} />
       <Field searchId={\`agents.tpl\`} />
     `);
+
+    it('accepts a literal data-settings-target on raw markup as a searchId', () => {
+      const raw = collectSourceIds('<button className="settings-btn" data-settings-target="machines.add-machine">Add</button>');
+      expect([...raw.searchIds]).toEqual(['machines.add-machine']);
+      // Dynamic targets (runtime provider rows) are not static ids.
+      expect([...collectSourceIds('<li data-settings-target={personaSearchId(p.id)} />').searchIds]).toEqual([]);
+    });
 
     it('collects static ids in every literal form', () => {
       expect([...ids.searchIds].sort()).toEqual(['agents.auto-close', 'agents.tpl']);

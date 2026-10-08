@@ -1,59 +1,51 @@
-import { createRequire } from 'node:module';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from '@babel/parser';
 import { describe, expect, it } from 'vitest';
 import { SETTINGS_SECTIONS } from '@/views/settings/settings-navigation';
 import { deriveNavEntries } from '../registry';
 import { normalize } from '../corpus';
 import { ALLOWED_FILES, ALLOWED_STRINGS } from '../completeness-allowlist';
-import { REQUIRE_ALL_SECTIONS, SECTION_SOURCES, SETTINGS_SOURCE_DIRS, type SearchSection } from '../guard-config';
+import { SECTION_SOURCES, SETTINGS_SOURCE_DIRS, type SearchSection } from '../guard-config';
 import type { SettingsSearchEntry } from '../types';
 
 // Completeness guard (design §3.5): every user-visible literal in the Settings
 // UI must be findable through some entry of its section. Enforced page by page.
+//
+// Parsed with `@babel/parser` (a declared root devDependency; TypeScript 7 is the
+// native port and has no in-process JS parser API). JSX text and JSX attribute
+// strings are read RAW (`extra.raw`), so an `&amp;` in source is compared as
+// written, never entity-decoded.
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Ts = any;
-
-const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-/**
- * TypeScript 7 (the repo's `typescript`) is the native port and exposes no
- * synchronous in-process parser, so find a JS compiler that does (a transitive
- * 5.x/6.x in the pnpm store). Test-only.
- */
-function loadTs(): Ts {
-  const req = createRequire(import.meta.url);
-  const usable = (m: Ts) => (typeof m?.createSourceFile === 'function' ? m : undefined);
-  try {
-    const direct = usable(req('typescript'));
-    if (direct) return direct;
-  } catch {
-    /* fall through to the pnpm store */
-  }
-  let dir = SRC_ROOT;
-  for (let i = 0; i < 8; i += 1, dir = dirname(dir)) {
-    const store = join(dir, 'node_modules', '.pnpm');
-    if (!existsSync(store)) continue;
-    const candidates = readdirSync(store)
-      .filter((d) => /^(typescript@\d|@typescript\+typescript6@)/.test(d))
-      .sort()
-      .reverse();
-    for (const c of candidates) {
-      const pkg = c.startsWith('@') ? join('@typescript', 'typescript6') : 'typescript';
-      try {
-        const found = usable(req(join(store, c, 'node_modules', pkg)));
-        if (found) return found;
-      } catch {
-        /* try next */
-      }
-    }
-  }
-  throw new Error('No JS TypeScript compiler with createSourceFile found for the settings-search guard');
+interface Node {
+  type: string;
+  [key: string]: unknown;
 }
 
-const ts = loadTs();
+const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const NON_CHILD_KEYS = new Set(['loc', 'start', 'end', 'range', 'extra', 'leadingComments', 'trailingComments', 'innerComments', 'comments', 'tokens']);
+
+function isNode(value: unknown): value is Node {
+  return !!value && typeof value === 'object' && typeof (value as Node).type === 'string';
+}
+
+function childNodes(node: Node): Node[] {
+  const out: Node[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (NON_CHILD_KEYS.has(key)) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) if (isNode(item)) out.push(item);
+    } else if (isNode(value)) {
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+function rawOf(node: Node): string | undefined {
+  return (node.extra as { raw?: string } | undefined)?.raw;
+}
 
 /** Settings primitives plus the page-local row components. */
 export const ROW_COMPONENTS = new Set([
@@ -62,74 +54,106 @@ export const ROW_COMPONENTS = new Set([
 ]);
 const TEXT_ATTRS = new Set(['label', 'title', 'help', 'desc']);
 
-function staticString(node: Ts): string | undefined {
+function jsxName(node: Node | undefined): string {
+  if (!node) return '';
+  if (node.type === 'JSXIdentifier') return node.name as string;
+  if (node.type === 'JSXMemberExpression') return `${jsxName(node.object as Node)}.${jsxName(node.property as Node)}`;
+  if (node.type === 'JSXNamespacedName') return `${jsxName(node.namespace as Node)}:${jsxName(node.name as Node)}`;
+  return '';
+}
+
+/** A string literal or a template literal without substitutions, through an expression container. */
+function staticString(node: Node | undefined | null): string | undefined {
   if (!node) return undefined;
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-  if (ts.isJsxExpression(node)) return staticString(node.expression);
-  if (ts.isParenthesizedExpression(node)) return staticString(node.expression);
+  if (node.type === 'StringLiteral') return node.value as string;
+  if (node.type === 'TemplateLiteral' && (node.expressions as unknown[]).length === 0) {
+    return ((node.quasis as Node[])[0].value as { cooked?: string }).cooked ?? undefined;
+  }
+  if (node.type === 'JSXExpressionContainer') return staticString(node.expression as Node);
   return undefined;
 }
 
-function jsxText(node: Ts, out: string[]): void {
-  if (ts.isJsxText(node)) {
-    out.push(node.text);
+/** A JSX attribute value: quoted strings raw (as written), braces as an expression. */
+function attrString(value: Node | undefined | null): string | undefined {
+  if (!value) return undefined;
+  if (value.type === 'StringLiteral') {
+    const raw = rawOf(value);
+    return raw !== undefined ? raw.slice(1, -1) : (value.value as string);
+  }
+  return staticString(value);
+}
+
+function jsxText(node: Node, out: string[]): void {
+  if (node.type === 'JSXText') {
+    out.push(rawOf(node) ?? (node.value as string));
     return;
   }
-  const str = ts.isJsxExpression(node) ? staticString(node) : undefined;
+  const str = node.type === 'JSXExpressionContainer' ? staticString(node) : undefined;
   if (str !== undefined) {
     out.push(str);
     return;
   }
-  ts.forEachChild(node, (c: Ts) => jsxText(c, out));
+  for (const child of childNodes(node)) jsxText(child, out);
+}
+
+function keyName(key: Node | undefined): string | undefined {
+  if (!key) return undefined;
+  if (key.type === 'Identifier') return key.name as string;
+  if (key.type === 'StringLiteral') return key.value as string;
+  return undefined;
 }
 
 /** Collect the searchable literals from one source text (exported shape for fixtures). */
-export function collectLiterals(sourceText: string, fileName = 'fixture.tsx'): string[] {
-  const sf = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function collectLiterals(sourceText: string, _fileName = 'fixture.tsx'): string[] {
+  const ast = parse(sourceText, { sourceType: 'module', plugins: ['typescript', 'jsx'], errorRecovery: true }) as unknown as Node;
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     const n = normalize(raw ?? '');
     if (n) out.push(n);
   };
 
-  const visitOptionsArray = (node: Ts) => {
-    const walk = (n: Ts) => {
-      if (ts.isPropertyAssignment(n) && n.name && (n.name.text === 'label' || n.name.text === 'title')) add(staticString(n.initializer));
-      ts.forEachChild(n, walk);
+  const visitOptionsArray = (node: Node) => {
+    const walk = (n: Node) => {
+      if (n.type === 'ObjectProperty') {
+        const name = keyName(n.key as Node);
+        if (name === 'label' || name === 'title') add(staticString(n.value as Node));
+      }
+      for (const child of childNodes(n)) walk(child);
     };
     walk(node);
   };
 
-  const visit = (node: Ts) => {
-    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      const tag = node.tagName.getText(sf);
+  const visit = (node: Node) => {
+    if (node.type === 'JSXOpeningElement') {
+      const tag = jsxName(node.name as Node);
       const isRow = ROW_COMPONENTS.has(tag);
-      for (const attr of node.attributes.properties) {
-        if (!ts.isJsxAttribute(attr)) continue;
-        const name = attr.name.getText(sf);
+      for (const attr of node.attributes as Node[]) {
+        if (attr.type !== 'JSXAttribute') continue;
+        const name = jsxName(attr.name as Node);
+        const value = attr.value as Node | null;
         if (isRow && TEXT_ATTRS.has(name)) {
-          const s = staticString(attr.initializer);
+          const s = attrString(value);
           if (s !== undefined) add(s);
-          else if (attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+          else if (value?.type === 'JSXExpressionContainer' && (value.expression as Node).type !== 'JSXEmptyExpression') {
             const parts: string[] = [];
-            jsxText(attr.initializer.expression, parts);
+            jsxText(value.expression as Node, parts);
             add(parts.join(' '));
           }
-        } else if (name === 'options' && attr.initializer) {
-          visitOptionsArray(attr.initializer);
+        } else if (name === 'options' && value) {
+          visitOptionsArray(value);
         } else if (tag === 'option' && name === 'label') {
-          add(staticString(attr.initializer));
+          add(attrString(value));
         }
       }
     }
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(sf) === 'option') {
+    if (node.type === 'JSXElement' && jsxName((node.openingElement as Node).name as Node) === 'option') {
       const parts: string[] = [];
-      for (const c of node.children) jsxText(c, parts);
+      for (const c of node.children as Node[]) jsxText(c, parts);
       add(parts.join(' '));
     }
-    ts.forEachChild(node, visit);
+    for (const child of childNodes(node)) visit(child);
   };
-  visit(sf);
+  visit(ast);
   return [...new Set(out)];
 }
 
@@ -217,12 +241,12 @@ describe('settings-search completeness guard', () => {
   const bySection = entriesBySection();
   const allSections: SearchSection[] = [...SETTINGS_SECTIONS.map((s) => s.id), 'project'];
 
-  it('only enforces sections that have an entries file (REQUIRE_ALL_SECTIONS gates the rest)', () => {
+  it('indexes every section, covering every literal in its sources', () => {
     const problems: string[] = [];
     for (const section of allSections) {
       const entries = bySection.get(section);
       if (!entries) {
-        if (REQUIRE_ALL_SECTIONS) problems.push(`missing entries/${section}.ts`);
+        problems.push(`missing entries/${section}.ts`);
         continue;
       }
       problems.push(...checkSection(section, entries).map((m) => `[${section}] ${m}`));
@@ -234,8 +258,7 @@ describe('settings-search completeness guard', () => {
     for (const section of bySection.keys()) expect(allSections).toContain(section);
   });
 
-  it('maps every scanned source file to a section when REQUIRE_ALL_SECTIONS is on', () => {
-    if (!REQUIRE_ALL_SECTIONS) return;
+  it('maps every scanned source file to a section', () => {
     const mapped = new Set(Object.values(SECTION_SOURCES).flat());
     const allowed = new Set(ALLOWED_FILES.map((a) => a.file));
     const unmapped = listSourceFiles().filter(

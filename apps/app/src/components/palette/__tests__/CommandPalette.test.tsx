@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  setSettingsAnchor: vi.fn(),
   navigate: vi.fn(), close: vi.fn(), selectTab: vi.fn(), projectView: vi.fn(), setNav: vi.fn(), exitProjectFocus: vi.fn(),
   createTerminal: vi.fn(async () => null), focusedProjectId: null as string | null,
   project: { id: 'p1', name: 'Design system', path: '/design', tag: 'design', favorite: false },
@@ -21,12 +22,14 @@ vi.mock('../../../lib/product-client.js', () => ({ product: {
   projectSettings: { get: async () => ({}), onChanged: () => () => {} }
 } }));
 vi.mock('../../../store.js', () => ({
-  useData: (selector: (state: unknown) => unknown) => selector({
+  // Same shape as the zustand store: Settings search runtime providers read and subscribe to it.
+  useData: Object.assign((selector: (state: unknown) => unknown) => selector({
     projects: [h.project], terminals: {}, createTerminal: h.createTerminal
-  }),
+  }), { getState: () => ({ projects: [h.project], harnessStatus: [] }), subscribe: () => () => {} }),
   useUi: Object.assign((selector: (state: unknown) => unknown) => selector({
     selectedProjectId: h.selectedProjectId, selectedTabId: {}, projectView: {}, recentFiles: {},
-    selectTab: h.selectTab, setProjectView: h.projectView, setNav: h.setNav, nav: 'inbox'
+    selectTab: h.selectTab, setProjectView: h.projectView, setNav: h.setNav, nav: 'inbox',
+    setSettingsAnchor: h.setSettingsAnchor
   }), { getState: () => ({ enterProjectFocus: vi.fn(), exitProjectFocus: h.exitProjectFocus }) }),
   useScheduler: (selector: (state: unknown) => unknown) => selector({ tasks: [] }),
   usePersonas: (selector: (state: unknown) => unknown) => selector({ personas: [] }),

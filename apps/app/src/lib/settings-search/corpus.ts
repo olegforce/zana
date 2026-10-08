@@ -1,21 +1,26 @@
 import { SETTINGS_GROUPS, SETTINGS_SECTIONS, SETTINGS_SUBSECTIONS } from '@/views/settings/settings-navigation';
 import { mayIndexValue } from './secrets';
-import { getSettingsSearchProviders, getStaticEntries } from './registry';
+import { getSettingsSearchProviders, getSettingsSearchSourcesVersion, getStaticEntries } from './registry';
 import type { SettingsSearchEntry, SettingsSearchProvider, SettingsValueSnapshot } from './types';
 
 export const VALUE_INDEX_MAX_CHARS = 200;
 
 const MARKS = /\p{M}/u;
+const ONLY_MARKS = /^\p{M}+$/u;
 
 /**
  * Lowercase + strip diacritics, one output UTF-16 unit per input unit so
  * offsets in folded text are valid offsets in the original (snippets rely on it).
+ * A unit folds to its NFD base only when the rest of the decomposition is
+ * combining marks (é → e); a decomposition into further letters (a Hangul
+ * syllable into jamo) keeps the unit, so it never collapses to its first jamo.
  */
 export function fold(text: string): string {
   let out = '';
   for (let i = 0; i < text.length; i += 1) {
     const unit = text[i];
-    const base = unit.normalize('NFD')[0] ?? unit;
+    const nfd = unit.normalize('NFD');
+    const base = nfd.length > 1 && ONLY_MARKS.test(nfd.slice(1)) ? nfd[0] : unit;
     out += MARKS.test(base) ? unit : (base.toLowerCase()[0] ?? unit);
   }
   return out;
@@ -164,19 +169,33 @@ function staticPartFor(entries: readonly SettingsSearchEntry[]): StaticPart {
 }
 
 let last:
-  | { snapshot: SettingsValueSnapshot; entries: readonly SettingsSearchEntry[]; providers: readonly SettingsSearchProvider[]; corpus: Corpus }
+  | {
+      snapshot: SettingsValueSnapshot;
+      entries: readonly SettingsSearchEntry[];
+      providers: readonly SettingsSearchProvider[];
+      sourcesVersion: number;
+      corpus: Corpus;
+    }
   | undefined;
 
 /**
  * Static text is normalised once per entries array; values and provider output
- * are re-derived only when the snapshot object identity (or provider set) changes.
+ * are re-derived only when the snapshot identity, the provider set, or the
+ * sources version (a provider's underlying data changed) moves.
  */
 export function buildCorpus(
   snapshot: SettingsValueSnapshot,
   entries: readonly SettingsSearchEntry[] = getStaticEntries(),
   providers: readonly SettingsSearchProvider[] = getSettingsSearchProviders()
 ): Corpus {
-  if (last && last.snapshot === snapshot && last.entries === entries && last.providers === providers) {
+  const sourcesVersion = getSettingsSearchSourcesVersion();
+  if (
+    last &&
+    last.snapshot === snapshot &&
+    last.entries === entries &&
+    last.providers === providers &&
+    last.sourcesVersion === sourcesVersion
+  ) {
     return last.corpus;
   }
   const part = staticPartFor(entries);
@@ -206,6 +225,6 @@ export function buildCorpus(
   }
 
   const corpus: Corpus = { entries: rows, vocab };
-  last = { snapshot, entries, providers, corpus };
+  last = { snapshot, entries, providers, sourcesVersion, corpus };
   return corpus;
 }

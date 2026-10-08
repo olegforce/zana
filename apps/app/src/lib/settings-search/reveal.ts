@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useEffect, useRef, useState } from 'react';
 import { buildCorpus } from './corpus';
 import { getStaticEntries } from './registry';
 import type { SettingsSearchEntry, SettingsValueSnapshot } from './types';
@@ -18,12 +18,13 @@ export interface RevealState {
 
 const IDLE: RevealState = { target: null, reveal: null };
 
-/** Collapsibles read this: `useRevealAdvanced()` is true while an `advanced` target is being revealed. */
+/**
+ * Collapsibles read this while a jump is in flight: `target` names the row
+ * being revealed and `reveal` the container to open. It returns to idle once
+ * the reveal finishes, so a block the user collapses afterwards stays collapsed
+ * and a repeat jump to the same row re-opens it.
+ */
 export const RevealContext = createContext<RevealState>(IDLE);
-
-export function useRevealAdvanced(): boolean {
-  return useContext(RevealContext).reveal === 'advanced';
-}
 
 /** False while any ancestor is `hidden` or `display: none` (e.g. an inactive tab panel): nothing to scroll to yet. */
 export function isShown(el: HTMLElement): boolean {
@@ -63,15 +64,22 @@ interface Args {
   anchor: string | null;
   snapshot: SettingsValueSnapshot;
   setAnchor: (anchor: string | null) => void;
+  /**
+   * Drop the `#target` from the URL once handled (replace, no history entry),
+   * so route memory never replays the jump and opening the same result again
+   * is a real navigation.
+   */
+  clearHash?: () => void;
 }
 
 /**
  * Resolve the URL-hash target (an entry id, or a plain section anchor id) once
  * its page has rendered: switch the container (Harness tab through its anchor,
  * `advanced` through RevealContext), retry up to 2 s, scroll to center, flash,
- * focus; fall back to the section anchor, then clear the pending anchor.
+ * focus; fall back to the section anchor, then clear the pending anchor, the
+ * URL hash and the published reveal state.
  */
-export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor }: Args): RevealState {
+export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor, clearHash }: Args): RevealState {
   const [state, setState] = useState<RevealState>(IDLE);
   const pending = useRef<SettingsSearchEntry | null>(null);
 
@@ -87,6 +95,7 @@ export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor }: Ar
     pending.current = null;
     if (entry?.kind === 'section') {
       setAnchor(null); // the route already switched pages: nothing to scroll to
+      clearHash?.();
       return;
     }
 
@@ -99,6 +108,8 @@ export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor }: Ar
     let frame = 0;
     const finish = () => {
       setAnchor(null);
+      setState(IDLE);
+      clearHash?.();
     };
     const attempt = () => {
       if (cancelled) return;
@@ -136,7 +147,7 @@ export function useSettingsTargetReveal({ tab, anchor, snapshot, setAnchor }: Ar
     };
     // snapshot intentionally omitted: config churn must not restart a reveal in flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchor, tab, setAnchor]);
+  }, [anchor, tab, setAnchor, clearHash]);
 
   return state;
 }

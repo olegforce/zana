@@ -1,6 +1,7 @@
 import { product } from '../../lib/product-client.js';
 import { DelayedStencilList } from '../../components/ui/Skeleton.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { RevealContext, useSettingsTargetReveal } from '@/lib/settings-search/reveal';
 import { buildSettingsSnapshot } from '@/lib/settings-search/snapshot';
 import { SETTINGS_SECTIONS } from './settings-navigation.js';
@@ -93,7 +94,22 @@ export function SettingsView() {
   // Resolve the pending hash target (entry id or section anchor) once its page
   // has rendered: reveal container, scroll, flash, focus (see reveal.ts).
   const snapshot = useMemo(() => buildSettingsSnapshot({ config, project: null, machines: null }), [config]);
-  const revealState = useSettingsTargetReveal({ tab, anchor: config ? settingsAnchor : null, snapshot, setAnchor: setSettingsAnchor });
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  // Stable identity (the reveal effect depends on it): drop a handled `#target`
+  // without adding a history entry.
+  const clearSettingsHash = useCallback(() => {
+    if (!window.location.hash) return;
+    void navigateRef.current({ pathname: window.location.pathname, search: window.location.search }, { replace: true });
+  }, []);
+  const revealState = useSettingsTargetReveal({
+    tab,
+    anchor: config ? settingsAnchor : null,
+    snapshot,
+    setAnchor: setSettingsAnchor,
+    clearHash: clearSettingsHash
+  });
 
   if (!config) {
     return (

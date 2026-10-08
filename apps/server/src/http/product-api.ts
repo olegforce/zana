@@ -264,16 +264,33 @@ async function handlePluginAppRpc(
   }
 }
 
+type PluginSettingsWire = ReturnType<NonNullable<ProductHttpContext['plugins']>['getSettings']>;
+
+/**
+ * Drop every `secret: true` value, keeping the descriptors. Callers that only
+ * need labels and non-secret values (Settings search) ask for this so stored
+ * secrets never cross to the renderer just to be discarded there (Rule 1).
+ */
+export function withoutSecretValues(snapshot: PluginSettingsWire): PluginSettingsWire {
+  const values = { ...snapshot.values };
+  for (const [key, descriptor] of Object.entries(snapshot.descriptors)) {
+    if ('secret' in descriptor && descriptor.secret === true) delete values[key];
+  }
+  return { descriptors: snapshot.descriptors, values };
+}
+
 async function handlePluginAppSettingsGet(
   response: ServerResponse,
   ctx: ProductHttpContext,
-  id: string
+  id: string,
+  options: { omitSecrets: boolean }
 ): Promise<void> {
   if (!ctx.plugins) {
     sendJson(response, 503, { error: 'plugin host is unavailable' });
     return;
   }
-  sendJson(response, 200, ctx.plugins.getSettings(id));
+  const snapshot = ctx.plugins.getSettings(id);
+  sendJson(response, 200, options.omitSecrets ? withoutSecretValues(snapshot) : snapshot);
 }
 
 async function handlePluginAppSettingsSet(
@@ -2952,7 +2969,9 @@ export async function handleProductHttp(
     }
     const pluginAppSettings = routeParams(path, '/api/v1/plugin-apps/:id/settings');
     if (pluginAppSettings && method === 'GET') {
-      await handlePluginAppSettingsGet(response, ctx, pluginAppSettings.id);
+      await handlePluginAppSettingsGet(response, ctx, pluginAppSettings.id, {
+        omitSecrets: requestUrl.searchParams.get('secrets') === 'omit'
+      });
       return true;
     }
     if (pluginAppSettings && method === 'POST') {

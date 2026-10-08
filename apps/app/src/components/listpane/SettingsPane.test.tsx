@@ -17,7 +17,11 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../store.js', () => ({
   useUi: (select: (state: typeof h.ui) => unknown) => select(h.ui),
-  useData: (select: (state: typeof h.data) => unknown) => select(h.data)
+  // Same shape as the zustand store: runtime providers read and subscribe to it.
+  useData: Object.assign((select: (state: typeof h.data) => unknown) => select(h.data), {
+    getState: () => ({ ...h.data, harnessStatus: [] }),
+    subscribe: () => () => {}
+  })
 }));
 vi.mock('../../hooks/useAppSettingsRouteMemory.js', () => ({
   useAppSettingsRouteMemory: () => ({ appRoutePath: '/inbox' })
@@ -28,7 +32,8 @@ vi.mock('../../lib/settings-search/snapshot.js', () => ({
 }));
 vi.mock('../mobile-nav-context.js', () => ({ useMobileNavDismiss: () => h.dismiss }));
 
-import { SettingsPane } from './SettingsPane.js';
+import { SettingsPane, groupHitsByPage } from './SettingsPane.js';
+import type { SettingsSearchHit } from '../../lib/settings-search/index.js';
 
 function Location() {
   const l = useLocation();
@@ -52,13 +57,31 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe('groupHitsByPage', () => {
+  const hit = (id: string, section: string, tier: 1 | 2 | 3): SettingsSearchHit =>
+    ({ entry: { id, section, label: id, kind: 'setting' }, breadcrumb: section, score: 1, tier }) as SettingsSearchHit;
+
+  it('orders pages by their best hit, never by Settings order, so a typo page cannot outrank an exact one', () => {
+    // Engine order: exact hits on Harness and Project first, then typo hits on Preferences.
+    const pages = groupHitsByPage([hit('harness.model', 'harness', 1), hit('project.model', 'project', 1), hit('global.theme', 'global', 3)]);
+    expect(pages.map((p) => p.section)).toEqual(['harness', 'project', 'global']);
+    // The first row (the one Enter opens) is the top-ranked hit.
+    expect(pages.flatMap((p) => p.hits)[0].entry.id).toBe('harness.model');
+  });
+
+  it('keeps rank order inside a page', () => {
+    const pages = groupHitsByPage([hit('a', 'terminal', 1), hit('b', 'agents', 1), hit('c', 'terminal', 2)]);
+    expect(pages[0].hits.map((h) => h.entry.id)).toEqual(['a', 'c']);
+  });
+});
+
 describe('focused Settings navigation', () => {
   it('dismisses the mobile drawer even when the selected section or anchor keeps the same route', () => {
     h.dismiss = vi.fn();
     mount();
     fireEvent.click(screen.getByRole('link', { name: 'Preferences' }));
     expect(h.dismiss).toHaveBeenCalledTimes(1);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search settings' }), { target: { value: 'appearance' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search settings' }), { target: { value: 'appearance' } });
     fireEvent.click(screen.getByTestId('settings-result-global.appearance'));
     expect(h.dismiss).toHaveBeenCalledTimes(2);
     expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('global.appearance');
@@ -79,7 +102,7 @@ describe('focused Settings navigation', () => {
 
   it('renders ranked, grouped results with breadcrumb and highlighted snippet, and routes by entry id', () => {
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'heartbeat' } });
     expect(screen.queryByRole('link', { name: 'Terminal' })).toBeNull();
     const list = screen.getByRole('listbox');
@@ -99,7 +122,7 @@ describe('focused Settings navigation', () => {
 
   it('supports ArrowDown/ArrowUp/Enter and opens a section result without a hash', () => {
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'terminal' } });
     const options = screen.getAllByRole('option');
     expect(options.length).toBeGreaterThan(1);
@@ -119,7 +142,7 @@ describe('focused Settings navigation', () => {
   it('re-ranks an open query once lazily fetched sources arrive', async () => {
     const reg = await import('../../lib/settings-search/registry.js');
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'lazyquokka' } });
     expect(screen.getByText('No matching settings')).toBeTruthy();
     const off = reg.registerSettingsSearchProvider(() => [
@@ -134,7 +157,7 @@ describe('focused Settings navigation', () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'terminal' } });
     fireEvent.keyDown(search, { key: 'ArrowDown' });
     expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
@@ -150,7 +173,7 @@ describe('focused Settings navigation', () => {
     ]);
     h.ui.focusedProjectId = 'focused';
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'zebra' } });
     const row = screen.getByTestId('settings-result-rt.child');
     expect(row.querySelector('mark')?.textContent).toBe('zebra');
@@ -165,7 +188,7 @@ describe('focused Settings navigation', () => {
 
   it('announces empty results and lets Escape clear the search without leaving Settings', () => {
     mount();
-    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
     fireEvent.change(search, { target: { value: 'no matching preference xyz' } });
     expect(screen.getByRole('status').textContent).toBe('No matching settings');
     fireEvent.keyDown(search, { key: 'ArrowDown' });

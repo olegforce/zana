@@ -1,7 +1,8 @@
 import type { AppConfig, HarnessFamily, HarnessVerifyResult } from '@zana-ai/zcc-domain/product';
 import type { HarnessAdapterDescriptor } from '@zana-ai/zcc-domain/harness-adapter';
 import { useData } from '@/store';
-import { getThreadModelCatalog } from '@/components/thread/pickers/thread-model-catalog';
+import { getThreadModelCatalog, subscribeThreadModelCatalog } from '@/components/thread/pickers/thread-model-catalog';
+import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider, SettingsValueSnapshot } from '../types';
 
 // Runtime source for the AI Harness page: one row per harness family plus the
@@ -223,8 +224,27 @@ export function threadProviderEntries(
   });
 }
 
-/** Registered once at app init (Rule 3: stateless, nothing to release). */
+/** Reads live store state; `registerHarnessSearchProvider` keeps the corpus in step with it. */
 export const harnessSearchProvider: SettingsSearchProvider = () => [
   ...harnessRowEntries(useData.getState().harnessStatus),
   ...threadProviderEntries([], getThreadModelCatalog())
 ];
+
+/**
+ * Register the provider and bump the sources version when its inputs change:
+ * the boot harness probe resolves asynchronously and the Modern model catalogue
+ * refreshes in the background, so a search opened early must not stay stale.
+ * The returned function releases both subscriptions (Rule 3).
+ */
+export function registerHarnessSearchProvider(): () => void {
+  const off = registerSettingsSearchProvider(harnessSearchProvider);
+  const stopStatus = useData.subscribe((state, prev) => {
+    if (state.harnessStatus !== prev.harnessStatus) notifySettingsSearchSourcesChanged();
+  });
+  const stopCatalog = subscribeThreadModelCatalog(notifySettingsSearchSourcesChanged);
+  return () => {
+    stopStatus();
+    stopCatalog();
+    off();
+  };
+}

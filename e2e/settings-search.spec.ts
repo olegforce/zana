@@ -20,7 +20,12 @@ const SECRET_ID = 'settings-search-secret';
 async function openSettings(win: Page) {
   await win.getByRole('link', { name: 'Settings', exact: true }).click();
   await win.getByTestId('settings-nav-global').click();
-  return win.getByRole('textbox', { name: 'Search settings' });
+  return win.getByRole('combobox', { name: 'Search settings' });
+}
+
+/** A handled jump drops its `#target` (replace, no history entry) so route memory never replays it. */
+async function hashCleared(win: Page) {
+  await expect.poll(() => new URL(win.url()).hash, { timeout: 10_000 }).toBe('');
 }
 
 async function inView(win: Page, selector: string) {
@@ -58,9 +63,10 @@ test('help-text-only phrase finds the row, jumps to it, flashes it and shows a s
   await expect(hit.locator('mark').first()).toBeVisible();
   await win.screenshot({ path: testInfo.outputPath('01-help-text-results.png'), animations: 'disabled' });
   await hit.click();
-  await expect(win).toHaveURL(/\/settings\/terminal#terminal\.tmux-persistence$/);
+  await expect(win).toHaveURL(/\/settings\/terminal/);
   const row = await inView(win, '[data-settings-target="terminal.tmux-persistence"]');
   await expect(row).toHaveClass(/settings-search-flash/);
+  await hashCleared(win);
   await win.screenshot({ path: testInfo.outputPath('02-help-text-jump.png'), animations: 'disabled' });
 });
 
@@ -69,9 +75,31 @@ test('cross-page jump lands in view (baseline probe regression)', async ({ app }
   const search = await openSettings(win);
   await search.fill('heartbeat');
   await win.getByTestId('settings-result-agents.agent-heartbeat.intro').click();
-  await expect(win).toHaveURL(/\/settings\/agents#/);
+  await expect(win).toHaveURL(/\/settings\/agents/);
   await inView(win, '#settings-anchor-agent-heartbeat');
+  await hashCleared(win);
   await win.screenshot({ path: testInfo.outputPath('03-cross-page-heartbeat.png'), animations: 'disabled' });
+});
+
+test('opening the same result twice reveals it both times (no stale hash, no stuck reveal state)', async ({ app }) => {
+  const win = app.window;
+  const search = await openSettings(win);
+  await search.fill('does not make terminals faster');
+  const hit = win.getByTestId('settings-result-terminal.tmux-persistence');
+  await hit.click();
+  const row = await inView(win, '[data-settings-target="terminal.tmux-persistence"]');
+  await expect(row).toHaveClass(/settings-search-flash/);
+  await hashCleared(win);
+  await expect(row).not.toHaveClass(/settings-search-flash/, { timeout: 5_000 });
+  // Scroll it away, then open the very same result again from the rail.
+  await row.evaluate((node) => {
+    for (let el: HTMLElement | null = node.parentElement; el; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight) { el.scrollTop = el.scrollHeight; break; }
+    }
+  });
+  await hit.click();
+  await inView(win, '[data-settings-target="terminal.tmux-persistence"]');
+  await expect(row).toHaveClass(/settings-search-flash/);
 });
 
 test('a term that lives only in a collapsed Advanced block expands it', async ({ app }, testInfo) => {
@@ -92,7 +120,7 @@ test('a Harness page field selects the right tab', async ({ app }, testInfo) => 
   const hit = win.getByTestId('settings-result-harness.claude.append-system-prompt');
   await expect(hit).toBeVisible();
   await hit.click();
-  await expect(win).toHaveURL(/\/settings\/harness#/);
+  await expect(win).toHaveURL(/\/settings\/harness/);
   await expect(win.getByTestId('harness-legacy-pane')).toBeVisible();
   await inView(win, '[data-settings-target="harness.claude.append-system-prompt"]');
   await win.screenshot({ path: testInfo.outputPath('05-harness-tab.png'), animations: 'disabled' });
@@ -115,7 +143,7 @@ test('keyboard: arrows move the active row, Enter opens it, Escape clears', asyn
   const before = win.url();
   await search.press('Enter');
   await expect.poll(() => win.url()).not.toBe(before);
-  await expect(win).toHaveURL(/\/settings\/[a-z-]+#/);
+  await expect(win).toHaveURL(/\/settings\/[a-z-]+/);
   await search.fill('zzzz-nothing');
   await expect(win.getByRole('status').filter({ hasText: 'No matching settings' })).toBeVisible();
   await search.press('Escape');

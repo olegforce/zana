@@ -26,7 +26,7 @@ export interface AllowedStaleId {
 /** Literals that are deliberately not searchable. */
 export const ALLOWED_STRINGS: readonly AllowedString[] = [];
 
-/** Whole files that carry no searchable settings rows (only needed once REQUIRE_ALL_SECTIONS is on). */
+/** Whole files that carry no searchable settings rows (exempt from the every-file-is-mapped check). */
 export const ALLOWED_FILES: readonly AllowedFile[] = [];
 
 /** Entry ids / anchors with no static `searchId` / `anchorId` literal in source. */

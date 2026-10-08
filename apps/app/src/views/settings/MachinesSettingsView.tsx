@@ -13,7 +13,7 @@ import { Field, Section } from '@/components/settings/FormFields';
 import { useHosts } from '../../hooks/useHosts.js';
 import { HostSshIdentityDialog } from '../../components/HostSshIdentityDialog.js';
 import { AddMachineDialog } from './AddMachineDialog.js';
-import { MachineCard, SearchTarget } from './MachineCard.js';
+import { MachineCard } from './MachineCard.js';
 import {
   defaultSshHost,
   sshHostOptionsFromProjects,
@@ -223,12 +223,10 @@ export function MachinesSettingsView({
           />
         </Field>
         <div className="machines-toolbar">
-          <SearchTarget searchId="machines.add-machine">
-            <button type="button" className="settings-btn" onClick={() => setAdding(true)}>
-              <Plus size={13} aria-hidden="true" />
-              Add a machine
-            </button>
-          </SearchTarget>
+          <button type="button" className="settings-btn" onClick={() => setAdding(true)} data-settings-target="machines.add-machine">
+            <Plus size={13} aria-hidden="true" />
+            Add a machine
+          </button>
           {actionable.length > 0 ? (
             <button
               type="button"

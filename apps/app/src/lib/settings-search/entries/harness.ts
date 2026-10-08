@@ -75,8 +75,8 @@ export const entries: readonly SettingsSearchEntry[] = [
     label: 'Extra args',
     help: 'Command arguments. Applied first. If a later Project, Persona, or Agent setting uses the same option, the later setting takes priority.',
     keywords: ['claude code', 'flags', 'command line', 'arguments', 'plugin dir'],
-    kind: 'setting',
-    value: (s) => s.config.claudeExtraArgs
+    // No value: free-form CLI args are where people paste --api-key or header JSON.
+    kind: 'setting'
   },
   {
     id: 'harness.claude.add-dirs',
