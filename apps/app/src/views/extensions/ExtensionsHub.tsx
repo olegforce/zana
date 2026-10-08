@@ -1,4 +1,6 @@
 import { product } from '../../lib/product-client.js';
+import { revealElement } from '@/lib/settings-search/reveal';
+import { PLUGIN_SETTING_PARAM } from '@/lib/settings-search/providers/plugins';
 import { hasDesktopBridge } from '../../lib/app-surface.js';
 import { useCompactLayout } from '@/hooks/useCompactLayout';
 import { MobilePageHeader } from '@/components/MobilePageHeader';
@@ -565,6 +567,36 @@ export function InstalledView({ toolbarExtra, mobileActions }: { toolbarExtra?: 
   );
 }
 
+const PLUGIN_SETTING_WAIT_MS = 2_000;
+
+/**
+ * Find the Configure-page field whose control is labelled `label` (the form
+ * loads asynchronously, so retry up to 2 s), then scroll, flash and focus its
+ * row. Returns a cancel function for the effect cleanup.
+ */
+export function revealPluginSetting(label: string): () => void {
+  const started = Date.now();
+  let frame = 0;
+  let cancelled = false;
+  const attempt = () => {
+    if (cancelled) return;
+    const control = [...document.querySelectorAll<HTMLElement>('#plugin-configure [aria-label]')].find(
+      (el) => el.getAttribute('aria-label') === label
+    );
+    const row = control?.closest<HTMLElement>('.plugin-setting-row');
+    if (row) {
+      revealElement(row);
+      return;
+    }
+    if (Date.now() - started < PLUGIN_SETTING_WAIT_MS) frame = window.requestAnimationFrame(attempt);
+  };
+  attempt();
+  return () => {
+    cancelled = true;
+    window.cancelAnimationFrame(frame);
+  };
+}
+
 function InstalledPluginRow({ row, onOpen }: { row: HubRow; onOpen: () => void }) {
   const [pending, setPending] = useState<boolean | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -831,6 +863,10 @@ function ExtensionDetail({ row }: { row: HubRow }) {
     if (typeof window === 'undefined' || window.location.hash !== '#plugin-configure') return;
     document.getElementById('plugin-configure')?.scrollIntoView({ block: 'start' });
     document.getElementById('plugin-configure')?.focus();
+    // Opened from a Settings search result: flash and focus the matching field.
+    const label = new URLSearchParams(window.location.search).get(PLUGIN_SETTING_PARAM);
+    if (!label) return;
+    return revealPluginSetting(label);
   }, [module.id]);
 
   const catalogEntry = catalog.find((item) => item.id === module.id) ?? null;
