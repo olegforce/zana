@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useAgentStatus, useSubagents } from '../../store.js';
 import type { TerminalSession, AgentState } from '@zana-ai/zcc-domain/product';
 import { agentCardRuntimeLabel, agentRowStateClass } from '../fleet-item.js';
@@ -33,10 +34,13 @@ function timeAgo(ts: number): string {
  */
 export function AgentRowDetail({
   session,
-  projectRemote = false
+  projectRemote = false,
+  projectName
 }: {
   session: TerminalSession;
   projectRemote?: boolean;
+  /** Set in the flat "Agents only" rail, where no parent project row exists. */
+  projectName?: string;
 }) {
   const state = useAgentStatus((s) => s.byId[session.id] ?? 'unknown');
   // Live sub-agent (Task tool) fan-out count — primitive subscription so a
@@ -59,13 +63,15 @@ export function AgentRowDetail({
     remoteToolProxy: Boolean(session.remoteToolProxy)
   });
   const origin = session.scheduled ? 'Scheduled' : '';
-  const detailParts = [origin, runtime, subagentText, timeText].filter(Boolean);
-  if (!stateText && detailParts.length === 0) return null;
+  // The runtime label and the time text are never empty, so every row has a
+  // lead and a tail; only the state word and the project tag are optional.
+  const segments: ReactNode[] = [[origin, runtime].filter(Boolean).join(' · ')];
+  if (stateText) segments.unshift(<span key="state" className={agentRowStateClass(state, exited)}>{stateText}</span>);
+  if (projectName) segments.push(<span key="project" className="project-terminal-project">{projectName}</span>);
+  segments.push([subagentText, timeText].filter(Boolean).join(' · '));
   return (
     <span className="project-terminal-detail">
-      {stateText ? <span className={agentRowStateClass(state, exited)}>{stateText}</span> : null}
-      {stateText && detailParts.length > 0 ? ' · ' : null}
-      {detailParts.join(' · ')}
+      {segments.flatMap((segment, i) => (i === 0 ? [segment] : [' · ', segment]))}
     </span>
   );
 }

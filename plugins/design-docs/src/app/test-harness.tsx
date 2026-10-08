@@ -3,14 +3,21 @@
  * test runtime, so UI tests exercise the same validation and live refresh
  * (`changed` → realtime) the app does.
  */
-import { act, render, type RenderResult } from '@testing-library/react';
+import { act, cleanup, configure, render, type RenderResult } from '@testing-library/react';
 import { createElement, useEffect, useRef, type ReactElement } from 'react';
-import { vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import { installTestPluginRuntime, type NavigateCall, type RpcCall } from '@zana-ai/zcc-plugin-sdk/testing/app';
+import { RenderReports } from '../server/render-reports.js';
 import { createRpcHandlers } from '../server/rpc.js';
 import { DesignDocStore } from '../server/store.js';
 import { createTestDatabase } from '../server/test-db.js';
 import { CHANGED_CHANNEL, type DocActor } from '../shared/contract.js';
+
+// The root `pnpm test` run does not load this plugin's vitest.setup.ts, so the
+// harness registers the same per-test DOM reset for every file that uses it.
+configure({ asyncUtilTimeout: 4_000 });
+afterEach(() => cleanup());
+beforeEach(() => window.localStorage.clear());
 
 export const AGENT: DocActor = { kind: 'agent', label: 'Architect', threadId: 'thread-agent' };
 export const PROJECTS = [
@@ -28,6 +35,8 @@ export interface HarnessOptions {
   /** What `navigate.openThreadPanel` returns (false: no thread to attach to). */
   threadPanel?: boolean;
   context?: { projectId?: string | null; threadId?: string | null };
+  /** Serve standalone pages at this URL (`pageLink`); unset, the RPC refuses. */
+  pageUrl?(docId: string, path: string): string;
 }
 
 function escapeHtml(text: string): string {
@@ -45,6 +54,8 @@ function TestMarkdown({ content, className }: { content: string; className?: str
 
 export interface Harness {
   store: DesignDocStore;
+  /** Page runs the panel reported, as agents would read them. */
+  reports: RenderReports;
   rpcCalls: RpcCall[];
   navigateCalls: NavigateCall[];
   toasts: Toast[];
@@ -62,6 +73,7 @@ export interface Harness {
 
 export function createHarness(options: HarnessOptions = {}): Harness {
   const store = new DesignDocStore(createTestDatabase());
+  const reports = new RenderReports();
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const emit = (payload: unknown, channel = CHANGED_CHANNEL) => {
     for (const listener of [...(listeners.get(channel) ?? [])]) listener(payload);
@@ -77,7 +89,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     },
     projects: { list: async () => projects.map((project) => ({ ...project, path: `/work/${project.id}` })) }
   };
-  const handlers = createRpcHandlers({ store, changed: (docId) => emit({ docId }), sdk: sdk as never });
+  const handlers = createRpcHandlers({ store, changed: (docId) => emit({ docId }), sdk: sdk as never, pageUrl: options.pageUrl, reports });
   const failures = new Map<string, string>();
   const rpc = Object.fromEntries(
     Object.entries(handlers).map(([name, handler]) => [
@@ -112,6 +124,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     }, [channel]);
   };
   if (options.threadPanel === false) {
+    // The stock runtime always accepts thread panels; model a host that cannot.
     const navigate = (runtime.useZccNavigate as () => Record<string, (...args: unknown[]) => unknown>)();
     const patched = {
       ...navigate,
@@ -130,6 +143,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 
   return {
     store,
+    reports,
     rpcCalls: installed.rpcCalls,
     navigateCalls: installed.navigateCalls,
     toasts,

@@ -9,7 +9,7 @@ export default defineWorkspaceTestConfig({
     coverage: {
       provider: "v8",
       include: ["app.tsx", "server.ts", "src/**/*.{ts,tsx}"],
-      exclude: ["src/**/*.test.{ts,tsx}", "src/server/test-db.ts", "src/app/test-harness.tsx"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/kit/test/**", "src/server/test-db.ts", "src/app/test-harness.tsx"],
       reporter: ["text-summary", "text"],
     },
   },
