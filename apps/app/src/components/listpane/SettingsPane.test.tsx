@@ -11,7 +11,8 @@ const h = vi.hoisted(() => ({
     selectedProjectId: 'selected' as string | null,
     focusedProjectId: null as string | null
   },
-  data: { projects: [{ id: 'selected', name: 'Demo' }] }
+  data: { projects: [{ id: 'selected', name: 'Demo' }] },
+  snapshot: { config: { theme: 'Dark' } } as never
 }));
 
 vi.mock('../../store.js', () => ({
@@ -22,16 +23,24 @@ vi.mock('../../hooks/useAppSettingsRouteMemory.js', () => ({
   useAppSettingsRouteMemory: () => ({ appRoutePath: '/inbox' })
 }));
 vi.mock('../SidebarResizer.js', () => ({ SidebarResizer: () => null }));
+vi.mock('../../lib/settings-search/snapshot.js', () => ({
+  useSettingsSnapshot: () => h.snapshot
+}));
 vi.mock('../mobile-nav-context.js', () => ({ useMobileNavDismiss: () => h.dismiss }));
 
 import { SettingsPane } from './SettingsPane.js';
 
 function Location() {
-  return <div data-testid="location">{useLocation().pathname}</div>;
+  const l = useLocation();
+  return <div data-testid="location">{l.pathname}</div>;
+}
+
+function Hash() {
+  return <div data-testid="hash">{useLocation().hash}</div>;
 }
 
 function mount() {
-  return render(<MemoryRouter initialEntries={['/settings/global']}><SettingsPane /><Location /></MemoryRouter>);
+  return render(<MemoryRouter initialEntries={['/settings/global']}><SettingsPane /><Location /><Hash /></MemoryRouter>);
 }
 
 beforeEach(() => {
@@ -49,10 +58,10 @@ describe('focused Settings navigation', () => {
     mount();
     fireEvent.click(screen.getByRole('link', { name: 'Preferences' }));
     expect(h.dismiss).toHaveBeenCalledTimes(1);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search settings' }), { target: { value: 'dark' } });
-    fireEvent.click(screen.getByRole('link', { name: 'Appearance' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search settings' }), { target: { value: 'appearance' } });
+    fireEvent.click(screen.getByTestId('settings-result-global.appearance'));
     expect(h.dismiss).toHaveBeenCalledTimes(2);
-    expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('appearance');
+    expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('global.appearance');
     fireEvent.click(screen.getByRole('link', { name: 'Back to app' }));
     expect(h.dismiss).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId('location').textContent).toBe('/inbox');
@@ -68,15 +77,61 @@ describe('focused Settings navigation', () => {
     expect(screen.getByTestId('location').textContent).toBe('/inbox');
   });
 
-  it('finds a subsection by keyword and routes to its anchor', () => {
+  it('renders ranked, grouped results with breadcrumb and highlighted snippet, and routes by entry id', () => {
     mount();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search settings' }), { target: { value: 'dark' } });
+    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(search, { target: { value: 'heartbeat' } });
     expect(screen.queryByRole('link', { name: 'Terminal' })).toBeNull();
-    fireEvent.click(screen.getByRole('link', { name: 'Appearance' }));
-    expect(h.ui.setSettingsAnchor).toHaveBeenCalledWith('appearance');
-    expect(screen.getByTestId('location').textContent).toBe('/settings/global');
+    const list = screen.getByRole('listbox');
+    expect(list).toBeTruthy();
+    const options = screen.getAllByRole('option');
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(search.getAttribute('aria-activedescendant')).toBe(options[0].id);
+    expect(screen.getByRole('group', { name: 'Agents' })).toBeTruthy();
+    fireEvent.click(screen.getByTestId('settings-result-agents.agent-heartbeat'));
+    expect(screen.getByTestId('location').textContent).toBe('/settings/agents');
+    // Cross-page jump: the target travels in the URL hash, not only in memory.
+    expect(screen.getByTestId('hash').textContent).toBe('#agents.agent-heartbeat');
+    expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('agents.agent-heartbeat');
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     expect(screen.getByRole('link', { name: 'Terminal' })).toBeTruthy();
+  });
+
+  it('supports ArrowDown/ArrowUp/Enter and opens a section result without a hash', () => {
+    mount();
+    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(search, { target: { value: 'terminal' } });
+    const options = screen.getAllByRole('option');
+    expect(options.length).toBeGreaterThan(1);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(options[1].getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.getByTestId('location').textContent).toBe('/settings/terminal');
+    expect(screen.getByTestId('hash').textContent).toBe('');
+  });
+
+  it('highlights snippet hits with <mark>, shows Current values, and routes project entries via project context', async () => {
+    const reg = await import('../../lib/settings-search/registry.js');
+    const off = reg.registerSettingsSearchProvider(() => [
+      { id: 'rt.child', section: 'project', label: 'Child toggle', help: 'Needs the zebra flag here.', kind: 'setting', dependsOn: 'rt.parent', value: () => 'Dark' },
+      { id: 'rt.parent', section: 'agents', label: 'Parent switch', kind: 'setting' }
+    ]);
+    h.ui.focusedProjectId = 'focused';
+    mount();
+    const search = screen.getByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(search, { target: { value: 'zebra' } });
+    const row = screen.getByTestId('settings-result-rt.child');
+    expect(row.querySelector('mark')?.textContent).toBe('zebra');
+    expect(row.textContent).toContain('Appears when Parent switch is on');
+    fireEvent.click(row);
+    expect(screen.getByTestId('location').textContent).toBe('/projects/focused/settings');
+    expect(screen.getByTestId('hash').textContent).toBe('#rt.child');
+    fireEvent.change(search, { target: { value: 'dark' } });
+    expect(screen.getByTestId('settings-result-rt.child').textContent).toContain('Current: Dark');
+    off();
   });
 
   it('announces empty results and lets Escape clear the search without leaving Settings', () => {

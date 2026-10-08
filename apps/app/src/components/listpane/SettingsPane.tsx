@@ -1,11 +1,14 @@
 import { ArrowLeft, FolderCog, Search, X } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMemo, useState, useId } from 'react';
 import { useData, useUi } from '../../store.js';
 import { SETTINGS_SECTIONS, SETTINGS_GROUPS, SETTINGS_SUBSECTIONS } from '@/views/settings/settings-navigation';
 import { SidebarResizer } from '../SidebarResizer.js';
 import { useAppSettingsRouteMemory } from '../../hooks/useAppSettingsRouteMemory.js';
-import { getSettingsTabRoutePath } from '../../lib/route-paths.js';
+import { getSettingsRoutePath, getSettingsTabRoutePath } from '../../lib/route-paths.js';
+import { searchSettings, type SettingsSearchHit, type SettingsSnippet } from '../../lib/settings-search/index.js';
+import { buildCorpus } from '../../lib/settings-search/corpus.js';
+import { useSettingsSnapshot } from '../../lib/settings-search/snapshot.js';
 import { appSettingsNavCatalog, filterSettingsNav } from '../../lib/settings-nav-search.js';
 import { useMobileNavDismiss } from '../mobile-nav-context.js';
 
@@ -19,6 +22,38 @@ import { useMobileNavDismiss } from '../mobile-nav-context.js';
  *
  * `SETTINGS_SECTIONS` is the shared source of truth for labels/icons/descs.
  */
+const SECTION_ORDER = new Map<string, number>(SETTINGS_SECTIONS.map((s, i) => [s.id, i]));
+
+function sectionTitle(section: string): string {
+  if (section === 'project') return 'Project settings';
+  return SETTINGS_SECTIONS.find((s) => s.id === section)?.label ?? section;
+}
+
+/** Group ranked hits by page in section order, keeping rank order inside a page. */
+export function groupHitsByPage(hits: readonly SettingsSearchHit[]): Array<{ section: string; title: string; hits: SettingsSearchHit[] }> {
+  const groups = new Map<string, SettingsSearchHit[]>();
+  for (const hit of hits) {
+    const list = groups.get(hit.entry.section) ?? [];
+    list.push(hit);
+    groups.set(hit.entry.section, list);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => (SECTION_ORDER.get(a[0]) ?? 1e6) - (SECTION_ORDER.get(b[0]) ?? 1e6))
+    .map(([section, list]) => ({ section, title: sectionTitle(section), hits: list }));
+}
+
+function Highlighted({ snippet }: { snippet: SettingsSnippet }) {
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  snippet.ranges.forEach(([start, end], i) => {
+    if (start > at) parts.push(snippet.text.slice(at, start));
+    parts.push(<mark key={i}>{snippet.text.slice(start, end)}</mark>);
+    at = end;
+  });
+  if (at < snippet.text.length) parts.push(snippet.text.slice(at));
+  return <>{parts}</>;
+}
+
 export function SettingsPane() {
   const dismissMobileNav = useMobileNavDismiss();
   const settingsTab = useUi((s) => s.settingsTab);
@@ -30,6 +65,29 @@ export function SettingsPane() {
   const routeMemory = useAppSettingsRouteMemory();
   const projectId = focusedProjectId ?? selectedProjectId ?? selectedProject?.id ?? null;
   const [query, setQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [active, setActive] = useState(0);
+  const navigate = useNavigate();
+  const listId = useId();
+  const searching = query.trim().length > 0;
+  const snapshot = useSettingsSnapshot(projectId, searchFocused || searching);
+  const hits = useMemo(() => (searching ? searchSettings(query, snapshot) : []), [searching, query, snapshot]);
+  const pages = useMemo(() => groupHitsByPage(hits), [hits]);
+  const flat = useMemo(() => pages.flatMap((p) => p.hits), [pages]);
+  const activeHit = flat[Math.min(active, flat.length - 1)];
+  const optionId = (hit: SettingsSearchHit) => `${listId}-${hit.entry.id}`;
+  const parentLabel = (id: string) => buildCorpus(snapshot).entries.find((r) => r.entry.id === id)?.entry.label;
+
+  const open = (hit: SettingsSearchHit) => {
+    const { entry } = hit;
+    const anchor = entry.kind === 'section' ? undefined : entry.id;
+    const path = entry.section === 'project'
+      ? getSettingsTabRoutePath('project', projectId) + (anchor ? `#${encodeURIComponent(anchor)}` : '')
+      : getSettingsRoutePath(entry.section, anchor);
+    setSettingsAnchor(anchor ?? null);
+    void navigate(path);
+    dismissMobileNav?.();
+  };
   const catalog = useMemo(
     () => appSettingsNavCatalog({
       groups: SETTINGS_GROUPS,
@@ -38,7 +96,7 @@ export function SettingsPane() {
     }),
     []
   );
-  const groups = useMemo(() => filterSettingsNav(query, catalog), [catalog, query]);
+  const groups = useMemo(() => filterSettingsNav('', catalog), [catalog]);
 
   const renderRow = (section: { id: string; label: string; subsections: Array<{ id: string; label: string }> }) => {
     const meta = SETTINGS_SECTIONS.find((row) => row.id === section.id);
@@ -62,7 +120,7 @@ export function SettingsPane() {
             {section.subsections.map((sub) => (
               <Link
                 key={sub.id}
-                to={getSettingsTabRoutePath(section.id, projectId)}
+                to={getSettingsRoutePath(section.id, sub.id)}
                 className="settings-subsection-item"
                 data-testid={`settings-nav-${section.id}-${sub.id}`}
                 onClick={() => { setSettingsAnchor(sub.id); dismissMobileNav?.(); }}
@@ -91,11 +149,23 @@ export function SettingsPane() {
           aria-label="Search settings"
           placeholder="Search settings…"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          aria-controls={searching ? listId : undefined}
+          aria-activedescendant={searching && activeHit ? optionId(activeHit) : undefined}
+          onFocus={() => setSearchFocused(true)}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {
             if (event.key === 'Escape' && query) {
               event.stopPropagation();
               setQuery('');
+            } else if (searching && flat.length > 0 && event.key === 'ArrowDown') {
+              event.preventDefault();
+              setActive((i) => Math.min(i + 1, flat.length - 1));
+            } else if (searching && flat.length > 0 && event.key === 'ArrowUp') {
+              event.preventDefault();
+              setActive((i) => Math.max(i - 1, 0));
+            } else if (searching && event.key === 'Enter' && activeHit) {
+              event.preventDefault();
+              open(activeHit);
             }
           }}
         />
@@ -110,18 +180,52 @@ export function SettingsPane() {
           </button>
         ) : null}
       </div>
+      {searching ? (
+        flat.length === 0 ? (
+          <p className="settings-search-empty" role="status">No matching settings</p>
+        ) : (
+          <div className="settings-results" role="listbox" id={listId} aria-label="Settings search results">
+            {pages.map((page) => (
+              <div key={page.section} className="settings-group" role="group" aria-label={page.title}>
+                <div className="settings-group-label">{page.title}</div>
+                {page.hits.map((hit) => (
+                  <div
+                    key={hit.entry.id}
+                    id={optionId(hit)}
+                    role="option"
+                    aria-selected={hit === activeHit}
+                    data-testid={`settings-result-${hit.entry.id}`}
+                    className="settings-result"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => open(hit)}
+                  >
+                    <span className="settings-result-label">{hit.entry.label}</span>
+                    <span className="settings-result-crumb">{hit.breadcrumb}</span>
+                    {hit.snippet ? (
+                      <span className="settings-result-snippet"><Highlighted snippet={hit.snippet} /></span>
+                    ) : null}
+                    {hit.matchedValue ? <span className="settings-result-value">Current: {hit.matchedValue}</span> : null}
+                    {hit.entry.dependsOn ? (
+                      <span className="settings-result-gate">
+                        Appears when {parentLabel(hit.entry.dependsOn) ?? 'its parent setting'} is on
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
       <nav className="settings-picker" aria-label="Settings navigation">
-            {groups.length === 0 ? (
-              <p className="settings-search-empty" role="status">No matching settings</p>
-            ) : (
-              groups.map((group) => (
-                <div key={group.id} className="settings-group">
-                  <div className="settings-group-label">{group.label}</div>
-                  {group.sections.map(renderRow)}
-                </div>
-              ))
-            )}
+            {groups.map((group) => (
+              <div key={group.id} className="settings-group">
+                <div className="settings-group-label">{group.label}</div>
+                {group.sections.map(renderRow)}
+              </div>
+            ))}
       </nav>
+      )}
       <SidebarResizer />
     </aside>
   );

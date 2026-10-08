@@ -1,6 +1,8 @@
 import { product } from '../../lib/product-client.js';
 import { DelayedStencilList } from '../../components/ui/Skeleton.js';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { RevealContext, useSettingsTargetReveal } from '@/lib/settings-search/reveal';
+import { buildSettingsSnapshot } from '@/lib/settings-search/snapshot';
 import { SETTINGS_SECTIONS } from './settings-navigation.js';
 export { SETTINGS_GROUPS, SETTINGS_SECTIONS, SETTINGS_SUBSECTIONS } from './settings-navigation.js';
 export type { SettingsGroup } from './settings-navigation.js';
@@ -88,19 +90,10 @@ export function SettingsView() {
     };
   }, []);
 
-  // Scroll a pending sub-section anchor into view once its tab has rendered
-  // (set by the section picker), then clear it so it fires only once. A short
-  // rAF-ish delay lets the newly-switched tab's DOM mount before we query it.
-  useEffect(() => {
-    if (!settingsAnchor) return;
-    const id = `settings-anchor-${settingsAnchor}`;
-    const timer = window.setTimeout(() => {
-      const el = document.getElementById(id);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setSettingsAnchor(null);
-    }, 60);
-    return () => window.clearTimeout(timer);
-  }, [settingsAnchor, tab, setSettingsAnchor]);
+  // Resolve the pending hash target (entry id or section anchor) once its page
+  // has rendered: reveal container, scroll, flash, focus (see reveal.ts).
+  const snapshot = useMemo(() => buildSettingsSnapshot({ config, project: null, machines: null }), [config]);
+  const revealState = useSettingsTargetReveal({ tab, anchor: config ? settingsAnchor : null, snapshot, setAnchor: setSettingsAnchor });
 
   if (!config) {
     return (
@@ -226,6 +219,7 @@ export function SettingsView() {
   const allowGlobalScope = tab !== 'project';
 
   return (
+    <RevealContext.Provider value={revealState}>
     <div className="settings-panel settings-panel--preferences">
       <div className={`settings-inner${WIDE_TABS.has(tab) ? ' settings-inner--wide' : ''}`}>
         {tab !== 'remote-access' && <header className="settings-header">
@@ -326,6 +320,7 @@ export function SettingsView() {
         {savedFlash && <div className="settings-saved">Saved</div>}
       </div>
     </div>
+    </RevealContext.Provider>
   );
 }
 
