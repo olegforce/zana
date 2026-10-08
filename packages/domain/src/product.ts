@@ -5768,6 +5768,7 @@ export interface ExecutionBoardProjection {
      *  is metadata, never the answer text). */
     audience?: 'human' | 'coordinator';
     response?: string;
+    notice?: { status: 'PENDING' | 'ACKNOWLEDGED'; attempts: number; inboxItemId?: string };
     delivery?: {
       id: string;
       state: 'PENDING' | 'LEASED' | 'DELIVERED' | 'FAILED';
@@ -5816,6 +5817,9 @@ export interface ExecutionBoardProjection {
   eventCursor?: number;
   coordinator?: { status: 'live' | 'parked' | 'lost' | 'complete'; sessionId?: string };
   recoveryAttention?: boolean;
+  /** Present only when deadline enforcement stopped this run. */
+  timeoutReason?: 'idle' | 'unresolved-blocker';
+  successorExecutionId?: string;
   recovery?: { status: 'available' | 'expired' | 'terminal'; deadlineAt?: number };
 }
 
