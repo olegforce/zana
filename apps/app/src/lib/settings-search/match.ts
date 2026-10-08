@@ -164,7 +164,7 @@ export function matchCorpus(corpus: Corpus, query: string, limit = SETTINGS_SEAR
   const normalized = normalize(query);
   if (!normalized || normalized.length > SETTINGS_SEARCH_QUERY_MAX_LENGTH) return [];
   const words = [...new Set(normalized.split(' '))];
-  const cap = Math.max(0, Math.min(limit, SETTINGS_SEARCH_MAX_RESULTS));
+  const cap = Number.isFinite(limit) ? Math.max(0, Math.min(Math.floor(limit), SETTINGS_SEARCH_MAX_RESULTS)) : SETTINGS_SEARCH_MAX_RESULTS;
   if (cap === 0) return [];
 
   const nearCache = new Map<string, Set<string>>();

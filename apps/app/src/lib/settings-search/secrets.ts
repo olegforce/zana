@@ -7,14 +7,14 @@ export const SECRET_ENTRY_PATTERN =
 /** Entry id -> reason it is safe to index the value despite matching the pattern. */
 export const SECRET_VALUE_ALLOWLIST: Readonly<Record<string, string>> = {};
 
-export function isSecretLooking(entry: Pick<SettingsSearchEntry, 'id' | 'label'>): boolean {
-  return SECRET_ENTRY_PATTERN.test(entry.id) || SECRET_ENTRY_PATTERN.test(entry.label);
+export function isSecretLooking(entry: Pick<SettingsSearchEntry, 'id' | 'label' | 'anchor'>): boolean {
+  return SECRET_ENTRY_PATTERN.test(entry.id) || SECRET_ENTRY_PATTERN.test(entry.label) || SECRET_ENTRY_PATTERN.test(entry.anchor ?? '');
 }
 
 /** True when `entry.value` may be read into the corpus. */
 export function mayIndexValue(entry: SettingsSearchEntry): boolean {
   if (!entry.value) return false;
-  return !isSecretLooking(entry) || entry.id in SECRET_VALUE_ALLOWLIST;
+  return !isSecretLooking(entry) || Object.hasOwn(SECRET_VALUE_ALLOWLIST, entry.id);
 }
 
 /** Guard helper: ids of entries that define `value` on a secret-looking field without an allowlist reason. */

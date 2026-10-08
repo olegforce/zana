@@ -205,10 +205,35 @@ describe('secret denylist', () => {
     expect(mayIndexValue(e('ok', 'Shell', { value: () => 'zsh' }))).toBe(true);
     expect(mayIndexValue(e('ok2', 'Shell'))).toBe(false);
   });
+  it('does not treat Object.prototype keys as allowlisted and checks the anchor', () => {
+    const accessor = vi.fn(() => 'leak');
+    const list = [e('constructor.token', 'Thing', { value: accessor }), e('toString', 'Auth', { value: accessor }), e('p', 'Plain', { anchor: 'api-key', value: accessor })];
+    expect(findSecretValueViolations(list)).toEqual(['constructor.token', 'toString', 'p']);
+    expect(searchSettings('leak', snap(), { entries: list })).toEqual([]);
+    expect(accessor).not.toHaveBeenCalled();
+  });
   it('shipped static entries and provider output have no violations', () => {
     expect(findSecretValueViolations(getStaticEntries())).toEqual([]);
     const fixture: SettingsSearchProvider = () => [e('pl.ok', 'Port', { value: () => '8780' })];
     expect(findSecretValueViolations(fixture(snap()))).toEqual([]);
+  });
+});
+
+describe('limit handling', () => {
+  it('treats NaN as the default cap and negatives as zero', () => {
+    const list = Array.from({ length: 5 }, (_, i) => e(`t.${i}`, `Terminal ${i}`));
+    expect(searchSettings('terminal', snap(), { entries: list, limit: Number.NaN })).toHaveLength(5);
+    expect(searchSettings('terminal', snap(), { entries: list, limit: -3 })).toEqual([]);
+    expect(searchSettings('terminal', snap(), { entries: list, limit: 2.9 })).toHaveLength(2);
+  });
+});
+
+describe('typoDistance edges', () => {
+  it('handles repeated-transposition and cutoff boundary', () => {
+    expect(typoDistance('abcd', 'badc', 5)).toBe(2);
+    expect(typoDistance('abcd', 'badc', 1)).toBe(2);
+    expect(typoDistance('kitten', 'sitting', 2)).toBe(3);
+    expect(typoDistance('', 'abc', 5)).toBe(3);
   });
 });
 
