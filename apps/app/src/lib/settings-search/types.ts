@@ -17,6 +17,8 @@ export interface SettingsSearchEntry {
   /** Curated synonyms ("dark" -> theme). */
   keywords?: readonly string[];
   kind: 'section' | 'subsection' | 'setting' | 'action';
+  /** Route to open instead of the Settings page (e.g. plugin settings live on the plugin page). */
+  href?: string;
   /** Entry id of the gating toggle -> result says "Appears when ... is on". */
   dependsOn?: string;
   /** Container to expand before scrolling. */

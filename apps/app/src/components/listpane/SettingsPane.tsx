@@ -7,6 +7,8 @@ import { SidebarResizer } from '../SidebarResizer.js';
 import { useAppSettingsRouteMemory } from '../../hooks/useAppSettingsRouteMemory.js';
 import { getSettingsRoutePath, getSettingsTabRoutePath } from '../../lib/route-paths.js';
 import { searchSettings, type SettingsSearchHit, type SettingsSnippet } from '../../lib/settings-search/index.js';
+import { settingsHitPath } from '../../lib/settings-search/links.js';
+import { ensureSettingsSearchProviders } from '../../lib/settings-search/runtime.js';
 import { buildCorpus } from '../../lib/settings-search/corpus.js';
 import { useSettingsSnapshot } from '../../lib/settings-search/snapshot.js';
 import { appSettingsNavCatalog, filterSettingsNav } from '../../lib/settings-nav-search.js';
@@ -71,7 +73,11 @@ export function SettingsPane() {
   const listId = useId();
   const searching = query.trim().length > 0;
   const snapshot = useSettingsSnapshot(projectId, searchFocused || searching);
-  const hits = useMemo(() => (searching ? searchSettings(query, snapshot) : []), [searching, query, snapshot]);
+  const hits = useMemo(() => {
+    if (!searching) return [];
+    ensureSettingsSearchProviders();
+    return searchSettings(query, snapshot);
+  }, [searching, query, snapshot]);
   const pages = useMemo(() => groupHitsByPage(hits), [hits]);
   const flat = useMemo(() => pages.flatMap((p) => p.hits), [pages]);
   const activeHit = flat[Math.min(active, flat.length - 1)];
@@ -84,10 +90,8 @@ export function SettingsPane() {
 
   const open = (hit: SettingsSearchHit) => {
     const { entry } = hit;
-    const anchor = entry.kind === 'section' ? undefined : entry.id;
-    const path = entry.section === 'project'
-      ? getSettingsTabRoutePath('project', projectId) + (anchor ? `#${encodeURIComponent(anchor)}` : '')
-      : getSettingsRoutePath(entry.section, anchor);
+    const anchor = entry.kind === 'section' || entry.href ? undefined : entry.id;
+    const path = settingsHitPath(hit, projectId);
     setSettingsAnchor(anchor ?? null);
     void navigate(path);
     dismissMobileNav?.();
@@ -156,7 +160,7 @@ export function SettingsPane() {
           aria-autocomplete="list"
           aria-controls={searching && flat.length > 0 ? listId : undefined}
           aria-activedescendant={activeOptionId}
-          onFocus={() => setSearchFocused(true)}
+          onFocus={() => { setSearchFocused(true); void ensureSettingsSearchProviders().prefetchPluginSettings(); }}
           onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {
             if (event.key === 'Escape' && query) {

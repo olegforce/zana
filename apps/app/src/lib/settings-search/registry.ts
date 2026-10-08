@@ -46,11 +46,26 @@ export function deriveNavEntries(): SettingsSearchEntry[] {
 // Later page units only ADD files under ./entries/; nothing else is edited.
 const pageModules = import.meta.glob<EntryModule>('./entries/*.ts', { eager: true });
 
+/**
+ * Derived entries come first (nav order), but a page entry that describes the
+ * same block wins: a derived SUBSECTION is dropped when a page entry in the same
+ * section has the same title, so a title never shows twice. Derived section
+ * entries stay: they are the page itself.
+ */
+export function mergeStaticEntries(
+  derived: readonly SettingsSearchEntry[],
+  page: readonly SettingsSearchEntry[]
+): SettingsSearchEntry[] {
+  const titled = new Set(page.map((e) => `${e.section}|${e.label.trim().toLowerCase()}`));
+  const kept = derived.filter((e) => e.kind !== 'subsection' || !titled.has(`${e.section}|${e.label.trim().toLowerCase()}`));
+  return [...kept, ...page];
+}
+
 let staticEntries: readonly SettingsSearchEntry[] | undefined;
 
 /** Derived nav entries followed by every `entries/*.ts` page file. Stable identity. */
 export function getStaticEntries(): readonly SettingsSearchEntry[] {
-  staticEntries ??= [...deriveNavEntries(), ...collectEntryModules(pageModules)];
+  staticEntries ??= mergeStaticEntries(deriveNavEntries(), collectEntryModules(pageModules));
   return staticEntries;
 }
 

@@ -11,7 +11,7 @@ import type { SettingsTab } from '@/store';
  * plus `project`, and fails on any scanned source file that is mapped to no
  * section (and not allow-listed).
  */
-export const REQUIRE_ALL_SECTIONS = false;
+export const REQUIRE_ALL_SECTIONS = true;
 
 export type SearchSection = SettingsTab | 'project';
 
@@ -42,7 +42,7 @@ export const SECTION_SOURCES: Record<SearchSection, readonly string[]> = {
   ],
   connectivity: ['views/settings/ConnectivityView.tsx'],
   phone: ['views/settings/PhoneSettingsView.tsx', 'views/settings/PhoneAccountConnection.tsx'],
-  'remote-access': ['views/settings/RemoteAccessView.tsx'],
+  'remote-access': ['views/settings/RemoteAccessView.tsx', 'views/settings/SharedPreviews.tsx'],
   agents: ['views/settings/AgentsSettingsView.tsx', 'views/settings/AgentGuidanceSettings.tsx', 'components/settings/OverseerRecentPane.tsx'],
   personas: ['views/settings/PersonasView.tsx'],
   squads: ['views/settings/SquadsView.tsx'],

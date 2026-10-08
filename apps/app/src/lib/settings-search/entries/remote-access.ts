@@ -38,6 +38,14 @@ export const entries: readonly SettingsSearchEntry[] = [
     kind: 'action'
   },
   {
+    id: 'remote-access.shared-previews',
+    section: 'remote-access',
+    label: 'Shared previews',
+    help: 'Open a running web app on your phone or another computer. Each address requires your Connect account. Shares expire after eight hours; sharing again renews them. Machine: Zana computer. Port. Share preview.',
+    keywords: ['share dev server', 'localhost port', 'preview link', 'share a port', 'stop sharing'],
+    kind: 'setting'
+  },
+  {
     id: 'remote-access.shared-instance',
     section: 'remote-access',
     label: 'Open an existing Zana instead',

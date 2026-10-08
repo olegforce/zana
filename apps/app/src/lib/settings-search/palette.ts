@@ -1,22 +1,15 @@
 import { createElement } from 'react';
 import { Settings } from 'lucide-react';
 import type { PaletteItem } from '@/components/palette/buildItems';
-import { getSettingsRoutePath, getSettingsTabRoutePath } from '../route-paths.js';
 import { searchSettings } from './index';
+import { settingsHitPath } from './links';
+import { ensureSettingsSearchProviders } from './runtime';
 import type { SettingsSearchHit, SettingsValueSnapshot } from './types';
 
 /** Rows the ⌘P "All" scope shows for Settings; the rest sit behind the overflow link. */
 export const PALETTE_SETTINGS_LANDING_CAP = 5;
 
-/** Same deep link the Settings rail uses: the entry id rides in the URL hash. */
-export function settingsHitPath(hit: SettingsSearchHit, projectId?: string | null): string {
-  const { entry } = hit;
-  const anchor = entry.kind === 'section' ? undefined : entry.id;
-  if (entry.section === 'project') {
-    return getSettingsTabRoutePath('project', projectId) + (anchor ? `#${encodeURIComponent(anchor)}` : '');
-  }
-  return getSettingsRoutePath(entry.section, anchor);
-}
+export { settingsHitPath } from './links';
 
 /** Breadcrumb, plus the current value when the query hit it. */
 export function settingsHitHint(hit: SettingsSearchHit): string {
@@ -35,6 +28,7 @@ export function settingsPaletteItems(
   options: { limit: number; projectId?: string | null; navigate: (path: string) => void }
 ): PaletteItem[] {
   if (!query.trim()) return [];
+  ensureSettingsSearchProviders();
   return searchSettings(query, snapshot, { limit: options.limit }).map((hit) => ({
     key: `settings:${hit.entry.id}`,
     icon: createElement(Settings, { size: 14 }),

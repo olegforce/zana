@@ -88,11 +88,11 @@ describe('focused Settings navigation', () => {
     expect(options[0].getAttribute('aria-selected')).toBe('true');
     expect(search.getAttribute('aria-activedescendant')).toBe(options[0].id);
     expect(screen.getByRole('group', { name: 'Agents' })).toBeTruthy();
-    fireEvent.click(screen.getByTestId('settings-result-agents.agent-heartbeat'));
+    fireEvent.click(screen.getByTestId('settings-result-agents.agent-heartbeat.intro'));
     expect(screen.getByTestId('location').textContent).toBe('/settings/agents');
     // Cross-page jump: the target travels in the URL hash, not only in memory.
-    expect(screen.getByTestId('hash').textContent).toBe('#agents.agent-heartbeat');
-    expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('agents.agent-heartbeat');
+    expect(screen.getByTestId('hash').textContent).toBe('#agents.agent-heartbeat.intro');
+    expect(h.ui.setSettingsAnchor).toHaveBeenLastCalledWith('agents.agent-heartbeat.intro');
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     expect(screen.getByRole('link', { name: 'Terminal' })).toBeTruthy();
   });
@@ -108,6 +108,9 @@ describe('focused Settings navigation', () => {
     fireEvent.keyDown(search, { key: 'ArrowUp' });
     fireEvent.keyDown(search, { key: 'ArrowUp' });
     expect(options[0].getAttribute('aria-selected')).toBe('true');
+    // Results are grouped by page in section order: walk down to the Terminal page row.
+    const target = options.indexOf(screen.getByTestId('settings-result-terminal.section'));
+    for (let i = 0; i < target; i += 1) fireEvent.keyDown(search, { key: 'ArrowDown' });
     fireEvent.keyDown(search, { key: 'Enter' });
     expect(screen.getByTestId('location').textContent).toBe('/settings/terminal');
     expect(screen.getByTestId('hash').textContent).toBe('');

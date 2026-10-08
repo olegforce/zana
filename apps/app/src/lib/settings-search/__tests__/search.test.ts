@@ -243,8 +243,8 @@ describe('registry', () => {
     expect(derived.find((d) => d.id === 'terminal.section')?.kind).toBe('section');
     expect(derived.find((d) => d.id === 'terminal.terminal-tmux')).toMatchObject({ kind: 'subsection', anchor: 'terminal-tmux', label: 'tmux' });
     expect(getStaticEntries()).toBe(getStaticEntries());
-    expect(ids(searchSettings('heartbeat', snap()))).toContain('agents.agent-heartbeat');
-    expect(ids(searchSettings('tmxu', snap()))).toContain('terminal.terminal-tmux');
+    expect(ids(searchSettings('heartbeat', snap()))).toContain('agents.agent-heartbeat.intro');
+    expect(ids(searchSettings('tmxu', snap()))).toContain('terminal.tmux-persistence');
     expect(searchSettings('configuration', snap())[0].breadcrumb).toBeTruthy();
   });
   it('collects page modules in path order from default or named exports', () => {
