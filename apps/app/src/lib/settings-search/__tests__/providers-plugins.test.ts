@@ -55,7 +55,9 @@ describe('plugin settings provider', () => {
     expect(entries.map((e) => e.id)).toContain('plugin.p1.relay');
     const relay = entries.find((e) => e.id === 'plugin.p1.relay')!;
     expect(relay).toMatchObject({ label: 'Relay endpoint', help: 'Quokka gateway address.', section: 'Plugins › Fixture One' });
-    expect(relay.href).toContain(`?${PLUGIN_SETTING_PARAM}=Relay%20endpoint#plugin-configure`);
+    const relayUrl = new URL(relay.href, 'http://h');
+    expect(relayUrl.searchParams.get('view')).toBe('installed');
+    expect(relayUrl.searchParams.get(PLUGIN_SETTING_PARAM)).toBe('Relay endpoint');
     expect(relay.href.endsWith('#plugin-configure')).toBe(true);
     expect(relay.value?.(config)).toBe('https://relay.test/quokka');
     expect(entries.find((e) => e.id === 'plugin.p1.flag')!.value?.(config)).toBe('On');
@@ -166,8 +168,13 @@ describe('plugin settings provider', () => {
     expect(getSettingsSearchSourcesVersion()).toBeGreaterThan(v0);
   });
 
-  it('builds a deep link from the route helper', () => {
-    expect(pluginSettingHref('x y', 'A&B')).toContain(`${PLUGIN_SETTING_PARAM}=A%26B#plugin-configure`);
+  it('builds a deep link to the INSTALLED plugin page (Browse only knows catalogue entries)', () => {
+    const href = pluginSettingHref('x y', 'A&B');
+    expect(href).toContain('/x%20y?');
+    const url = new URL(href, 'http://h');
+    expect(url.searchParams.get('view')).toBe('installed');
+    expect(url.searchParams.get(PLUGIN_SETTING_PARAM)).toBe('A&B');
+    expect(url.hash).toBe('#plugin-configure');
   });
 });
 

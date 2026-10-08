@@ -46,9 +46,22 @@ export function resetPluginSettingsCache(): void {
   inflight = null;
 }
 
+/**
+ * The INSTALLED plugin page (`view=installed`): that is where the Configure
+ * block lives. Without it the route opens the marketplace Browse detail, which
+ * only knows catalogue entries, so a local plugin showed "Plugin not found".
+ */
+export function pluginConfigureHref(pluginId: string, params: Record<string, string> = {}): string {
+  const path = getPluginDetailRoutePath(pluginId, { view: 'installed' });
+  const [pathname, query = ''] = path.split('?');
+  const search = new URLSearchParams(query);
+  for (const [key, value] of Object.entries(params)) search.set(key, value);
+  const qs = search.toString();
+  return `${pathname}${qs ? `?${qs}` : ''}${PLUGIN_CONFIGURE_HASH}`;
+}
+
 export function pluginSettingHref(pluginId: string, label: string): string {
-  const path = getPluginDetailRoutePath(pluginId);
-  return `${path}?${PLUGIN_SETTING_PARAM}=${encodeURIComponent(label)}${PLUGIN_CONFIGURE_HASH}`;
+  return pluginConfigureHref(pluginId, { [PLUGIN_SETTING_PARAM]: label });
 }
 
 function nonSecretValues(snap: PluginSettingsSnapshot): Record<string, StoredValue> {
@@ -160,7 +173,7 @@ export const pluginSettingsSearchProvider: SettingsSearchProvider = () => {
       help: section.description,
       kind: 'setting',
       keywords: [name, 'plugin settings'],
-      href: `${getPluginDetailRoutePath(section.pluginId)}${PLUGIN_CONFIGURE_HASH}`
+      href: pluginConfigureHref(section.pluginId)
     });
   }
   return out;

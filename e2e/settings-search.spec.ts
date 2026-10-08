@@ -222,7 +222,14 @@ test('plugin-defined settings are searchable, land on #plugin-configure and neve
     await expect(hit).toBeVisible({ timeout: 15_000 });
     await win.screenshot({ path: testInfo.outputPath('10-plugin-result.png'), animations: 'disabled' });
     await hit.click();
-    await expect(win).toHaveURL(new RegExp(`${NORMAL_ID}.*#plugin-configure`));
+    await expect(win).toHaveURL(new RegExp(`${NORMAL_ID}\\?view=installed.*#plugin-configure`));
+    // The installed plugin page itself, not the Browse detail ("Plugin not found."):
+    await expect(win.locator('#plugin-configure')).toBeVisible({ timeout: 15_000 });
+    await expect(win.getByText('Plugin not found.')).toHaveCount(0);
+    const field = win.locator('#plugin-configure .plugin-setting-row').filter({
+      has: win.locator(`[aria-label="${VALUES.normal.stringLabel}"]`)
+    });
+    await expect(field).toHaveClass(/settings-search-flash/);
     await win.screenshot({ path: testInfo.outputPath('11-plugin-configure.png'), animations: 'disabled' });
 
     await win.goBack();
