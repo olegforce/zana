@@ -87,3 +87,15 @@ it('still resets when invalidations overflow the queue or a send fails', async (
   release(); await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
   expect(send).toHaveBeenLastCalledWith('product:reset', []); forwarder.dispose();
 });
+it('never coalesces or invalidates id-carrying channels, and resets when one is oversized', async () => {
+  const { send, release } = blocked();
+  const forwarder = createProductEventForwarder(send);
+  forwarder.publish('first', []);
+  forwarder.publish('feed:onChanged', ['a']); forwarder.publish('feed:onChanged', ['b']);
+  forwarder.publish('projectSettings:onChanged', ['p1']); forwarder.publish('projectSettings:onChanged', ['p2']);
+  release(); await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(5));
+  expect(send.mock.calls.slice(1)).toEqual([['feed:onChanged', ['a']], ['feed:onChanged', ['b']], ['projectSettings:onChanged', ['p1']], ['projectSettings:onChanged', ['p2']]]);
+  forwarder.publish('feed:onChanged', ['x'.repeat(PRODUCT_EVENT_ARGS_MAX_CHARS)]);
+  await vi.waitFor(() => expect(send).toHaveBeenLastCalledWith('product:reset', []));
+  forwarder.dispose();
+});

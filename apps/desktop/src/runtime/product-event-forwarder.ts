@@ -1,7 +1,6 @@
-import { PRODUCT_EVENT_ARGS_MAX_CHARS, PRODUCT_EVENT_ARGS_MAX_COUNT } from '@zana-ai/zcc-contracts/runtime';
+import { PRODUCT_EVENT_ARGS_MAX_CHARS, PRODUCT_EVENT_ARGS_MAX_COUNT, PRODUCT_EVENT_SNAPSHOT_CHANNELS } from '@zana-ai/zcc-contracts/runtime';
 
-const isSnapshotChannel = (channel: string) =>
-  !channel.startsWith('terminals:') && (channel.endsWith(':onChanged') || channel === 'scheduler:onTemplatesChanged');
+const isSnapshotChannel = (channel: string) => PRODUCT_EVENT_SNAPSHOT_CHANNELS.has(channel);
 
 /** Bound the main → product utility link before IPC serialization can accumulate.
  * A dropped notification is repaired by a snapshot read, never command replay. */
