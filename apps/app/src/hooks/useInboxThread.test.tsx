@@ -6,7 +6,7 @@ import type { InboxThread } from '../lib/inbox-thread.js';
 
 const resolve = vi.hoisted(() => vi.fn());
 vi.mock('../lib/inbox-thread.js', () => ({ resolveInboxThread: resolve }));
-import { useInboxThread } from './useInboxThread.js';
+import { createResultCache, inboxThreadCache, useInboxThread } from './useInboxThread.js';
 const entry = (id: string): InboxEntry => ({ id, projectId: 'p', ts: 1, sessionId: id });
 beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);
@@ -31,4 +31,36 @@ it('shows a useful message for non-Error failures', async () => {
   resolve.mockRejectedValue('offline');
   const { result } = renderHook(() => useInboxThread(entry('thread'), false));
   await waitFor(() => expect(result.current.error).toBe('Could not load the original conversation.'));
+});
+
+it('paints a cached thread immediately, revalidates, and keeps it when revalidation fails', async () => {
+  inboxThreadCache.clear();
+  resolve.mockResolvedValueOnce({ id: 'c', title: 'One', archived: false });
+  const first = renderHook(() => useInboxThread(entry('c'), false));
+  expect(first.result.current.loading).toBe(true);
+  await waitFor(() => expect(first.result.current.thread?.title).toBe('One'));
+  first.unmount();
+  let finish!: (thread: InboxThread) => void;
+  resolve.mockReturnValueOnce(new Promise((yes) => { finish = yes; }));
+  const second = renderHook(() => useInboxThread(entry('c'), false));
+  expect(second.result.current).toMatchObject({ loading: false, thread: { title: 'One' } });
+  await act(async () => finish({ id: 'c', title: 'Two', archived: false }));
+  expect(second.result.current.thread?.title).toBe('Two');
+  second.unmount();
+  resolve.mockRejectedValueOnce(new Error('offline'));
+  const third = renderHook(() => useInboxThread(entry('c'), false));
+  await act(async () => { await Promise.resolve(); });
+  expect(third.result.current).toMatchObject({ loading: false, error: null, thread: { title: 'Two' } });
+});
+
+it('never caches a failed lookup and evicts the least recently used entry beyond 20', async () => {
+  inboxThreadCache.clear();
+  resolve.mockRejectedValueOnce(new Error('offline'));
+  const failed = renderHook(() => useInboxThread(entry('f'), false));
+  await waitFor(() => expect(failed.result.current.error).toBe('offline'));
+  expect(inboxThreadCache.get('f:f')).toBeUndefined();
+  const cache = createResultCache<number>(20);
+  for (let i = 0; i < 20; i++) cache.set(`k${i}`, i);
+  cache.get('k0'); cache.set('k20', 20);
+  expect(cache.get('k1')).toBeUndefined(); expect(cache.get('k0')).toBe(0); expect(cache.get('k20')).toBe(20);
 });

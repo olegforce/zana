@@ -1257,6 +1257,8 @@ export interface InboxSummaryCacheItem {
   digest: InboxDigest | null;
   /** Epoch ms of the last successful generation, or null if never generated. */
   generatedAt: number | null;
+  /** Epoch ms of the last completed attempt, success or failure. Throttles automatic retries. */
+  attemptedAt: number | null;
   loading: boolean;
   /** 'empty' (nothing to summarize) | 'failed' | null. Drives the card's fallback. */
   error: 'empty' | 'failed' | null;
@@ -1276,6 +1278,7 @@ export const useInboxSummary = create<InboxSummaryState>((set) => ({
       const prev = s.byScope[scopeKey] ?? {
         digest: null,
         generatedAt: null,
+        attemptedAt: null,
         loading: false,
         error: null,
         signature: ''
@@ -1320,6 +1323,7 @@ export async function refreshInboxSummary(
       setItem(scopeKey, {
         digest: res.digest,
         generatedAt: Date.now(),
+        attemptedAt: Date.now(),
         loading: false,
         error: null,
         signature
@@ -1327,6 +1331,7 @@ export async function refreshInboxSummary(
     } else {
       setItem(scopeKey, {
         loading: false,
+        attemptedAt: Date.now(),
         error: res.reason === 'empty' ? 'empty' : 'failed',
         // Stamp the signature even on a soft failure so we don't hammer the model
         // on every render for an inbox that simply can't be summarized yet.
@@ -1334,7 +1339,7 @@ export async function refreshInboxSummary(
       });
     }
   } catch {
-    setItem(scopeKey, { loading: false, error: 'failed', signature });
+    setItem(scopeKey, { loading: false, attemptedAt: Date.now(), error: 'failed', signature });
   }
 }
 
@@ -1351,11 +1356,11 @@ export function maybeRefreshInboxSummary(projectId: string | null, entries: Inbo
   const item = useInboxSummary.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  const unchanged = item && item.signature === signature && item.generatedAt !== null;
-  if (unchanged) return; // inbox hasn't changed since last (success OR soft-fail)
-  // Throttle automatic regens: if we generated recently, wait — a manual refresh
+  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) return; // inbox hasn't changed since last (success OR soft-fail)
+  // Throttle automatic regens since the latest attempt — a manual refresh
   // bypasses this by calling refreshInboxSummary directly.
-  if (item?.generatedAt && Date.now() - item.generatedAt < INBOX_SUMMARY_AUTO_MIN_MS) return;
+  const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
+  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) return;
   void refreshInboxSummary(projectId, signature);
 }
 
@@ -1372,6 +1377,8 @@ export interface FeedNoiseCacheItem {
   /** Ids to demote into the folded "Routine" section. */
   routineIds: Set<string>;
   generatedAt: number | null;
+  /** Epoch ms of the last completed attempt, success or failure. */
+  attemptedAt: number | null;
   loading: boolean;
   /** Inbox-content signature the cached verdict reflects. */
   signature: string;
@@ -1389,6 +1396,7 @@ export const useFeedNoise = create<FeedNoiseState>((set) => ({
       const prev = s.byScope[scopeKey] ?? {
         routineIds: new Set<string>(),
         generatedAt: null,
+        attemptedAt: null,
         loading: false,
         signature: ''
       };
@@ -1409,15 +1417,21 @@ export async function refreshFeedNoise(
   setItem(scopeKey, { loading: true });
   try {
     const res = await product.inbox.classifyNoise(projectId);
+    const previous = useFeedNoise.getState().byScope[scopeKey]?.routineIds;
+    const next = new Set(res.routineIds);
+    // Keep the previous Set instance when membership is unchanged so the list does not regroup.
+    const same = previous && previous.size === next.size && [...next].every((id) => previous.has(id));
     setItem(scopeKey, {
-      routineIds: new Set(res.routineIds),
+      routineIds: same ? previous : next,
       generatedAt: Date.now(),
+      attemptedAt: Date.now(),
       loading: false,
       signature
     });
   } catch {
     // Degrade to "nothing demoted" — the overlay is advisory, never load-bearing.
-    setItem(scopeKey, { routineIds: new Set(), loading: false, signature });
+    const previous = useFeedNoise.getState().byScope[scopeKey]?.routineIds;
+    setItem(scopeKey, { routineIds: previous?.size === 0 ? previous : new Set(), attemptedAt: Date.now(), loading: false, signature });
   }
 }
 
@@ -1438,9 +1452,9 @@ export function maybeRefreshFeedNoise(
   const item = useFeedNoise.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  const unchanged = item && item.signature === signature && item.generatedAt !== null;
-  if (unchanged) return;
-  if (item?.generatedAt && Date.now() - item.generatedAt < INBOX_SUMMARY_AUTO_MIN_MS) return;
+  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) return;
+  const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
+  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) return;
   void refreshFeedNoise(projectId, signature);
 }
 
