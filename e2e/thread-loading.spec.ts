@@ -3,8 +3,15 @@ import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import type { TimelineRow } from '@zana-ai/zcc-server-contract';
 import { test, expect } from './fixtures/app.js';
+import { CONVERSATION_READ_RETRIES, CONVERSATION_READ_TIMEOUT_MS } from '../apps/app/src/lib/conversation-read.js';
 
 test.use({ launchEnv: { ZCC_FAKE_PROVIDER: '1' }, isolateBundledCatalog: true });
+
+// Gates are released in each test's finally block. Drain their route handlers
+// while the page is alive so response reads cannot outlive fixture teardown.
+test.afterEach(async ({ app }) => {
+  await app.window.unrouteAll({ behavior: 'wait' });
+});
 
 async function createLoadingThread(window: Page, home: string) {
   const projectPath = join(home, 'loading-project');
@@ -183,7 +190,10 @@ test('unanswered conversation requests time out and Retry recovers without reope
     const timeline = detail.getByTestId('thread-timeline');
     const error = detail.getByTestId('thread-timeline-load-error');
     await expect(timeline.getByTestId('thread-loading')).toBeVisible();
-    await expect(error).toContainText('The server is taking too long', { timeout: 25_000 });
+    // Each automatic retry gets its own read deadline before the error appears.
+    await expect(error).toContainText('The server is taking too long', {
+      timeout: CONVERSATION_READ_TIMEOUT_MS * (CONVERSATION_READ_RETRIES + 1) + 10_000
+    });
     await expect(timeline).toHaveAttribute('aria-busy', 'false');
     await expect(timeline.getByTestId('thread-loading')).toHaveCount(0);
     await expect.poll(() => new Set(failedReads).size).toBe(2);
