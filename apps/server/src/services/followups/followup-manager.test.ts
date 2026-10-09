@@ -549,3 +549,10 @@ describe('poll reloads emit only on content change', () => {
     expect(changed).toHaveBeenCalledTimes(afterCreate);
   });
 });
+
+it('passes other events through without touching the change fingerprint', async () => {
+  const m = makeManager({ persistence: { load: async () => [], save: async () => {}, remove: async () => {}, localProjects: () => [project] } as never });
+  const other = vi.fn(); const changed = vi.fn(); m.on('other', other); m.on('changed', changed);
+  expect(m.emit('other', 1)).toBe(true); expect(other).toHaveBeenCalledWith(1);
+  await m.loadAll([project]); expect(changed).toHaveBeenCalledTimes(1);
+});

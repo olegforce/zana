@@ -975,3 +975,10 @@ describe('GoalManager poll reloads emit only on content change', () => {
     expect(changed).toHaveBeenCalledTimes(afterCreate); manager.stopAll();
   });
 });
+
+it('GoalManager passes other events through without touching the change fingerprint', async () => {
+  const { manager } = durableManager(); const other = vi.fn(); const changed = vi.fn();
+  manager.on('other', other); manager.on('changed', changed);
+  expect(manager.emit('other', 1)).toBe(true); expect(other).toHaveBeenCalledWith(1);
+  await manager.loadAll([project]); expect(changed).toHaveBeenCalledTimes(1); manager.stopAll();
+});

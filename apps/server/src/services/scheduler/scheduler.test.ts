@@ -1243,3 +1243,8 @@ describe('SchedulerManager poll reloads emit only on content change', () => {
     manager.stopAll();
   });
 });
+
+it('SchedulerManager passes other events through without touching the change fingerprint', async () => {
+  const manager = new SchedulerManager(); const other = vi.fn(); manager.on('other', other);
+  expect(manager.emit('other', 1)).toBe(true); expect(other).toHaveBeenCalledWith(1);
+});
