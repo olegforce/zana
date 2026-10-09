@@ -1547,7 +1547,8 @@ export interface CcApi {
     onChanged(cb: (entries: PluginAppEntry[]) => void): () => void;
     setEnabled(id: string, enabled: boolean): Promise<Result<true>>;
     callRpc(pluginId: string, method: string, args?: unknown): Promise<unknown>;
-    getSettings(pluginId: string): Promise<PluginSettingsSnapshot>;
+    /** `omitSecrets` drops `secret: true` values server-side (descriptors stay). */
+    getSettings(pluginId: string, options?: { omitSecrets?: boolean }): Promise<PluginSettingsSnapshot>;
     setSettings(
       pluginId: string,
       values: Record<string, string | number | boolean | undefined>
