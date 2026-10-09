@@ -567,34 +567,40 @@ export function InstalledView({ toolbarExtra, mobileActions }: { toolbarExtra?: 
   );
 }
 
-const PLUGIN_SETTING_WAIT_MS = 2_000;
+/** Upper bound on waiting for the Configure form; it loads with the plugin's settings request. */
+export const PLUGIN_SETTING_WAIT_MS = 15_000;
 
 /**
- * Find the Configure-page field whose control is labelled `label` (the form
- * loads asynchronously, so retry up to 2 s), then scroll, flash and focus its
- * row. Returns a cancel function for the effect cleanup.
+ * Reveal the Configure-page row for descriptor `settingKey` (stable and unique,
+ * unlike display labels). The form renders when the plugin's settings request
+ * resolves, so a MutationObserver waits for the row instead of polling on a
+ * fixed short budget; it stops on success, on the cap, or when cancelled (the
+ * effect cleanup on navigation). Returns the cancel function.
  */
-export function revealPluginSetting(label: string): () => void {
-  const started = Date.now();
-  let frame = 0;
-  let cancelled = false;
-  const attempt = () => {
-    if (cancelled) return;
-    const control = [...document.querySelectorAll<HTMLElement>('#plugin-configure [aria-label]')].find(
-      (el) => el.getAttribute('aria-label') === label
-    );
-    const row = control?.closest<HTMLElement>('.plugin-setting-row');
-    if (row) {
-      revealElement(row);
-      return;
-    }
-    if (Date.now() - started < PLUGIN_SETTING_WAIT_MS) frame = window.requestAnimationFrame(attempt);
-  };
-  attempt();
-  return () => {
-    cancelled = true;
-    window.cancelAnimationFrame(frame);
-  };
+export function revealPluginSetting(settingKey: string): () => void {
+  const selector = `#plugin-configure [data-plugin-setting-key="${CSS.escape(settingKey)}"]`;
+  const find = () => document.querySelector<HTMLElement>(selector);
+  const now = find();
+  if (now) {
+    revealElement(now);
+    return () => {};
+  }
+  let done = false;
+  const observer = new MutationObserver(() => {
+    const row = find();
+    if (!row) return;
+    stop();
+    revealElement(row);
+  });
+  const timer = window.setTimeout(() => stop(), PLUGIN_SETTING_WAIT_MS);
+  function stop() {
+    if (done) return;
+    done = true;
+    observer.disconnect();
+    window.clearTimeout(timer);
+  }
+  observer.observe(document.body, { childList: true, subtree: true });
+  return stop;
 }
 
 function InstalledPluginRow({ row, onOpen }: { row: HubRow; onOpen: () => void }) {
@@ -868,9 +874,9 @@ function ExtensionDetail({ row }: { row: HubRow }) {
     document.getElementById('plugin-configure')?.scrollIntoView({ block: 'start' });
     document.getElementById('plugin-configure')?.focus();
     // Opened from a Settings search result: flash and focus the matching field.
-    const label = new URLSearchParams(locationSearch).get(PLUGIN_SETTING_PARAM);
-    if (!label) return;
-    return revealPluginSetting(label);
+    const settingKey = new URLSearchParams(locationSearch).get(PLUGIN_SETTING_PARAM);
+    if (!settingKey) return;
+    return revealPluginSetting(settingKey);
   }, [module.id, locationSearch, locationHash, locationKey]);
 
   const catalogEntry = catalog.find((item) => item.id === module.id) ?? null;

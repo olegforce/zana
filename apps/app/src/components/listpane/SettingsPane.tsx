@@ -79,6 +79,60 @@ function Highlighted({ snippet }: { snippet: SettingsSnippet }) {
   return <>{parts}</>;
 }
 
+/** The ranked results list (listbox): page groups, the "Close matches" band, rows. */
+function SettingsSearchResults({
+  listId,
+  pages,
+  activeHit,
+  optionId,
+  parentLabel,
+  onOpen
+}: {
+  listId: string;
+  pages: SettingsResultPage[];
+  activeHit: SettingsSearchHit | undefined;
+  optionId: (hit: SettingsSearchHit) => string;
+  parentLabel: (id: string) => string | undefined;
+  onOpen: (hit: SettingsSearchHit) => void;
+}) {
+  return (
+    <div className="settings-results" role="listbox" id={listId} aria-label="Settings search results">
+      {pages.map((page, index) => (
+        <div key={page.key} className="settings-group" role="group" aria-label={page.close ? `${page.title} (close matches)` : page.title}>
+          {page.close && index > 0 && !pages[index - 1].close ? (
+            <div className="settings-group-label settings-results-close" role="presentation">Close matches</div>
+          ) : null}
+          <div className="settings-group-label">{page.title}</div>
+          {page.hits.map((hit) => (
+            <div
+              key={hit.entry.id}
+              id={optionId(hit)}
+              role="option"
+              aria-selected={hit === activeHit}
+              data-testid={`settings-result-${hit.entry.id}`}
+              className="settings-result"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onOpen(hit)}
+            >
+              <span className="settings-result-label">{hit.entry.label}</span>
+              <span className="settings-result-crumb">{hit.breadcrumb}</span>
+              {hit.snippet ? (
+                <span className="settings-result-snippet"><Highlighted snippet={hit.snippet} /></span>
+              ) : null}
+              {hit.matchedValue ? <span className="settings-result-value">Current: {hit.matchedValue}</span> : null}
+              {hit.entry.dependsOn ? (
+                <span className="settings-result-gate">
+                  Appears when {parentLabel(hit.entry.dependsOn) ?? 'its parent setting'} is on
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsPane() {
   const dismissMobileNav = useMobileNavDismiss();
   const settingsTab = useUi((s) => s.settingsTab);
@@ -112,7 +166,11 @@ export function SettingsPane() {
   useEffect(() => {
     if (activeOptionId) document.getElementById(activeOptionId)?.scrollIntoView?.({ block: 'nearest' });
   }, [activeOptionId]);
-  const parentLabel = (id: string) => buildCorpus(snapshot).entries.find((r) => r.entry.id === id)?.entry.label;
+  // One label lookup per corpus (not a scan per gated row on every render).
+  const labelById = useMemo(
+    () => (searching ? new Map(buildCorpus(snapshot).entries.map((r) => [r.entry.id, r.entry.label])) : new Map<string, string>()),
+    [searching, snapshot, sourcesVersion]
+  );
 
   const open = (hit: SettingsSearchHit) => {
     openSettingsHit(hit, { projectId, navigate: (path) => void navigate(path), setAnchor: setSettingsAnchor });
@@ -161,6 +219,8 @@ export function SettingsPane() {
           aria-autocomplete="list"
           aria-controls={searching && flat.length > 0 ? listId : undefined}
           aria-activedescendant={activeOptionId}
+          // Values are only read while the box is focused or has a query.
+          onBlur={() => { if (!query.trim()) setSearchFocused(false); }}
           onFocus={() => {
             setSearchFocused(true);
             void ensureSettingsSearchProviders().prefetchPluginSettings();
@@ -197,40 +257,14 @@ export function SettingsPane() {
         flat.length === 0 ? (
           <p className="settings-search-empty" role="status">No matching settings</p>
         ) : (
-          <div className="settings-results" role="listbox" id={listId} aria-label="Settings search results">
-            {pages.map((page, index) => (
-              <div key={page.key} className="settings-group" role="group" aria-label={page.close ? `${page.title} (close matches)` : page.title}>
-                {page.close && index > 0 && !pages[index - 1].close ? (
-                  <div className="settings-group-label settings-results-close" role="presentation">Close matches</div>
-                ) : null}
-                <div className="settings-group-label">{page.title}</div>
-                {page.hits.map((hit) => (
-                  <div
-                    key={hit.entry.id}
-                    id={optionId(hit)}
-                    role="option"
-                    aria-selected={hit === activeHit}
-                    data-testid={`settings-result-${hit.entry.id}`}
-                    className="settings-result"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => open(hit)}
-                  >
-                    <span className="settings-result-label">{hit.entry.label}</span>
-                    <span className="settings-result-crumb">{hit.breadcrumb}</span>
-                    {hit.snippet ? (
-                      <span className="settings-result-snippet"><Highlighted snippet={hit.snippet} /></span>
-                    ) : null}
-                    {hit.matchedValue ? <span className="settings-result-value">Current: {hit.matchedValue}</span> : null}
-                    {hit.entry.dependsOn ? (
-                      <span className="settings-result-gate">
-                        Appears when {parentLabel(hit.entry.dependsOn) ?? 'its parent setting'} is on
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+          <SettingsSearchResults
+            listId={listId}
+            pages={pages}
+            activeHit={activeHit}
+            optionId={optionId}
+            parentLabel={(id) => labelById.get(id)}
+            onOpen={open}
+          />
         )
       ) : (
       <nav className="settings-picker" aria-label="Settings navigation">

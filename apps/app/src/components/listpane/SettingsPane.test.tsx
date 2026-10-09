@@ -12,7 +12,8 @@ const h = vi.hoisted(() => ({
     focusedProjectId: null as string | null
   },
   data: { projects: [{ id: 'selected', name: 'Demo' }] },
-  snapshot: { config: { theme: 'Dark' } } as never
+  snapshot: { config: { theme: 'Dark' } } as never,
+  snapshotEnabled: [] as boolean[]
 }));
 
 vi.mock('../../store.js', () => ({
@@ -28,7 +29,10 @@ vi.mock('../../hooks/useAppSettingsRouteMemory.js', () => ({
 }));
 vi.mock('../SidebarResizer.js', () => ({ SidebarResizer: () => null }));
 vi.mock('../../lib/settings-search/snapshot.js', () => ({
-  useSettingsSnapshot: () => h.snapshot
+  useSettingsSnapshot: (_projectId: string | null, enabled: boolean) => {
+    h.snapshotEnabled.push(enabled);
+    return h.snapshot;
+  }
 }));
 vi.mock('../mobile-nav-context.js', () => ({ useMobileNavDismiss: () => h.dismiss }));
 
@@ -87,6 +91,21 @@ describe('groupHitsByPage', () => {
 });
 
 describe('focused Settings navigation', () => {
+  it('reads current values only while the box is focused or has a query', () => {
+    mount();
+    const search = screen.getByRole('combobox', { name: 'Search settings' });
+    const last = () => h.snapshotEnabled.at(-1);
+    expect(last()).toBe(false);
+    fireEvent.focus(search);
+    expect(last()).toBe(true);
+    fireEvent.blur(search);
+    expect(last()).toBe(false); // empty box: stop reading values
+    fireEvent.focus(search);
+    fireEvent.change(search, { target: { value: 'theme' } });
+    fireEvent.blur(search);
+    expect(last()).toBe(true); // a live query keeps its values current
+  });
+
   it('dismisses the mobile drawer even when the selected section or anchor keeps the same route', () => {
     h.dismiss = vi.fn();
     mount();

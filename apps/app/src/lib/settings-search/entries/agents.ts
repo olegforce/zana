@@ -343,7 +343,12 @@ export const entries: readonly SettingsSearchEntry[] = [
     help: 'How long a Squad run may go WITHOUT making progress before timing out. Worker output and heartbeats reset the clock, so a long but healthy run is never cut off — only a stalled one times out. Set to 0 to disable completely. Default is 45 minutes. Range 0 (disabled) or 1–1440 (1 minute to 24 hours).',
     keywords: ['timeout', 'autonomous', 'stalled', 'minutes', 'squad run'],
     kind: 'setting',
-    value: (s) => s.config.autonomousTimeoutMs === 0 ? '0' : String(Math.round((s.config.autonomousTimeoutMs ?? 45 * 60 * 1000) / 60000)),
+    value: (s) => {
+      const ms = s.config.autonomousTimeoutMs;
+      if (ms === 0) return '0';
+      // Anything non-numeric (unset, null from an older config) is the 45-minute default, never "NaN".
+      return String(Math.round((typeof ms === 'number' && Number.isFinite(ms) ? ms : 45 * 60 * 1000) / 60000));
+    },
   },
   {
     id: 'agents.max-autonomous-rounds',
@@ -460,7 +465,8 @@ export const entries: readonly SettingsSearchEntry[] = [
     section: 'agents',
     anchor: 'overseer',
     label: 'Overseer (fallback auto-approve)',
-    help: 'A local auto-approval cascade for launches where auto mode is unavailable (older model) or turned off. While auto mode is on it is not installed — auto mode supersedes it. It can only ever turn a prompt into an auto-approve, never block, and is fail-open. Applies to new sessions. A local auto-approval cascade that skips the permission prompt for provably-safe tool calls (read-only tools, git status–class shell). It can only ever turn a prompt into an auto-approve — it never blocks a tool call — and is fail-open: if it errors or you turn it off, your normal prompts come back unchanged. Applies to new sessions.',
+    // The view shows one of two texts depending on auto mode; both are indexed, each labelled.
+    help: 'With auto mode off: A local auto-approval cascade that skips the permission prompt for provably-safe tool calls (read-only tools, git status–class shell). It can only ever turn a prompt into an auto-approve — it never blocks a tool call — and is fail-open: if it errors or you turn it off, your normal prompts come back unchanged. Applies to new sessions. With auto mode on: A local auto-approval cascade for launches where auto mode is unavailable (older model) or turned off. While auto mode is on it is not installed — auto mode supersedes it. It can only ever turn a prompt into an auto-approve, never block, and is fail-open. Applies to new sessions.',
     keywords: ['overseer', 'auto approve', 'permissions', 'safe list', 'fallback'],
     kind: 'subsection',
   },

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { machineSearchId } from '@/lib/settings-search/providers/machines';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -209,7 +210,7 @@ export function MachineCard({
   }, [host.defaultWorkspacePath]);
 
   return (
-    <li className={`machine-card${host.status === 'connected' ? ' machine-card--online' : ''}`}>
+    <li className={`machine-card${host.status === 'connected' ? ' machine-card--online' : ''}`} data-settings-target={machineSearchId(host.id)}>
       <div className="machine-card-header">
         <span
           className={`machine-status-dot${host.status === 'connected' ? ' machine-status-dot--on' : ''}`}

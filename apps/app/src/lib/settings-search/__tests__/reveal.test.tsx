@@ -51,6 +51,21 @@ describe('revealElement', () => {
     vi.advanceTimersByTime(FLASH_MS);
     expect(row.classList.contains(FLASH_CLASS)).toBe(false);
   });
+  it('opens a collapsed <details> the row wraps, or sits inside, and focuses its summary', () => {
+    const wrapper = mountRow('remote-access.shared-instance');
+    wrapper.innerHTML = '<details><summary>Open an existing shared instance</summary><input /></details>';
+    revealElement(wrapper);
+    expect(wrapper.querySelector('details')!.open).toBe(true);
+    expect(document.activeElement?.tagName).toBe('SUMMARY');
+    const outer = document.createElement('details');
+    const nested = document.createElement('div');
+    nested.innerHTML = '<input />';
+    outer.appendChild(nested);
+    document.body.appendChild(outer);
+    revealElement(nested);
+    expect(outer.open).toBe(true);
+  });
+
   it('focuses the target itself when it is the control (ToggleSwitch)', () => {
     const btn = document.createElement('button');
     btn.setAttribute('data-settings-target', 'toggle');
@@ -219,12 +234,37 @@ describe('useSettingsTargetReveal', () => {
 });
 
 describe('isShown / hidden containers', () => {
-  it('reports hidden and display:none ancestors', async () => {
+  it('uses the native checkVisibility() without a computed-style walk', async () => {
+    const { isShown } = await import('../reveal');
+    const row = document.createElement('div');
+    document.body.appendChild(row);
+    const styles = vi.spyOn(window, 'getComputedStyle');
+    const native = vi.spyOn(row, 'checkVisibility').mockReturnValue(false);
+    expect(isShown(row)).toBe(false);
+    native.mockReturnValue(true);
+    expect(isShown(row)).toBe(true);
+    expect(styles).not.toHaveBeenCalled();
+    styles.mockRestore();
+  });
+
+  it('a hidden ancestor (tab panel) is never shown, whatever checkVisibility says', async () => {
+    const { isShown } = await import('../reveal');
+    const panel = document.createElement('div');
+    const row = document.createElement('div');
+    panel.appendChild(row);
+    document.body.appendChild(panel);
+    vi.spyOn(row, 'checkVisibility').mockReturnValue(true);
+    panel.hidden = true;
+    expect(isShown(row)).toBe(false);
+  });
+
+  it('falls back to a computed-style walk where checkVisibility is missing (hidden and display:none)', async () => {
     const { isShown } = await import('../reveal');
     const wrap = document.createElement('div');
     const row = document.createElement('div');
     wrap.appendChild(row);
     document.body.appendChild(wrap);
+    Object.defineProperty(row, 'checkVisibility', { value: undefined, configurable: true });
     expect(isShown(row)).toBe(true);
     wrap.hidden = true;
     expect(isShown(row)).toBe(false);

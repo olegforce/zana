@@ -105,7 +105,6 @@ export function threadProviderSearchId(providerId: string): string {
   return `harness.provider.${providerId}`;
 }
 
-const MODEL_KEYWORD_CAP = 40;
 
 let descriptorCache: ReadonlyMap<string, HarnessAdapterDescriptor> | null = null;
 
@@ -217,7 +216,8 @@ export function threadProviderEntries(
       keywords: [
         'modern',
         'models',
-        ...models.slice(0, MODEL_KEYWORD_CAP).flatMap((m) => [m.displayName, m.id])
+        // Every model name is searchable (no per-provider cap): the typo tier scans unique words, so this stays cheap.
+        ...models.flatMap((m) => [m.displayName, m.id])
       ],
       kind: 'setting'
     } satisfies SettingsSearchEntry;

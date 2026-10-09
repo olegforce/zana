@@ -2,6 +2,7 @@ import type { PluginAppEntry, PluginSettingsSnapshot } from '@zana-ai/zcc-domain
 import { listSettingsSections } from '../../../plugins/plugin-slots.js';
 import { product } from '../../product-client.js';
 import { getPluginDetailRoutePath } from '../../route-paths.js';
+import { warnSettingsSearchOnce } from '../diagnostics';
 import { notifySettingsSearchSourcesChanged, registerSettingsSearchProvider } from '../registry';
 import type { SettingsSearchEntry, SettingsSearchProvider } from '../types';
 
@@ -13,8 +14,8 @@ import type { SettingsSearchEntry, SettingsSearchProvider } from '../types';
 // filter below is defence in depth, applied before caching.
 
 export const PLUGIN_CONFIGURE_HASH = '#plugin-configure';
-/** Query param naming the field (by label) the hub should flash and focus. */
-export const PLUGIN_SETTING_PARAM = 'settingLabel';
+/** Query param naming the field (by descriptor key: unique and stable, unlike labels) the hub should flash and focus. */
+export const PLUGIN_SETTING_PARAM = 'setting';
 export const PLUGIN_VALUES_TTL_MS = 30_000;
 const FETCH_CONCURRENCY = 4;
 
@@ -60,8 +61,8 @@ export function pluginConfigureHref(pluginId: string, params: Record<string, str
   return `${pathname}${qs ? `?${qs}` : ''}${PLUGIN_CONFIGURE_HASH}`;
 }
 
-export function pluginSettingHref(pluginId: string, label: string): string {
-  return pluginConfigureHref(pluginId, { [PLUGIN_SETTING_PARAM]: label });
+export function pluginSettingHref(pluginId: string, settingKey: string): string {
+  return pluginConfigureHref(pluginId, { [PLUGIN_SETTING_PARAM]: settingKey });
 }
 
 function nonSecretValues(snap: PluginSettingsSnapshot): Record<string, StoredValue> {
@@ -95,7 +96,8 @@ export function prefetchPluginSettings(
     let apps: PluginAppEntry[];
     try {
       apps = (await api.list()).filter((app) => app.enabled);
-    } catch {
+    } catch (error) {
+      warnSettingsSearchOnce('plugins:list', 'listing plugins failed; plugin settings stay as last fetched', error);
       return;
     }
     let changed = false;
@@ -119,8 +121,9 @@ export function prefetchPluginSettings(
           fetchedAt: now()
         });
         changed = true;
-      } catch {
-        /* one broken plugin never blanks the rest */
+      } catch (error) {
+        // One broken plugin never blanks the rest.
+        warnSettingsSearchOnce(`plugins:settings:${app.id}`, `reading settings of plugin "${app.id}" failed; its settings are not searchable`, error);
       }
     });
     if (changed) notifySettingsSearchSourcesChanged();
@@ -152,7 +155,7 @@ export const pluginSettingsSearchProvider: SettingsSearchProvider = () => {
         label: descriptor.label,
         kind: 'setting',
         keywords: [plugin.name, 'plugin setting'],
-        href: pluginSettingHref(pluginId, descriptor.label)
+        href: pluginSettingHref(pluginId, key)
       };
       if (descriptor.description) entry.help = descriptor.description;
       if (descriptor.options?.length) entry.options = descriptor.options;

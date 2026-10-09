@@ -1,11 +1,19 @@
 import type { SettingsSearchEntry } from './types';
 
 /**
- * Entries matching this must not expose a `value` (design 3.7 rule 2). Free-form
- * CLI args and env blocks are included: that is where people paste keys and headers.
+ * Entries matching this must not expose a `value` (design 3.7 rule 2).
+ *
+ * This is a best-effort, name-based safety net for the STATIC index, enforced at
+ * runtime (`mayIndexValue`) and by the guard test, not a classifier: a value is
+ * only ever indexed when its entry opts in with a `value` accessor, so the
+ * primary control is never adding one to a field that can hold credentials.
+ * Plugin-defined secrets are redacted server-side by their `secret` flag.
+ * Covered names: credentials and tokens, one-time pairing/connect/join codes,
+ * free-form CLI args and env blocks, and URLs/strings that commonly embed
+ * credentials (webhooks, connection strings, DSNs).
  */
 export const SECRET_ENTRY_PATTERN =
-  /token|secret|password|passphrase|api[-_ ]?key|credential|cookie|auth|private[-_ ]?key|enroll|extra[-_ ]?args|\benv\b/i;
+  /token|secret|password|passphrase|api[-_ ]?key|credential|cookie|auth|private[-_ ]?key|enroll|(connect|pair(ing)?|join)[-_ ]?code|webhook|connection[-_ ]?string|\bdsn\b|extra[-_ ]?args|\benv\b/i;
 
 /** Entry id -> reason it is safe to index the value despite matching the pattern. */
 export const SECRET_VALUE_ALLOWLIST: Readonly<Record<string, string>> = {};

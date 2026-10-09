@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect, launchApp, closeApp } from './fixtures/app.js';
+import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
 
 // Settings search (salesforce/zana#272) in the built Electron app: ranked
 // results, precise jump + flash, collapsed/tabbed containers, plugin settings,
@@ -61,13 +62,13 @@ test('help-text-only phrase finds the row, jumps to it, flashes it and shows a s
   const hit = win.getByTestId('settings-result-terminal.tmux-persistence');
   await expect(hit).toBeVisible();
   await expect(hit.locator('mark').first()).toBeVisible();
-  await win.screenshot({ path: testInfo.outputPath('01-help-text-results.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('01-help-text-results.png'));
   await hit.click();
   await expect(win).toHaveURL(/\/settings\/terminal/);
   const row = await inView(win, '[data-settings-target="terminal.tmux-persistence"]');
   await expect(row).toHaveClass(/settings-search-flash/);
   await hashCleared(win);
-  await win.screenshot({ path: testInfo.outputPath('02-help-text-jump.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('02-help-text-jump.png'));
 });
 
 test('cross-page jump lands in view (baseline probe regression)', async ({ app }, testInfo) => {
@@ -78,7 +79,7 @@ test('cross-page jump lands in view (baseline probe regression)', async ({ app }
   await expect(win).toHaveURL(/\/settings\/agents/);
   await inView(win, '#settings-anchor-agent-heartbeat');
   await hashCleared(win);
-  await win.screenshot({ path: testInfo.outputPath('03-cross-page-heartbeat.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('03-cross-page-heartbeat.png'));
 });
 
 test('opening the same result twice reveals it both times (no stale hash, no stuck reveal state)', async ({ app }) => {
@@ -110,7 +111,7 @@ test('a term that lives only in a collapsed Advanced block expands it', async ({
   await expect(hit).toBeVisible();
   await hit.click();
   await inView(win, '[data-settings-target="editor.cursor-binary"]');
-  await win.screenshot({ path: testInfo.outputPath('04-advanced-expanded.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('04-advanced-expanded.png'));
 });
 
 test('a Harness page field selects the right tab', async ({ app }, testInfo) => {
@@ -123,7 +124,7 @@ test('a Harness page field selects the right tab', async ({ app }, testInfo) => 
   await expect(win).toHaveURL(/\/settings\/harness/);
   await expect(win.getByTestId('harness-legacy-pane')).toBeVisible();
   await inView(win, '[data-settings-target="harness.claude.append-system-prompt"]');
-  await win.screenshot({ path: testInfo.outputPath('05-harness-tab.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('05-harness-tab.png'));
 });
 
 test('keyboard: arrows move the active row, Enter opens it, Escape clears', async ({ app }) => {
@@ -156,7 +157,7 @@ test('typos still find the setting and exact queries rank the exact hit first', 
   const search = await openSettings(win);
   await search.fill('tmxu');
   await expect(win.getByTestId('settings-result-terminal.tmux-persistence')).toBeVisible();
-  await win.screenshot({ path: testInfo.outputPath('06-typo-tmxu.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('06-typo-tmxu.png'));
   await search.fill('tmux');
   await expect(win.getByRole('option').first()).toContainText('tmux');
 });
@@ -170,7 +171,7 @@ test('current values are searchable, shown as Current, and follow edits', async 
   await search.fill('e2e-search-old');
   const hit = win.getByRole('option').filter({ hasText: 'Current:' }).first();
   await expect(hit).toContainText(oldPath);
-  await win.screenshot({ path: testInfo.outputPath('07-value-match.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('07-value-match.png'));
   await win.evaluate((value) => window.cc.config.set({ claudeBinary: value }), newPath);
   await search.fill('');
   await search.fill('e2e-search-old');
@@ -188,7 +189,7 @@ test('Cmd+P: Settings section for a help phrase, Enter lands on the flashed row,
   const input = palette.getByRole('combobox');
   await input.fill('does not make terminals faster');
   await expect(palette.getByRole('option').filter({ hasText: 'tmux' }).first()).toBeVisible({ timeout: 15_000 });
-  await win.screenshot({ path: testInfo.outputPath('08-palette-settings-section.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('08-palette-settings-section.png'));
   await input.press('Enter');
   await expect(palette).toHaveCount(0);
   const row = await inView(win, '[data-settings-target="terminal.tmux-persistence"]');
@@ -199,7 +200,7 @@ test('Cmd+P: Settings section for a help phrase, Enter lands on the flashed row,
   await palette.getByRole('button', { name: 'Settings', exact: true }).click();
   await input.fill('terminal');
   expect(await palette.getByRole('option').count()).toBeGreaterThan(5);
-  await win.screenshot({ path: testInfo.outputPath('09-palette-settings-scope.png'), animations: 'disabled' });
+  await captureElectronScreenshot(app.electron, win, testInfo.outputPath('09-palette-settings-scope.png'));
 });
 
 test('plugin-defined settings are searchable, land on #plugin-configure and never leak secret values', async ({ home }, testInfo) => {
@@ -231,7 +232,7 @@ test('plugin-defined settings are searchable, land on #plugin-configure and neve
     await search.fill('quokka');
     const hit = win.getByRole('option').filter({ hasText: VALUES.normal.stringLabel }).first();
     await expect(hit).toBeVisible({ timeout: 15_000 });
-    await win.screenshot({ path: testInfo.outputPath('10-plugin-result.png'), animations: 'disabled' });
+    await captureElectronScreenshot(app.electron, win, testInfo.outputPath('10-plugin-result.png'));
     await hit.click();
     await expect(win).toHaveURL(new RegExp(`${NORMAL_ID}\\?view=installed.*#plugin-configure`));
     // The installed plugin page itself, not the Browse detail ("Plugin not found."):
@@ -241,7 +242,7 @@ test('plugin-defined settings are searchable, land on #plugin-configure and neve
       has: win.locator(`[aria-label="${VALUES.normal.stringLabel}"]`)
     });
     await expect(field).toHaveClass(/settings-search-flash/);
-    await win.screenshot({ path: testInfo.outputPath('11-plugin-configure.png'), animations: 'disabled' });
+    await captureElectronScreenshot(app.electron, win, testInfo.outputPath('11-plugin-configure.png'));
 
     await win.goBack();
     await expect(search).toBeVisible();
@@ -254,7 +255,7 @@ test('plugin-defined settings are searchable, land on #plugin-configure and neve
     const palette = win.getByRole('dialog', { name: 'Command palette' });
     await palette.getByRole('combobox').fill(VALUES.secret.secretValue);
     await expect(palette.getByRole('option').filter({ hasText: VALUES.secret.secretLabel })).toHaveCount(0);
-    await win.screenshot({ path: testInfo.outputPath('12-secret-not-searchable.png'), animations: 'disabled' });
+    await captureElectronScreenshot(app.electron, win, testInfo.outputPath('12-secret-not-searchable.png'));
   } finally {
     await closeApp(app.electron);
   }

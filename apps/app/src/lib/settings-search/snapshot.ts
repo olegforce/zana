@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AppConfig, ProjectSettings } from '@zana-ai/zcc-domain/product';
+import { warnSettingsSearchOnce } from './diagnostics';
 import { product } from '../product-client.js';
 import type { SettingsValueSnapshot } from './types';
 
 export interface SnapshotParts {
   config: AppConfig | null;
   project: { id: string; settings: ProjectSettings } | null;
-  machines: ReadonlyArray<{ name: string; host?: string }> | null;
+  machines: ReadonlyArray<{ id?: string; name: string; host?: string }> | null;
 }
 
 const EMPTY_CONFIG = {} as AppConfig;
@@ -32,13 +33,15 @@ export function useSettingsSnapshot(projectId: string | null, enabled: boolean):
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    product.config.get().then((next) => { if (!cancelled) setConfig(next); }).catch(() => {});
+    product.config.get()
+      .then((next) => { if (!cancelled) setConfig(next); })
+      .catch((error) => warnSettingsSearchOnce('snapshot:config', 'loading config for current values failed', error));
     const off = product.config.onChanged((next) => { if (!cancelled) setConfig(next); });
     product.hosts.list()
       .then((hosts) => {
-        if (!cancelled) setMachines(hosts.map((h) => ({ name: h.name, host: h.sshHost ?? undefined })));
+        if (!cancelled) setMachines(hosts.map((h) => ({ id: h.id, name: h.name, host: h.sshHost ?? undefined })));
       })
-      .catch(() => {});
+      .catch((error) => warnSettingsSearchOnce('snapshot:hosts', 'loading machines for search failed', error));
     return () => { cancelled = true; off(); };
   }, [enabled]);
 
@@ -51,7 +54,7 @@ export function useSettingsSnapshot(projectId: string | null, enabled: boolean):
     const load = (id: string) => {
       product.projectSettings.get(id)
         .then((settings) => { if (!cancelled) setProject({ id, settings }); })
-        .catch(() => {});
+        .catch((error) => warnSettingsSearchOnce(`snapshot:project:${id}`, `loading settings of project "${id}" for search failed`, error));
     };
     load(projectId);
     const off = product.projectSettings.onChanged((changed) => { if (changed === projectId) load(projectId); });

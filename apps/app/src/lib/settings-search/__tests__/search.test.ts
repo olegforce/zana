@@ -42,6 +42,30 @@ describe('normalisation', () => {
   });
 });
 
+describe('Squad idle timeout value', () => {
+  it('is the 45-minute default for unset, null or non-numeric configs, never NaN', async () => {
+    const { entries } = await import('../entries/agents');
+    const value = entries.find((x) => x.id === 'agents.squad-idle-timeout')!.value!;
+    const at = (autonomousTimeoutMs: unknown) => value(snap({ autonomousTimeoutMs }));
+    expect(at(0)).toBe('0');
+    expect(at(30 * 60 * 1000)).toBe('30');
+    for (const odd of [undefined, null, Number.NaN, 'soon']) expect(at(odd)).toBe('45');
+  });
+});
+
+describe('decomposed diacritics (NFD input) through the matching path', () => {
+  it('matches precomposed and decomposed forms in both directions', () => {
+    const composed = 'Caf\u00e9 mode';
+    const decomposed = 'Cafe\u0301 mode';
+    expect(normalize(composed)).toBe('cafe mode');
+    expect(normalize(decomposed)).toBe('cafe mode');
+    // query decomposed -> entry precomposed, and the reverse, and plain ASCII to both
+    expect(ids(searchSettings('cafe\u0301', snap(), { entries: [e('a', composed)] }))).toEqual(['a']);
+    expect(ids(searchSettings('caf\u00e9', snap(), { entries: [e('b', decomposed)] }))).toEqual(['b']);
+    expect(ids(searchSettings('cafe', snap(), { entries: [e('a', composed), e('b', decomposed)] })).sort()).toEqual(['a', 'b']);
+  });
+});
+
 describe('non-Latin folding', () => {
   it('keeps Hangul syllables intact (a decomposition into further letters is not a diacritic)', () => {
     expect(fold('\uD55C\uAD6D')).toBe('\uD55C\uAD6D');
@@ -243,6 +267,22 @@ describe('secret denylist', () => {
     expect(mayIndexValue(e('ok', 'Shell', { value: () => 'zsh' }))).toBe(true);
     expect(mayIndexValue(e('ok2', 'Shell'))).toBe(false);
   });
+  it('also denies one-time codes and credential-carrying URLs/strings by name', () => {
+    const accessor = vi.fn(() => 'leak');
+    const risky = [
+      e('remote-access.connect-code', 'Get a connect code', { value: accessor }),
+      e('machines.pairing-code', 'Pairing code', { value: accessor }),
+      e('x.join', 'Join code', { value: accessor }),
+      e('hooks.url', 'Webhook URL', { value: accessor }),
+      e('db', 'Connection string', { value: accessor }),
+      e('sentry', 'Sentry DSN', { value: accessor })
+    ];
+    expect(findSecretValueViolations(risky)).toHaveLength(risky.length);
+    expect(searchSettings('leak', snap(), { entries: risky })).toEqual([]);
+    expect(accessor).not.toHaveBeenCalled();
+    // Words that merely contain the letters stay indexable.
+    expect(mayIndexValue(e('editor.encoder', 'Encoder', { value: () => 'x' }))).toBe(true);
+  });
   it('does not treat Object.prototype keys as allowlisted and checks the anchor', () => {
     const accessor = vi.fn(() => 'leak');
     const list = [e('constructor.token', 'Thing', { value: accessor }), e('toString', 'Auth', { value: accessor }), e('p', 'Plain', { anchor: 'api-key', value: accessor })];
@@ -305,8 +345,13 @@ describe('registry', () => {
   });
 });
 
+// Design budget: 8 ms per keystroke (median). Shared CI runners are noisy and
+// throttled, so there the bound is a regression tripwire (an order-of-magnitude
+// slowdown), not the budget itself; run locally to check the real budget.
+const SEARCH_MEDIAN_BUDGET_MS = process.env.CI ? 40 : 8;
+
 describe('performance', () => {
-  it('median query over 3000 synthetic entries is under 8 ms', () => {
+  it(`median query over 3000 synthetic entries is under the budget (${SEARCH_MEDIAN_BUDGET_MS} ms)`, () => {
     const vocab = ['agent', 'heartbeat', 'terminal', 'shell', 'tmux', 'editor', 'binary', 'timeout', 'idle', 'close', 'theme', 'launch', 'model', 'harness', 'prompt', 'inbox', 'browser', 'cookie', 'remote', 'machine'];
     const w = (i: number, n: number) => Array.from({ length: n }, (_, k) => vocab[(i * 7 + k * 3) % vocab.length] + (k % 5 === 0 ? i % 97 : '')).join(' ');
     const entries = Array.from({ length: 3000 }, (_, i) =>
@@ -324,6 +369,6 @@ describe('performance', () => {
       }
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length / 2)]).toBeLessThan(8);
+    expect(times[Math.floor(times.length / 2)]).toBeLessThan(SEARCH_MEDIAN_BUDGET_MS);
   });
 });

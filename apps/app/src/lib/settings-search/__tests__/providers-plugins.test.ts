@@ -19,7 +19,7 @@ import {
   resetPluginSettingsCache,
   type DeepLinkedSettingsEntry
 } from '../providers/plugins';
-import { revealPluginSetting } from '../../../views/extensions/ExtensionsHub';
+import { PLUGIN_SETTING_WAIT_MS, revealPluginSetting } from '../../../views/extensions/ExtensionsHub';
 
 const SECRET_DUMMY = 'hunter2-fixture-dummy-0000';
 const app = (id: string, name: string, enabled = true): PluginAppEntry => ({ id, name, enabled } as PluginAppEntry);
@@ -57,7 +57,7 @@ describe('plugin settings provider', () => {
     expect(relay).toMatchObject({ label: 'Relay endpoint', help: 'Quokka gateway address.', section: 'Plugins › Fixture One' });
     const relayUrl = new URL(relay.href, 'http://h');
     expect(relayUrl.searchParams.get('view')).toBe('installed');
-    expect(relayUrl.searchParams.get(PLUGIN_SETTING_PARAM)).toBe('Relay endpoint');
+    expect(relayUrl.searchParams.get(PLUGIN_SETTING_PARAM)).toBe('relay'); // the descriptor key, not the label
     expect(relay.href.endsWith('#plugin-configure')).toBe(true);
     expect(relay.value?.(config)).toBe('https://relay.test/quokka');
     expect(entries.find((e) => e.id === 'plugin.p1.flag')!.value?.(config)).toBe('On');
@@ -179,44 +179,89 @@ describe('plugin settings provider', () => {
 });
 
 describe('ExtensionsHub revealPluginSetting', () => {
-  const mount = () => {
-    document.body.innerHTML = `
-      <section id="plugin-configure">
-        <div class="plugin-setting-row"><input aria-label="Relay endpoint" /></div>
-        <div class="plugin-setting-row"><input aria-label="Other" /></div>
-      </section>`;
-    Element.prototype.scrollIntoView = vi.fn();
-  };
-
-  it('flashes and focuses the matching row once it mounts', () => {
+  const rowsHtml = `
+    <div class="plugin-setting-row" data-plugin-setting-key="relay"><input aria-label="Endpoint" /></div>
+    <div class="plugin-setting-row" data-plugin-setting-key="backup"><input aria-label="Endpoint" /></div>`;
+  beforeEach(() => {
     vi.useFakeTimers();
-    document.body.innerHTML = '<section id="plugin-configure"></section>';
     Element.prototype.scrollIntoView = vi.fn();
-    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => window.setTimeout(cb, 16));
-    vi.stubGlobal('cancelAnimationFrame', (n: number) => window.clearTimeout(n));
-    revealPluginSetting('Relay endpoint');
-    vi.advanceTimersByTime(100);
-    mount();
-    vi.advanceTimersByTime(40);
-    const rows = document.querySelectorAll('.plugin-setting-row');
-    expect(rows[0].classList.contains('settings-search-flash')).toBe(true);
-    expect(rows[1].classList.contains('settings-search-flash')).toBe(false);
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Relay endpoint');
-    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+  const rows = () => [...document.querySelectorAll<HTMLElement>('.plugin-setting-row')];
+
+  it('reveals an already-rendered row by descriptor key, even when labels are duplicated', () => {
+    document.body.innerHTML = `<section id="plugin-configure">${rowsHtml}</section>`;
+    revealPluginSetting('backup');
+    expect(rows()[1].classList.contains('settings-search-flash')).toBe(true);
+    expect(rows()[0].classList.contains('settings-search-flash')).toBe(false);
+    expect(document.activeElement).toBe(rows()[1].querySelector('input'));
   });
 
-  it('stops retrying after 2 s and on cancel', () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => window.setTimeout(cb, 16));
-    vi.stubGlobal('cancelAnimationFrame', (n: number) => window.clearTimeout(n));
+  it('waits for a slow settings load (well past the old 2 s budget) and reveals once the row mounts', async () => {
     document.body.innerHTML = '<section id="plugin-configure"></section>';
-    const cancel = revealPluginSetting('Missing');
-    vi.advanceTimersByTime(2_500);
+    revealPluginSetting('relay');
+    vi.advanceTimersByTime(8_000);
+    document.querySelector('#plugin-configure')!.innerHTML = rowsHtml;
+    await Promise.resolve(); // MutationObserver callbacks are microtasks
+    expect(rows()[0].classList.contains('settings-search-flash')).toBe(true);
+    expect(vi.getTimerCount()).toBe(1); // only the flash-removal timer is left
+  });
+
+  it('gives up at the cap and on cancel, leaving no timers or observers behind', async () => {
+    document.body.innerHTML = '<section id="plugin-configure"></section>';
+    revealPluginSetting('missing');
+    vi.advanceTimersByTime(PLUGIN_SETTING_WAIT_MS);
     expect(vi.getTimerCount()).toBe(0);
-    const again = revealPluginSetting('Missing');
-    again();
+    const cancel = revealPluginSetting('relay');
     cancel();
     expect(vi.getTimerCount()).toBe(0);
-    vi.unstubAllGlobals();
+    document.querySelector('#plugin-configure')!.innerHTML = rowsHtml; // arrives after cancel
+    await Promise.resolve();
+    expect(rows().some((r) => r.classList.contains('settings-search-flash'))).toBe(false);
+  });
+});
+
+describe('ExtensionsHub revealPluginSetting observer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  it('keeps waiting through mutations that do not contain the row yet, then reveals it', async () => {
+    document.body.innerHTML = '<section id="plugin-configure"></section>';
+    revealPluginSetting('relay');
+    const section = document.querySelector('#plugin-configure')!;
+    section.innerHTML = '<div data-plugin-setting-key="other"></div>';
+    await Promise.resolve();
+    expect(document.querySelector('.settings-search-flash')).toBeNull();
+    expect(vi.getTimerCount()).toBe(1); // cap timer still armed: observer is still waiting
+    section.insertAdjacentHTML('beforeend', '<div data-plugin-setting-key="relay"><input /></div>');
+    await Promise.resolve();
+    expect(document.querySelector('[data-plugin-setting-key="relay"]')!.classList.contains('settings-search-flash')).toBe(true);
+  });
+
+  it('stops observing once the cap elapses, so a late row is never revealed', async () => {
+    document.body.innerHTML = '<section id="plugin-configure"></section>';
+    revealPluginSetting('relay');
+    vi.advanceTimersByTime(PLUGIN_SETTING_WAIT_MS);
+    document.querySelector('#plugin-configure')!.innerHTML = '<div data-plugin-setting-key="relay"></div>';
+    await Promise.resolve();
+    expect(document.querySelector('.settings-search-flash')).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('treats a second stop (cancel after the cap) as a no-op', () => {
+    document.body.innerHTML = '<section id="plugin-configure"></section>';
+    const cancel = revealPluginSetting('relay');
+    vi.advanceTimersByTime(PLUGIN_SETTING_WAIT_MS);
+    expect(() => cancel()).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

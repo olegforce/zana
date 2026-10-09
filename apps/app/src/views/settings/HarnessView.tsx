@@ -793,7 +793,10 @@ export function HarnessView({
     let cancelled = false;
     descriptors()
       .then((next) => { if (!cancelled) { setDescriptors(next); rememberHarnessDescriptors(next); } })
-      .catch(() => { if (!cancelled) setDescriptors([]); });
+      .catch((error) => {
+        console.warn('[settings] loading harness descriptors failed; launch-default rows are hidden', error);
+        if (!cancelled) setDescriptors([]);
+      });
     return () => { cancelled = true; };
   }, []);
 

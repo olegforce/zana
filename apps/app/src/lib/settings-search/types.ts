@@ -37,7 +37,7 @@ export interface SettingsSearchEntry {
 export interface SettingsValueSnapshot {
   config: AppConfig;
   project?: { id: string; settings: ProjectSettings };
-  machines?: readonly { name: string; host?: string }[];
+  machines?: readonly { id?: string; name: string; host?: string }[];
 }
 
 /**
@@ -45,6 +45,11 @@ export interface SettingsValueSnapshot {
  * optional `revision` returns the identities of the data the provider reads
  * (cheap, no side effects); the corpus rebuilds when any of them changes, so a
  * provider stays fresh without subscribing to anything.
+ *
+ * Contract: return STABLE references (store arrays, snapshot objects, cached
+ * maps) or primitives. Elements are compared with `Object.is`, so building a
+ * fresh object or array inside `revision()` would defeat the memoisation and
+ * rebuild the corpus on every search.
  */
 export interface SettingsSearchProvider {
   (s: SettingsValueSnapshot): readonly SettingsSearchEntry[];

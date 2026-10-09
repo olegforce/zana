@@ -1,4 +1,5 @@
 import { SETTINGS_GROUPS, SETTINGS_SECTIONS, SETTINGS_SUBSECTIONS } from '@/views/settings/settings-navigation';
+import { warnSettingsSearchOnce } from './diagnostics';
 import { mayIndexValue } from './secrets';
 import { getSettingsSearchProviders, getSettingsSearchSourcesVersion, getStaticEntries } from './registry';
 import type { SettingsSearchEntry, SettingsSearchProvider, SettingsValueSnapshot } from './types';
@@ -137,7 +138,8 @@ function withValue(ce: CorpusEntry, snapshot: SettingsValueSnapshot): CorpusEntr
   let raw: string | readonly string[] | undefined;
   try {
     raw = ce.entry.value?.(snapshot);
-  } catch {
+  } catch (error) {
+    warnSettingsSearchOnce(`value:${ce.entry.id}`, `value accessor for "${ce.entry.id}" failed; indexing it without its value`, error);
     return ce;
   }
   if (raw === undefined || raw === null) return ce;
@@ -182,10 +184,11 @@ let last:
 const NO_REVISION: readonly unknown[] = [];
 
 function readRevisions(providers: readonly SettingsSearchProvider[]): Array<readonly unknown[]> {
-  return providers.map((provider) => {
+  return providers.map((provider, index) => {
     try {
       return provider.revision?.() ?? NO_REVISION;
-    } catch {
+    } catch (error) {
+      warnSettingsSearchOnce(`revision:${provider.name || index}`, `provider "${provider.name || index}" revision() failed`, error);
       return NO_REVISION;
     }
   });
@@ -230,8 +233,10 @@ export function buildCorpus(
     let provided: readonly SettingsSearchEntry[] = [];
     try {
       provided = provider(snapshot);
-    } catch {
-      continue; // one broken source never blanks the rest
+    } catch (error) {
+      // One broken source never blanks the rest.
+      warnSettingsSearchOnce(`provider:${provider.name || providers.indexOf(provider)}`, `provider "${provider.name || providers.indexOf(provider)}" failed; skipping its results`, error);
+      continue;
     }
     for (const entry of provided) {
       if (seen.has(entry.id)) continue;
