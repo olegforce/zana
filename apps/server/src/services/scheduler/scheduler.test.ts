@@ -1193,3 +1193,53 @@ describe('SchedulerManager — cron cadence', () => {
     expect(live.status.nextRunAt).toBe('2027-01-01T00:00:00.000Z');
   });
 });
+
+describe('SchedulerManager poll reloads emit only on content change', () => {
+  async function polled() {
+    const project: Project = { id: 'proj-1', name: 'P', path: '/tmp/proj', createdAt: 0, lastActiveAt: 0 };
+    const records = new Map<string, any>();
+    const persistence = {
+      load: vi.fn(async () => structuredClone([...records.values()])),
+      save: vi.fn(async (value: any) => { records.set(value.id, structuredClone(value)); }),
+      remove: vi.fn(async (value: any) => { records.delete(value.id); }),
+      localProjects: vi.fn(() => [project])
+    };
+    const manager = new SchedulerManager();
+    manager.setDeps({
+      persistence, ptys: Object.assign(new FakePtyManager(), { reapDeadSessions: vi.fn() }) as unknown as PtyManager,
+      launchTerminal: vi.fn() as never,
+      store: { listProjects: () => [project], getConfig: () => ({}) } as never
+    } as never);
+    const changed = vi.fn(); manager.on('changed', changed);
+    return { manager, records, changed, project };
+  }
+
+  it('emits once for two reloads of unchanged persistence', async () => {
+    const { manager, changed, project } = await polled();
+    await manager.loadAll([project]); await manager.loadAll([project]);
+    expect(changed).toHaveBeenCalledTimes(1);
+    manager.stopAll();
+  });
+
+  it('emits when persistence changed externally', async () => {
+    const { manager, records, changed, project } = await polled();
+    const task = await manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });
+    changed.mockClear();
+    await manager.loadAll([project]); expect(changed).not.toHaveBeenCalled();
+    records.set(task.id, { ...structuredClone(records.get(task.id)), name: 'renamed' });
+    await manager.loadAll([project]);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(manager.list()[0].name).toBe('renamed');
+    manager.stopAll();
+  });
+
+  it('does not re-emit after a mutation when the poll sees identical content', async () => {
+    const { manager, changed, project } = await polled();
+    await manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });
+    const afterCreate = changed.mock.calls.length;
+    expect(afterCreate).toBeGreaterThan(0);
+    await manager.loadAll([project]);
+    expect(changed).toHaveBeenCalledTimes(afterCreate);
+    manager.stopAll();
+  });
+});
