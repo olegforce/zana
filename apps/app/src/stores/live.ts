@@ -1343,6 +1343,17 @@ export async function refreshInboxSummary(
   }
 }
 
+/** Trailing retries for auto refreshes deferred by the throttle: without one, a change that lands inside the
+ * window is never summarised unless the inbox changes again. One timer per scope; the latest entries win. */
+const deferredAutoRefresh = new Map<string, ReturnType<typeof setTimeout>>();
+function deferAutoRefresh(key: string, waitMs: number, run: () => void) {
+  clearTimeout(deferredAutoRefresh.get(key));
+  deferredAutoRefresh.set(key, setTimeout(() => { deferredAutoRefresh.delete(key); run(); }, waitMs));
+}
+function cancelDeferredAutoRefresh(key: string) {
+  clearTimeout(deferredAutoRefresh.get(key)); deferredAutoRefresh.delete(key);
+}
+
 /**
  * View-driven, throttled auto-refresh of a scope's AI summary. Called by the
  * card when the Inbox is open: regenerates only when (a) not already loading,
@@ -1356,11 +1367,16 @@ export function maybeRefreshInboxSummary(projectId: string | null, entries: Inbo
   const item = useInboxSummary.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) return; // inbox hasn't changed since last (success OR soft-fail)
+  const timerKey = `summary:${scopeKey}`;
+  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) { cancelDeferredAutoRefresh(timerKey); return; } // inbox hasn't changed since last (success OR soft-fail)
   // Throttle automatic regens since the latest attempt — a manual refresh
   // bypasses this by calling refreshInboxSummary directly.
   const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
-  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) return;
+  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) {
+    deferAutoRefresh(timerKey, INBOX_SUMMARY_AUTO_MIN_MS - (Date.now() - last), () => maybeRefreshInboxSummary(projectId, entries));
+    return;
+  }
+  cancelDeferredAutoRefresh(timerKey);
   void refreshInboxSummary(projectId, signature);
 }
 
@@ -1452,9 +1468,14 @@ export function maybeRefreshFeedNoise(
   const item = useFeedNoise.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) return;
+  const timerKey = `noise:${scopeKey}`;
+  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) { cancelDeferredAutoRefresh(timerKey); return; }
   const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
-  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) return;
+  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) {
+    deferAutoRefresh(timerKey, INBOX_SUMMARY_AUTO_MIN_MS - (Date.now() - last), () => maybeRefreshFeedNoise(projectId, entries, enabled));
+    return;
+  }
+  cancelDeferredAutoRefresh(timerKey);
   void refreshFeedNoise(projectId, signature);
 }
 

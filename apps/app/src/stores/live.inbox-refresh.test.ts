@@ -91,3 +91,32 @@ describe('feed noise auto refresh', () => {
     await refreshFeedNoise('p', '5'); expect(useFeedNoise.getState().byScope.p!.routineIds).toBe(empty);
   });
 });
+
+describe('throttled auto refresh retries after the window', () => {
+  beforeEach(() => { vi.useRealTimers(); vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
+  const changed = [{ id: 'b', ts: 2, occurrences: 1 }] as never[];
+  it('summarises a change that landed inside the throttle window once it elapses, without further changes', async () => {
+    summarize.mockResolvedValue({ ok: true, digest: { headline: 'h' } });
+    await refreshInboxSummary('p', 'old');
+    maybeRefreshInboxSummary('p', changed); expect(summarize).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS + 1);
+    expect(summarize).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS * 2); expect(summarize).toHaveBeenCalledTimes(2);
+  });
+  it('cancels the deferred retry when the inbox returns to the already-summarised content', async () => {
+    summarize.mockResolvedValue({ ok: true, digest: { headline: 'h' } });
+    maybeRefreshInboxSummary('p', entries); await vi.advanceTimersByTimeAsync(0);
+    expect(summarize).toHaveBeenCalledOnce();
+    maybeRefreshInboxSummary('p', changed);
+    maybeRefreshInboxSummary('p', entries);
+    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS * 2); expect(summarize).toHaveBeenCalledOnce();
+  });
+  it('retries the feed-noise classifier too, and does nothing when disabled', async () => {
+    classifyNoise.mockResolvedValue({ routineIds: [] });
+    await refreshFeedNoise('p', 'old');
+    maybeRefreshFeedNoise('p', changed, true); expect(classifyNoise).toHaveBeenCalledOnce();
+    maybeRefreshFeedNoise('q', changed, false);
+    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS + 1);
+    expect(classifyNoise).toHaveBeenCalledTimes(2);
+  });
+});
