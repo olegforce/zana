@@ -8,7 +8,10 @@ import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
 
 const FOLLOWUPS = 330;
 
-test.use({ e2e: true, initialConfig: { tmuxScope: 'off' } });
+// Under Xvfb a hidden E2E window never paints, so xterm 6 never applies wheel
+// scrolls or moves its scrollbar slider (both run on animation frames). Show the
+// window on Linux; macOS paints hidden windows, so local runs stay headless.
+test.use({ e2e: true, initialConfig: { tmuxScope: 'off' }, launchEnv: process.platform === 'linux' ? { ZCC_E2E_VISIBLE: '1' } : {} });
 
 test('a large follow-up list neither resets the product link nor replays or moves an open terminal', async ({ app }, testInfo) => {
   test.setTimeout(240_000);
