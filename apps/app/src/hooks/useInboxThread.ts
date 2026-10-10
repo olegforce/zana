@@ -2,20 +2,30 @@ import { useEffect, useState } from 'react';
 import type { InboxEntry } from '@zana-ai/zcc-domain/product';
 import { resolveInboxThread, type InboxThread } from '../lib/inbox-thread.js';
 
-/** Tiny insertion-ordered LRU for last-known-good Inbox results, so a remounted pane paints instantly. */
-export function createResultCache<V>(max = 20) {
-  const map = new Map<string, V>();
+/** Tiny insertion-ordered LRU for last-known-good Inbox results, so a remounted pane paints instantly.
+ * An optional weight bounds total retained size (Rule 5); a value heavier than `maxEntryWeight` is never kept. */
+export function createResultCache<V>(max = 20, budget?: { weigh: (value: V) => number; maxWeight: number; maxEntryWeight: number }) {
+  const map = new Map<string, { value: V; weight: number }>();
+  let total = 0;
+  const remove = (key: string) => {
+    const entry = map.get(key);
+    if (entry) { total -= entry.weight; map.delete(key); }
+  };
   return {
     get(key: string): V | undefined {
-      const value = map.get(key);
-      if (value !== undefined) { map.delete(key); map.set(key, value); }
-      return value;
+      const entry = map.get(key);
+      if (entry) { map.delete(key); map.set(key, entry); }
+      return entry?.value;
     },
     set(key: string, value: V) {
-      map.delete(key); map.set(key, value);
-      if (map.size > max) map.delete(map.keys().next().value as string);
+      remove(key);
+      const weight = budget ? budget.weigh(value) : 0;
+      if (budget && weight > budget.maxEntryWeight) return;
+      map.set(key, { value, weight }); total += weight;
+      while (map.size > max || (budget && total > budget.maxWeight)) remove(map.keys().next().value as string);
     },
-    clear() { map.clear(); }
+    delete(key: string) { remove(key); },
+    clear() { map.clear(); total = 0; }
   };
 }
 
@@ -43,7 +53,9 @@ export function useInboxThread(entry: InboxEntry, hasTerminal: boolean) {
     setState(cached ? { loading: false, thread: cached, error: null } : { loading: true, thread: null, error: null });
     void resolveInboxThread({ projectId, sessionId, origin: { threadId } }).then(
       (thread) => {
+        // A thread that no longer resolves must not keep flashing its old copy.
         if (thread) inboxThreadCache.set(cacheKey, thread);
+        else inboxThreadCache.delete(cacheKey);
         if (!cancelled) setState({ loading: false, thread, error: null });
       },
       (error: unknown) => {

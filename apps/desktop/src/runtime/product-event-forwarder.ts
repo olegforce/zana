@@ -1,6 +1,25 @@
 import { PRODUCT_EVENT_ARGS_MAX_CHARS, PRODUCT_EVENT_ARGS_MAX_COUNT, PRODUCT_EVENT_SNAPSHOT_CHANNELS } from '@zana-ai/zcc-contracts/runtime';
 
 const isSnapshotChannel = (channel: string) => PRODUCT_EVENT_SNAPSHOT_CHANNELS.has(channel);
+const TERMINAL_DATA = 'terminals:onData';
+
+/** Split one oversized PTY chunk into ordered slices the utility schema accepts.
+ * JSON escaping can grow control-heavy output up to 6x, so each slice is measured. */
+export function splitTerminalData(sessionId: string, data: string, maxChars = PRODUCT_EVENT_ARGS_MAX_CHARS): string[] {
+  const slices: string[] = [];
+  const fits = (start: number, length: number) => JSON.stringify([sessionId, data.slice(start, start + length)]).length <= maxChars;
+  for (let start = 0; start < data.length;) {
+    // An eighth of the cap always fits: JSON escaping grows a character at most 6x.
+    let length = Math.min(Math.max(1, Math.floor(maxChars / 8)), data.length - start);
+    while (length > 1 && !fits(start, length)) length = Math.floor(length / 2);
+    // Never split a surrogate pair across two slices.
+    const last = data.charCodeAt(start + length - 1);
+    if (start + length < data.length && length > 1 && last >= 0xd800 && last <= 0xdbff) length -= 1;
+    slices.push(data.slice(start, start + length));
+    start += length;
+  }
+  return slices;
+}
 
 /** Bound the main → product utility link before IPC serialization can accumulate.
  * A dropped notification is repaired by a snapshot read, never command replay. */
@@ -28,28 +47,36 @@ export function createProductEventForwarder(
       }
     } finally { running = false; }
   }
+  // Serialized once per event; the envelope adds the channel and fixed JSON keys.
+  const envelopeBytes = (channel: string, json: string) => Buffer.byteLength(json) + Buffer.byteLength(channel) + 24;
+  function publish(channel: string, args: unknown[]): void {
+    if (stopped) return;
+    let size: number, argsLength: number;
+    try { const json = JSON.stringify(args); argsLength = json.length; size = envelopeBytes(channel, json); }
+    catch { argsLength = 0; size = limits.bytes + 1; }
+    // An event the utility's schema would refuse must not stall the link: send a channel-scoped
+    // invalidation so readers re-fetch the snapshot. A PTY chunk is split into ordered slices;
+    // other streams cannot be re-read, so they still reset.
+    const oversized = args.length > PRODUCT_EVENT_ARGS_MAX_COUNT || argsLength > PRODUCT_EVENT_ARGS_MAX_CHARS;
+    if (oversized && channel === TERMINAL_DATA && args.length === 2 && typeof args[0] === 'string' && typeof args[1] === 'string') {
+      for (const slice of splitTerminalData(args[0], args[1])) publish(channel, [args[0], slice]);
+      return;
+    }
+    const invalidation = oversized && isSnapshotChannel(channel);
+    if (invalidation) { args = []; size = envelopeBytes(channel, '[]'); }
+    const coalesce = isSnapshotChannel(channel) ? queue.findIndex(entry => entry.channel === channel) : -1;
+    const pending = queue.findIndex(entry => entry.channel === channel && entry.invalidation);
+    if (reset) { /* a pending global reset supersedes everything */ }
+    else if (invalidation && pending >= 0) { /* one invalidation per channel */ }
+    else if (coalesce >= 0 && bytes - queue[coalesce]!.bytes + size <= limits.bytes) {
+      bytes += size - queue[coalesce]!.bytes; queue[coalesce] = { channel, args, bytes: size, invalidation };
+    } else if ((oversized && !invalidation) || size > limits.bytes || bytes + size > limits.bytes || queue.length >= limits.messages) {
+      queue.length = 0; bytes = 0; reset = true;
+    } else { queue.push({ channel, args, bytes: size, invalidation }); bytes += size; }
+    void drain();
+  }
   return {
-    publish(channel: string, args: unknown[]) {
-      if (stopped) return;
-      let size: number, argsLength: number;
-      try { argsLength = JSON.stringify(args).length; size = Buffer.byteLength(JSON.stringify({ channel, args })); }
-      catch { argsLength = 0; size = limits.bytes + 1; }
-      // An event the utility's schema would refuse must not stall the link: send a channel-scoped
-      // invalidation so readers re-fetch the snapshot. Streams cannot be re-read, so they still reset.
-      const oversized = args.length > PRODUCT_EVENT_ARGS_MAX_COUNT || argsLength > PRODUCT_EVENT_ARGS_MAX_CHARS;
-      const invalidation = oversized && isSnapshotChannel(channel);
-      if (invalidation) { args = []; size = Buffer.byteLength(JSON.stringify({ channel, args })); }
-      const coalesce = isSnapshotChannel(channel) ? queue.findIndex(entry => entry.channel === channel) : -1;
-      const pending = queue.findIndex(entry => entry.channel === channel && entry.invalidation);
-      if (reset) { /* a pending global reset supersedes everything */ }
-      else if (invalidation && pending >= 0) { /* one invalidation per channel */ }
-      else if (coalesce >= 0 && bytes - queue[coalesce]!.bytes + size <= limits.bytes) {
-        bytes += size - queue[coalesce]!.bytes; queue[coalesce] = { channel, args, bytes: size, invalidation };
-      } else if ((oversized && !invalidation) || size > limits.bytes || bytes + size > limits.bytes || queue.length >= limits.messages) {
-        queue.length = 0; bytes = 0; reset = true;
-      } else { queue.push({ channel, args, bytes: size, invalidation }); bytes += size; }
-      void drain();
-    },
+    publish,
     dispose() {
       stopped = true; queue.length = 0; bytes = 0; reset = false;
       if (retry) clearTimeout(retry);

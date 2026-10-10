@@ -85,38 +85,48 @@ describe('feed noise auto refresh', () => {
     classifyNoise.mockResolvedValue({ routineIds: ['a'] });
     await refreshFeedNoise('p', '3');
     expect(useFeedNoise.getState().byScope.p!.routineIds).not.toBe(first);
+    // A failed call (thrown or reported) keeps the previous overlay instead of regrouping.
+    const kept = useFeedNoise.getState().byScope.p!.routineIds;
     classifyNoise.mockRejectedValue(new Error('x'));
-    await refreshFeedNoise('p', '4'); const empty = useFeedNoise.getState().byScope.p!.routineIds;
-    expect(empty.size).toBe(0);
-    await refreshFeedNoise('p', '5'); expect(useFeedNoise.getState().byScope.p!.routineIds).toBe(empty);
+    await refreshFeedNoise('p', '4');
+    expect(useFeedNoise.getState().byScope.p).toMatchObject({ routineIds: kept, error: 'failed' });
+    classifyNoise.mockResolvedValue({ routineIds: [], candidateCount: 1, failed: true });
+    await refreshFeedNoise('p', '5');
+    expect(useFeedNoise.getState().byScope.p).toMatchObject({ routineIds: kept, error: 'failed' });
   });
 });
 
-describe('throttled auto refresh retries after the window', () => {
+describe('auto refresh never runs in the background', () => {
   beforeEach(() => { vi.useRealTimers(); vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
   const changed = [{ id: 'b', ts: 2, occurrences: 1 }] as never[];
-  it('summarises a change that landed inside the throttle window once it elapses, without further changes', async () => {
+  it('leaves a change inside the throttle window to the next view instead of a timer', async () => {
     summarize.mockResolvedValue({ ok: true, digest: { headline: 'h' } });
     await refreshInboxSummary('p', 'old');
-    maybeRefreshInboxSummary('p', changed); expect(summarize).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS + 1);
-    expect(summarize).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS * 2); expect(summarize).toHaveBeenCalledTimes(2);
-  });
-  it('cancels the deferred retry when the inbox returns to the already-summarised content', async () => {
-    summarize.mockResolvedValue({ ok: true, digest: { headline: 'h' } });
-    maybeRefreshInboxSummary('p', entries); await vi.advanceTimersByTimeAsync(0);
-    expect(summarize).toHaveBeenCalledOnce();
     maybeRefreshInboxSummary('p', changed);
-    maybeRefreshInboxSummary('p', entries);
-    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS * 2); expect(summarize).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS * 2);
+    expect(summarize).toHaveBeenCalledOnce();
+    maybeRefreshInboxSummary('p', changed); expect(summarize).toHaveBeenCalledTimes(2);
   });
-  it('retries the feed-noise classifier too, and does nothing when disabled', async () => {
-    classifyNoise.mockResolvedValue({ routineIds: [] });
-    await refreshFeedNoise('p', 'old');
-    maybeRefreshFeedNoise('p', changed, true); expect(classifyNoise).toHaveBeenCalledOnce();
+  it('retries a failed summary of unchanged content after the floor, but never an empty one', async () => {
+    summarize.mockResolvedValueOnce({ ok: false, reason: 'failed' });
+    maybeRefreshInboxSummary('p', entries); await vi.advanceTimersByTimeAsync(0);
+    maybeRefreshInboxSummary('p', entries); expect(summarize).toHaveBeenCalledOnce();
+    vi.setSystemTime(1_000_000 + INBOX_SUMMARY_AUTO_MIN_MS);
+    summarize.mockResolvedValueOnce({ ok: false, reason: 'empty' });
+    maybeRefreshInboxSummary('p', entries); await vi.advanceTimersByTimeAsync(0);
+    expect(summarize).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(1_000_000 + INBOX_SUMMARY_AUTO_MIN_MS * 3);
+    maybeRefreshInboxSummary('p', entries); expect(summarize).toHaveBeenCalledTimes(2);
+  });
+  it('retries a failed feed-noise call after the floor, and does nothing when disabled', async () => {
+    classifyNoise.mockResolvedValueOnce({ routineIds: [], candidateCount: 1, failed: true });
+    maybeRefreshFeedNoise('p', entries, true); await vi.advanceTimersByTimeAsync(0);
+    maybeRefreshFeedNoise('p', entries, true); expect(classifyNoise).toHaveBeenCalledOnce();
     maybeRefreshFeedNoise('q', changed, false);
-    await vi.advanceTimersByTimeAsync(INBOX_SUMMARY_AUTO_MIN_MS + 1);
+    vi.setSystemTime(1_000_000 + INBOX_SUMMARY_AUTO_MIN_MS);
+    classifyNoise.mockResolvedValueOnce({ routineIds: ['a'], candidateCount: 1 });
+    maybeRefreshFeedNoise('p', entries, true); await vi.advanceTimersByTimeAsync(0);
     expect(classifyNoise).toHaveBeenCalledTimes(2);
+    expect([...useFeedNoise.getState().byScope.p!.routineIds]).toEqual(['a']);
   });
 });

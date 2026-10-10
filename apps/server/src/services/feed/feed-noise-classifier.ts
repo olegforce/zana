@@ -39,12 +39,15 @@ import {
 export const FEED_NOISE_MAX_ENTRIES = 60;
 
 /** Result of a classify call. Always an id set (empty on any failure / nothing
- *  routine); the caller treats "no verdict" and "nothing routine" identically. */
+ *  routine); `failed` marks a failed model call so the renderer can keep its
+ *  previous overlay instead of regrouping. */
 export interface FeedNoiseResult {
   /** Entry ids to demote into the folded `routine` section. Subset of the input. */
   routineIds: string[];
   /** How many entries were considered (candidates after the deterministic gate). */
   candidateCount: number;
+  /** Set when the classify call itself failed (not "nothing is routine"). */
+  failed?: true;
 }
 
 export interface FeedNoiseDeps {
@@ -153,7 +156,7 @@ export class FeedNoiseClassifier {
 
     const result = await this.deps.runClassify(text, `feed-noise:${projectId ?? 'all'}`);
     if (!result.ok || !result.text.trim()) {
-      return { routineIds: [], candidateCount: candidates.length };
+      return { routineIds: [], candidateCount: candidates.length, failed: true };
     }
     const validIds = new Set(candidates.map((c) => c.id));
     return { routineIds: parseRoutineIds(result.text, validIds), candidateCount: candidates.length };

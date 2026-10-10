@@ -105,7 +105,7 @@ describe('terminal product reset replay', () => {
     await reconnect();
     expect(h.reset).toHaveBeenCalledOnce();
     expect(h.scrollToLine).toHaveBeenCalledWith(40); expect(h.scrollToBottom).not.toHaveBeenCalled();
-    expect(hosts.every(el => el.style.visibility !== 'hidden')).toBe(true);
+    expect(hosts.every(el => el.style.opacity !== '0')).toBe(true);
   });
 
   it('follows the bottom after a redraw when the user was at the bottom', async () => {
@@ -128,7 +128,7 @@ describe('terminal product reset replay', () => {
   it('reveals the host after the 1000 ms cap even if the rewrite never lands', async () => {
     const view = await mount();
     h.snapshot.mockResolvedValue(snap('xyz', 100));
-    const hidden = () => [...view.container.querySelectorAll('div')].some(el => (el as HTMLElement).style.visibility === 'hidden');
+    const hidden = () => [...view.container.querySelectorAll('div')].some(el => (el as HTMLElement).style.opacity === '0');
     h.stall = true; // the parser never completes, so follow() never sees an idle queue
     await act(async () => { h.reconnect!(); await vi.advanceTimersByTimeAsync(0); });
     await frames();

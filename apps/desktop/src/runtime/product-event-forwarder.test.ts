@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { PRODUCT_EVENT_ARGS_MAX_CHARS, PRODUCT_EVENT_ARGS_MAX_COUNT } from '@zana-ai/zcc-contracts/runtime';
-import { createProductEventForwarder } from './product-event-forwarder.js';
+import { createProductEventForwarder, splitTerminalData } from './product-event-forwarder.js';
 afterEach(() => vi.useRealTimers());
 it('keeps one IPC request in flight and preserves notification order', async () => {
   let resolve!: () => void;
@@ -57,15 +57,43 @@ it('turns an oversized snapshot into one invalidation without a reset and keeps 
   expect(send.mock.calls).toEqual([['first', []], ['followups:onChanged', []], ['terminals:onData', ['a']], ['terminals:onData', ['b']], ['goals:onChanged', []]]);
   forwarder.dispose();
 });
-it('accepts a snapshot at exactly the cap and falls back to reset for an oversized stream', async () => {
+it('accepts a snapshot at exactly the cap and falls back to reset for an oversized unsplittable stream', async () => {
   const { send, release } = blocked();
   const forwarder = createProductEventForwarder(send);
   forwarder.publish('first', []);
   const exact = ['x'.repeat(PRODUCT_EVENT_ARGS_MAX_CHARS - 4)];
   forwarder.publish('config:onChanged', exact);
-  forwarder.publish('terminals:onData', ['y'.repeat(PRODUCT_EVENT_ARGS_MAX_CHARS)]);
+  forwarder.publish('terminals:onCliPlan', ['y'.repeat(PRODUCT_EVENT_ARGS_MAX_CHARS)]);
   release(); await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
   expect(send.mock.calls[1]).toEqual(['product:reset', []]); forwarder.dispose();
+});
+it('splits an oversized PTY chunk into ordered slices instead of resetting', async () => {
+  const { send, release } = blocked();
+  const forwarder = createProductEventForwarder(send);
+  forwarder.publish('first', []);
+  // Control-heavy output: every ESC becomes a six-character JSON escape.
+  const data = '\x1b[31mred\x1b[0m'.repeat(40_000);
+  forwarder.publish('terminals:onData', ['session-1', data]);
+  forwarder.publish('terminals:onData', ['session-1', 'tail']);
+  release();
+  await vi.waitFor(() => expect(send.mock.calls.at(-1)).toEqual(['terminals:onData', ['session-1', 'tail']]));
+  const slices = send.mock.calls.slice(1, -1);
+  expect(slices.length).toBeGreaterThan(1);
+  expect(send.mock.calls.some(([channel]) => channel === 'product:reset')).toBe(false);
+  for (const [channel, args] of slices) {
+    expect(channel).toBe('terminals:onData');
+    expect(JSON.stringify(args).length).toBeLessThanOrEqual(PRODUCT_EVENT_ARGS_MAX_CHARS);
+  }
+  expect(slices.map(([, args]) => (args as string[])[1]).join('')).toBe(data);
+  forwarder.dispose();
+});
+it('splitTerminalData never splits a surrogate pair and always makes progress', () => {
+  const emoji = '😀'.repeat(50);
+  const slices = splitTerminalData('s', emoji, 40);
+  expect(slices.join('')).toBe(emoji);
+  for (const slice of slices) expect(slice.length % 2).toBe(0);
+  expect(splitTerminalData('s', '"'.repeat(10), 8).join('')).toBe('"'.repeat(10));
+  expect(splitTerminalData('s', '')).toEqual([]);
 });
 it('coalesces queued snapshots in place and preserves the order of other channels', async () => {
   const { send, release } = blocked();

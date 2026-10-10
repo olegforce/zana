@@ -319,10 +319,10 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
     }, visibleRef.current);
     writesRef.current = writes;
     let hideTimer: ReturnType<typeof setTimeout> | undefined;
-    const showHost = () => { clearTimeout(hideTimer); if (ref.current) ref.current.style.visibility = ''; };
+    const showHost = () => { clearTimeout(hideTimer); if (ref.current) ref.current.style.opacity = ''; };
     const hideHost = () => {
       clearTimeout(hideTimer);
-      if (ref.current) ref.current.style.visibility = 'hidden';
+      if (ref.current) ref.current.style.opacity = '0';
       hideTimer = setTimeout(showHost, 1000);
     };
     const writeFollowing = (data: string) => writes.write(data);
@@ -333,7 +333,8 @@ function TerminalViewImpl({ session, area, scrollbackLimit = TERMINAL_SCROLLBACK
         return { following: buf.viewportY >= buf.baseY, distanceFromBottom: Math.max(0, buf.baseY - buf.viewportY) };
       },
       // A redraw hides the host until the rewrite lands (capped), so the user
-      // never watches the old output fast-forward.
+      // never watches the old output fast-forward. Opacity, not visibility, so
+      // the focused xterm textarea keeps focus and typing still lands.
       reset: () => writes.reset(() => { hideHost(); term.reset(); }), write: writeFollowing,
       follow: (previous) => {
         if (disposedRef.current) return;

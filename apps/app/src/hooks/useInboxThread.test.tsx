@@ -64,3 +64,32 @@ it('never caches a failed lookup and evicts the least recently used entry beyond
   cache.get('k0'); cache.set('k20', 20);
   expect(cache.get('k1')).toBeUndefined(); expect(cache.get('k0')).toBe(0); expect(cache.get('k20')).toBe(20);
 });
+
+it('evicts a cached thread once it no longer resolves', async () => {
+  inboxThreadCache.clear();
+  resolve.mockResolvedValueOnce({ id: 'gone', title: 'Old', archived: false });
+  const first = renderHook(() => useInboxThread(entry('gone'), false));
+  await waitFor(() => expect(first.result.current.thread?.title).toBe('Old'));
+  first.unmount();
+  resolve.mockResolvedValueOnce(null);
+  const second = renderHook(() => useInboxThread(entry('gone'), false));
+  await waitFor(() => expect(second.result.current.thread).toBeNull());
+  second.unmount();
+  resolve.mockReturnValueOnce(new Promise(() => {}));
+  const third = renderHook(() => useInboxThread(entry('gone'), false));
+  expect(third.result.current).toMatchObject({ loading: true, thread: null });
+});
+
+it('bounds a weighted cache by total weight and skips oversized values', () => {
+  const cache = createResultCache<string>(20, { weigh: (value) => value.length, maxWeight: 10, maxEntryWeight: 6 });
+  cache.set('a', 'xxxx'); cache.set('b', 'yyyy');
+  cache.set('huge', 'z'.repeat(7));
+  expect(cache.get('huge')).toBeUndefined();
+  cache.set('c', 'wwww');
+  expect(cache.get('a')).toBeUndefined();
+  expect(cache.get('b')).toBe('yyyy');
+  expect(cache.get('c')).toBe('wwww');
+  cache.set('b', 'v'); cache.set('d', 'uuuuu');
+  expect([cache.get('b'), cache.get('c'), cache.get('d')]).toEqual(['v', 'wwww', 'uuuuu']);
+  cache.delete('c'); expect(cache.get('c')).toBeUndefined();
+});

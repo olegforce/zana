@@ -1343,16 +1343,20 @@ export async function refreshInboxSummary(
   }
 }
 
-/** Trailing retries for auto refreshes deferred by the throttle: without one, a change that lands inside the
- * window is never summarised unless the inbox changes again. One timer per scope; the latest entries win. */
-const deferredAutoRefresh = new Map<string, ReturnType<typeof setTimeout>>();
-function deferAutoRefresh(key: string, waitMs: number, run: () => void) {
-  clearTimeout(deferredAutoRefresh.get(key));
-  deferredAutoRefresh.set(key, setTimeout(() => { deferredAutoRefresh.delete(key); run(); }, waitMs));
+/** Whether a cached item already answers this content signature. A soft failure
+ * counts as an answer, except that a 'failed' attempt goes stale after the floor
+ * so a transient model error is retried on a later view. */
+function answersSignature(
+  item: { signature: string; generatedAt: number | null; attemptedAt: number | null; error?: string | null } | undefined,
+  signature: string
+): boolean {
+  if (!item || item.signature !== signature || (item.generatedAt === null && item.attemptedAt === null)) return false;
+  return !(item.error === 'failed' && item.attemptedAt !== null && Date.now() - item.attemptedAt >= INBOX_SUMMARY_AUTO_MIN_MS);
 }
-function cancelDeferredAutoRefresh(key: string) {
-  clearTimeout(deferredAutoRefresh.get(key)); deferredAutoRefresh.delete(key);
-}
+const withinAutoFloor = (item: { generatedAt: number | null; attemptedAt: number | null } | undefined) => {
+  const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
+  return last > 0 && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS;
+};
 
 /**
  * View-driven, throttled auto-refresh of a scope's AI summary. Called by the
@@ -1367,16 +1371,11 @@ export function maybeRefreshInboxSummary(projectId: string | null, entries: Inbo
   const item = useInboxSummary.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  const timerKey = `summary:${scopeKey}`;
-  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) { cancelDeferredAutoRefresh(timerKey); return; } // inbox hasn't changed since last (success OR soft-fail)
+  if (answersSignature(item, signature)) return; // inbox hasn't changed since last (success OR soft-fail)
   // Throttle automatic regens since the latest attempt — a manual refresh
-  // bypasses this by calling refreshInboxSummary directly.
-  const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
-  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) {
-    deferAutoRefresh(timerKey, INBOX_SUMMARY_AUTO_MIN_MS - (Date.now() - last), () => maybeRefreshInboxSummary(projectId, entries));
-    return;
-  }
-  cancelDeferredAutoRefresh(timerKey);
+  // bypasses this by calling refreshInboxSummary directly. No background timer:
+  // a change inside the window is picked up by the next view after it.
+  if (withinAutoFloor(item)) return;
   void refreshInboxSummary(projectId, signature);
 }
 
@@ -1396,6 +1395,8 @@ export interface FeedNoiseCacheItem {
   /** Epoch ms of the last completed attempt, success or failure. */
   attemptedAt: number | null;
   loading: boolean;
+  /** 'failed' when the last classify call failed; retried once the auto floor has passed. */
+  error?: 'failed' | null;
   /** Inbox-content signature the cached verdict reflects. */
   signature: string;
 }
@@ -1431,8 +1432,12 @@ export async function refreshFeedNoise(
   const scopeKey = scopeKeyFor(projectId);
   const { setItem } = useFeedNoise.getState();
   setItem(scopeKey, { loading: true });
+  // A failed call keeps the previous overlay (empty at first, so everything stays
+  // inline) instead of regrouping the list; it is retried after the auto floor.
+  const keepPrevious = () => setItem(scopeKey, { attemptedAt: Date.now(), loading: false, error: 'failed', signature });
   try {
     const res = await product.inbox.classifyNoise(projectId);
+    if (res.failed) { keepPrevious(); return; }
     const previous = useFeedNoise.getState().byScope[scopeKey]?.routineIds;
     const next = new Set(res.routineIds);
     // Keep the previous Set instance when membership is unchanged so the list does not regroup.
@@ -1442,12 +1447,11 @@ export async function refreshFeedNoise(
       generatedAt: Date.now(),
       attemptedAt: Date.now(),
       loading: false,
+      error: null,
       signature
     });
   } catch {
-    // Degrade to "nothing demoted" — the overlay is advisory, never load-bearing.
-    const previous = useFeedNoise.getState().byScope[scopeKey]?.routineIds;
-    setItem(scopeKey, { routineIds: previous?.size === 0 ? previous : new Set(), attemptedAt: Date.now(), loading: false, signature });
+    keepPrevious();
   }
 }
 
@@ -1468,14 +1472,8 @@ export function maybeRefreshFeedNoise(
   const item = useFeedNoise.getState().byScope[scopeKey];
   if (item?.loading) return;
   const signature = inboxContentSignature(entries);
-  const timerKey = `noise:${scopeKey}`;
-  if (item && item.signature === signature && (item.generatedAt !== null || item.attemptedAt !== null)) { cancelDeferredAutoRefresh(timerKey); return; }
-  const last = Math.max(item?.generatedAt ?? 0, item?.attemptedAt ?? 0);
-  if (last && Date.now() - last < INBOX_SUMMARY_AUTO_MIN_MS) {
-    deferAutoRefresh(timerKey, INBOX_SUMMARY_AUTO_MIN_MS - (Date.now() - last), () => maybeRefreshFeedNoise(projectId, entries, enabled));
-    return;
-  }
-  cancelDeferredAutoRefresh(timerKey);
+  if (answersSignature(item, signature)) return;
+  if (withinAutoFloor(item)) return;
   void refreshFeedNoise(projectId, signature);
 }
 

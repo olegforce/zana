@@ -1122,7 +1122,11 @@ function DocExplorer({
  * note where it was actually found.
  */
 /** Last successful doc read per entry+path, so a remount paints content instead of a skeleton. */
-export const inboxDocCache = createResultCache<{ result: FsReadResult; resolvedPath: string; relocated: boolean }>(20);
+// Weighted by content length (UTF-16 units): about 16 MB in total, and no single
+// document or image data URL over about 512 KB is retained after unmount.
+export const inboxDocCache = createResultCache<{ result: FsReadResult; resolvedPath: string; relocated: boolean }>(20, {
+  weigh: (value) => value.result.content?.length ?? 0, maxWeight: 8 * 1024 * 1024, maxEntryWeight: 256 * 1024
+});
 
 function DocPreview({
   project,
@@ -1157,9 +1161,9 @@ function DocPreview({
     let foundPath = doc.path, foundRelocated = false;
     const commit = (r: FsReadResult) => {
       if (cancelled) return;
+      // A failure is never cached, and it evicts a stale good copy (e.g. a deleted doc).
       if (r.ok && cacheScope) inboxDocCache.set(cacheKey, { result: r, resolvedPath: foundPath, relocated: foundRelocated });
-      // A failed revalidation never replaces (or becomes) a cached good result.
-      if (!r.ok && cached) return;
+      else inboxDocCache.delete(cacheKey);
       if (cached) { setResolvedPath(foundPath); setRelocated(foundRelocated); }
       setResult(r);
     };

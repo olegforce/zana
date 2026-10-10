@@ -1,5 +1,5 @@
 // A large follow-up list used to overflow the main -> utility product-event link, which broadcast
-// product:reset every ~15 s and made every terminal re-read its backlog and jump to the bottom.
+// product:reset every ~30 s and made every terminal re-read its backlog and jump to the bottom.
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
@@ -98,11 +98,15 @@ test('a large follow-up list neither resets the product link nor replays or move
   expect((await events()).filter(e => e.kind === 'product:reset')).toEqual([]);
   expect(await backlogReads()).toBe(baselineReads);
 
-  // An external edit still reaches the web client, as an invalidation or a snapshot, and still no reset.
+  // An external edit still reaches the web client, and still no reset.
   const file = join(dir, readdirSync(dir).sort()[0]!);
   const record = JSON.parse(readFileSync(file, 'utf8'));
   writeFileSync(file, JSON.stringify({ ...record, title: 'Edited on disk '.padEnd(80, 'y'), updatedAt: new Date().toISOString() }, null, 2));
+  // 330 follow-ups exceed the event cap, so the change must arrive as a zero-arg invalidation.
   await expect.poll(async () => (await events()).some(e => e.kind === 'shared:followups:onChanged'), { timeout: 20_000 }).toBe(true);
+  const followupEvents = (await events()).filter(e => e.kind === 'shared:followups:onChanged');
+  expect(followupEvents.length).toBeGreaterThan(0);
+  expect(followupEvents.every(e => e.args === 0)).toBe(true);
   await page.waitForTimeout(3_000);
   expect((await events()).filter(e => e.kind === 'product:reset')).toEqual([]);
 

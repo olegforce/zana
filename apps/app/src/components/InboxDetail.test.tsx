@@ -117,7 +117,7 @@ describe('InboxDetail revisit cache', () => {
     expect(screen.queryByRole('status', { name: 'Loading document' })).toBeNull();
   });
 
-  it('keeps the cached document when revalidation fails and never caches a failure', async () => {
+  it('never caches a failure, and a failed revalidation evicts the stale copy', async () => {
     state.readFile.mockResolvedValueOnce({ ok: false, message: 'Missing' });
     const first = render(view());
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -130,7 +130,9 @@ describe('InboxDetail revisit cache', () => {
     second.unmount();
     state.readFile.mockResolvedValueOnce({ ok: false, message: 'Gone' });
     render(view());
+    // The cached copy paints first, then the deleted document's failure replaces it.
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(screen.getByText('Good')).toBeTruthy();
+    expect(screen.queryByText('Good')).toBeNull();
+    expect(inboxDocCache.get('one:report.md')).toBeUndefined();
   });
 });
