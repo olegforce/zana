@@ -536,8 +536,10 @@ export class SchedulerManager extends EventEmitter {
       this.remotePoll = setInterval(() => {
         // 'polled' lets owners of merged views (e.g. Claude /loop rows) re-check
         // state this manager doesn't track, without an unconditional 'changed'.
+        // Never after stopWatching, and a throwing listener is logged, not left unhandled.
         if (!this.pending && this.deps) void this.loadAll(this.deps.store.listProjects())
-          .then(() => { this.emit('polled'); }, error => this.log('refresh', error));
+          .then(() => { if (this.remotePoll) this.emit('polled'); })
+          .catch(error => this.log('refresh', error));
       }, 15_000);
       this.remotePoll.unref?.();
     }

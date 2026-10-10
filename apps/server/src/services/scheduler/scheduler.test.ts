@@ -1247,6 +1247,25 @@ describe('SchedulerManager poll reloads emit only on content change', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('logs a throwing polled listener and stops signalling after stopWatching', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = await polled();
+      const logger = vi.fn();
+      (manager as unknown as { deps: { logger: unknown } }).deps.logger = logger;
+      const polledEvents = vi.fn(() => { throw new Error('listener boom'); });
+      manager.on('polled', polledEvents);
+      manager.startWatching();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(polledEvents).toHaveBeenCalledTimes(1);
+      expect(logger).toHaveBeenCalledWith('refresh', expect.objectContaining({ message: 'listener boom' }));
+      manager.stopWatching();
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(polledEvents).toHaveBeenCalledTimes(1);
+      manager.stopAll();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('does not re-emit after a mutation when the poll sees identical content', async () => {
     const { manager, changed, project } = await polled();
     await manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });

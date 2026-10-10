@@ -66,7 +66,12 @@ test('a large follow-up list neither resets the product link nor replays or move
     ws.onmessage = (e) => {
       const m = JSON.parse(String(e.data));
       const kind = m.type === 'shared:changed' ? `shared:${m.payload?.channel}` : m.type;
-      if (kind === 'shared:terminals:onData' || kind === 'pong') return;
+      if (kind === 'pong') return;
+      if (kind === 'shared:terminals:onData') {
+        // Only the burst's end marker is recorded; every other PTY frame is ignored.
+        if (String(m.payload?.args?.[1] ?? '').includes('SPLIT-2-DONE')) w.__events.push({ at: Date.now(), kind: 'split-done', args: 2 });
+        return;
+      }
       w.__events.push({ at: Date.now(), kind, args: Array.isArray(m.payload?.args) ? m.payload.args.length : -1 });
     };
   });
@@ -99,12 +104,14 @@ test('a large follow-up list neither resets the product link nor replays or move
   expect(await backlogReads()).toBe(baselineReads);
 
   // An external edit still reaches the web client, and still no reset.
+  const editAt = Date.now();
   const file = join(dir, readdirSync(dir).sort()[0]!);
   const record = JSON.parse(readFileSync(file, 'utf8'));
   writeFileSync(file, JSON.stringify({ ...record, title: 'Edited on disk '.padEnd(80, 'y'), updatedAt: new Date().toISOString() }, null, 2));
   // 330 follow-ups exceed the event cap, so the change must arrive as a zero-arg invalidation.
-  await expect.poll(async () => (await events()).some(e => e.kind === 'shared:followups:onChanged'), { timeout: 20_000 }).toBe(true);
-  const followupEvents = (await events()).filter(e => e.kind === 'shared:followups:onChanged');
+  const afterEdit = async () => (await events()).filter(e => e.kind === 'shared:followups:onChanged' && e.at >= editAt);
+  await expect.poll(async () => (await afterEdit()).length, { timeout: 20_000 }).toBeGreaterThan(0);
+  const followupEvents = await afterEdit();
   expect(followupEvents.length).toBeGreaterThan(0);
   expect(followupEvents.every(e => e.args === 0)).toBe(true);
   await page.waitForTimeout(3_000);
@@ -116,4 +123,13 @@ test('a large follow-up list neither resets the product link nor replays or move
   await captureElectronScreenshot(electron, page, testInfo.outputPath('terminal-after.png'), terminal);
   expect(after.top / after.track).toBeLessThan(0.5);
   expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2);
+
+  // A fast, escape-heavy burst produces PTY chunks far over the event cap once
+  // JSON-escaped; they are split into ordered slices instead of resetting. The
+  // end marker is computed by the shell so the echoed command line can't match it.
+  const burstAt = Date.now();
+  await page.evaluate((id) => window.cc.terminals.write(id, "yes $'\\e[0m\\e[0m\\e[0m\\e[0m' | head -n 50000 | tr -d '\\n'; echo SPLIT-$((1+1))-DONE\r"), sessionId);
+  await expect.poll(async () => (await events()).some(e => e.kind === 'split-done' && e.at >= burstAt), { timeout: 30_000 }).toBe(true);
+  await page.waitForTimeout(3_000);
+  expect((await events()).filter(e => e.kind === 'product:reset')).toEqual([]);
 });

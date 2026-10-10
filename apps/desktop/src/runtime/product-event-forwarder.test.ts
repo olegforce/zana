@@ -90,10 +90,20 @@ it('splits an oversized PTY chunk into ordered slices instead of resetting', asy
 it('splitTerminalData never splits a surrogate pair and always makes progress', () => {
   const emoji = '😀'.repeat(50);
   const slices = splitTerminalData('s', emoji, 40);
-  expect(slices.join('')).toBe(emoji);
-  for (const slice of slices) expect(slice.length % 2).toBe(0);
-  expect(splitTerminalData('s', '"'.repeat(10), 8).join('')).toBe('"'.repeat(10));
+  expect(slices!.join('')).toBe(emoji);
+  for (const slice of slices!) expect(slice.length % 2).toBe(0);
+  expect(splitTerminalData('s', '"'.repeat(10), 12)!.join('')).toBe('"'.repeat(10));
   expect(splitTerminalData('s', '')).toEqual([]);
+  // Not even one character fits beside the id: unsplittable.
+  expect(splitTerminalData('s', '"'.repeat(10), 8)).toBeNull();
+});
+it('resets instead of recursing when a PTY chunk cannot be split under the cap', async () => {
+  const { send, release } = blocked();
+  const forwarder = createProductEventForwarder(send);
+  forwarder.publish('first', []);
+  forwarder.publish('terminals:onData', ['s'.repeat(PRODUCT_EVENT_ARGS_MAX_CHARS), 'data']);
+  release(); await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+  expect(send.mock.calls[1]).toEqual(['product:reset', []]); forwarder.dispose();
 });
 it('coalesces queued snapshots in place and preserves the order of other channels', async () => {
   const { send, release } = blocked();

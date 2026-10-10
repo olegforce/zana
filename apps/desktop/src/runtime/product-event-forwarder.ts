@@ -4,14 +4,16 @@ const isSnapshotChannel = (channel: string) => PRODUCT_EVENT_SNAPSHOT_CHANNELS.h
 const TERMINAL_DATA = 'terminals:onData';
 
 /** Split one oversized PTY chunk into ordered slices the utility schema accepts.
- * JSON escaping can grow control-heavy output up to 6x, so each slice is measured. */
-export function splitTerminalData(sessionId: string, data: string, maxChars = PRODUCT_EVENT_ARGS_MAX_CHARS): string[] {
+ * JSON escaping can grow control-heavy output up to 6x, so each slice is measured.
+ * Returns null when not even one character fits beside the session id. */
+export function splitTerminalData(sessionId: string, data: string, maxChars = PRODUCT_EVENT_ARGS_MAX_CHARS): string[] | null {
   const slices: string[] = [];
   const fits = (start: number, length: number) => JSON.stringify([sessionId, data.slice(start, start + length)]).length <= maxChars;
   for (let start = 0; start < data.length;) {
-    // An eighth of the cap always fits: JSON escaping grows a character at most 6x.
+    // With a short id an eighth of the cap fits first time: escaping grows a character at most 6x.
     let length = Math.min(Math.max(1, Math.floor(maxChars / 8)), data.length - start);
     while (length > 1 && !fits(start, length)) length = Math.floor(length / 2);
+    if (!fits(start, length)) return null;
     // Never split a surrogate pair across two slices.
     const last = data.charCodeAt(start + length - 1);
     if (start + length < data.length && length > 1 && last >= 0xd800 && last <= 0xdbff) length -= 1;
@@ -49,7 +51,7 @@ export function createProductEventForwarder(
   }
   // Serialized once per event; the envelope adds the channel and fixed JSON keys.
   const envelopeBytes = (channel: string, json: string) => Buffer.byteLength(json) + Buffer.byteLength(channel) + 24;
-  function publish(channel: string, args: unknown[]): void {
+  function publish(channel: string, args: unknown[], split = true): void {
     if (stopped) return;
     let size: number, argsLength: number;
     try { const json = JSON.stringify(args); argsLength = json.length; size = envelopeBytes(channel, json); }
@@ -58,9 +60,10 @@ export function createProductEventForwarder(
     // invalidation so readers re-fetch the snapshot. A PTY chunk is split into ordered slices;
     // other streams cannot be re-read, so they still reset.
     const oversized = args.length > PRODUCT_EVENT_ARGS_MAX_COUNT || argsLength > PRODUCT_EVENT_ARGS_MAX_CHARS;
-    if (oversized && channel === TERMINAL_DATA && args.length === 2 && typeof args[0] === 'string' && typeof args[1] === 'string') {
-      for (const slice of splitTerminalData(args[0], args[1])) publish(channel, [args[0], slice]);
-      return;
+    if (split && oversized && channel === TERMINAL_DATA && args.length === 2 && typeof args[0] === 'string' && typeof args[1] === 'string') {
+      const slices = splitTerminalData(args[0], args[1]);
+      // Slices are enqueued without re-splitting; an unsplittable chunk falls through to reset.
+      if (slices) { for (const slice of slices) publish(channel, [args[0], slice], false); return; }
     }
     const invalidation = oversized && isSnapshotChannel(channel);
     if (invalidation) { args = []; size = envelopeBytes(channel, '[]'); }
@@ -76,7 +79,7 @@ export function createProductEventForwarder(
     void drain();
   }
   return {
-    publish,
+    publish: (channel: string, args: unknown[]) => publish(channel, args),
     dispose() {
       stopped = true; queue.length = 0; bytes = 0; reset = false;
       if (retry) clearTimeout(retry);

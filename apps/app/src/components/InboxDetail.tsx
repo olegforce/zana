@@ -1122,10 +1122,10 @@ function DocExplorer({
  * note where it was actually found.
  */
 /** Last successful doc read per entry+path, so a remount paints content instead of a skeleton. */
-// Weighted by content length (UTF-16 units): about 16 MB in total, and no single
-// document or image data URL over about 512 KB is retained after unmount.
+// Weighted by content length (UTF-16 units, 2 bytes each): about 4 MB in total,
+// and no single document or image data URL over about 512 KB is retained after unmount.
 export const inboxDocCache = createResultCache<{ result: FsReadResult; resolvedPath: string; relocated: boolean }>(20, {
-  weigh: (value) => value.result.content?.length ?? 0, maxWeight: 8 * 1024 * 1024, maxEntryWeight: 256 * 1024
+  weigh: (value) => value.result.content?.length ?? 0, maxWeight: 2 * 1024 * 1024, maxEntryWeight: 256 * 1024
 });
 
 function DocPreview({
@@ -1161,9 +1161,14 @@ function DocPreview({
     let foundPath = doc.path, foundRelocated = false;
     const commit = (r: FsReadResult) => {
       if (cancelled) return;
-      // A failure is never cached, and it evicts a stale good copy (e.g. a deleted doc).
       if (r.ok && cacheScope) inboxDocCache.set(cacheKey, { result: r, resolvedPath: foundPath, relocated: foundRelocated });
-      else inboxDocCache.delete(cacheKey);
+      else if (!r.ok) {
+        // A failure is never cached. It may be transient, so this view keeps the
+        // good copy it painted, but the copy is evicted: the next visit re-reads
+        // and shows the real state (e.g. a deleted doc) instead of stale content.
+        inboxDocCache.delete(cacheKey);
+        if (cached) return;
+      }
       if (cached) { setResolvedPath(foundPath); setRelocated(foundRelocated); }
       setResult(r);
     };
