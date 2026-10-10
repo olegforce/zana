@@ -1266,6 +1266,37 @@ describe('SchedulerManager poll reloads emit only on content change', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('skips a poll tick while a mutation is pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = await polled();
+      const polledEvents = vi.fn(); manager.on('polled', polledEvents);
+      const load = vi.spyOn(manager, 'loadAll');
+      (manager as unknown as { pending: number }).pending = 1;
+      manager.startWatching();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(load).not.toHaveBeenCalled();
+      expect(polledEvents).not.toHaveBeenCalled();
+      manager.stopWatching(); manager.stopAll();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not signal polled when watching stopped while the poll was loading', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = await polled();
+      const polledEvents = vi.fn(); manager.on('polled', polledEvents);
+      let finish!: () => void;
+      vi.spyOn(manager, 'loadAll').mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+      manager.startWatching();
+      await vi.advanceTimersByTimeAsync(15_000);
+      manager.stopWatching();
+      finish(); await vi.advanceTimersByTimeAsync(0);
+      expect(polledEvents).not.toHaveBeenCalled();
+      manager.stopAll();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('does not re-emit after a mutation when the poll sees identical content', async () => {
     const { manager, changed, project } = await polled();
     await manager.create({ name: 't', projectId: 'proj-1', profile: 'claude', every: '5m', enabled: false });
