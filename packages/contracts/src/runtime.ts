@@ -25,7 +25,7 @@ export const PRODUCT_EVENT_SNAPSHOT_CHANNELS: ReadonlySet<string> = new Set([
   'config:onChanged', 'scheduler:onChanged', 'scheduler:groups:onChanged', 'scheduler:onTemplatesChanged', 'goals:onChanged',
   'followups:onChanged', 'personas:onChanged', 'teams:onChanged', 'quickPrompts:onChanged', 'extensions:onChanged'
 ]);
-export const SERVER_RUNTIME_PROTOCOL_VERSION = 13;
+export const SERVER_RUNTIME_PROTOCOL_VERSION = 14;
 const ServerRuntimeProtocolVersionSchema = z.literal(SERVER_RUNTIME_PROTOCOL_VERSION);
 const RequestIdSchema = z.string().uuid();
 const DeadlineSchema = z.string().datetime();
@@ -136,6 +136,44 @@ export function normalizeNativeToolPolicyReason(raw: unknown, fallback: string):
     .replace(LONE_SURROGATE, '\ufffd');
   return reason === '' ? fallback : reason;
 }
+
+/** JSON chars of one tool call's input. The hook route's 256 KiB body cap keeps the CLIs' canonical JSON under it. */
+export const NATIVE_TOOL_POLICY_INPUT_MAX_CHARS = 256 * 1024;
+
+/**
+ * One native tool call from a PTY Electron-main owns. Main asserts the
+ * identity from its live session record and derives `invocationId`; the
+ * server runtime only asks the plugin policy.
+ */
+export const NativeToolPolicyRequestSchema = z.object({
+  invocationId: z.string().regex(/^[a-f0-9]{64}$/),
+  threadId: SessionIdSchema.max(256),
+  projectId: ProjectIdSchema.max(256),
+  profile: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9-]*$/),
+  toolName: z.string().min(1).max(512).refine(
+    (value) => !/[\x00-\x1f\x7f]/.test(value),
+    'tool name must not contain control characters'
+  ),
+  input: z.record(z.string(), z.unknown()).refine((value) => {
+    try {
+      return JSON.stringify(value).length <= NATIVE_TOOL_POLICY_INPUT_MAX_CHARS;
+    } catch {
+      return false;
+    }
+  }, 'tool input exceeds the native tool policy limit')
+}).strict();
+
+/**
+ * The plugin policy's answer for one native tool call. A shape check only:
+ * {@link normalizeNativeToolPolicyReason} is what guarantees a usable reason.
+ */
+export const NativeToolPolicyDecisionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('allow') }).strict(),
+  z.object({ action: z.literal('deny'), reason: z.string().min(1).max(NATIVE_TOOL_POLICY_REASON_MAX_CHARS) }).strict()
+]);
+
+export type NativeToolPolicyRequest = z.infer<typeof NativeToolPolicyRequestSchema>;
+export type NativeToolPolicyDecision = z.infer<typeof NativeToolPolicyDecisionSchema>;
 
 const ServerRuntimeRequestBaseSchema = z.object({
   type: z.literal('request'),
@@ -289,6 +327,12 @@ export const ServerRuntimeRequestSchema = z.discriminatedUnion('operation', [
     projectId: z.string().min(1).max(128).optional(),
     threadId: z.string().min(1).max(128).optional(),
     cwd: z.string().min(1).max(4096).optional()
+  }).strict(),
+  ServerRuntimeRequestBaseSchema.extend({
+    // OBL-004 for PTYs Electron-main owns: the product server never registers
+    // them, so main asserts the live session's identity on this channel.
+    operation: z.literal('plugins-tool-policy'),
+    request: NativeToolPolicyRequestSchema
   }).strict(),
   ServerRuntimeRequestBaseSchema.extend({
     operation: z.literal('marketplace-list')

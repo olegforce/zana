@@ -3,6 +3,7 @@ import { createHostCliDiscovery } from './runtime/cli-discovery.js';
 import { ProjectCatalogs } from './runtime/project-catalogs.js';
 import { runtimeLibraryAgentApi } from './runtime/library-agent-api.js';
 import { createSnapshotNotifications } from './runtime/snapshot-notifications.js';
+import { createNativeToolPolicyHook } from './runtime/native-tool-policy.js';
 import { localMetadataProjects, localProjectPathOptions } from '@zana-ai/zcc-server/services/projects/project-metadata';
 import { invokeSharedProduct } from './ipc/shared-product-registry.js';
 import { cliHostProblem, teamHostProblem } from './ipc/cli-host-guard.js';
@@ -38,7 +39,7 @@ import {
   type MessageBoxOptions
 } from 'electron';
 import { join, isAbsolute, resolve, sep, basename } from 'node:path';
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, relative } from 'node:path';
@@ -520,43 +521,6 @@ export function logMainError(context: string, err: unknown) {
   const message = err instanceof Error ? err.stack || err.message : String(err);
   testTap.recordLog('error', context, message);
   console.error(`[main] ${context}: ${message}`);
-}
-
-export async function decideNativeToolPolicy(sessionId: string, body: string): Promise<{ decision: 'allow' | 'deny'; reason: string } | null> {
-  try {
-    const raw = JSON.parse(body) as Record<string, unknown> | null;
-    const validId = (value: unknown): value is string =>
-      typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
-      || !validId(raw.turn_id) || !validId(raw.tool_use_id)
-      || typeof raw.tool_name !== 'string' || !raw.tool_name) return null;
-    // Hash provider identities to keep input out of the wire key and bound its size.
-    const invocationId = createHash('sha256')
-      .update(JSON.stringify([sessionId, raw.turn_id, raw.tool_use_id]))
-      .digest('hex');
-    const input = raw.tool_input && typeof raw.tool_input === 'object' && !Array.isArray(raw.tool_input)
-      ? raw.tool_input as Record<string, unknown> : {};
-    const response = await fetch(
-      new URL(`api/v1/terminals/${encodeURIComponent(sessionId)}/tool-policy`, productServerUrl()),
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ invocationId, toolName: raw.tool_name, input })
-      }
-    );
-    if (!response.ok) return null;
-    const policy: unknown = await response.json();
-    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return null;
-    const { action, reason } = policy as Record<string, unknown>;
-    if (action !== 'allow' && action !== 'deny') return null;
-    return {
-      decision: action,
-      reason: typeof reason === 'string' ? reason
-        : action === 'deny' ? 'denied by plugin tool policy' : 'allowed'
-    };
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -7967,16 +7931,20 @@ async function bootstrapNormal() {
     // Native Tool Policy callback (OBL-004 — plugin-governed native-provider tool
     // gating). The agent BLOCKS on this, but UNLIKE Overseer/ContentScreen the
     // route (mcp-server.ts) is FAIL-CLOSED: null/throw here denies the tool call.
-    // The actual Allow/Deny decision lives in a plugin running inside
-    // product-server, so — unlike onOverseerHook's local resolve — this is a
-    // Pattern B hook: it fetches into the new terminal-scoped product-server
-    // route rather than deciding in-process. cwd/projectId are resolved from the
-    // LIVE session (rule 1), never the agent-supplied body.
-    onNativeToolPolicyHook: async (_projectId: string, sessionId: string, body: string) => {
-      const session = ptys.getSession(sessionId);
-      if (!session || session.status === 'exited') return null;
-      return decideNativeToolPolicy(sessionId, body);
-    },
+    // The actual Allow/Deny decision lives in a plugin running inside the
+    // server runtime, so this is a Pattern B hook. Main owns these PTYs, so it
+    // asserts their identity from the LIVE record (rule 1), never the
+    // agent-supplied body, and asks the plugin host over the supervised runtime
+    // channel: the product HTTP route only knows product-registered terminals.
+    // Dev has no supervisor and stays fail-closed.
+    onNativeToolPolicyHook: createNativeToolPolicyHook({
+      getSession: (id) => ptys.getSession(id),
+      decider: () => {
+        const supervisor = runtimeSupervisor;
+        return supervisor ? (request) => supervisor.decideToolPolicy(request) : null;
+      },
+      log: (message) => console.warn(`[native-tool-policy] ${message}`)
+    }),
     // Upper bound on the whole exchange; mcp-server.ts fails CLOSED (deny) if
     // this elapses, the inverse of overseerDecisionTimeoutMs's fail-open guard.
     nativeToolPolicyDecisionTimeoutMs: NATIVE_TOOL_POLICY_DECISION_TIMEOUT_MS,
