@@ -109,6 +109,34 @@ export const ServerRuntimeStartSchema = z.object({
   version: z.string()
 }).strict();
 
+/** Longest native-tool-policy (OBL-004) deny reason relayed to a CLI. */
+export const NATIVE_TOOL_POLICY_REASON_MAX_CHARS = 1024;
+// Without the `u` flag these match UTF-16 code units, so only unpaired halves hit.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+const CONTROL_RUN = /[\u0000-\u001f\u007f-\u009f]+/g;
+
+/**
+ * Turn any plugin-supplied deny reason into one every CLI still treats as a
+ * deny. Codex runs the tool when a deny reason is empty after Rust's
+ * `str::trim` — which, unlike JS `trim`, also strips U+0085 — and when
+ * serde_json rejects the reply for an escaped lone surrogate. So C0/C1
+ * controls become spaces, lone surrogates become U+FFFD, the result is
+ * trimmed and capped, and nothing left means `fallback`. The cap can split a
+ * surrogate pair, hence the second repair pass. A regex, not ES2024
+ * `toWellFormed`, because the repo compiles against lib ES2022.
+ */
+export function normalizeNativeToolPolicyReason(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  const reason = raw
+    .slice(0, 4 * NATIVE_TOOL_POLICY_REASON_MAX_CHARS)
+    .replace(LONE_SURROGATE, '\ufffd')
+    .replace(CONTROL_RUN, ' ')
+    .trim()
+    .slice(0, NATIVE_TOOL_POLICY_REASON_MAX_CHARS)
+    .replace(LONE_SURROGATE, '\ufffd');
+  return reason === '' ? fallback : reason;
+}
+
 const ServerRuntimeRequestBaseSchema = z.object({
   type: z.literal('request'),
   protocolVersion: ServerRuntimeProtocolVersionSchema,
