@@ -3,10 +3,19 @@ import { createHash } from 'node:crypto';
 import type { BrowserWindow } from 'electron';
 import { createNativeToolPolicyHook } from '../runtime/native-tool-policy.js';
 
-const { showMessageBox, signUiSend } = vi.hoisted(() => ({ showMessageBox: vi.fn(), signUiSend: vi.fn(() => 'signed-proof') }));
+const { showMessageBox, signUiSend, liveSessions } = vi.hoisted(() => ({
+  showMessageBox: vi.fn(),
+  signUiSend: vi.fn(() => 'signed-proof'),
+  liveSessions: new Map<string, { id: string; projectId: string; profile: string; status: string }>()
+}));
 
 vi.mock('@zana-ai/zcc-host-daemon/pty', () => ({
-  PtyManager: class { setMcpBaseUrl() {} setProjectRoots() {} setRulesResolver() {} },
+  PtyManager: class {
+    setMcpBaseUrl() {}
+    setProjectRoots() {}
+    setRulesResolver() {}
+    getSession(id: string) { return liveSessions.get(id) ?? null; }
+  },
   isClaudeProfile: () => false
 }));
 vi.mock('@zana-ai/zcc-server/services/projects/store', () => ({
@@ -27,7 +36,7 @@ vi.mock('../updater.js', () => ({ createUpdater: () => ({}) }));
 vi.mock('../test-tap.js', () => ({ record: () => {}, recordLog: () => {}, isEnabled: () => false, enable: () => {}, drain: () => ({ entries: [], cursor: 0 }), snapshot: () => ({ entries: [] }), reset: () => {} }));
 vi.mock('@zana-ai/zcc-server/http/ui-send-proof', () => ({ signUiSend }));
 
-const { sendQueuedMessageNow } = await import('../host.js');
+const { sendQueuedMessageNow, nativeToolPolicyHook } = await import('../host.js');
 
 // 2.3.4 denied EVERY local Claude PTY tool call: Claude's PreToolUse payload has
 // no turn_id, and the decision went to a product route that never registers
@@ -73,6 +82,19 @@ describe('native tool policy callback', () => {
       invocationId: sha(['session-1', turnId, event.tool_use_id, 'Bash', { command: 'pwd' }]),
       threadId: 'session-1', projectId: 'project-1', profile, toolName: 'Bash', input: { command: 'pwd' }
     });
+  });
+
+  // host.ts wires the hook to main's live PtyManager and the runtime supervisor.
+  // No supervisor runs under unit bootstrap (as in dev), so even a live session
+  // fails closed; the supervised path is proven by e2e/native-tool-policy-pty.spec.ts.
+  it('wires main\'s hook to the live PTY record and fails closed without a supervisor', async () => {
+    liveSessions.set('session-1', { id: 'session-1', projectId: 'project-1', profile: 'claude', status: 'running' });
+    try {
+      await expect(nativeToolPolicyHook('project-1', 'session-1', JSON.stringify(claudeEvent))).resolves.toBeNull();
+      await expect(nativeToolPolicyHook('project-1', 'session-unknown', JSON.stringify(claudeEvent))).resolves.toBeNull();
+    } finally {
+      liveSessions.clear();
+    }
   });
 });
 

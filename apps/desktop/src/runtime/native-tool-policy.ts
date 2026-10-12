@@ -101,3 +101,22 @@ export function createNativeToolPolicyHook(deps: NativeToolPolicyHookDeps) {
       : { decision: 'allow', reason: 'allowed' };
   };
 }
+
+/**
+ * The supervised runtime channel as a hook decider. It reads the supervisor
+ * per call, so a hook wired before the runtime starts (or in dev, where none
+ * ever starts) fails closed instead of capturing a stale null.
+ */
+export function supervisorToolPolicyDecider(
+  getSupervisor: () => { decideToolPolicy(request: NativeToolPolicyRequest): Promise<unknown> } | null
+): NativeToolPolicyHookDeps['decider'] {
+  return () => {
+    const supervisor = getSupervisor();
+    return supervisor ? (request) => supervisor.decideToolPolicy(request) : null;
+  };
+}
+
+/** Main-process sink for the hook's bounded diagnostics. */
+export function warnNativeToolPolicy(message: string): void {
+  console.warn(`[native-tool-policy] ${message}`);
+}

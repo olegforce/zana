@@ -3,7 +3,7 @@ import { createHostCliDiscovery } from './runtime/cli-discovery.js';
 import { ProjectCatalogs } from './runtime/project-catalogs.js';
 import { runtimeLibraryAgentApi } from './runtime/library-agent-api.js';
 import { createSnapshotNotifications } from './runtime/snapshot-notifications.js';
-import { createNativeToolPolicyHook } from './runtime/native-tool-policy.js';
+import { createNativeToolPolicyHook, supervisorToolPolicyDecider, warnNativeToolPolicy } from './runtime/native-tool-policy.js';
 import { localMetadataProjects, localProjectPathOptions } from '@zana-ai/zcc-server/services/projects/project-metadata';
 import { invokeSharedProduct } from './ipc/shared-product-registry.js';
 import { cliHostProblem, teamHostProblem } from './ipc/cli-host-guard.js';
@@ -2900,6 +2900,15 @@ const mobileGateway = new MobileGatewayManager({
   signQueuedSend: signMobileQueuedSend
 });
 let runtimeSupervisor: RuntimeSupervisor | null = null;
+// Main's /hook/nativetool handler (OBL-004), wired into the MCP server in
+// bootstrapNormal. Identity comes from the live PTY record; the decision comes
+// over the supervised runtime channel, and without a supervisor it fails closed.
+const nativeToolPolicyDecider = supervisorToolPolicyDecider(() => runtimeSupervisor);
+export const nativeToolPolicyHook = createNativeToolPolicyHook({
+  getSession: (id) => ptys.getSession(id),
+  decider: nativeToolPolicyDecider,
+  log: warnNativeToolPolicy
+});
 export function discoveryForRegisteredLaunch(
   supervisor: Pick<RuntimeSupervisor, 'cliDiscovery' | 'hostId'> | null,
   project: Pick<Project, 'id' | 'remote' | 'hostId'>,
@@ -7937,14 +7946,7 @@ async function bootstrapNormal() {
     // agent-supplied body, and asks the plugin host over the supervised runtime
     // channel: the product HTTP route only knows product-registered terminals.
     // Dev has no supervisor and stays fail-closed.
-    onNativeToolPolicyHook: createNativeToolPolicyHook({
-      getSession: (id) => ptys.getSession(id),
-      decider: () => {
-        const supervisor = runtimeSupervisor;
-        return supervisor ? (request) => supervisor.decideToolPolicy(request) : null;
-      },
-      log: (message) => console.warn(`[native-tool-policy] ${message}`)
-    }),
+    onNativeToolPolicyHook: nativeToolPolicyHook,
     // Upper bound on the whole exchange; mcp-server.ts fails CLOSED (deny) if
     // this elapses, the inverse of overseerDecisionTimeoutMs's fail-open guard.
     nativeToolPolicyDecisionTimeoutMs: NATIVE_TOOL_POLICY_DECISION_TIMEOUT_MS,

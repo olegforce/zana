@@ -660,6 +660,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     callPluginRpc: (pluginId, method, args) => server.request('plugins-call-rpc', pluginId, method, args),
     getPluginSettings: (pluginId) => server.request('plugins-settings-get', pluginId),
     setPluginSettings: (pluginId, values) => server.request('plugins-settings-set', pluginId, values),
+    /* v8 ignore next -- the packaged utility child runs only at the built-Electron boundary (e2e/native-tool-policy-pty.spec.ts) */
     decideToolPolicy: (request) => server.request('plugins-tool-policy', request),
     async relaunchEnrolledHost() {
       if (failed || closing) return { ok: false as const, message: 'Background service stopped. Restart Zana to reconnect.' };

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { createNativeToolPolicyHook, parseNativeToolHookEvent, type NativeToolPolicySession } from './native-tool-policy.js';
+import { createNativeToolPolicyHook, parseNativeToolHookEvent, supervisorToolPolicyDecider, warnNativeToolPolicy, type NativeToolPolicySession } from './native-tool-policy.js';
 
 const sha = (key: unknown[]) => createHash('sha256').update(JSON.stringify(key)).digest('hex');
 
@@ -197,5 +197,34 @@ describe('createNativeToolPolicyHook', () => {
     });
     await expect(hook('project-1', 'session-1', body)).resolves.toBeNull();
     expect(log).toHaveBeenCalledWith('decision failed for session session-: unknown error');
+  });
+});
+
+describe('supervisorToolPolicyDecider', () => {
+  const request = {
+    invocationId: 'a'.repeat(64), threadId: 'session-1', projectId: 'project-1', profile: 'claude', toolName: 'Bash', input: { command: 'pwd' }
+  };
+
+  it('has no decider while no supervisor runs, so the hook fails closed', () => {
+    expect(supervisorToolPolicyDecider(() => null)()).toBeNull();
+  });
+
+  it('reads the supervisor per call and forwards the main-built request unchanged', async () => {
+    const decideToolPolicy = vi.fn(async () => ({ action: 'allow' }));
+    let supervisor: { decideToolPolicy: typeof decideToolPolicy } | null = null;
+    const decider = supervisorToolPolicyDecider(() => supervisor);
+    expect(decider()).toBeNull();
+    supervisor = { decideToolPolicy };
+    await expect(decider()!(request)).resolves.toEqual({ action: 'allow' });
+    expect(decideToolPolicy).toHaveBeenCalledWith(request);
+  });
+});
+
+describe('warnNativeToolPolicy', () => {
+  it('prefixes the bounded diagnostic for main-process logs', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warnNativeToolPolicy('invalid decision for session session-');
+    expect(warn).toHaveBeenCalledWith('[native-tool-policy] invalid decision for session session-');
+    warn.mockRestore();
   });
 });
