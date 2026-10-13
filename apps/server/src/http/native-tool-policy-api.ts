@@ -11,8 +11,8 @@ class BodyTooLarge extends Error {}
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  // No encoding is set on the request, so every chunk is a Buffer.
+  for await (const bytes of request as AsyncIterable<Buffer>) {
     size += bytes.length;
     if (size > NATIVE_TOOL_POLICY_EVENT_MAX_BYTES) throw new BodyTooLarge();
     chunks.push(bytes);

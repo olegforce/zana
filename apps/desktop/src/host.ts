@@ -2976,15 +2976,19 @@ function ensureProductServerCredential(): string {
 ensureProductServerCredential();
 // Main's /hook/nativetool handler (OBL-004), wired into the MCP server in
 // bootstrapNormal. Identity comes from the live PTY record; the decision comes
-// over the supervised runtime channel or, with no supervisor (`pnpm dev`, where
-// the product server is its own process), from its signed product route.
+// over the supervised runtime channel. electron-vite dev never starts one (the
+// product server is its own `pnpm dev` process), so only there it asks that
+// server's signed product route. Elsewhere a missing supervisor fails closed.
 const productRouteNativeToolPolicy = productRouteToolPolicyDecider({
   serverUrl: productServerUrl,
   credential: ensureProductServerCredential
 });
 export const nativeToolPolicyHook = createNativeToolPolicyHook({
   getSession: (id) => ptys.getSession(id),
-  decider: firstToolPolicyDecider(supervisorToolPolicyDecider(() => runtimeSupervisor), () => productRouteNativeToolPolicy),
+  decider: firstToolPolicyDecider(
+    supervisorToolPolicyDecider(() => runtimeSupervisor),
+    () => (process.env.ELECTRON_RENDERER_URL ? productRouteNativeToolPolicy : null)
+  ),
   log: warnNativeToolPolicy
 });
 

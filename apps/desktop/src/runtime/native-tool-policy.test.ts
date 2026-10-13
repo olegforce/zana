@@ -297,6 +297,20 @@ describe('firstToolPolicyDecider', () => {
     expect(decider()).toBe(supervised);
     expect(firstToolPolicyDecider(() => null, () => null)()).toBeNull();
   });
+
+  it('never falls through to the product route when a running supervisor fails', async () => {
+    const route = vi.fn(async () => ({ action: 'allow' }));
+    const hook = createNativeToolPolicyHook({
+      getSession: () => ({ id: 'session-1', projectId: 'project-1', profile: 'claude', status: 'running' }),
+      decider: firstToolPolicyDecider(
+        supervisorToolPolicyDecider(() => ({ decideToolPolicy: async () => { throw new Error('server plugins-tool-policy request timed out'); } })),
+        () => route
+      ),
+      log: () => {}
+    });
+    await expect(hook('project-1', 'session-1', JSON.stringify(claudeEvent))).resolves.toBeNull();
+    expect(route).not.toHaveBeenCalled();
+  });
 });
 
 // `pnpm dev` end to end: main's hook asks a real product server over the
