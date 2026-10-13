@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { createNativeToolPolicyHook, parseNativeToolHookEvent, supervisorToolPolicyDecider, warnNativeToolPolicy, type NativeToolPolicySession } from './native-tool-policy.js';
+import { NATIVE_TOOL_POLICY_INPUT_MAX_CHARS } from '@zana-ai/zcc-contracts/runtime';
+import { createNativeToolPolicyHook, NATIVE_TOOL_INPUT_TOO_LARGE, parseNativeToolHookEvent, supervisorToolPolicyDecider, warnNativeToolPolicy, type NativeToolPolicySession } from './native-tool-policy.js';
 
 const sha = (key: unknown[]) => createHash('sha256').update(JSON.stringify(key)).digest('hex');
 
@@ -149,6 +150,18 @@ describe('createNativeToolPolicyHook', () => {
     const { hook, decide } = setup({ action: 'allow' });
     await expect(hook('project-1', 'session-1', JSON.stringify({ ...claudeEvent, tool_use_id: undefined }))).resolves.toBeNull();
     expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('measures the parsed tool input in JSON characters, like the runtime contract', async () => {
+    const { hook, decide } = setup({ action: 'allow' });
+    const fill = NATIVE_TOOL_POLICY_INPUT_MAX_CHARS - '{"content":""}'.length;
+    // 3 UTF-8 bytes per character: well past 256 KiB on the wire, still in the limit.
+    const atLimit = JSON.stringify({ ...claudeEvent, tool_name: 'Write', tool_input: { content: '\u20ac'.repeat(fill) } });
+    await expect(hook('project-1', 'session-1', atLimit)).resolves.toEqual({ decision: 'allow', reason: 'allowed' });
+    expect(decide).toHaveBeenCalledTimes(1);
+    const overLimit = JSON.stringify({ ...claudeEvent, tool_name: 'Write', tool_input: { content: 'x'.repeat(fill + 1) } });
+    await expect(hook('project-1', 'session-1', overLimit)).resolves.toEqual({ decision: 'deny', reason: NATIVE_TOOL_INPUT_TOO_LARGE });
+    expect(decide).toHaveBeenCalledTimes(1);
   });
 
   it('asserts the live session identity, whatever the body claims', async () => {

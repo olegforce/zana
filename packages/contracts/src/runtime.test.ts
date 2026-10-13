@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   MenubarAgentSchema,
+  NATIVE_TOOL_POLICY_EVENT_MAX_BYTES,
   NATIVE_TOOL_POLICY_INPUT_MAX_CHARS,
+  nativeToolPolicyInputFits,
   NATIVE_TOOL_POLICY_REASON_MAX_CHARS,
   NativeToolPolicyDecisionSchema,
   PRODUCT_EVENT_ARGS_MAX_CHARS,
@@ -222,6 +224,13 @@ describe('native tool policy runtime contract', () => {
 
   it('rejects the previous protocol version', () => {
     expect(parse({}, { protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION - 1 })).toBe(false);
+  });
+
+  it('leaves the hook route room for a limit-sized input in any UTF-8', () => {
+    expect(nativeToolPolicyInputFits({ content: 'x'.repeat(NATIVE_TOOL_POLICY_INPUT_MAX_CHARS - empty) })).toBe(true);
+    expect(nativeToolPolicyInputFits({ content: 'x'.repeat(NATIVE_TOOL_POLICY_INPUT_MAX_CHARS - empty + 1) })).toBe(false);
+    expect(nativeToolPolicyInputFits({ count: 1n })).toBe(false);
+    expect(NATIVE_TOOL_POLICY_EVENT_MAX_BYTES - 3 * NATIVE_TOOL_POLICY_INPUT_MAX_CHARS).toBeGreaterThanOrEqual(256 * 1024);
   });
 
   it('rejects input it cannot measure instead of throwing', () => {

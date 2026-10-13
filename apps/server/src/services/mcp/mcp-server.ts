@@ -83,7 +83,7 @@ import { registerLibraryTools, type LibraryAgentApi } from '../library/library-m
 import { registerGoalTools, type GoalAgentApi } from '../goals/goal-mcp-tools.js';
 import { registerFollowUpTools, type FollowUpAgentApi } from '../followups/followup-mcp-tools.js';
 import { verifySessionControlCredential } from '@zana-ai/zcc-host-daemon/control-credential';
-import { normalizeNativeToolPolicyReason } from '@zana-ai/zcc-contracts/runtime';
+import { NATIVE_TOOL_POLICY_EVENT_MAX_BYTES, normalizeNativeToolPolicyReason } from '@zana-ai/zcc-contracts/runtime';
 import { readHookBody } from './read-hook-body.js';
 
 interface ProjectLookup {
@@ -1580,7 +1580,11 @@ async function handleRequest(
     let done = false;
     let oversized = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const CAP = 256 * 1024; // tool inputs (e.g. a big Write) can be sizeable
+    // Bounds the whole provider event, not the tool input: the handler enforces
+    // the 256 KiB `tool_input` limit on the parsed input, in JSON characters
+    // like the runtime contract. This leaves room for a limit-sized input at
+    // 3 UTF-8 bytes per character plus the provider's own fields.
+    const CAP = NATIVE_TOOL_POLICY_EVENT_MAX_BYTES;
     // Past CAP the rest of the body is drained, never buffered, so the agent
     // still gets an explicit deny instead of a reset socket (which its relay
     // can only report as "unreachable"). Past this ceiling we destroy it.
@@ -1665,7 +1669,7 @@ async function handleRequest(
     });
     req.on('end', () => {
       if (oversized) {
-        answerDenied('tool input is larger than the 256 KiB native tool policy limit');
+        answerDenied('tool call is larger than the 1 MiB native tool policy request limit');
         return;
       }
       void finish(Buffer.concat(chunks).toString('utf8'));

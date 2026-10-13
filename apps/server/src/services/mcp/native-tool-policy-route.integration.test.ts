@@ -13,6 +13,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { connect } from 'node:net';
+import { NATIVE_TOOL_POLICY_EVENT_MAX_BYTES, NATIVE_TOOL_POLICY_INPUT_MAX_CHARS } from '@zana-ai/zcc-contracts/runtime';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { createMemoryInboxStore } from '@zana-ai/zcc-server';
 import { createMemorySuggestionsStore } from '@zana-ai/zcc-server';
@@ -148,17 +149,39 @@ describe('Native Tool Policy PreToolUse route (end-to-end, fail-closed)', () => 
     });
     const { status, json } = await postHook(h.url, 'proj-1/sess-A', {
       tool_name: 'Write',
-      tool_input: { content: 'x'.repeat(300 * 1024) }
+      tool_input: { content: 'x'.repeat(NATIVE_TOOL_POLICY_EVENT_MAX_BYTES) }
     });
     expect(status).toBe(200);
     expect(json).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: 'tool input is larger than the 256 KiB native tool policy limit'
+        permissionDecisionReason: 'tool call is larger than the 1 MiB native tool policy request limit'
       }
     });
     expect(called).toBe(false);
+  });
+
+  it('3f2. hands a limit-sized multi-byte tool input to the handler intact: the route caps the event, not the input', async () => {
+    let received = '';
+    const h = await boot(async (_projectId, _sessionId, body) => {
+      received = body;
+      return { decision: 'allow', reason: 'allowed' };
+    });
+    // 3 UTF-8 bytes per character: about 768 KiB on the wire for an input
+    // the runtime contract accepts.
+    const event = {
+      session_id: 's'.repeat(36),
+      transcript_path: `/home/user/.claude/projects/${'p'.repeat(200)}/session.jsonl`,
+      tool_name: 'Write',
+      tool_use_id: 'toolu_limit',
+      tool_input: { content: '\u20ac'.repeat(NATIVE_TOOL_POLICY_INPUT_MAX_CHARS - '{"content":""}'.length) }
+    };
+    const { status, json } = await postHook(h.url, 'proj-1/sess-A', event);
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(Buffer.byteLength(received)).toBeGreaterThan(3 * NATIVE_TOOL_POLICY_INPUT_MAX_CHARS - 64);
+    expect(JSON.parse(received)).toEqual(event);
   });
 
   it('3g. fails CLOSED past the drain ceiling: resets a body over 16 MiB without invoking the handler', async () => {

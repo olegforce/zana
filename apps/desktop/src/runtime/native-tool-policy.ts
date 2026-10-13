@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { NativeToolPolicyDecisionSchema, type NativeToolPolicyRequest } from '@zana-ai/zcc-contracts/runtime';
+import {
+  NativeToolPolicyDecisionSchema,
+  nativeToolPolicyInputFits,
+  type NativeToolPolicyRequest
+} from '@zana-ai/zcc-contracts/runtime';
+
+/** The deny for a tool input over the runtime contract's limit; plugins are never asked. */
+export const NATIVE_TOOL_INPUT_TOO_LARGE = 'tool input is larger than the 256 KiB native tool policy limit';
 
 /** The live PTY session fields main asserts as a tool call's identity. */
 export interface NativeToolPolicySession {
@@ -65,7 +72,7 @@ export function parseNativeToolHookEvent(sessionId: string, body: string): Nativ
  * runtime channel: the product HTTP route only knows product-registered
  * terminals. Null — unknown or exited session, a project the session is not
  * in, no policy, a malformed event, a failed or invalid reply — makes the
- * route deny.
+ * route deny. Input over the contract's limit is denied with its own reason.
  */
 export function createNativeToolPolicyHook(deps: NativeToolPolicyHookDeps) {
   return async (projectId: string, sessionId: string, body: string): Promise<{ decision: 'allow' | 'deny'; reason: string } | null> => {
@@ -75,6 +82,7 @@ export function createNativeToolPolicyHook(deps: NativeToolPolicyHookDeps) {
     if (!decide) return null;
     const call = parseNativeToolHookEvent(session.id, body);
     if (!call) return null;
+    if (!nativeToolPolicyInputFits(call.input)) return { decision: 'deny', reason: NATIVE_TOOL_INPUT_TOO_LARGE };
     let reply: unknown;
     try {
       reply = await decide({

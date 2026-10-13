@@ -137,8 +137,23 @@ export function normalizeNativeToolPolicyReason(raw: unknown, fallback: string):
   return reason === '' ? fallback : reason;
 }
 
-/** JSON chars of one tool call's input. The hook route's 256 KiB body cap keeps the CLIs' canonical JSON under it. */
+/** JSON chars of one tool call's input, measured on the parsed input the policy judges. */
 export const NATIVE_TOOL_POLICY_INPUT_MAX_CHARS = 256 * 1024;
+/**
+ * UTF-8 bytes of one whole PreToolUse event at the hook route. A limit-sized
+ * input is at most 3 bytes per JSON char, so 1 MiB still leaves 256 KiB for
+ * the provider's own fields; a bigger event is denied before it is parsed.
+ */
+export const NATIVE_TOOL_POLICY_EVENT_MAX_BYTES = 1024 * 1024;
+
+/** Whether `input` fits {@link NATIVE_TOOL_POLICY_INPUT_MAX_CHARS}; unserialisable input does not. */
+export function nativeToolPolicyInputFits(input: Record<string, unknown>): boolean {
+  try {
+    return JSON.stringify(input).length <= NATIVE_TOOL_POLICY_INPUT_MAX_CHARS;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * One native tool call from a PTY Electron-main owns. Main asserts the
@@ -154,13 +169,7 @@ export const NativeToolPolicyRequestSchema = z.object({
     (value) => !/[\x00-\x1f\x7f]/.test(value),
     'tool name must not contain control characters'
   ),
-  input: z.record(z.string(), z.unknown()).refine((value) => {
-    try {
-      return JSON.stringify(value).length <= NATIVE_TOOL_POLICY_INPUT_MAX_CHARS;
-    } catch {
-      return false;
-    }
-  }, 'tool input exceeds the native tool policy limit')
+  input: z.record(z.string(), z.unknown()).refine(nativeToolPolicyInputFits, 'tool input exceeds the native tool policy limit')
 }).strict();
 
 /**
