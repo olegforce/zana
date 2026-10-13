@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SERVER_RUNTIME_PROTOCOL_VERSION } from '@zana-ai/zcc-contracts/runtime';
 
 // The real runtime boundary stays in place: requests must pass the v14 schema,
@@ -52,13 +52,19 @@ const call = {
   input: { command: 'deploy', token: 'secret-value' }
 };
 
-it('answers main-owned tool policy calls from the attached plugin service, and denies outside its lifetime', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'utility-tool-policy-'));
+// utility-entry is a process singleton, so the phases share one import and
+// run in order: before start, while running, after stop.
+describe('main-owned tool policy over the runtime channel', () => {
   const parent = Object.assign(new EventEmitter(), { postMessage: vi.fn() });
   const descriptor = Object.getOwnPropertyDescriptor(process, 'parentPort');
-  Object.defineProperty(process, 'parentPort', { configurable: true, value: parent });
-  const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-  h.context = { db: {}, hub: { emit() {}, subscribe: () => () => undefined }, config: { getConfig: () => ({}) } };
+  let exit: ReturnType<typeof vi.spyOn>;
+  let root = '';
+  let stopped = false;
+  const stop = async () => {
+    parent.emit('message', { data: { type: 'stop', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION } });
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    stopped = true;
+  };
   const decide = async (request: Record<string, unknown> = call) => {
     const id = randomUUID();
     parent.emit('message', { data: {
@@ -68,14 +74,32 @@ it('answers main-owned tool policy calls from the attached plugin service, and d
     await vi.waitFor(() => expect(parent.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id })));
     return parent.postMessage.mock.calls.map(([message]) => message).find((message) => message.id === id);
   };
-  let stopped = false;
-  try {
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'utility-tool-policy-'));
+    Object.defineProperty(process, 'parentPort', { configurable: true, value: parent });
+    exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    h.context = { db: {}, hub: { emit() {}, subscribe: () => () => undefined }, config: { getConfig: () => ({}) } };
     await import('./utility-entry.js');
+  });
+
+  afterAll(async () => {
+    if (!stopped) await stop();
+    exit.mockRestore();
+    if (descriptor) Object.defineProperty(process, 'parentPort', descriptor);
+    else Reflect.deleteProperty(process, 'parentPort');
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('denies before the runtime has started its plugin service', async () => {
     await expect(decide()).resolves.toEqual({
       type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: expect.any(String),
       value: { action: 'deny', reason: 'plugin service is unavailable' }
     });
+    expect(h.decide).not.toHaveBeenCalled();
+  });
 
+  it('answers from the attached plugin service, with a normalised reason and redacted input', async () => {
     parent.emit('message', { data: {
       type: 'start', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, rendererRoot: root, dataDir: root,
       hostUrl: 'http://127.0.0.1:1', hostToken: 't'.repeat(32), hostSigningKey: 's'.repeat(32),
@@ -91,26 +115,20 @@ it('answers main-owned tool policy calls from the attached plugin service, and d
     });
     h.decide.mockResolvedValueOnce({ action: 'allow' });
     await expect(decide()).resolves.toMatchObject({ type: 'result', value: { action: 'allow' } });
+  });
 
+  it('replies with an error for a failed policy, and for a request outside the contract without asking it', async () => {
     h.decide.mockRejectedValueOnce(new Error('policy worker crashed'));
     await expect(decide()).resolves.toMatchObject({ type: 'error', message: 'policy worker crashed' });
     const calls = h.decide.mock.calls.length;
     await expect(decide({ ...call, invocationId: 'not-a-digest' })).resolves.toMatchObject({ type: 'error' });
     expect(h.decide).toHaveBeenCalledTimes(calls);
+  });
 
-    parent.emit('message', { data: { type: 'stop', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION } });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
-    stopped = true;
+  it('denies again once the runtime has stopped', async () => {
+    const calls = h.decide.mock.calls.length;
+    await stop();
     await expect(decide()).resolves.toMatchObject({ type: 'result', value: { action: 'deny', reason: 'plugin service is unavailable' } });
     expect(h.decide).toHaveBeenCalledTimes(calls);
-  } finally {
-    if (!stopped) {
-      parent.emit('message', { data: { type: 'stop', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION } });
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
-    }
-    exit.mockRestore();
-    if (descriptor) Object.defineProperty(process, 'parentPort', descriptor);
-    else Reflect.deleteProperty(process, 'parentPort');
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
