@@ -1,7 +1,21 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NATIVE_TOOL_POLICY_INPUT_MAX_CHARS } from '@zana-ai/zcc-contracts/runtime';
-import { createNativeToolPolicyHook, NATIVE_TOOL_INPUT_TOO_LARGE, parseNativeToolHookEvent, supervisorToolPolicyDecider, warnNativeToolPolicy, type NativeToolPolicySession } from './native-tool-policy.js';
+import { createNativeToolPolicyVerifier, NATIVE_TOOL_POLICY_PROOF_HEADER } from '@zana-ai/zcc-server/http/native-tool-policy-proof';
+import { startProductServer, type ProductServer } from '@zana-ai/zcc-server/http/product-server';
+import {
+  createNativeToolPolicyHook,
+  firstToolPolicyDecider,
+  NATIVE_TOOL_INPUT_TOO_LARGE,
+  parseNativeToolHookEvent,
+  productRouteToolPolicyDecider,
+  supervisorToolPolicyDecider,
+  warnNativeToolPolicy,
+  type NativeToolPolicySession
+} from './native-tool-policy.js';
 
 const sha = (key: unknown[]) => createHash('sha256').update(JSON.stringify(key)).digest('hex');
 
@@ -230,6 +244,95 @@ describe('supervisorToolPolicyDecider', () => {
     supervisor = { decideToolPolicy };
     await expect(decider()!(request)).resolves.toEqual({ action: 'allow' });
     expect(decideToolPolicy).toHaveBeenCalledWith(request);
+  });
+});
+
+describe('productRouteToolPolicyDecider (no runtime supervisor)', () => {
+  const secret = 'k'.repeat(64);
+  const request = {
+    invocationId: 'a'.repeat(64), threadId: 'session-1', projectId: 'project-1', profile: 'claude', toolName: 'Bash', input: { command: 'pwd' }
+  };
+
+  it('posts the strict request, signed for its exact body, and returns the reply for the hook to check', async () => {
+    const verify = createNativeToolPolicyVerifier(secret);
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = init!.headers as Record<string, string>;
+      expect(verify(headers[NATIVE_TOOL_POLICY_PROOF_HEADER], init!.body as string)).toBe(true);
+      return Response.json({ action: 'allow' });
+    });
+    const decide = productRouteToolPolicyDecider({ serverUrl: () => 'http://127.0.0.1:8781/', credential: () => secret, fetch: fetchImpl });
+    await expect(decide(request)).resolves.toEqual({ action: 'allow' });
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(String(url)).toBe('http://127.0.0.1:8781/api/v1/native-tool-policy');
+    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify(request), headers: { 'content-type': 'application/json' } });
+    expect(init!.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('rejects on a refused request, so the hook fails closed', async () => {
+    const decide = productRouteToolPolicyDecider({
+      serverUrl: () => 'http://127.0.0.1:8781/', credential: () => secret, fetch: async () => Response.json({ error: 'no' }, { status: 403 })
+    });
+    await expect(decide(request)).rejects.toThrow('product server answered HTTP 403');
+  });
+
+  it('defaults to the global fetch', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ action: 'allow' }));
+    try {
+      await expect(productRouteToolPolicyDecider({ serverUrl: () => 'http://127.0.0.1:8781/', credential: () => secret })(request)).resolves.toEqual({ action: 'allow' });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+describe('firstToolPolicyDecider', () => {
+  it('uses the first decider that is available on each call', () => {
+    const supervised = vi.fn();
+    const route = vi.fn();
+    let supervisor: typeof supervised | null = null;
+    const decider = firstToolPolicyDecider(() => supervisor, () => route);
+    expect(decider()).toBe(route);
+    supervisor = supervised;
+    expect(decider()).toBe(supervised);
+    expect(firstToolPolicyDecider(() => null, () => null)()).toBeNull();
+  });
+});
+
+// `pnpm dev` end to end: main's hook asks a real product server over the
+// signed route, and the server's plugin policy decides.
+describe('main hook over the product route (pnpm dev)', () => {
+  const secret = 'd'.repeat(64);
+  const live: NativeToolPolicySession = { id: 'session-1', projectId: 'project-1', profile: 'claude', status: 'running' };
+  let server: ProductServer | null = null;
+  let dataDir = '';
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('reaches the dev server\'s plugin policy with main-asserted identity, and fails closed on a wrong credential', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'zcc-native-tool-route-'));
+    server = await startProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 }, uiSendSecret: secret });
+    const decideToolPolicy = vi.fn(async () => ({ action: 'deny' as const, reason: 'blocked by dev policy' }));
+    server.ctx.plugins = { decideToolPolicy } as unknown as typeof server.ctx.plugins;
+    const hookFor = (credential: string) => createNativeToolPolicyHook({
+      getSession: (id) => (id === live.id ? live : null),
+      decider: firstToolPolicyDecider(() => null, () => productRouteToolPolicyDecider({ serverUrl: () => server!.url, credential: () => credential })),
+      log: () => {}
+    });
+
+    await expect(hookFor(secret)('project-1', 'session-1', JSON.stringify({ ...claudeEvent, session_id: 'forged' }))).resolves.toEqual({
+      decision: 'deny', reason: 'blocked by dev policy'
+    });
+    expect(decideToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      invocationId: sha(['session-1', null, 'toolu_01ABC', 'Bash', { command: 'pwd' }]),
+      threadId: 'session-1', projectId: 'project-1', providerId: 'claude-code', toolName: 'Bash'
+    }));
+    await expect(hookFor('w'.repeat(64))('project-1', 'session-1', JSON.stringify({ ...claudeEvent, tool_use_id: 'toolu_02' }))).resolves.toBeNull();
+    expect(decideToolPolicy).toHaveBeenCalledTimes(1);
   });
 });
 

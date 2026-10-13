@@ -85,14 +85,27 @@ describe('native tool policy callback', () => {
   });
 
   // host.ts wires the hook to main's live PtyManager and the runtime supervisor.
-  // No supervisor runs under unit bootstrap (as in dev), so even a live session
-  // fails closed; the supervised path is proven by e2e/native-tool-policy-pty.spec.ts.
-  it('wires main\'s hook to the live PTY record and fails closed without a supervisor', async () => {
+  // No supervisor runs under unit bootstrap (as in dev), so a live session's
+  // call goes to the product server's signed route; the supervised path is
+  // proven by e2e/native-tool-policy-pty.spec.ts.
+  it('wires main\'s hook to the live PTY record and, without a supervisor, to the signed product route', async () => {
     liveSessions.set('session-1', { id: 'session-1', projectId: 'project-1', profile: 'claude', status: 'running' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ action: 'deny', reason: 'blocked by dev policy' }));
     try {
+      await expect(nativeToolPolicyHook('project-1', 'session-1', JSON.stringify(claudeEvent))).resolves.toEqual({
+        decision: 'deny', reason: 'blocked by dev policy'
+      });
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(new URL(String(url)).pathname).toBe('/api/v1/native-tool-policy');
+      expect((init!.headers as Record<string, string>)['x-zcc-native-tool-policy-proof']).toMatch(/^\d{13}\.[a-f0-9]{32}\.[a-f0-9]{64}$/);
+      expect(JSON.parse(init!.body as string)).toMatchObject({ threadId: 'session-1', projectId: 'project-1', profile: 'claude', toolName: 'Bash' });
+
+      fetchSpy.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
       await expect(nativeToolPolicyHook('project-1', 'session-1', JSON.stringify(claudeEvent))).resolves.toBeNull();
       await expect(nativeToolPolicyHook('project-1', 'session-unknown', JSON.stringify(claudeEvent))).resolves.toBeNull();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     } finally {
+      fetchSpy.mockRestore();
       liveSessions.clear();
     }
   });

@@ -3,7 +3,13 @@ import { createHostCliDiscovery } from './runtime/cli-discovery.js';
 import { ProjectCatalogs } from './runtime/project-catalogs.js';
 import { runtimeLibraryAgentApi } from './runtime/library-agent-api.js';
 import { createSnapshotNotifications } from './runtime/snapshot-notifications.js';
-import { createNativeToolPolicyHook, supervisorToolPolicyDecider, warnNativeToolPolicy } from './runtime/native-tool-policy.js';
+import {
+  createNativeToolPolicyHook,
+  firstToolPolicyDecider,
+  productRouteToolPolicyDecider,
+  supervisorToolPolicyDecider,
+  warnNativeToolPolicy
+} from './runtime/native-tool-policy.js';
 import { localMetadataProjects, localProjectPathOptions } from '@zana-ai/zcc-server/services/projects/project-metadata';
 import { invokeSharedProduct } from './ipc/shared-product-registry.js';
 import { cliHostProblem, teamHostProblem } from './ipc/cli-host-guard.js';
@@ -2900,15 +2906,6 @@ const mobileGateway = new MobileGatewayManager({
   signQueuedSend: signMobileQueuedSend
 });
 let runtimeSupervisor: RuntimeSupervisor | null = null;
-// Main's /hook/nativetool handler (OBL-004), wired into the MCP server in
-// bootstrapNormal. Identity comes from the live PTY record; the decision comes
-// over the supervised runtime channel, and without a supervisor it fails closed.
-const nativeToolPolicyDecider = supervisorToolPolicyDecider(() => runtimeSupervisor);
-export const nativeToolPolicyHook = createNativeToolPolicyHook({
-  getSession: (id) => ptys.getSession(id),
-  decider: nativeToolPolicyDecider,
-  log: warnNativeToolPolicy
-});
 export function discoveryForRegisteredLaunch(
   supervisor: Pick<RuntimeSupervisor, 'cliDiscovery' | 'hostId'> | null,
   project: Pick<Project, 'id' | 'remote' | 'hostId'>,
@@ -2977,6 +2974,19 @@ function ensureProductServerCredential(): string {
 // In development the launcher supplies this to multiple processes. Remove it
 // before any main-owned agent/utility can be spawned, not on the first UI click.
 ensureProductServerCredential();
+// Main's /hook/nativetool handler (OBL-004), wired into the MCP server in
+// bootstrapNormal. Identity comes from the live PTY record; the decision comes
+// over the supervised runtime channel or, with no supervisor (`pnpm dev`, where
+// the product server is its own process), from its signed product route.
+const productRouteNativeToolPolicy = productRouteToolPolicyDecider({
+  serverUrl: productServerUrl,
+  credential: ensureProductServerCredential
+});
+export const nativeToolPolicyHook = createNativeToolPolicyHook({
+  getSession: (id) => ptys.getSession(id),
+  decider: firstToolPolicyDecider(supervisorToolPolicyDecider(() => runtimeSupervisor), () => productRouteNativeToolPolicy),
+  log: warnNativeToolPolicy
+});
 
 function verifyProductServerCredential(credential: unknown): boolean {
   const expected = productServerCredential;
@@ -7944,8 +7954,9 @@ async function bootstrapNormal() {
     // server runtime, so this is a Pattern B hook. Main owns these PTYs, so it
     // asserts their identity from the LIVE record (rule 1), never the
     // agent-supplied body, and asks the plugin host over the supervised runtime
-    // channel: the product HTTP route only knows product-registered terminals.
-    // Dev has no supervisor and stays fail-closed.
+    // channel: the product terminal route only knows product-registered
+    // terminals. Dev has no supervisor, so there it asks the dev product
+    // server's signed native-tool-policy route instead.
     onNativeToolPolicyHook: nativeToolPolicyHook,
     // Upper bound on the whole exchange; mcp-server.ts fails CLOSED (deny) if
     // this elapses, the inverse of overseerDecisionTimeoutMs's fail-open guard.

@@ -286,8 +286,9 @@ request with the same id replays the same decision rather than re-deciding.
 For PTY sessions the host derives it from the live session plus the
 provider's turn id (when it sends one), tool call id, tool name and input: an
 identical retry replays its decision, and different content never reuses one.
-PTY tool input over 256 KiB is denied with an explicit reason, without calling
-plugins.
+PTY tool input over 256 KiB (counted in JSON characters of the parsed input,
+not wire bytes) is denied with an explicit reason, without calling plugins.
+The same holds in a `pnpm dev` build.
 
 | Provider | Native before/after | Delivery surface |
 | --- | --- | --- |
