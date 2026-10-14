@@ -1,0 +1,125 @@
+.problems-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.problems-classic-link {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent, inherit);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+.problems-filters,
+.problems-bulk,
+.problems-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.problems-outcomes button {
+  padding: 2px 10px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.problems-outcomes button.active {
+  background: var(--accent-soft, rgba(127, 127, 127, 0.2));
+  border-color: var(--accent, currentColor);
+}
+.problems-filters input[type='search'] {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.problems-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.problems-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.problems-table th,
+.problems-table td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+.problems-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  text-align: left;
+}
+.problems-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.problems-actions .settings-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.problems-empty {
+  margin: 16px 0;
+  color: var(--text-muted, inherit);
+}
+@media (max-width: 520px) {
+  .problems-filters > select,
+  .problems-filters > input {
+    flex: 1 1 100%;
+  }
+}
+
+.recovery-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+}
+.recovery-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.recovery-card-actions,
+.recovery-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.recovery-inline {
+  margin-top: 6px;
+}
+.recovery-inline input[type='number'] {
+  width: 72px;
+}
+.recovery-dialog-body fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}

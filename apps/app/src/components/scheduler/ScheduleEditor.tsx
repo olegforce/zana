@@ -7,7 +7,9 @@ import type {
   ScheduledTask,
   ScheduleCreateInput,
   InboxNotifyLevel,
-  Team
+  Team,
+  ScheduleCatchUp,
+  ScheduleRetryPolicy
 } from '@zana-ai/zcc-domain/product';
 import { parseEvery, formatInterval } from '@zana-ai/zcc-domain/parse-every';
 import { isValidCron, nextCronRuns } from '@zana-ai/zcc-domain/parse-cron';
@@ -16,6 +18,9 @@ import { ImprovePromptButton } from '../ImprovePromptButton.js';
 import { PopoverPicklist } from '../ui/PopoverPicklist.js';
 import { PROFILE_LABEL, INBOX_LEVELS, scopeLabel, sourceLabel } from './schedulerUtils.js';
 import type { ScheduleSeed } from './schedule-seed.js';
+import './schedule-runs.css';
+
+type MissedRunChoice = 'classic' | ScheduleCatchUp['mode'];
 
 const PROFILES = VALID_PROFILES;
 
@@ -108,6 +113,17 @@ export function ScheduleEditor({
       ?? seededTask?.group
       ?? (task === null && !seededTask && schedulerTab === 'group' ? selectedGroupId ?? '' : '')
   );
+  // Missed-run and retry policies. A NEW schedule (including a copy of a Classic
+  // one) starts in Recovery ("Run once"); an existing one without `catchUp` is
+  // Classic and shows as such.
+  const policySource = task ?? seededTask;
+  const [missedChoice, setMissedChoice] = useState<MissedRunChoice>(
+    task ? (task.catchUp ? task.catchUp.mode : 'classic') : (seededTask?.catchUp?.mode ?? 'once')
+  );
+  const [missedMax, setMissedMax] = useState<number>(policySource?.catchUp?.max ?? 3);
+  const [retryOn, setRetryOn] = useState<boolean>(!!policySource?.retry);
+  const [retryAttempts, setRetryAttempts] = useState<number>(policySource?.retry?.attempts ?? 3);
+  const [retryDelay, setRetryDelay] = useState<number>(policySource?.retry?.delayMinutes ?? 5);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -166,6 +182,16 @@ export function ScheduleEditor({
     return null;
   })();
 
+  const clampInt = (n: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, Number.isFinite(n) ? Math.round(n) : min));
+  const catchUpValue = (): ScheduleCatchUp | null =>
+    missedChoice === 'classic' ? null
+      : missedChoice === 'all' ? { mode: 'all', max: clampInt(missedMax, 1, 10) }
+        : { mode: missedChoice };
+  const retryValue = (): ScheduleRetryPolicy | null =>
+    retryOn ? { attempts: clampInt(retryAttempts, 1, 5), delayMinutes: clampInt(retryDelay, 1, 1440) } : null;
+  const showPolicies = !readOnly && !task?.external;
+
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
@@ -190,7 +216,9 @@ export function ScheduleEditor({
           scope: scope === 'project' ? { projectId } : 'global',
           inboxLevel,
           autoCloseOnFinish,
-          group: scope === 'global' && group ? group : undefined
+          group: scope === 'global' && group ? group : undefined,
+          catchUp: catchUpValue(),
+          retry: retryValue()
         };
         const result = await product.scheduler.create(input);
         if (!result.ok) {
@@ -217,6 +245,8 @@ export function ScheduleEditor({
           prompt,
           inboxLevel,
           autoCloseOnFinish,
+          catchUp: catchUpValue(),
+          retry: retryValue(),
           ...(isGlobalTask ? { group: group || null } : {})
         });
         if (!result.ok) {
@@ -582,6 +612,78 @@ export function ScheduleEditor({
           </span>
         </label>
       </div>
+      {showPolicies ? (
+        <>
+          <div className="scheduler-form-field">
+            <label htmlFor="sched-missed">Missed runs</label>
+            <select
+              id="sched-missed"
+              value={missedChoice}
+              onChange={(e) => setMissedChoice(e.target.value as MissedRunChoice)}
+            >
+              <option value="classic">Classic (as before)</option>
+              <option value="once">Run once (recommended)</option>
+              <option value="skip">Skip</option>
+              <option value="all">Run each missed time, up to N</option>
+            </select>
+            {missedChoice === 'all' ? (
+              <div className="schedule-policy-inline">
+                <label htmlFor="sched-missed-max">Up to</label>
+                <input
+                  id="sched-missed-max"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={missedMax}
+                  onChange={(e) => setMissedMax(clampInt(parseInt(e.target.value, 10), 1, 10))}
+                />
+                <span>missed times</span>
+              </div>
+            ) : null}
+            <p className="modal-hint">
+              {missedChoice === 'classic'
+                ? 'Classic keeps the behaviour from earlier Zana versions: cron schedules catch up once, interval schedules wait for their next time after a long close.'
+                : 'What to do when a scheduled time passes while the computer sleeps or Zana is closed.'}
+            </p>
+          </div>
+          <div className="scheduler-form-field">
+            <label htmlFor="sched-retry">Auto-retry</label>
+            <select
+              id="sched-retry"
+              value={retryOn ? 'on' : 'off'}
+              onChange={(e) => setRetryOn(e.target.value === 'on')}
+            >
+              <option value="off">Off</option>
+              <option value="on">Retry failed runs</option>
+            </select>
+            {retryOn ? (
+              <div className="schedule-policy-inline">
+                <label htmlFor="sched-retry-attempts">Up to</label>
+                <input
+                  id="sched-retry-attempts"
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={retryAttempts}
+                  onChange={(e) => setRetryAttempts(clampInt(parseInt(e.target.value, 10), 1, 5))}
+                />
+                <span>times</span>
+                <label htmlFor="sched-retry-delay">Wait</label>
+                <input
+                  id="sched-retry-delay"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={retryDelay}
+                  onChange={(e) => setRetryDelay(clampInt(parseInt(e.target.value, 10), 1, 1440))}
+                />
+                <span>minutes</span>
+              </div>
+            ) : null}
+            <p className="modal-hint">Retries only failures that are likely temporary (exit errors, missing reports, launch failures). Waits longer after each attempt.</p>
+          </div>
+        </>
+      ) : null}
       {error && <div className="modal-error">{error}</div>}
       {!readOnly ? (
         <div className="schedule-editor-actions">

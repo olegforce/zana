@@ -353,4 +353,114 @@ describe('ScheduleEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await vi.waitFor(() => expect(screen.getByText('conflict')).toBeTruthy());
   });
+
+  describe('missed-run and retry policies', () => {
+    const base = {
+      id: 'sched-1', name: 'Morning digest', enabled: true, projectId: 'p1', profile: 'claude',
+      schedule: { every: '1h' }, overlap: 'skip', history: { retain: 10 }, status: { runCount: 0, runs: [] },
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z'
+    };
+    const missed = () => document.querySelector('#sched-missed') as HTMLSelectElement;
+    const retry = () => document.querySelector('#sched-retry') as HTMLSelectElement;
+    const input = (id: string, value: string) => fireEvent.change(document.querySelector(id) as HTMLInputElement, { target: { value } });
+    const saved = async (task: unknown) => {
+      update.mockResolvedValue({ ok: true, value: { id: 'sched-1' } });
+      const onSaved = vi.fn();
+      render(<ScheduleEditor task={task as never} onSaved={onSaved} />);
+      return onSaved;
+    };
+
+    it('defaults a new schedule to Run once with retry off, and creates it so', async () => {
+      create.mockResolvedValue({ ok: true, value: { id: 'n' } });
+      render(<ScheduleEditor task={null} />);
+      expect(missed().value).toBe('once');
+      expect(retry().value).toBe('off');
+      expect(screen.getByText('What to do when a scheduled time passes while the computer sleeps or Zana is closed.')).toBeTruthy();
+      fireEvent.change(document.querySelector('#sched-name') as HTMLInputElement, { target: { value: 'N' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+      await vi.waitFor(() => expect(create).toHaveBeenCalled());
+      expect(create.mock.calls[0]![0]).toMatchObject({ catchUp: { mode: 'once' }, retry: null });
+    });
+
+    it('a copy of a Classic schedule is a NEW schedule and starts at Run once; a copy of a Recovery one keeps its policy', () => {
+      render(<ScheduleEditor task={null} seed={{ kind: 'duplicate', source: base as never }} />);
+      expect(missed().value).toBe('once');
+      cleanup();
+      render(<ScheduleEditor task={null} seed={{ kind: 'duplicate', source: { ...base, catchUp: { mode: 'skip' } } as never }} />);
+      expect(missed().value).toBe('skip');
+    });
+
+    it('shows an existing schedule without catchUp as Classic with its help, saving null', async () => {
+      const onSaved = await saved(base);
+      expect(missed().value).toBe('classic');
+      expect(screen.getByText(/Classic keeps the behaviour from earlier Zana versions/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1]).toMatchObject({ catchUp: null, retry: null });
+    });
+
+    it.each([['once', { mode: 'once' }], ['skip', { mode: 'skip' }]])('round-trips %s', async (choice, expected) => {
+      const onSaved = await saved(base);
+      fireEvent.change(missed(), { target: { value: choice } });
+      expect(document.querySelector('#sched-missed-max')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].catchUp).toEqual(expected);
+    });
+
+    it('round-trips Run each missed time with a clamped N', async () => {
+      const onSaved = await saved({ ...base, catchUp: { mode: 'all', max: 4 } });
+      expect(missed().value).toBe('all');
+      expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('4');
+      input('#sched-missed-max', '99');
+      expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('10');
+      input('#sched-missed-max', '0');
+      expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('1');
+      input('#sched-missed-max', '7');
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].catchUp).toEqual({ mode: 'all', max: 7 });
+    });
+
+    it('clears back to Classic', async () => {
+      const onSaved = await saved({ ...base, catchUp: { mode: 'skip' } });
+      expect(missed().value).toBe('skip');
+      fireEvent.change(missed(), { target: { value: 'classic' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].catchUp).toBeNull();
+    });
+
+    it('turns retry on with clamped attempts and delay, and off again', async () => {
+      const onSaved = await saved(base);
+      fireEvent.change(retry(), { target: { value: 'on' } });
+      input('#sched-retry-attempts', '9');
+      input('#sched-retry-delay', '5000');
+      expect((document.querySelector('#sched-retry-attempts') as HTMLInputElement).value).toBe('5');
+      expect((document.querySelector('#sched-retry-delay') as HTMLInputElement).value).toBe('1440');
+      input('#sched-retry-attempts', '2');
+      input('#sched-retry-delay', '15');
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].retry).toEqual({ attempts: 2, delayMinutes: 15 });
+      cleanup();
+      update.mockClear();
+      const again = await saved({ ...base, retry: { attempts: 2, delayMinutes: 15 } });
+      expect(retry().value).toBe('on');
+      expect((document.querySelector('#sched-retry-attempts') as HTMLInputElement).value).toBe('2');
+      fireEvent.change(retry(), { target: { value: 'off' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(again).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].retry).toBeNull();
+    });
+
+    it('hides both fields for read-only and external rows', () => {
+      render(<ScheduleEditor task={{ ...base, external: { kind: 'claude-loop' } } as never} readOnly />);
+      expect(missed()).toBeNull();
+      expect(retry()).toBeNull();
+      cleanup();
+      render(<ScheduleEditor task={{ ...base, external: { kind: 'claude-loop' } } as never} />);
+      expect(missed()).toBeNull();
+    });
+  });
 });

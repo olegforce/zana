@@ -69,3 +69,53 @@ export function nextRunMsFrom(s: ScheduleCadence, from: Date): number | null {
   }
   return null;
 }
+
+/** Result of {@link slotsBetween}: slot count plus the first and last slot (epoch ms). */
+export interface SlotsBetween {
+  count: number;
+  first?: number;
+  last?: number;
+}
+
+/**
+ * Count the cadence slots in `(afterMsExclusive, untilMsInclusive]`, stopping
+ * at `cap`. Interval slots are `after + k*interval` (k >= 1); cron slots
+ * iterate `nextCronRunAt` from `after`. Never throws; an invalid cadence or an
+ * empty window yields `{ count: 0 }`.
+ */
+export function slotsBetween(
+  cadence: ScheduleCadence,
+  afterMsExclusive: number,
+  untilMsInclusive: number,
+  cap = 1000
+): SlotsBetween {
+  if (!Number.isFinite(afterMsExclusive) || !Number.isFinite(untilMsInclusive) || untilMsInclusive <= afterMsExclusive || cap < 1) {
+    return { count: 0 };
+  }
+  if (isCronCadence(cadence)) {
+    let count = 0;
+    let first: number | undefined;
+    let last: number | undefined;
+    let cursor = afterMsExclusive;
+    while (count < cap) {
+      let next: Date | null = null;
+      try {
+        next = nextCronRunAt(cadence.cron!, cadence.tz, new Date(cursor));
+      } catch {
+        next = null;
+      }
+      if (!next || next.getTime() <= cursor || next.getTime() > untilMsInclusive) break;
+      cursor = next.getTime();
+      first ??= cursor;
+      last = cursor;
+      count++;
+    }
+    return count > 0 ? { count, first, last } : { count: 0 };
+  }
+  const interval = cadence.every ? parseEvery(cadence.every) : null;
+  if (!interval || interval <= 0) return { count: 0 };
+  const total = Math.floor((untilMsInclusive - afterMsExclusive) / interval);
+  if (total < 1) return { count: 0 };
+  const count = Math.min(total, cap);
+  return { count, first: afterMsExclusive + interval, last: afterMsExclusive + count * interval };
+}

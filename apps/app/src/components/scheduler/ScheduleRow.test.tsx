@@ -114,4 +114,14 @@ describe('ScheduleRow', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /Open in split/ }));
     expect(onOpenInSplit).toHaveBeenCalledTimes(1);
   });
+
+  it('shows Queued and Retry pending indicators', () => {
+    const wrap = (t: ScheduledTask) => <MemoryRouter><ScheduleRow task={t} projectName="Demo" onOpen={vi.fn()} onOpenInSplit={vi.fn()} onDuplicate={vi.fn()} onAskDelete={vi.fn()} /></MemoryRouter>;
+    const queued = render(wrap({ ...task, status: { runCount: 0, runs: [], queuedAt: '2026-01-01T00:00:00Z' } }));
+    expect(queued.getByText('Queued')).toBeTruthy();
+    queued.unmount();
+    const retry = render(wrap({ ...task, status: { runCount: 0, runs: [], pendingRetry: { rootRunId: 'r', attempt: 1, dueAt: '2026-01-01T00:00:00Z' } } }));
+    expect(retry.getByText('Retry pending')).toBeTruthy();
+    expect(retry.queryByText('Queued')).toBeNull();
+  });
 });

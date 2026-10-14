@@ -183,6 +183,10 @@ export const ScheduleRow = React.memo(function ScheduleRow({
             </span>
           ) : task.status.runs.some(run => run.launchState === 'pending') ? (
             <span className="scheduler-pill scheduler-pill--error" title="Open this schedule to check its reserved worker">needs checking</span>
+          ) : task.status.queuedAt ? (
+            <span className="scheduler-pill scheduler-pill--error" title="Waiting for a free slot under the scheduled-run limit">Queued</span>
+          ) : task.status.pendingRetry ? (
+            <span className="scheduler-pill scheduler-pill--error" title="An automatic retry is waiting to start">Retry pending</span>
           ) : isWorking ? (
             <span className="scheduler-pill scheduler-pill--running" title="Agent is working — turn in progress">
               running

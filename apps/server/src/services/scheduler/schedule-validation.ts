@@ -1,9 +1,90 @@
-import type { ScheduledTask, LaunchProfileId } from '@zana-ai/zcc-domain/product';
+import type { ScheduledTask, ScheduleCatchUp, ScheduleRetryPolicy, ScheduleStatus, LaunchProfileId } from '@zana-ai/zcc-domain/product';
 import { VALID_PROFILES } from '@zana-ai/zcc-domain/launch-provider';
 import { validateCadence } from '@zana-ai/zcc-domain/schedule-spec';
 
 /** Upper bound on pending reservations + active Squad runs kept per schedule file. */
 const MAX_UNRESOLVED_RUNS = 100;
+
+function clampInt(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function isoOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+/** Normalise a raw `catchUp` value; anything invalid is dropped (= Classic). */
+export function normalizeCatchUp(raw: unknown): ScheduleCatchUp | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const { mode, max } = raw as { mode?: unknown; max?: unknown };
+  if (mode !== 'once' && mode !== 'skip' && mode !== 'all') return undefined;
+  const clamped = max === undefined ? undefined : clampInt(max, 1, 10);
+  return clamped === undefined ? { mode } : { mode, max: clamped };
+}
+
+/** Normalise a raw auto-retry policy; anything invalid is dropped (= off). */
+export function normalizeRetry(raw: unknown): ScheduleRetryPolicy | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const attempts = clampInt((raw as { attempts?: unknown }).attempts, 0, 5);
+  const delayMinutes = clampInt((raw as { delayMinutes?: unknown }).delayMinutes, 1, 1440);
+  if (attempts === undefined || delayMinutes === undefined) return undefined;
+  return { attempts, delayMinutes };
+}
+
+function normalizePendingRetry(raw: unknown): ScheduleStatus['pendingRetry'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { rootRunId, attempt, dueAt } = raw as { rootRunId?: unknown; attempt?: unknown; dueAt?: unknown };
+  if (typeof rootRunId !== 'string' || !rootRunId || rootRunId.length > 256) return undefined;
+  const n = typeof attempt === 'number' && Number.isInteger(attempt) && attempt >= 2 && attempt <= 6 ? attempt : undefined;
+  const due = isoOrUndefined(dueAt);
+  if (n === undefined || due === undefined) return undefined;
+  return { rootRunId, attempt: n, dueAt: due };
+}
+
+// Keys this loader understands (carried, or deliberately dropped). Anything else
+// is a newer version's field and is preserved (C5) so it survives our saves.
+const KNOWN_TASK_KEYS = new Set([
+  'id', 'name', 'description', 'enabled', 'projectId', 'profile', 'personaId', 'extraArgs', 'prompt',
+  'inboxLevel', 'notifyInbox', 'autoCloseOnFinish', 'maxDurationMinutes', 'group', 'schedule', 'overlap',
+  'history', 'status', 'createdAt', 'updatedAt', 'catchUp', 'retry', 'kind', 'teamId', 'planSource'
+]);
+const KNOWN_STATUS_KEYS = new Set([
+  'runCount', 'runs', 'lastRunAt', 'lastRunResult', 'lastRunSessionId', 'nextRunAt',
+  'slotCursorAt', 'missedFloorAt', 'pendingRetry'
+]);
+// Never preserved: runtime/derived data that must not be persisted.
+const NEVER_PRESERVE_TASK_KEYS = new Set(['source', 'external', '__proto__', 'constructor', 'prototype']);
+const NEVER_PRESERVE_STATUS_KEYS = new Set(['queuedAt', '__proto__', 'constructor', 'prototype']);
+const MAX_EXTRAS_JSON = 4096;
+
+function collectExtras(obj: Record<string, unknown>, known: Set<string>, deny: Set<string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (known.has(key) || deny.has(key)) continue;
+    out[key] = obj[key];
+  }
+  return out;
+}
+
+function jsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return Infinity;
+  }
+}
+
+/** Unknown top-level and status keys, or none at all when together over 4 KB. */
+function preservedExtras(r: Record<string, unknown>): { task: Record<string, unknown>; status: Record<string, unknown> } {
+  const task = collectExtras(r, KNOWN_TASK_KEYS, NEVER_PRESERVE_TASK_KEYS);
+  const status = r.status && typeof r.status === 'object'
+    ? collectExtras(r.status as Record<string, unknown>, KNOWN_STATUS_KEYS, NEVER_PRESERVE_STATUS_KEYS)
+    : {};
+  if (jsonLength(task) + jsonLength(status) > MAX_EXTRAS_JSON) return { task: {}, status: {} };
+  return { task, status };
+}
+
 /**
  * Validate a schedule JSON file. Returns the schedule on success, or a string
  * reason on failure (so callers can log the reason rather than silently
@@ -65,8 +146,16 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
       runs.push(run);
     }
   }
+  const extras = preservedExtras(r);
+  const rawStatus = r.status && typeof r.status === 'object' ? (r.status as Record<string, unknown>) : undefined;
+  const catchUp = normalizeCatchUp(r.catchUp);
+  const retry = normalizeRetry(r.retry);
+  const slotCursorAt = isoOrUndefined(rawStatus?.slotCursorAt);
+  const missedFloorAt = isoOrUndefined(rawStatus?.missedFloorAt);
+  const pendingRetry = normalizePendingRetry(rawStatus?.pendingRetry);
   // Defensive defaults — older hand-edited files may be missing pieces.
   const task: ScheduledTask = {
+    ...(extras.task as object),
     id: r.id,
     name: r.name,
     description: typeof r.description === 'string' ? r.description : undefined,
@@ -108,6 +197,7 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
     status:
       r.status && typeof r.status === 'object'
         ? {
+            ...(extras.status as object),
             runCount: typeof (r.status as { runCount?: unknown }).runCount === 'number'
               ? (r.status as { runCount: number }).runCount
               : 0,
@@ -124,9 +214,14 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
                 : undefined,
             nextRunAt: typeof (r.status as { nextRunAt?: unknown }).nextRunAt === 'string'
               ? (r.status as { nextRunAt: string }).nextRunAt
-              : undefined
+              : undefined,
+            ...(slotCursorAt ? { slotCursorAt } : {}),
+            ...(missedFloorAt ? { missedFloorAt } : {}),
+            ...(pendingRetry ? { pendingRetry } : {})
           }
         : { runCount: 0, runs: [] },
+    ...(catchUp ? { catchUp } : {}),
+    ...(retry ? { retry } : {}),
     createdAt: typeof r.createdAt === 'string' ? r.createdAt : new Date().toISOString(),
     updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : new Date().toISOString()
   };

@@ -1,0 +1,37 @@
+.schedule-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.schedule-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-muted, inherit);
+  white-space: nowrap;
+}
+.schedule-run-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.schedule-run-actions .settings-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.scheduler-run-row:has(.schedule-run-actions) {
+  flex-wrap: wrap;
+}
+.schedule-policy-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.schedule-policy-inline input[type='number'] {
+  width: 72px;
+}
