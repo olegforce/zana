@@ -303,7 +303,7 @@ export function AgentsSettingsView({
         <Field
           label="When the limit is reached"
           searchId="agents.scheduled.overflow"
-          help="Automatic keeps the classic behaviour (skip) for schedules that haven’t turned on recovery, and queues runs for schedules that have. Retries always queue."
+          help="Automatic: schedules with recovery turned on wait their turn in a queue; schedules without it skip that run and wait for their next time. Retries always queue."
         >
           <PopoverPicklist
             value={config.scheduledRunOverflow ?? 'auto'}

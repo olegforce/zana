@@ -22,6 +22,9 @@ const launchEnv = process.platform === 'linux' ? { ZCC_E2E_VISIBLE: '1' } : {};
 test.use({ launchEnv });
 
 async function addProject(app: Handle, name: string): Promise<string> {
+  // Screenshots go into the PR: dismiss the first-run "Star on GitHub" nudge so it isn't in every image.
+  const nudge = app.window.locator('.sponsor-nudge-close');
+  if (await nudge.isVisible().catch(() => false)) await nudge.click();
   const dir = join(app.home, name);
   mkdirSync(dir, { recursive: true });
   return app.window.evaluate(async path => {
@@ -161,7 +164,8 @@ test('Limit 1 queues the second due run instead of skipping it', async ({ app },
   await limit.blur();
   await expect.poll(() => app.window.evaluate(() => window.cc.config.get())).toMatchObject({ scheduledRunConcurrency: 1 });
   await expect(app.window.getByRole('button', { name: 'When the limit is reached' })).toContainText('Automatic');
-  await limit.scrollIntoViewIfNeeded();
+  // Centre the new controls so the whole "Scheduled" group is in the screenshot.
+  await limit.evaluate(el => el.scrollIntoView({ block: 'center' }));
   await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('settings-scheduled.png'));
 
