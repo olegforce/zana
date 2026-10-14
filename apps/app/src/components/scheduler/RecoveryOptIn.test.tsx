@@ -107,12 +107,12 @@ describe('RecoveryDialog', () => {
     render(<RecoveryDialog tasks={[...classic, task('Gamma', { catchUp: { mode: 'skip' } })]} onClose={onClose} />);
     expect(screen.queryByLabelText('Gamma')).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Beta' }));
-    fireEvent.change(screen.getByLabelText('Missed runs'), { target: { value: 'all' } });
+    fireEvent.click(screen.getByRole('radio', { name: /Run each missed time/ }));
     // Number fields keep the typed text and are clamped on apply.
     const max = screen.getByRole('spinbutton', { name: 'Missed runs to catch up' }) as HTMLInputElement;
     fireEvent.change(max, { target: { value: '50' } });
     expect(max.value).toBe('50');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Auto-retry temporary failures' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Retry failed runs/ }));
     const attempts = screen.getByRole('spinbutton', { name: 'Retry attempts' }) as HTMLInputElement;
     const delay = screen.getByRole('spinbutton', { name: 'Minutes to wait between retries' }) as HTMLInputElement;
     expect(attempts.value).toBe('1');
@@ -138,20 +138,27 @@ describe('RecoveryDialog', () => {
     cleanup();
     h.update.mockClear();
     render(<RecoveryDialog tasks={classic} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('Missed runs'), { target: { value: 'skip' } });
+    fireEvent.click(screen.getByRole('radio', { name: /Don't catch up/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Turn on for 2 schedules' }));
     await screen.findByText('2 turned on');
     expect(h.update.mock.calls[0]![1]).toEqual({ catchUp: { mode: 'skip' } });
   });
 
-  it('reports partial failure by name and still marks applied', async () => {
-    h.update.mockResolvedValueOnce({ ok: true, value: {} }).mockResolvedValueOnce({ ok: false, message: 'x' });
+  it('reports each failure by name with its reason in plain words, and still marks applied', async () => {
+    h.update.mockResolvedValueOnce({ ok: true, value: {} }).mockResolvedValueOnce({ ok: false, message: 'Error: Unknown metadata project' });
     render(<RecoveryDialog tasks={[...classic, task('Gamma')]} onClose={vi.fn()} />);
-    h.update.mockRejectedValueOnce(new Error('boom'));
+    h.update.mockRejectedValueOnce(new Error('disk full'));
     fireEvent.click(screen.getByRole('button', { name: 'Turn on for 3 schedules' }));
     expect(await screen.findByText('1 turned on')).toBeTruthy();
-    expect(screen.getByText('Could not update: Beta, Gamma')).toBeTruthy();
+    expect(screen.getByText('Could not turn on recovery for Beta: its project is missing.')).toBeTruthy();
+    expect(screen.getByText('Could not turn on recovery for Gamma: disk full.')).toBeTruthy();
     expect(h.set).toHaveBeenCalledWith({ schedulerRecoveryIntro: 'applied' });
+  });
+
+  it('never offers a schedule whose project is missing (it cannot be saved)', () => {
+    render(<RecoveryDialog tasks={[...classic, task('Orphan', { projectId: 'gone' })]} projectIds={new Set(['p'])} onClose={vi.fn()} />);
+    expect(screen.queryByRole('checkbox', { name: 'Orphan' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Turn on for 2 schedules' })).toBeTruthy();
   });
 
   it('does not mark applied when everything fails', async () => {
@@ -192,11 +199,15 @@ describe('RecoveryDialog', () => {
     expect(h.set).not.toHaveBeenCalledWith({ schedulerRecoveryIntro: 'applied' });
   });
 
-  it('keeps the auto-retry checkbox out of the uppercase field-label style', () => {
+  it('uses the same cards as the editor: titles with plain descriptions', () => {
     render(<RecoveryDialog tasks={classic} onClose={vi.fn()} />);
-    const label = screen.getByRole('checkbox', { name: 'Auto-retry temporary failures' }).closest('label')!;
-    expect(label.className).toBe('scheduler-checkbox-row');
-    expect(label.parentElement!.classList.contains('scheduler-form-field')).toBe(false);
+    for (const title of ['Run once', 'Run each missed time', "Don't catch up", "Don't retry", 'Retry failed runs']) {
+      expect(screen.getByRole('radio', { name: new RegExp(title) })).toBeTruthy();
+    }
+    expect((screen.getByRole('radio', { name: /^Run once/ }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('radio', { name: /Don't retry/ }) as HTMLInputElement).checked).toBe(true);
+    // The dialog only turns recovery ON: the original-rules choice isn't offered.
+    expect(screen.queryByText(/unless several were missed|skip when busy/)).toBeNull();
   });
 
   it('shows a note when no Classic schedules remain', () => {

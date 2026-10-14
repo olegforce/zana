@@ -106,9 +106,11 @@ test('Recovery: slots missed while closed give one marker and one catch-up run',
   await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('detail-chips.png'));
   const editor = app.window.getByTestId('schedule-editor');
-  await expect(editor.getByLabel('Missed runs')).toHaveValue('once');
-  await expect(editor.getByLabel('Auto-retry')).toBeVisible();
-  await editor.locator('#sched-missed').scrollIntoViewIfNeeded();
+  // Both policies are cards with a title and a plain description, like Inbox notifications.
+  const missedRuns = editor.getByRole('radiogroup', { name: 'Missed runs' });
+  await expect(missedRuns.locator('input[value="once"]')).toBeChecked();
+  await expect(editor.getByRole('radiogroup', { name: 'Auto-retry' }).locator('input[value="off"]')).toBeChecked();
+  await missedRuns.scrollIntoViewIfNeeded();
   await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('editor-policies.png'));
 });
@@ -228,7 +230,7 @@ test('An existing (2.3-format) schedule keeps Classic behaviour until recovery i
 
   await openScheduler(app);
   await openDetail(app, 'Legacy stale');
-  await expect(app.window.locator('.schedule-chips').getByText('Classic')).toBeVisible();
+  await expect(app.window.locator('.schedule-chips').getByText('Recovery off')).toBeVisible();
   await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('classic-detail.png'));
 

@@ -55,7 +55,8 @@ export function ProblemsPanel({ tasks, projects, onOpenSchedule, onOpenSession, 
   const [busy, setBusy] = useState(false);
 
   const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
-  const classicCount = useMemo(() => tasks.filter((t) => !t.external && !isRecoveryMode(t)).length, [tasks]);
+  // Only schedules recovery can actually be turned on for (their project exists).
+  const classicCount = useMemo(() => tasks.filter((t) => !t.external && !isRecoveryMode(t) && projects.has(t.projectId)).length, [tasks, projects]);
   const projectOptions = useMemo(
     () => [...new Set(tasks.map((t) => t.projectId))].map((id) => ({ id, name: projects.get(id)?.name ?? 'Project missing' })),
     [tasks, projects]
@@ -168,7 +169,7 @@ export function ProblemsPanel({ tasks, projects, onOpenSchedule, onOpenSession, 
     <section className="problems-workbench" role="region" aria-label="Problems">
       {classicCount > 0 && (
         <button type="button" className="problems-classic-link" onClick={onTurnOnRecovery}>
-          {classicCount} Classic {classicCount === 1 ? 'schedule' : 'schedules'} · Turn on recovery
+          {classicCount} {classicCount === 1 ? 'schedule' : 'schedules'} without recovery · Turn on recovery
         </button>
       )}
       <div className="schedule-filters problems-filters">

@@ -16,11 +16,11 @@ import { isValidCron, nextCronRuns } from '@zana-ai/zcc-domain/parse-cron';
 import { useData, useUi, useScheduleGroups, upsertSchedulerTask } from '../../store.js';
 import { ImprovePromptButton } from '../ImprovePromptButton.js';
 import { PopoverPicklist } from '../ui/PopoverPicklist.js';
-import { PROFILE_LABEL, INBOX_LEVELS, scopeLabel, sourceLabel } from './schedulerUtils.js';
+import { PROFILE_LABEL, INBOX_LEVELS, RETRY_CHOICES, missedRunChoices, scopeLabel, sourceLabel, type MissedRunChoiceValue } from './schedulerUtils.js';
 import type { ScheduleSeed } from './schedule-seed.js';
 import './schedule-runs.css';
 
-type MissedRunChoice = 'classic' | ScheduleCatchUp['mode'];
+type MissedRunChoice = MissedRunChoiceValue;
 
 const PROFILES = VALID_PROFILES;
 
@@ -113,12 +113,12 @@ export function ScheduleEditor({
       ?? seededTask?.group
       ?? (task === null && !seededTask && schedulerTab === 'group' ? selectedGroupId ?? '' : '')
   );
-  // Missed-run and retry policies. A NEW schedule (including a copy of a Classic
-  // one) starts in Recovery ("Run once"); an existing one without `catchUp` is
-  // Classic and shows as such.
+  // Missed-run and retry policies. A NEW schedule (including a copy of one on its
+  // original rules) starts with "Run once"; an existing one without `catchUp`
+  // keeps its original rules and shows them as such.
   const policySource = task ?? seededTask;
   const [missedChoice, setMissedChoice] = useState<MissedRunChoice>(
-    task ? (task.catchUp ? task.catchUp.mode : 'classic') : (seededTask?.catchUp?.mode ?? 'once')
+    task ? (task.catchUp ? task.catchUp.mode : 'original') : (seededTask?.catchUp?.mode ?? 'once')
   );
   // Number fields keep the raw text while typing; they are clamped on save.
   const [missedMax, setMissedMax] = useState<string>(String(policySource?.catchUp?.max ?? 3));
@@ -189,7 +189,7 @@ export function ScheduleEditor({
     return Math.max(min, Math.min(max, Number.isFinite(n) ? Math.round(n) : min));
   };
   const catchUpValue = (): ScheduleCatchUp | null =>
-    missedChoice === 'classic' ? null
+    missedChoice === 'original' ? null
       : missedChoice === 'all' ? { mode: 'all', max: clampInt(missedMax, 1, 10) }
         : { mode: missedChoice };
   const retryValue = (): ScheduleRetryPolicy | null =>
@@ -619,17 +619,26 @@ export function ScheduleEditor({
       {showPolicies ? (
         <>
           <div className="scheduler-form-field">
-            <label htmlFor="sched-missed">Missed runs</label>
-            <select
-              id="sched-missed"
-              value={missedChoice}
-              onChange={(e) => setMissedChoice(e.target.value as MissedRunChoice)}
-            >
-              <option value="classic">Classic (as before)</option>
-              <option value="once">Run once (recommended)</option>
-              <option value="skip">Skip</option>
-              <option value="all">Run each missed time, up to N</option>
-            </select>
+            <label>Missed runs</label>
+            <p className="modal-hint">When a scheduled time passes while the computer sleeps or Zana is closed.</p>
+            <div className="scheduler-scope-picker" role="radiogroup" aria-label="Missed runs">
+              {missedRunChoices(cadenceMode, !isNew).map(({ value, title, hint }) => (
+                <label key={value} className={`scheduler-scope-option ${missedChoice === value ? 'is-active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="sched-missed"
+                    value={value}
+                    checked={missedChoice === value}
+                    disabled={disabled}
+                    onChange={() => setMissedChoice(value)}
+                  />
+                  <div className="scheduler-scope-option-body">
+                    <span className="scheduler-scope-title">{title}</span>
+                    <span className="scheduler-scope-hint">{hint}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
             {missedChoice === 'all' ? (
               <div className="schedule-policy-inline">
                 <span aria-hidden>Up to</span>
@@ -641,28 +650,34 @@ export function ScheduleEditor({
                   max={10}
                   aria-label="Missed runs to catch up"
                   value={missedMax}
+                  disabled={disabled}
                   onChange={(e) => setMissedMax(e.target.value)}
                   onBlur={() => setMissedMax(String(clampInt(missedMax, 1, 10)))}
                 />
                 <span aria-hidden>missed times</span>
               </div>
             ) : null}
-            <p className="modal-hint">
-              {missedChoice === 'classic'
-                ? 'Classic keeps the behaviour from earlier Zana versions: cron schedules catch up once, interval schedules wait for their next time after a long close.'
-                : 'What to do when a scheduled time passes while the computer sleeps or Zana is closed.'}
-            </p>
           </div>
           <div className="scheduler-form-field">
-            <label htmlFor="sched-retry">Auto-retry</label>
-            <select
-              id="sched-retry"
-              value={retryOn ? 'on' : 'off'}
-              onChange={(e) => setRetryOn(e.target.value === 'on')}
-            >
-              <option value="off">Off</option>
-              <option value="on">Retry failed runs</option>
-            </select>
+            <label>Auto-retry</label>
+            <div className="scheduler-scope-picker" role="radiogroup" aria-label="Auto-retry">
+              {RETRY_CHOICES.map(({ value, title, hint }) => (
+                <label key={value} className={`scheduler-scope-option ${(retryOn ? 'on' : 'off') === value ? 'is-active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="sched-retry"
+                    value={value}
+                    checked={(retryOn ? 'on' : 'off') === value}
+                    disabled={disabled}
+                    onChange={() => setRetryOn(value === 'on')}
+                  />
+                  <div className="scheduler-scope-option-body">
+                    <span className="scheduler-scope-title">{title}</span>
+                    <span className="scheduler-scope-hint">{hint}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
             {retryOn ? (
               <div className="schedule-policy-inline">
                 <span aria-hidden>Up to</span>
@@ -674,11 +689,11 @@ export function ScheduleEditor({
                   max={5}
                   aria-label="Retry attempts"
                   value={retryAttempts}
+                  disabled={disabled}
                   onChange={(e) => setRetryAttempts(e.target.value)}
                   onBlur={() => setRetryAttempts(String(clampInt(retryAttempts, 1, 5)))}
                 />
-                <span aria-hidden>times</span>
-                <span aria-hidden>Wait</span>
+                <span aria-hidden>times, waiting</span>
                 <input
                   id="sched-retry-delay"
                   className="settings-input"
@@ -687,13 +702,13 @@ export function ScheduleEditor({
                   max={1440}
                   aria-label="Minutes to wait between retries"
                   value={retryDelay}
+                  disabled={disabled}
                   onChange={(e) => setRetryDelay(e.target.value)}
                   onBlur={() => setRetryDelay(String(clampInt(retryDelay, 1, 1440)))}
                 />
-                <span aria-hidden>minutes</span>
+                <span aria-hidden>minutes first</span>
               </div>
             ) : null}
-            <p className="modal-hint">Retries only failures that are likely temporary (exit errors, missing reports, launch failures). Waits longer after each attempt.</p>
           </div>
         </>
       ) : null}

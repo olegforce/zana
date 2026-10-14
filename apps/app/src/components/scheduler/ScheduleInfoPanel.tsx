@@ -175,7 +175,7 @@ export function ScheduleInfoPanel({
               </span>
             ) : null}
             {!isRecoveryMode(task) ? (
-              <span className="schedule-chip" title="Runs exactly like earlier Zana versions. Edit the schedule to turn on recovery.">Classic</span>
+              <span className="schedule-chip" title="Missed and over-the-limit runs follow this schedule's original rules. Edit the schedule to choose how missed runs are caught up.">Recovery off</span>
             ) : null}
           </div>
         )}

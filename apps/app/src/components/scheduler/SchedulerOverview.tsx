@@ -259,7 +259,7 @@ export function SchedulerOverview({
 
   return (
     <div className="scheduler-overview">
-      <RecoveryCard tasks={tasks} refreshKey={recoveryOpen} onReview={() => onTurnOnRecovery?.()} />
+      <RecoveryCard tasks={tasks} projectIds={projectMap} refreshKey={recoveryOpen} onReview={() => onTurnOnRecovery?.()} />
       {issues.length > 0 && <section className="schedule-attention" aria-label="Schedules needing attention">
         <AlertTriangle size={20} aria-hidden />
         <div><h3>{issues.length} {issues.length === 1 ? 'schedule needs' : 'schedules need'} attention</h3>

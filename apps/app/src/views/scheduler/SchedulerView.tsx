@@ -373,7 +373,7 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
           }}
         />
       )}
-      {recoveryOpen && <RecoveryDialog tasks={scopedTasks} onClose={() => setRecoveryOpen(false)} />}
+      {recoveryOpen && <RecoveryDialog tasks={scopedTasks} projectIds={projectMap} onClose={() => setRecoveryOpen(false)} />}
       {confirmDelete && (
         <DeleteConfirmModal
           task={confirmDelete}

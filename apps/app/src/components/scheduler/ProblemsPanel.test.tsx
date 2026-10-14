@@ -253,9 +253,9 @@ describe('ProblemsPanel', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select all on this page' }));
   });
 
-  it('offers Turn on recovery only when Classic schedules exist', () => {
+  it('offers Turn on recovery only for schedules without recovery', () => {
     const props = mount([make('Classic', [], { catchUp: undefined }), make('Ext', [], { external: { kind: 'claude-loop' } as ScheduledTask['external'], catchUp: undefined })]);
-    fireEvent.click(screen.getByRole('button', { name: '1 Classic schedule · Turn on recovery' }));
+    fireEvent.click(screen.getByRole('button', { name: '1 schedule without recovery · Turn on recovery' }));
     expect(props.onTurnOnRecovery).toHaveBeenCalledOnce();
     cleanup();
     mount([make('Recovery', [])]);

@@ -274,7 +274,7 @@ describe('ScheduleInfoPanel', () => {
       expect(screen.queryByRole('button', { name: /Retry Morning digest run/ })).toBeNull();
       rerender(<ScheduleInfoPanel task={withRuns([failedRun], { external: { kind: 'claude-loop' } as ScheduledTask['external'] })} />);
       expect(screen.queryByRole('button', { name: /Retry Morning digest run/ })).toBeNull();
-      expect(screen.queryByText('Classic')).toBeNull();
+      expect(screen.queryByText('Recovery off')).toBeNull();
     });
 
     it('shows only history.retain rows', () => {
@@ -314,16 +314,16 @@ describe('ScheduleInfoPanel', () => {
       expect(retryAtLabel('garbage', now)).toBe('');
     });
 
-    it('shows Queued, Retry at and Classic chips', () => {
+    it('shows Queued, Retry at and Recovery off chips', () => {
       const due = new Date(2026, 0, 1, 14, 30).toISOString();
       const { rerender } = render(<ScheduleInfoPanel task={withRuns([], { catchUp: undefined, status: { runCount: 0, runs: [], queuedAt: '2026-01-01T00:00:00Z', pendingRetry: { rootRunId: 'x', attempt: 1, dueAt: due } } })} />);
       expect(screen.getByText('Queued')).toBeTruthy();
       expect(screen.getByText(/^Retry at /)).toBeTruthy();
-      expect(screen.getByText('Classic').getAttribute('title')).toContain('Runs exactly like earlier Zana versions');
+      expect(screen.getByText('Recovery off').getAttribute('title')).toContain("follow this schedule's original rules");
       rerender(<ScheduleInfoPanel task={withRuns([])} />);
       expect(screen.queryByText('Queued')).toBeNull();
       expect(screen.queryByText(/^Retry at /)).toBeNull();
-      expect(screen.queryByText('Classic')).toBeNull();
+      expect(screen.queryByText('Recovery off')).toBeNull();
     });
   });
 });

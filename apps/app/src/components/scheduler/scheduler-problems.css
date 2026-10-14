@@ -125,3 +125,5 @@
   max-height: 200px;
   overflow-y: auto;
 }
+/* Space each policy block from the cards above it, as the editor's form fields are. */
+.recovery-dialog-body .scheduler-form-field + .scheduler-form-field { margin-top: 12px; }
