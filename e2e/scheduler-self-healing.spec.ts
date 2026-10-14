@@ -57,6 +57,15 @@ async function openScheduler(app: Handle) {
   await app.window.locator('.nav-item').filter({ hasText: 'Scheduler' }).first().click();
   return app.window.getByTestId('scheduler-view');
 }
+/** Two animation frames: a native capture right after a DOM change grabs the previous frame. */
+const settle = (app: Handle) => app.window.evaluate(() => new Promise<void>(done =>
+  requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+/** Switch the theme the supported way and wait until it is painted. */
+async function useTheme(app: Handle, theme: 'light' | 'dark') {
+  await app.window.evaluate(value => window.cc.config.set({ theme: value }), theme);
+  await expect(app.window.locator('html')).toHaveAttribute('data-theme', theme);
+  await settle(app);
+}
 const subview = (app: Handle, name: 'Overview' | 'Schedules' | 'Problems') =>
   app.window.locator('.scheduler-subview-toggle button', { hasText: name }).click();
 async function openDetail(app: Handle, name: string) {
@@ -91,10 +100,13 @@ test('Recovery: slots missed while closed give one marker and one catch-up run',
   expect(saved.status.runCount).toBe(2);
   expect(saved.status.runs.find((run: { marker?: boolean }) => run.marker)).toMatchObject({ result: 'skipped', reasonCode: 'missed-app-closed', missed: { count: 4 } });
 
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('detail-chips.png'));
   const editor = app.window.getByTestId('schedule-editor');
   await expect(editor.getByLabel('Missed runs')).toHaveValue('once');
   await expect(editor.getByLabel('Auto-retry')).toBeVisible();
+  await editor.locator('#sched-missed').scrollIntoViewIfNeeded();
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('editor-policies.png'));
 });
 
@@ -114,8 +126,8 @@ test('Problems: retry a failed run and dismiss another', async ({ app }, testInf
   await expect(row('Flaky job')).toContainText('Exited with an error');
   await expect(row('Always fails')).toContainText('Exited with an error');
   await app.window.setViewportSize({ width: 1440, height: 1000 });
-  for (const theme of ['light', 'dark']) {
-    await app.window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+  for (const theme of ['light', 'dark'] as const) {
+    await useTheme(app, theme);
     await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath(`problems-${theme}.png`));
   }
 
@@ -144,6 +156,8 @@ test('Limit 1 queues the second due run instead of skipping it', async ({ app },
   await limit.blur();
   await expect.poll(() => app.window.evaluate(() => window.cc.config.get())).toMatchObject({ scheduledRunConcurrency: 1 });
   await expect(app.window.getByRole('button', { name: 'When the limit is reached' })).toContainText('Automatic');
+  await limit.scrollIntoViewIfNeeded();
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('settings-scheduled.png'));
 
   const cron = { every: undefined, cron: '0 * * * *', tz: 'UTC', enabled: true };
@@ -212,17 +226,20 @@ test('An existing (2.3-format) schedule keeps Classic behaviour until recovery i
   await openScheduler(app);
   await openDetail(app, 'Legacy stale');
   await expect(app.window.locator('.schedule-chips').getByText('Classic')).toBeVisible();
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('classic-detail.png'));
 
   await openScheduler(app);
   await subview(app, 'Overview');
   const card = app.window.getByRole('region', { name: 'Run recovery' });
   await expect(card).toContainText('Your schedules still run exactly as before');
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('recovery-card.png'));
   await card.getByRole('button', { name: 'Review' }).click();
   const dialog = app.window.locator('.recovery-dialog');
   await expect(dialog.getByText('Legacy stale')).toBeVisible();
   await expect(dialog.getByText('Legacy fresh')).toBeVisible();
+  await settle(app);
   await captureElectronScreenshot(app.electron, app.window, testInfo.outputPath('recovery-dialog.png'));
   await dialog.getByRole('button', { name: 'Turn on for 2 schedules' }).click();
   await expect(dialog.getByText('2 turned on')).toBeVisible({ timeout: 15_000 });

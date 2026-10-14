@@ -408,13 +408,39 @@ describe('schedule_runs / schedule_retry / schedule_dismiss', () => {
     const { api, tools } = setup();
     const out = payload(await tools.get('schedule_retry')!({ refs: [{ scheduleId: 'mine', runId: 'r1' }, { scheduleId: 'foreign', runId: 'r3' }] }));
     expect(api.retryRuns).toHaveBeenCalledWith([{ scheduleId: 'mine', runId: 'r1' }]);
-    expect(out.ok).toBe(false);
+    // Partial success: the call worked (`ok`), but not every ref (`allOk`).
+    expect(out.ok).toBe(true);
+    expect(out.allOk).toBe(false);
     expect(out.results).toEqual([
       { scheduleId: 'mine', runId: 'r1', ok: true, status: 'started' },
       { scheduleId: 'foreign', runId: 'r3', ok: false, error: 'schedule not found' }
     ]);
     const widened = payload(await tools.get('schedule_retry')!({ refs: [{ scheduleId: 'foreign', runId: 'r3' }], allProjects: true }));
-    expect(widened.ok).toBe(true);
+    expect(widened).toMatchObject({ ok: true, allOk: true });
+    const nothing = payload(await tools.get('schedule_retry')!({ refs: [{ scheduleId: 'foreign', runId: 'r3' }] }));
+    expect(nothing).toMatchObject({ ok: false, allOk: false });
+  });
+
+  it('schedule_retry open:true sends one ref per schedule', async () => {
+    const many = [
+      { scheduleId: 'mine', run: { id: 'n1' }, manualRetry: true },
+      { scheduleId: 'mine', run: { id: 'n2' }, manualRetry: true },
+      { scheduleId: 'mine', run: { id: 'n3' }, manualRetry: true }
+    ];
+    const { api, tools } = setup({ queryRuns: vi.fn(async () => ({ rows: many as never, total: 3, truncated: false })) });
+    await tools.get('schedule_retry')!({ open: true });
+    expect(api.retryRuns).toHaveBeenCalledWith([{ scheduleId: 'mine', runId: 'n1' }]);
+  });
+
+  it('schedule_runs returns compact rows, not full run records', async () => {
+    const full = [{ scheduleId: 'mine', scheduleName: 'Nightly', projectId: 'proj-1', outcome: 'error', reason: 'exit-nonzero', open: true, manualRetry: true,
+      run: { id: 'r9', at: '2026-10-14T01:00:00Z', result: 'error', message: 'x'.repeat(400), report: 'long markdown report', sessionId: 's9' } }];
+    const { tools } = setup({ queryRuns: vi.fn(async () => ({ rows: full as never, total: 1, truncated: false })) });
+    const out = payload(await tools.get('schedule_runs')!({}));
+    expect(out.rows).toEqual([expect.objectContaining({ scheduleId: 'mine', runId: 'r9', reason: 'exit-nonzero', label: 'Exited with an error', attempt: 1, sessionId: 's9' })]);
+    expect(out.rows[0].message).toHaveLength(200);
+    expect(out.rows[0]).not.toHaveProperty('run');
+    expect(JSON.stringify(out)).not.toContain('long markdown report');
   });
 
   it('schedule_retry open:true queries this project and retries only retryable rows with an id', async () => {
@@ -445,9 +471,9 @@ describe('schedule_runs / schedule_retry / schedule_dismiss', () => {
     const { api, tools } = setup();
     const out = payload(await tools.get('schedule_dismiss')!({ refs: [{ scheduleId: 'mine', runId: 'r1' }, { scheduleId: 'foreign', runId: 'r3' }] }));
     expect(api.dismissRuns).toHaveBeenCalledWith([{ scheduleId: 'mine', runId: 'r1' }]);
-    expect(out).toEqual({ ok: false, dismissed: 1, rejected: [{ scheduleId: 'foreign', runId: 'r3' }] });
+    expect(out).toEqual({ ok: true, allOk: false, dismissed: 1, rejected: [{ scheduleId: 'foreign', runId: 'r3' }] });
     const none = payload(await tools.get('schedule_dismiss')!({ refs: [{ scheduleId: 'foreign', runId: 'r3' }] }));
-    expect(none.dismissed).toBe(0);
+    expect(none).toMatchObject({ ok: false, dismissed: 0 });
     expect(api.dismissRuns).toHaveBeenCalledTimes(1);
   });
 
@@ -462,7 +488,7 @@ describe('schedule_runs / schedule_retry / schedule_dismiss', () => {
   it.each(['schedule_runs', 'schedule_retry', 'schedule_dismiss'])('%s surfaces owner failures', async (name) => {
     const boom = async () => { throw new Error('Owner offline'); };
     const { tools } = setup({ queryRuns: boom, retryRuns: boom, dismissRuns: boom });
-    const res = await tools.get(name)!({ refs: [{ scheduleId: 'mine', runId: 'r' }], open: name === 'schedule_retry' ? undefined : undefined });
+    const res = await tools.get(name)!({ refs: [{ scheduleId: 'mine', runId: 'r' }] });
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('Owner offline');
   });

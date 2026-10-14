@@ -78,7 +78,7 @@ describe('scheduled Squads and self-healing', () => {
     expect(deps.inbox.append).toHaveBeenCalledWith(expect.objectContaining({ notify: 'loud' }));
   });
 
-  it('records a stopped Squad as "squad-stopped", which is not a problem and not loud', async () => {
+  it('records a stopped Squad as "squad-stopped": not a problem, but notified loudly as #328 does', async () => {
     const { manager, deps, states, input } = fixture();
     const task = await manager.create({ ...input, inboxLevel: 'quiet' });
     await manager.runNow(task.id);
@@ -87,7 +87,8 @@ describe('scheduled Squads and self-healing', () => {
     const final = runs(manager, task.id)[0];
     expect(final).toMatchObject({ result: 'error', reasonCode: 'squad-stopped' });
     expect(isOpenProblem(final, Date.now())).toBe(false);
-    expect(deps.inbox.append).toHaveBeenCalledWith(expect.objectContaining({ notify: 'quiet' }));
+    // Notification behaviour is unchanged from #328: any error is loud.
+    expect(deps.inbox.append).toHaveBeenCalledWith(expect.objectContaining({ notify: 'loud' }));
   });
 
   it('closes earlier open problems when a later Squad run completes', async () => {

@@ -59,7 +59,8 @@ const internals = (manager: SchedulerManager) => manager as unknown as Internals
 const T = (manager: SchedulerManager, id: string) => manager.list().find(task => task.id === id)!;
 const autoFire = (manager: SchedulerManager, id: string) => internals(manager).fire(id, { manual: false });
 /** Wait for queued serial work (exit handlers, drains) to finish. */
-const settle = (manager: SchedulerManager) => manager.queryRuns();
+const settle = (manager: SchedulerManager) =>
+  (manager as unknown as { serial: (work: () => Promise<unknown>) => Promise<unknown> }).serial(async () => undefined);
 const HOUR = 3_600_000;
 const MIN = 60_000;
 
@@ -310,7 +311,10 @@ describe('queue behaviour', () => {
       expect(fired.every(run => run.trigger === 'catch-up')).toBe(true);
       const slots = fired.map(run => Date.parse(run.slotAt!)).sort((a, b) => a - b);
       expect(slots).toEqual([now - 2.5 * HOUR, now - 1.5 * HOUR, now - 0.5 * HOUR]);
-      expect(markers[0].resolvedBy).toBe(fired.find(run => Date.parse(run.slotAt!) === slots[0])!.id);
+      // Queued catch-ups may never start, so the marker carries no early `resolvedBy`:
+      // the first finished success closes it (D8).
+      const marker = T(manager, id).status.runs.find(run => run.marker)!;
+      expect(marker.resolvedBy).toBe(fired.find(run => Date.parse(run.slotAt!) === slots[0])!.id);
       manager.stopAll();
     });
   });
@@ -531,7 +535,7 @@ describe('retryRuns through the queue', () => {
     expect(T(manager, tasks[1].id).status.runs[0]).toMatchObject({ trigger: 'retry', attempt: 2 });
   });
 
-  it('a newer retry for the same schedule replaces the queued one and says so', async () => {
+  it('a newer retry for the same schedule coalesces with the queued one', async () => {
     const { manager, tasks } = await makeFixture([{}, {}], { scheduledRunConcurrency: 1 });
     internals(manager).live.get(tasks[1].id)!.task.status.runs = [problem, { ...problem, id: 'p2' }];
     await manager.runNow(tasks[0].id);
@@ -539,7 +543,8 @@ describe('retryRuns through the queue', () => {
       { scheduleId: tasks[1].id, runId: 'p1' },
       { scheduleId: tasks[1].id, runId: 'p2' }
     ]);
-    expect(results[0]).toMatchObject({ ok: false, error: 'replaced by a newer retry' });
+    // Coalesced, not failed: the schedule re-runs once and that run serves both refs.
+    expect(results[0]).toMatchObject({ ok: true, status: 'queued' });
     expect(results[1]).toMatchObject({ ok: true, status: 'queued' });
     expect(internals(manager).queue).toHaveLength(1);
   });

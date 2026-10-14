@@ -1,5 +1,5 @@
 import type { Project, ScheduledTask } from '@zana-ai/zcc-domain/product';
-import { isOpenProblem } from '@zana-ai/zcc-domain/schedule-health';
+import { taskOpenProblems } from '@zana-ai/zcc-domain/schedule-health';
 
 const OPEN_PROBLEM_LABEL = 'Open problem';
 
@@ -7,8 +7,8 @@ export type ScheduleFilter = 'all' | 'enabled' | 'paused' | 'attention';
 
 export function scheduleIssue(task: ScheduledTask, projects: ReadonlyMap<string, Project>): string | null {
   if (!projects.has(task.projectId)) return 'Project missing';
-  const now = Date.now();
-  if (task.status?.runs?.some(run => isOpenProblem(run, now))) return OPEN_PROBLEM_LABEL;
+  // A later finished success closes earlier problems (also in pre-recovery history).
+  if (taskOpenProblems(task, Date.now()).length > 0) return OPEN_PROBLEM_LABEL;
   return null;
 }
 

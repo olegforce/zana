@@ -58,10 +58,14 @@ const NEVER_PRESERVE_TASK_KEYS = new Set(['source', 'external', '__proto__', 'co
 const NEVER_PRESERVE_STATUS_KEYS = new Set(['queuedAt', '__proto__', 'constructor', 'prototype']);
 const MAX_EXTRAS_JSON = 4096;
 
-function collectExtras(obj: Record<string, unknown>, known: Set<string>, deny: Set<string>): Record<string, unknown> {
+function collectExtras(obj: Record<string, unknown>, known: Set<string>, deny: Set<string>, budget: { left: number }): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(obj)) {
     if (known.has(key) || deny.has(key)) continue;
+    // Fill the budget field by field: one oversized future field drops only itself.
+    const size = jsonLength({ [key]: obj[key] });
+    if (size > budget.left) continue;
+    budget.left -= size;
     out[key] = obj[key];
   }
   return out;
@@ -75,13 +79,13 @@ function jsonLength(value: unknown): number {
   }
 }
 
-/** Unknown top-level and status keys, or none at all when together over 4 KB. */
+/** Unknown top-level and status keys, kept field by field within a shared 4 KB budget. */
 function preservedExtras(r: Record<string, unknown>): { task: Record<string, unknown>; status: Record<string, unknown> } {
-  const task = collectExtras(r, KNOWN_TASK_KEYS, NEVER_PRESERVE_TASK_KEYS);
+  const budget = { left: MAX_EXTRAS_JSON };
+  const task = collectExtras(r, KNOWN_TASK_KEYS, NEVER_PRESERVE_TASK_KEYS, budget);
   const status = r.status && typeof r.status === 'object'
-    ? collectExtras(r.status as Record<string, unknown>, KNOWN_STATUS_KEYS, NEVER_PRESERVE_STATUS_KEYS)
+    ? collectExtras(r.status as Record<string, unknown>, KNOWN_STATUS_KEYS, NEVER_PRESERVE_STATUS_KEYS, budget)
     : {};
-  if (jsonLength(task) + jsonLength(status) > MAX_EXTRAS_JSON) return { task: {}, status: {} };
   return { task, status };
 }
 
@@ -152,7 +156,8 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
   const retry = normalizeRetry(r.retry);
   const slotCursorAt = isoOrUndefined(rawStatus?.slotCursorAt);
   const missedFloorAt = isoOrUndefined(rawStatus?.missedFloorAt);
-  const pendingRetry = normalizePendingRetry(rawStatus?.pendingRetry);
+  // A pending retry only means something under a live retry policy.
+  const pendingRetry = retry && retry.attempts >= 1 ? normalizePendingRetry(rawStatus?.pendingRetry) : undefined;
   // Defensive defaults — older hand-edited files may be missing pieces.
   const task: ScheduledTask = {
     ...(extras.task as object),

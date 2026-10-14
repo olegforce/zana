@@ -18,7 +18,7 @@ import { useData } from '../../store.js';
 import { filterSchedules, scheduleIssue, type ScheduleFilter } from './schedule-filter.js';
 import { ScheduleFilters } from './ScheduleFilters.js';
 import { RecoveryCard } from './RecoveryOptIn.js';
-import { collectRunRows } from '@zana-ai/zcc-domain/schedule-health';
+import { countOpenProblems } from '@zana-ai/zcc-domain/schedule-health';
 import './scheduler-overview.css';
 import { KpiCard } from './KpiCard.js';
 import { ProjectDot } from '../listpane/ProjectDot.js';
@@ -78,14 +78,14 @@ export function SchedulerOverview({
   const [page, setPage] = useState(0);
   const inventory = useRef<HTMLElement>(null);
   const projectMap = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
-  const issues = useMemo(() => tasks.filter(t => scheduleIssue(t, projectMap)), [tasks, projectMap]);
+  // Open problems age out with real time; `tick` keeps the banner and the KPI in step.
+  const issues = useMemo(() => tasks.filter(t => scheduleIssue(t, projectMap)), [tasks, projectMap, tick]);
   const missing = issues.filter(t => !projectMap.has(t.projectId)).length;
   const withProblems = issues.length - missing;
   const openProblems = useMemo(() => {
-    const { rows, total } = collectRunRows(tasks, { state: 'open', limit: 500 }, Date.now());
-    const count = (...outcomes: string[]) => rows.filter(r => outcomes.includes(r.outcome)).length;
-    return { total, failed: count('error', 'incomplete'), missed: count('missed'), skipped: count('skipped') };
-    // Age-out of old problems depends on real time; tick keeps it fresh.
+    // Counts only: no row objects or sorting on every tick.
+    const { runs, byOutcome } = countOpenProblems(tasks, Date.now());
+    return { total: runs, failed: byOutcome.error + byOutcome.incomplete, missed: byOutcome.missed, skipped: byOutcome.skipped };
   }, [tasks, tick]);
   const reviewIssues = () => {
     setSearch('');

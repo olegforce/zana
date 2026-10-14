@@ -22,6 +22,7 @@ import {
   isOpenProblem,
   isProblemRun,
   isRecoveryMode,
+  newestSuccessMs,
   runOutcome,
   runReason
 } from '@zana-ai/zcc-domain/schedule-health';
@@ -35,6 +36,22 @@ import {
   formatRelative,
   pickLiveRun
 } from './schedulerUtils.js';
+
+/** "14:30", or with the date when not today: linear backoff can wait days. */
+export function retryAtLabel(dueAt: string, now = new Date()): string {
+  const due = new Date(dueAt);
+  if (Number.isNaN(due.getTime())) return '';
+  const time = due.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return due.toDateString() === now.toDateString()
+    ? time
+    : `${due.toLocaleDateString([], { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+/** The policy's total attempts, unless manual retries took this chain past it. */
+function policyMaxFor(task: ScheduledTask, run: ScheduleRun): number | undefined {
+  const max = task.retry ? task.retry.attempts + 1 : undefined;
+  return max !== undefined && (run.attempt ?? 1) <= max ? max : undefined;
+}
 
 export function ScheduleInfoPanel({
   task,
@@ -65,6 +82,8 @@ export function ScheduleInfoPanel({
     );
 
   const runs = task?.status.runs ?? [];
+  // A later finished success closes earlier problems, also for history written before recovery existed.
+  const closedBefore = newestSuccessMs(runs);
   const pending = runs.filter(run => run.launchState === 'pending');
   const liveRun = task ? pickLiveRun(runs, isSessionAlive) : null;
   const liveSessionId = liveRun?.sessionId ?? null;
@@ -114,6 +133,9 @@ export function ScheduleInfoPanel({
         const result = await product.scheduler.dismissRuns(refs);
         if (!result.ok) pushToast(`Dismiss failed: ${result.message}`, 'error');
       }
+    } catch (error) {
+      // A thrown IPC failure must not vanish as an unhandled rejection.
+      pushToast(`${action === 'retry' ? 'Run' : 'Dismiss'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
     } finally {
       setBusyRuns((prev) => {
         const next = new Set(prev);
@@ -148,7 +170,7 @@ export function ScheduleInfoPanel({
             ) : null}
             {task.status.pendingRetry ? (
               <span className="schedule-chip" title="An automatic retry is waiting to start">
-                Retry at {new Date(task.status.pendingRetry.dueAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                Retry at {retryAtLabel(task.status.pendingRetry.dueAt)}
               </span>
             ) : null}
             {!isRecoveryMode(task) ? (
@@ -209,7 +231,7 @@ export function ScheduleInfoPanel({
               const retryable = !isExternal && !!run.id
                 && canManualRetry({
                   manualRetry: isProblemRun(run) && (reason ? SCHEDULE_REASONS[reason].manualRetry : true),
-                  open: isOpenProblem(run, Date.now())
+                  open: isOpenProblem(run, Date.now(), closedBefore)
                 });
               const busy = !!run.id && busyRuns.has(run.id);
               return (
@@ -221,7 +243,7 @@ export function ScheduleInfoPanel({
                 <span className="scheduler-run-when" title={new Date(run.at).toLocaleString()}>
                   {formatRelative(new Date(run.at))}
                 </span>
-                <span className="scheduler-run-result"><RunOutcomeBadge run={run} maxAttempts={task.retry ? task.retry.attempts + 1 : undefined} /></span>
+                <span className="scheduler-run-result"><RunOutcomeBadge run={run} maxAttempts={policyMaxFor(task, run)} /></span>
                 <span className="scheduler-run-duration">
                   {run.durationMs !== undefined ? formatDuration(run.durationMs) : '—'}
                 </span>

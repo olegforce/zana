@@ -16,14 +16,20 @@
   display: inline-flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-left: auto;
+}
+/* The run list is a 6-column subgrid (dot, when, result, duration, details,
+   report): the actions take their own line under the row instead of an
+   auto-placed 7th cell, so #328's details/report icons stay aligned. */
+.scheduler-run-row > .schedule-run-actions {
+  grid-column: 2 / -1;
+  justify-self: end;
 }
 .schedule-run-actions .settings-btn {
   padding: 1px 8px;
   font-size: 11px;
 }
-.scheduler-run-row:has(.schedule-run-actions) {
-  flex-wrap: wrap;
+.scheduler-run-list .scheduler-run-when {
+  white-space: nowrap;
 }
 .schedule-policy-inline {
   display: flex;

@@ -8,3 +8,7 @@
 .run-outcome-chip,
 .run-outcome-badge { display: inline-block; max-width: 100%; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-muted); font-size: 11px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-outcome-chip { color: var(--text-primary); border-color: color-mix(in srgb, var(--warning, #b77900) 40%, var(--border)); background: color-mix(in srgb, var(--warning, #b77900) 8%, var(--bg-panel)); cursor: help; }
+/* Inside run lists the result column is uppercase; chips and badges stay readable
+   ("Ran 45m late", not "RAN 45M LATE"). */
+.run-outcome-chip,
+.run-outcome-badge { text-transform: none; letter-spacing: normal; font-weight: 400; }

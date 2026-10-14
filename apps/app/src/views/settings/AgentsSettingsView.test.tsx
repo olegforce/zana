@@ -297,7 +297,8 @@ describe('AgentsTab scheduled run limit', () => {
     expect(onConfigDraft).toHaveBeenCalledWith({ ...config, scheduledRunConcurrency: 7 });
     fireEvent.change(input, { target: { value: 'abc' } });
     expect(onConfigDraft).toHaveBeenCalledTimes(1);
-    for (const [raw, want] of [['7', 7], ['0', 1], ['50', 20], ['', 1]] as const) {
+    // Empty or invalid falls back to the default (5); numbers clamp to 1-20.
+    for (const [raw, want] of [['7', 7], ['0', 1], ['50', 20], ['', 5], ['abc', 5]] as const) {
       fireEvent.blur(input, { target: { value: raw } });
       expect(onUpdate).toHaveBeenLastCalledWith({ scheduledRunConcurrency: want });
     }

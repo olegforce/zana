@@ -293,7 +293,9 @@ export function AgentsSettingsView({
               if (!Number.isNaN(n)) onConfigDraft({ ...config, scheduledRunConcurrency: n });
             }}
             onBlur={(e) => {
-              const n = Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1));
+              // An empty or invalid entry falls back to the default (5), not the minimum.
+              const parsed = parseInt(e.target.value, 10);
+              const n = Number.isNaN(parsed) ? 5 : Math.max(1, Math.min(20, parsed));
               onUpdate({ scheduledRunConcurrency: n });
             }}
           />

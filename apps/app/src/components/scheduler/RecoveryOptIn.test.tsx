@@ -1,14 +1,20 @@
 /** @vitest-environment happy-dom */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScheduledTask } from '@zana-ai/zcc-domain/product';
 
-const h = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn(), update: vi.fn() }));
-vi.mock('../../lib/product-client.js', () => ({ product: { config: { get: h.get, set: h.set }, scheduler: { update: h.update } } }));
+const h = vi.hoisted(() => ({
+  get: vi.fn(), set: vi.fn(), update: vi.fn(), onChanged: vi.fn(),
+  modal: { onClose: undefined as undefined | (() => void), closeOnBackdrop: undefined as undefined | boolean, hideClose: undefined as undefined | boolean }
+}));
+vi.mock('../../lib/product-client.js', () => ({ product: { config: { get: h.get, set: h.set, onChanged: h.onChanged }, scheduler: { update: h.update } } }));
 vi.mock('../Modal.js', () => ({
-  Modal: ({ title, children, footer }: { title: string; children: React.ReactNode; footer?: React.ReactNode }) => (
-    <div role="dialog" aria-label={title}>{children}{footer}</div>
-  )
+  Modal: ({ title, children, footer, onClose, closeOnBackdrop, hideClose }: {
+    title: string; children: React.ReactNode; footer?: React.ReactNode; onClose: () => void; closeOnBackdrop?: boolean; hideClose?: boolean;
+  }) => {
+    h.modal = { onClose, closeOnBackdrop, hideClose };
+    return <div role="dialog" aria-label={title}>{children}{footer}</div>;
+  }
 }));
 import { RecoveryCard, RecoveryDialog } from './RecoveryOptIn.js';
 
@@ -19,6 +25,7 @@ beforeEach(() => {
   h.get.mockReset().mockResolvedValue({});
   h.set.mockReset().mockResolvedValue(undefined);
   h.update.mockReset().mockResolvedValue({ ok: true, value: {} });
+  h.onChanged.mockReset().mockReturnValue(() => {});
 });
 afterEach(cleanup);
 
@@ -62,6 +69,27 @@ describe('RecoveryCard', () => {
     await vi.waitFor(() => expect(screen.queryByRole('region', { name: 'Run recovery' })).toBeNull());
   });
 
+  it('hides when another window answers the offer, and unsubscribes on unmount', async () => {
+    const off = vi.fn();
+    let push!: (config: Record<string, unknown>) => void;
+    h.onChanged.mockImplementation((cb: typeof push) => { push = cb; return off; });
+    const { unmount } = render(<RecoveryCard tasks={classic} onReview={vi.fn()} />);
+    expect(await screen.findByText('New: missed and failed run recovery.')).toBeTruthy();
+    act(() => push({ schedulerRecoveryIntro: 'dismissed' }));
+    expect(screen.queryByRole('region', { name: 'Run recovery' })).toBeNull();
+    unmount();
+    expect(off).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a config read that resolves after unmount', async () => {
+    let resolve!: (v: unknown) => void;
+    h.get.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const { unmount } = render(<RecoveryCard tasks={classic} onReview={vi.fn()} />);
+    unmount();
+    await act(async () => { resolve({}); });
+    expect(screen.queryByRole('region', { name: 'Run recovery' })).toBeNull();
+  });
+
   it('Review opens the dialog and Not now persists dismissal', async () => {
     const onReview = vi.fn();
     render(<RecoveryCard tasks={classic} onReview={onReview} />);
@@ -80,12 +108,19 @@ describe('RecoveryDialog', () => {
     expect(screen.queryByLabelText('Gamma')).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Beta' }));
     fireEvent.change(screen.getByLabelText('Missed runs'), { target: { value: 'all' } });
-    fireEvent.change(screen.getByLabelText('Up to', { selector: '#recovery-missed-max' }), { target: { value: '50' } });
+    // Number fields keep the typed text and are clamped on apply.
+    const max = screen.getByRole('spinbutton', { name: 'Missed runs to catch up' }) as HTMLInputElement;
+    fireEvent.change(max, { target: { value: '50' } });
+    expect(max.value).toBe('50');
     fireEvent.click(screen.getByRole('checkbox', { name: 'Auto-retry temporary failures' }));
-    expect((document.querySelector('#recovery-attempts') as HTMLInputElement).value).toBe('1');
-    expect((document.querySelector('#recovery-delay') as HTMLInputElement).value).toBe('10');
-    fireEvent.change(document.querySelector('#recovery-attempts')!, { target: { value: '9' } });
-    fireEvent.change(document.querySelector('#recovery-delay')!, { target: { value: '0' } });
+    const attempts = screen.getByRole('spinbutton', { name: 'Retry attempts' }) as HTMLInputElement;
+    const delay = screen.getByRole('spinbutton', { name: 'Minutes to wait between retries' }) as HTMLInputElement;
+    expect(attempts.value).toBe('1');
+    expect(delay.value).toBe('10');
+    expect(attempts.className).toBe('settings-input');
+    fireEvent.change(attempts, { target: { value: '9' } });
+    fireEvent.change(delay, { target: { value: '' } });
+    expect(delay.value).toBe('');
     fireEvent.click(screen.getByRole('button', { name: 'Turn on for 1 schedule' }));
     expect(await screen.findByText('1 turned on')).toBeTruthy();
     expect(h.update).toHaveBeenCalledTimes(1);
@@ -136,6 +171,31 @@ describe('RecoveryDialog', () => {
     expect(onClose).toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
     expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('cannot be cancelled while writing, and stops writing once unmounted', async () => {
+    const pending: Array<(v: unknown) => void> = [];
+    h.update.mockImplementation(() => new Promise((r) => { pending.push(r); }));
+    const onClose = vi.fn();
+    const { unmount } = render(<RecoveryDialog tasks={[...classic, task('Gamma')]} onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on for 3 schedules' }));
+    expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(h.modal.closeOnBackdrop).toBe(false);
+    expect(h.modal.hideClose).toBe(true);
+    h.modal.onClose?.();
+    expect(onClose).not.toHaveBeenCalled();
+    // The parent unmounts the dialog mid-loop: no further schedule is written.
+    unmount();
+    await act(async () => { pending[0]!({ ok: true, value: {} }); });
+    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(h.set).toHaveBeenCalledWith({ schedulerRecoveryIntro: 'applied' });
+  });
+
+  it('keeps the auto-retry checkbox out of the uppercase field-label style', () => {
+    render(<RecoveryDialog tasks={classic} onClose={vi.fn()} />);
+    const label = screen.getByRole('checkbox', { name: 'Auto-retry temporary failures' }).closest('label')!;
+    expect(label.className).toBe('scheduler-checkbox-row');
+    expect(label.parentElement!.classList.contains('scheduler-form-field')).toBe(false);
   });
 
   it('shows a note when no Classic schedules remain', () => {

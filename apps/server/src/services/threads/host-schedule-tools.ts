@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { asControlResult, callControlAsProductServer } from '../../http/cli-agent-ops.js';
 import type { DynamicTool, ToolCallResponse } from '@zana-ai/zcc-domain/thread-runtime';
 import type { Result, ScheduledTask, ScheduleReloadResult, ScheduleRetryResult, ScheduleRunQueryResult, ScheduleRunRef } from '@zana-ai/zcc-domain/product';
+import { compactRunRow, openRetryRefs } from '@zana-ai/zcc-domain/schedule-health';
 import { pluginToolResultToResponse } from '../../plugins/plugin-agent-tools.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import {
@@ -41,6 +42,10 @@ const runsInput = z.object(scheduleRunsInputSchema).strict();
 const retryInput = z.object(scheduleRetryInputSchema).strict();
 const dismissInput = z.object(scheduleDismissInputSchema).strict();
 const RUN_TOOL_NAMES = [SCHEDULE_RUNS_NAME, SCHEDULE_RETRY_NAME, SCHEDULE_DISMISS_NAME];
+/** Page bounds for thread tools (their replies share a 256 KB cap). */
+const HOST_RUNS_DEFAULT_LIMIT = 50;
+const HOST_RUNS_MAX_LIMIT = 100;
+const HOST_OPEN_RETRY_SCAN = 200;
 
 export const HOST_SCHEDULE_INSTRUCTION = [
   'Read, patch or refresh schedules with `schedule_get`, `schedule_update` and `schedule_reload`.',
@@ -204,15 +209,19 @@ async function invokeRunTool(
   scoped: ScheduledTask[],
   widen: boolean
 ): Promise<ToolCallResponse> {
-  const inScope = new Set(scoped.map(task => task.id));
+  // Claude /loop rows are read-only mirrors: never a retry or dismiss target.
+  const inScope = new Set(scoped.filter(task => !task.external).map(task => task.id));
   const split = (refs: ScheduleRunRef[]) => ({ allowed: refs.filter(ref => inScope.has(ref.scheduleId)), rejected: refs.filter(ref => !inScope.has(ref.scheduleId)) });
   const unwrap = <T>(result: Result<T>): T => { if (!result.ok) throw new Error(result.message); return result.value; };
 
   if (name === SCHEDULE_RUNS_NAME) {
     const { allProjects: _widen, ...query } = runsInput.parse(fields);
     void _widen;
-    const result = unwrap(await invokeOwner<Result<ScheduleRunQueryResult>>(ctx, 'scheduler.queryRuns', [{ ...query, ...(widen ? {} : { projectId }) }]));
-    return pluginToolResultToResponse(name, { scope: widen ? 'all-projects' : `project:${projectId}`, ...result });
+    // Thread tools pass through the 256 KB product.invoke reply cap: bound the
+    // page and send compact rows.
+    const limit = Math.min(query.limit ?? HOST_RUNS_DEFAULT_LIMIT, HOST_RUNS_MAX_LIMIT);
+    const result = unwrap(await invokeOwner<Result<ScheduleRunQueryResult>>(ctx, 'scheduler.queryRuns', [{ ...query, limit, ...(widen ? {} : { projectId }) }]));
+    return pluginToolResultToResponse(name, { scope: widen ? 'all-projects' : `project:${projectId}`, total: result.total, truncated: result.truncated, rows: result.rows.map(compactRunRow) });
   }
   if (name === SCHEDULE_RETRY_NAME) {
     const input = retryInput.parse(fields);
@@ -220,16 +229,17 @@ async function invokeRunTool(
     let wanted: ScheduleRunRef[];
     if (input.refs) wanted = input.refs;
     else {
-      const found = unwrap(await invokeOwner<Result<ScheduleRunQueryResult>>(ctx, 'scheduler.queryRuns', [{ state: 'open', limit: 500, ...(widen ? {} : { projectId }) }]));
-      wanted = found.rows.filter(row => row.manualRetry && row.run.id).slice(0, 50).map(row => ({ scheduleId: row.scheduleId, runId: row.run.id! }));
+      const found = unwrap(await invokeOwner<Result<ScheduleRunQueryResult>>(ctx, 'scheduler.queryRuns', [{ state: 'open', limit: HOST_OPEN_RETRY_SCAN, ...(widen ? {} : { projectId }) }]));
+      wanted = openRetryRefs(found.rows, 50);
     }
     const { allowed, rejected } = split(wanted);
     const done = allowed.length ? unwrap(await invokeOwner<Result<ScheduleRetryResult[]>>(ctx, 'scheduler.retryRuns', [allowed])) : [];
     const results = [...done, ...rejected.map(ref => ({ ...ref, ok: false, error: 'schedule not found' }))];
-    return pluginToolResultToResponse(name, { ok: results.every(r => r.ok), count: results.length, results });
+    // A top-level `ok: false` marks the whole tool call failed; partial success is `allOk: false`.
+    return pluginToolResultToResponse(name, { ok: results.length === 0 || results.some(r => r.ok), allOk: results.every(r => r.ok), count: results.length, results });
   }
   const input = dismissInput.parse(fields);
   const { allowed, rejected } = split(input.refs);
   const dismissed = allowed.length ? unwrap(await invokeOwner<Result<number>>(ctx, 'scheduler.dismissRuns', [allowed])) : 0;
-  return pluginToolResultToResponse(name, { ok: rejected.length === 0, dismissed, rejected });
+  return pluginToolResultToResponse(name, { ok: dismissed > 0 || rejected.length === 0, allOk: rejected.length === 0 && dismissed === allowed.length, dismissed, rejected });
 }

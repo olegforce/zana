@@ -14,8 +14,16 @@ describe('slotsBetween', () => {
   it('interval: many slots with first/last', () => {
     expect(slotsBetween({ every: '30m' }, T0, T0 + 3 * H + 1)).toEqual({ count: 6, first: T0 + H / 2, last: T0 + 3 * H });
   });
-  it('interval: caps the count and the last slot', () => {
-    expect(slotsBetween({ every: '1m' }, T0, T0 + 10 * H, 5)).toEqual({ count: 5, first: T0 + 60_000, last: T0 + 5 * 60_000 });
+  it('interval: caps the count but reports the true newest slot', () => {
+    expect(slotsBetween({ every: '1m' }, T0, T0 + 10 * H, 5)).toEqual({ count: 5, first: T0 + 60_000, last: T0 + 10 * H, capped: true });
+  });
+  it('cron: caps the count but reports the true newest slot', () => {
+    const r = slotsBetween({ cron: '* * * * *', tz: 'UTC' }, T0, T0 + 2 * H, 10);
+    expect(r).toMatchObject({ count: 10, first: T0 + 60_000, capped: true });
+    expect(r.last).toBe(T0 + 2 * H);
+  });
+  it('cron: an exact fill of the cap is not reported as capped', () => {
+    expect(slotsBetween({ cron: '0 * * * *', tz: 'UTC' }, T0, T0 + 3 * H, 3)).toEqual({ count: 3, first: T0 + H, last: T0 + 3 * H });
   });
   it('empty or inverted window, bad numbers and bad cadence give 0', () => {
     expect(slotsBetween({ every: '1h' }, T0, T0)).toEqual({ count: 0 });

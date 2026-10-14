@@ -2,8 +2,11 @@
  * Frozen copy of the 2.3.x loader. Never edit; it proves files written by newer versions still load in older ones.
  */
 import type { ScheduledTask, LaunchProfileId } from '@zana-ai/zcc-domain/product';
+// `VALID_PROFILES` and `validateCadence` stay imported: both are unchanged since v2.3.4, and a
+// guard test forbids copying the profile list outside launch-provider.ts.
 import { VALID_PROFILES } from '@zana-ai/zcc-domain/launch-provider';
 import { validateCadence } from '@zana-ai/zcc-domain/schedule-spec';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { SchedulerManager } from './scheduler.js';
@@ -184,6 +187,10 @@ const recoveryFiles: Record<string, Record<string, unknown>> = {
   }
 };
 
+/** Wait for the scheduler's queued serial work (exit handlers, drains) to finish. */
+const settled = (manager: SchedulerManager) =>
+  (manager as unknown as { serial: (work: () => Promise<unknown>) => Promise<unknown> }).serial(async () => undefined);
+
 describe('older loader (2.3.x) vs files written by the Recovery version', () => {
   it.each(Object.entries(recoveryFiles))('(a) the 2.3 loader accepts: %s', (_name, file) => {
     const out = validateScheduleFileV23(JSON.parse(JSON.stringify(file)));
@@ -293,24 +300,26 @@ describe('a Recovery schedule written by a real fire/exit cycle falls back to Cl
     });
     await manager.runNow(task.id);
     ptys.simulateExit(ptys.sessions[0].id, 1);
-    await manager.queryRuns();
+    await settled(manager);
     const pendingSnapshot = snapshots.at(-1)!;
     await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
     await manager.attachReport(ptys.sessions[1].id, 'done');
     ptys.simulateExit(ptys.sessions[1].id, 0);
-    await manager.queryRuns();
+    await settled(manager);
     const finalSnapshot = snapshots.at(-1)!;
     manager.stopAll();
-    return { pendingSnapshot, finalSnapshot };
+    return { pendingSnapshot, finalSnapshot, snapshots };
   }
 
   it('writes the new fields, and the 2.3 loader accepts every file it saved', async () => {
-    const { pendingSnapshot, finalSnapshot } = await runCycle();
+    const { pendingSnapshot, finalSnapshot, snapshots } = await runCycle();
     expect(pendingSnapshot.catchUp).toEqual({ mode: 'all', max: 4 });
     expect(pendingSnapshot.status.pendingRetry).toMatchObject({ attempt: 2 });
     expect(finalSnapshot.status.runs[0]).toMatchObject({ result: 'success', trigger: 'retry', attempt: 2 });
     expect(finalSnapshot.status.runs.some((run: { reasonCode?: string }) => run.reasonCode === 'exit-nonzero')).toBe(true);
-    for (const file of [pendingSnapshot, finalSnapshot]) {
+    // Every file this version saved during the cycle, not just two of them.
+    expect(snapshots.length).toBeGreaterThan(2);
+    for (const file of snapshots) {
       expect('error' in validateScheduleFileV23(JSON.parse(JSON.stringify(file)))).toBe(false);
     }
   });

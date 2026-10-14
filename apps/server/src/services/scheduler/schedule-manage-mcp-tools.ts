@@ -29,6 +29,7 @@ import type {
   ScheduleRunRef
 } from '@zana-ai/zcc-domain/product';
 import { scheduleRunQuerySchema, scheduleRunRefsSchema } from './schedule-run-schemas.js';
+import { compactRunRow, openRetryRefs } from '@zana-ai/zcc-domain/schedule-health';
 
 export const scheduleDefinitionPatchSchema = z.object({
   prompt: z.string().max(1_000_000).optional(),
@@ -354,7 +355,8 @@ export function registerScheduleManageTools(
         if (!scheduleAgentApi.queryRuns) return unavailable('schedule_runs');
         const widen = allProjects === true;
         const result = await scheduleAgentApi.queryRuns({ ...query, ...(widen ? {} : { projectId }) });
-        return okJson({ scope: widen ? 'all-projects' : `project:${projectId}`, ...result });
+        // Compact rows: full run records would cost tens of thousands of tokens.
+        return okJson({ scope: widen ? 'all-projects' : `project:${projectId}`, total: result.total, truncated: result.truncated, rows: result.rows.map(compactRunRow) });
       } catch (err) {
         return fail('schedule_runs', err instanceof Error ? err.message : String(err));
       }
@@ -379,8 +381,7 @@ export function registerScheduleManageTools(
         if (refs) wanted = refs;
         else {
           const found = await scheduleAgentApi.queryRuns({ state: 'open', limit: 500, ...(widen ? {} : { projectId }) });
-          wanted = found.rows.filter((row) => row.manualRetry && row.run.id)
-            .slice(0, MAX_RETRY_REFS).map((row) => ({ scheduleId: row.scheduleId, runId: row.run.id! }));
+          wanted = openRetryRefs(found.rows, MAX_RETRY_REFS);
         }
         const { allowed, rejected } = splitByScope(wanted, widen);
         const done = allowed.length ? await scheduleAgentApi.retryRuns(allowed) : [];
@@ -388,7 +389,8 @@ export function registerScheduleManageTools(
           ...done,
           ...rejected.map((ref) => ({ ...ref, ok: false, error: 'schedule not found' }))
         ];
-        return okJson({ ok: results.every((r) => r.ok), count: results.length, results });
+        // `ok` is the call's outcome: false only when nothing could be retried.
+        return okJson({ ok: results.length === 0 || results.some((r) => r.ok), allOk: results.every((r) => r.ok), count: results.length, results });
       } catch (err) {
         return fail('schedule_retry', err instanceof Error ? err.message : String(err));
       }
@@ -403,7 +405,7 @@ export function registerScheduleManageTools(
         if (!scheduleAgentApi.dismissRuns) return unavailable('schedule_dismiss');
         const { allowed, rejected } = splitByScope(refs, allProjects === true);
         const dismissed = allowed.length ? await scheduleAgentApi.dismissRuns(allowed) : 0;
-        return okJson({ ok: rejected.length === 0, dismissed, rejected });
+        return okJson({ ok: dismissed > 0 || rejected.length === 0, allOk: rejected.length === 0 && dismissed === allowed.length, dismissed, rejected });
       } catch (err) {
         return fail('schedule_dismiss', err instanceof Error ? err.message : String(err));
       }

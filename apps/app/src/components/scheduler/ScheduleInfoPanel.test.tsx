@@ -35,7 +35,7 @@ vi.mock('../../store.js', () => ({
   )
 }));
 
-import { ScheduleInfoPanel } from './ScheduleInfoPanel.js';
+import { ScheduleInfoPanel, retryAtLabel } from './ScheduleInfoPanel.js';
 
 const baseTask = {
   id: 'sched-1',
@@ -281,6 +281,37 @@ describe('ScheduleInfoPanel', () => {
       const runs = Array.from({ length: 3 }, (_, i) => ({ id: `r${i}`, at: new Date(Date.now() - i * 1000).toISOString(), result: 'success' }));
       const { container } = render(<ScheduleInfoPanel task={withRuns(runs, { history: { retain: 2 } })} />);
       expect(container.querySelectorAll('.scheduler-run-row')).toHaveLength(2);
+    });
+
+    it('hides actions for a failure a later finished success closed, even without resolvedBy', () => {
+      const ok = { id: 'ok', at: new Date().toISOString(), result: 'success', durationMs: 5 };
+      render(<ScheduleInfoPanel task={withRuns([ok, failedRun])} />);
+      expect(screen.queryByRole('button', { name: 'Retry Morning digest run' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Dismiss Morning digest run' })).toBeNull();
+    });
+
+    it('shows the attempt alone once manual retries pass the policy', () => {
+      render(<ScheduleInfoPanel task={withRuns([{ ...failedRun, attempt: 4 }], { retry: { attempts: 1, delayMinutes: 10 } })} />);
+      expect(screen.getByText('Attempt 4')).toBeTruthy();
+      expect(screen.queryByText('Attempt 4/2')).toBeNull();
+    });
+
+    it('reports a thrown retry or dismiss call', async () => {
+      render(<ScheduleInfoPanel task={withRuns([failedRun])} />);
+      retryRuns.mockRejectedValueOnce(new Error('ipc down'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry Morning digest run' }));
+      await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith('Run failed: ipc down', 'error'));
+      await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Dismiss Morning digest run' }) as HTMLButtonElement).disabled).toBe(false));
+      dismissRuns.mockRejectedValueOnce('nope');
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss Morning digest run' }));
+      await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith('Dismiss failed: nope', 'error'));
+    });
+
+    it('formats Retry at with the date when the retry is not today', () => {
+      const now = new Date(2026, 9, 14, 9, 0);
+      expect(retryAtLabel(new Date(2026, 9, 14, 14, 30).toISOString(), now)).not.toMatch(/,/);
+      expect(retryAtLabel(new Date(2026, 9, 16, 14, 30).toISOString(), now)).toMatch(/16.*,/);
+      expect(retryAtLabel('garbage', now)).toBe('');
     });
 
     it('shows Queued, Retry at and Classic chips', () => {

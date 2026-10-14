@@ -26,6 +26,13 @@ describe('scheduleIssue', () => {
   ])('is clear for %s', (_label, run) => {
     expect(scheduleIssue(make({}, [run]), projects)).toBeNull();
   });
+  it('is clear when a later finished success closed an older failure (pre-recovery history)', () => {
+    const older = failed({ at: new Date(Date.now() - 3_600_000).toISOString() });
+    const later = { id: 'ok', at: new Date().toISOString(), result: 'success', durationMs: 10 };
+    expect(scheduleIssue(make({}, [later, older]), projects)).toBeNull();
+    // The optimistic in-flight record is not a finished success.
+    expect(scheduleIssue(make({}, [{ ...later, durationMs: undefined, launchState: 'running' }, older]), projects)).toBe('Open problem');
+  });
   it('tolerates a task with no status', () => {
     expect(scheduleIssue({ ...make(), status: undefined } as unknown as ScheduledTask, projects)).toBeNull();
   });

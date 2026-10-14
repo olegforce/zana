@@ -44,8 +44,8 @@ describe('parseRunsArgs', () => {
 });
 
 describe('parseRefs', () => {
-  it('splits on the first colon and enforces bounds', () => {
-    expect(parseRefs(['a:b:c'], 50)).toEqual({ ok: true, value: [{ scheduleId: 'a', runId: 'b:c' }] });
+  it('splits on the last colon (schedule ids may contain colons) and enforces bounds', () => {
+    expect(parseRefs(['acme:nightly:uuid-1'], 50)).toEqual({ ok: true, value: [{ scheduleId: 'acme:nightly', runId: 'uuid-1' }] });
     for (const bad of [[], ['nocolon'], [':x'], ['x:'], ['--open']]) expect(parseRefs(bad, 50).ok).toBe(false);
     expect(parseRefs(Array.from({ length: 51 }, () => 'a:b'), 50).ok).toBe(false);
     expect(parseRefs(Array.from({ length: 50 }, () => 'a:b'), 50).ok).toBe(true);
@@ -118,12 +118,16 @@ describe('runScheduleRunsCommand', () => {
   });
 
   it('retry --open --dry-run only prints', async () => {
-    const many = Array.from({ length: 52 }, (_, i) => row({ run: { id: `r${i}`, at: '2026-10-14T01:00:00Z', result: 'error' } }));
+    const many = Array.from({ length: 52 }, (_, i) => row({ scheduleId: `s${i}`, run: { id: `r${i}`, at: '2026-10-14T01:00:00Z', result: 'error' } }));
     const call = mockCall({ rows: many, total: 52, truncated: false });
     const out = await runScheduleRunsCommand('retry', ['--open', '--dry-run'], false, call);
     expect(call).toHaveBeenCalledTimes(1);
-    expect(out.stdout.split('\n')[0]).toBe('would retry  s1:r0');
+    expect(out.stdout.split('\n')[0]).toBe('would retry  s0:r0');
     expect(out.stdout).toContain('50 of 52');
+    // One retry per schedule: further open rows of the same schedule would only replace it.
+    const sameSchedule = Array.from({ length: 4 }, (_, i) => row({ run: { id: `r${i}`, at: '2026-10-14T01:00:00Z', result: 'error' } }));
+    const one = await runScheduleRunsCommand('retry', ['--open', '--dry-run'], false, mockCall({ rows: sameSchedule, total: 4, truncated: false }));
+    expect(one.stdout).toBe('would retry  s1:r0\n1 of 4\n');
     expect(JSON.parse((await runScheduleRunsCommand('retry', ['--open', '--dry-run'], true, call)).stdout)).toMatchObject({ dryRun: true, total: 52 });
     const none = mockCall({ rows: [], total: 0, truncated: false });
     expect((await runScheduleRunsCommand('retry', ['--open', '--dry-run'], false, none)).stdout).toBe('Nothing to retry.\n');
@@ -140,6 +144,21 @@ describe('runScheduleRunsCommand', () => {
     expect(JSON.parse((await runScheduleRunsCommand('dismiss', ['a:b'], true, call)).stdout)).toBe(2);
     expect((await runScheduleRunsCommand('dismiss', [], false, call)).exitCode).toBe(2);
     expect((await runScheduleRunsCommand('dismiss', Array.from({ length: 201 }, () => 'a:b'), false, call)).exitCode).toBe(2);
-    expect((await runScheduleRunsCommand('dismiss', Array.from({ length: 200 }, () => 'a:b'), false, call)).exitCode).toBe(0);
+    expect((await runScheduleRunsCommand('dismiss', Array.from({ length: 200 }, () => 'a:b'), false, mockCall(200))).exitCode).toBe(0);
+    // Like retry, any ref that wasn't dismissed fails the command.
+    const partial = await runScheduleRunsCommand('dismiss', ['a:b', 'c:d'], false, mockCall(1));
+    expect(partial.exitCode).toBe(1);
+    expect(partial.stdout).toBe('Dismissed 1 of 2.\n');
+    expect((await runScheduleRunsCommand('dismiss', ['a:b', 'c:d'], true, mockCall(0))).exitCode).toBe(1);
+  });
+
+  it('accumulates repeated --outcome / --reason flags', () => {
+    const parsed = parseRunsArgs(['--outcome', 'error', '--outcome', 'missed,error', '--reason', 'timeout', '--reason', 'no-report'], Date.now());
+    expect(parsed).toMatchObject({ ok: true, value: { outcomes: ['error', 'missed'], reasonCodes: ['timeout', 'no-report'] } });
+  });
+
+  it('prints "-" as the REF of a run without an id', () => {
+    const out = formatRunsTable({ rows: [row({ run: { at: '2026-10-14T01:00:00Z', result: 'error' } }) as never], total: 1, truncated: false });
+    expect(out.trimEnd().split('\n')[1]).toMatch(/ -$/);
   });
 });

@@ -224,10 +224,15 @@ describe('validateScheduleFile: recovery fields', () => {
       missedFloorAt: '2026-02-01T01:00:00.000Z',
       pendingRetry: { rootRunId: 'run-1', attempt: 2, dueAt: '2026-02-01T02:00:00.000Z' }
     };
-    const t = okTask({ ...baseTask, status });
+    const t = okTask({ ...baseTask, retry: { attempts: 2, delayMinutes: 10 }, status });
     expect(t.status.slotCursorAt).toBe(status.slotCursorAt);
     expect(t.status.missedFloorAt).toBe(status.missedFloorAt);
     expect(t.status.pendingRetry).toEqual(status.pendingRetry);
+  });
+  it('drops a pending retry that has no live retry policy', () => {
+    const status = { runCount: 1, runs: [], pendingRetry: { rootRunId: 'run-1', attempt: 2, dueAt: '2026-02-01T02:00:00.000Z' } };
+    expect(okTask({ ...baseTask, status }).status.pendingRetry).toBeUndefined();
+    expect(okTask({ ...baseTask, retry: { attempts: 0, delayMinutes: 10 }, status }).status.pendingRetry).toBeUndefined();
   });
   it.each([
     ['non-ISO cursor', { slotCursorAt: 'soon', missedFloorAt: 5 }],
@@ -286,11 +291,14 @@ describe('validateScheduleFile: unknown key preservation (C5)', () => {
     expect(Object.getPrototypeOf(t)).toBe(Object.prototype);
     expect((t as unknown as { polluted?: boolean }).polluted).toBeUndefined();
   });
-  it('drops ALL extras when together over 4096 chars', () => {
+  it('fills the 4096-char budget field by field: an oversized field drops only itself', () => {
     const t = okTask({ ...baseTask, small: 'ok', big: 'x'.repeat(4100), status: { runCount: 0, runs: [], tiny: 1 } }) as unknown as Record<string, unknown> & { status: Record<string, unknown> };
-    expect('small' in t).toBe(false);
+    expect(t.small).toBe('ok');
     expect('big' in t).toBe(false);
-    expect('tiny' in t.status).toBe(false);
+    expect(t.status.tiny).toBe(1);
+    const over = okTask({ ...baseTask, a: 'x'.repeat(3000), b: 'y'.repeat(2000) }) as unknown as Record<string, unknown>;
+    expect(over.a).toHaveLength(3000);
+    expect('b' in over).toBe(false);
   });
   it('keeps extras at or under the cap', () => {
     const t = okTask({ ...baseTask, fine: 'x'.repeat(3000) }) as unknown as Record<string, unknown>;

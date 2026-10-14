@@ -11,7 +11,10 @@ import {
   reasonHint,
   reasonLabel,
   runOutcome,
-  runReason
+  runReason,
+  newestSuccessMs,
+  taskOpenProblems,
+  countOpenProblems
 } from './schedule-health.js';
 
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -46,7 +49,7 @@ describe('reason catalogue', () => {
     expect(codes.filter((c) => !SCHEDULE_REASONS[c].autoRetry).sort())
       .toEqual(['in-flight', 'missed-app-closed', 'missed-asleep', 'outcome-unknown', 'overlap', 'project-missing', 'squad-failed', 'squad-stopped']);
     expect(codes.filter((c) => !SCHEDULE_REASONS[c].manualRetry).sort())
-      .toEqual(['in-flight', 'overlap', 'project-missing']);
+      .toEqual(['in-flight', 'overlap', 'project-missing', 'squad-stopped']);
   });
   it('degrades for unknown codes', () => {
     expect(reasonLabel(undefined)).toBe('');
@@ -139,12 +142,12 @@ describe('isRecoveryMode', () => {
 
 // A realistic 2.3-era history: no reasonCode anywhere, newest first.
 const legacyRuns: ScheduleRun[] = [
-  run({ at: iso(1 * H), result: 'skipped', message: 'concurrency-cap: 5 scheduled runs already active' }),
+  run({ at: iso(1 * H), result: 'skipped', message: 'concurrency-cap: 5/5 scheduled runs active' }),
   run({ at: iso(2 * H), result: 'success', sessionId: 's5', durationMs: 1000 }),
-  run({ at: iso(3 * H), result: 'incomplete', sessionId: 's4', message: 'exited without filing a schedule_report' }),
+  run({ at: iso(3 * H), result: 'incomplete', sessionId: 's4', message: 'exited without filing a schedule_report — possible silent failure' }),
   run({ at: iso(4 * H), result: 'error', sessionId: 's3', message: 'exit 1' }),
   run({ at: iso(5 * H), result: 'skipped', message: 'previous run still active' }),
-  run({ at: iso(6 * H), result: 'error', sessionId: 's2', message: 'exceeded maximum duration (30m)' }),
+  run({ at: iso(6 * H), result: 'error', sessionId: 's2', message: 'exceeded maximum duration of 30 minutes' }),
   run({ at: iso(7 * H), result: 'success', launchState: 'running', sessionId: 's1' })
 ];
 
@@ -154,11 +157,36 @@ describe('legacy history', () => {
       'concurrency-cap', undefined, 'no-report', 'exit-nonzero', 'overlap', 'timeout', undefined
     ]);
   });
-  it('open query finds only the real problems, newest first', () => {
+  it('a later finished success closes older problems at read time, with no resolvedBy written', () => {
+    // The finished success at 2 h closes the no-report, exit and timeout runs
+    // before it; the optimistic in-flight record at 7 h is not a finished success.
     const res = collectRunRows([task('a', legacyRuns)], undefined, NOW);
-    expect(res.rows.map((r) => r.reason)).toEqual(['concurrency-cap', 'no-report', 'exit-nonzero', 'timeout']);
-    expect(res.total).toBe(4);
+    expect(res.rows.map((r) => r.reason)).toEqual(['concurrency-cap']);
+    expect(res.total).toBe(1);
     expect(res.truncated).toBe(false);
+    expect(legacyRuns.some((r) => r.resolvedBy)).toBe(false);
+  });
+  it('still lists every problem as history under state "problems"', () => {
+    const res = collectRunRows([task('a', legacyRuns)], { state: 'problems' }, NOW);
+    expect(res.rows.map((r) => [r.reason, r.open])).toEqual([
+      ['concurrency-cap', true], ['no-report', false], ['exit-nonzero', false], ['timeout', false]
+    ]);
+  });
+  it('newestSuccessMs ignores the optimistic in-flight record', () => {
+    expect(newestSuccessMs(legacyRuns)).toBe(Date.parse(iso(2 * H)));
+    expect(newestSuccessMs([run({ result: 'success', launchState: 'running' })])).toBe(-Infinity);
+    expect(newestSuccessMs([run({ result: 'success', launchState: 'running', finishedAt: iso(0) })])).toBe(Date.parse(iso(1 * H)));
+    expect(newestSuccessMs(undefined)).toBe(-Infinity);
+  });
+  it('taskOpenProblems and countOpenProblems apply the same closure', () => {
+    const tasks = [task('a', legacyRuns), task('b', [run({ at: iso(1 * H), message: 'exit 2' }), run({ at: iso(2 * H), result: 'skipped', reasonCode: 'missed-asleep', marker: true })])];
+    expect(taskOpenProblems(tasks[0], NOW).map(runReason)).toEqual(['concurrency-cap']);
+    expect(taskOpenProblems({ ...tasks[0], external: { kind: 'claude-loop', cron: '* * * * *' } }, NOW)).toEqual([]);
+    expect(countOpenProblems(tasks, NOW)).toEqual({ runs: 3, schedules: 2, byOutcome: { success: 0, error: 1, skipped: 1, incomplete: 0, missed: 1 } });
+    expect(countOpenProblems([], NOW).runs).toBe(0);
+  });
+  it('never treats a success as a problem, even one promoted from incomplete that keeps its old reason', () => {
+    expect(isProblemRun(run({ result: 'success', reasonCode: 'no-report', message: 'exited without filing a schedule_report — possible silent failure', durationMs: 5 }))).toBe(false);
   });
 });
 

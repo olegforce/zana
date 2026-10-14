@@ -120,10 +120,12 @@ export function ScheduleEditor({
   const [missedChoice, setMissedChoice] = useState<MissedRunChoice>(
     task ? (task.catchUp ? task.catchUp.mode : 'classic') : (seededTask?.catchUp?.mode ?? 'once')
   );
-  const [missedMax, setMissedMax] = useState<number>(policySource?.catchUp?.max ?? 3);
+  // Number fields keep the raw text while typing; they are clamped on save.
+  const [missedMax, setMissedMax] = useState<string>(String(policySource?.catchUp?.max ?? 3));
   const [retryOn, setRetryOn] = useState<boolean>(!!policySource?.retry);
-  const [retryAttempts, setRetryAttempts] = useState<number>(policySource?.retry?.attempts ?? 3);
-  const [retryDelay, setRetryDelay] = useState<number>(policySource?.retry?.delayMinutes ?? 5);
+  // Defaults match the recovery dialog: one retry, ten minutes later.
+  const [retryAttempts, setRetryAttempts] = useState<string>(String(policySource?.retry?.attempts ?? 1));
+  const [retryDelay, setRetryDelay] = useState<string>(String(policySource?.retry?.delayMinutes ?? 10));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -182,8 +184,10 @@ export function ScheduleEditor({
     return null;
   })();
 
-  const clampInt = (n: number, min: number, max: number) =>
-    Math.max(min, Math.min(max, Number.isFinite(n) ? Math.round(n) : min));
+  const clampInt = (text: string, min: number, max: number) => {
+    const n = parseInt(text, 10);
+    return Math.max(min, Math.min(max, Number.isFinite(n) ? Math.round(n) : min));
+  };
   const catchUpValue = (): ScheduleCatchUp | null =>
     missedChoice === 'classic' ? null
       : missedChoice === 'all' ? { mode: 'all', max: clampInt(missedMax, 1, 10) }
@@ -628,16 +632,19 @@ export function ScheduleEditor({
             </select>
             {missedChoice === 'all' ? (
               <div className="schedule-policy-inline">
-                <label htmlFor="sched-missed-max">Up to</label>
+                <span aria-hidden>Up to</span>
                 <input
                   id="sched-missed-max"
+                  className="settings-input"
                   type="number"
                   min={1}
                   max={10}
+                  aria-label="Missed runs to catch up"
                   value={missedMax}
-                  onChange={(e) => setMissedMax(clampInt(parseInt(e.target.value, 10), 1, 10))}
+                  onChange={(e) => setMissedMax(e.target.value)}
+                  onBlur={() => setMissedMax(String(clampInt(missedMax, 1, 10)))}
                 />
-                <span>missed times</span>
+                <span aria-hidden>missed times</span>
               </div>
             ) : null}
             <p className="modal-hint">
@@ -658,26 +665,32 @@ export function ScheduleEditor({
             </select>
             {retryOn ? (
               <div className="schedule-policy-inline">
-                <label htmlFor="sched-retry-attempts">Up to</label>
+                <span aria-hidden>Up to</span>
                 <input
                   id="sched-retry-attempts"
+                  className="settings-input"
                   type="number"
                   min={1}
                   max={5}
+                  aria-label="Retry attempts"
                   value={retryAttempts}
-                  onChange={(e) => setRetryAttempts(clampInt(parseInt(e.target.value, 10), 1, 5))}
+                  onChange={(e) => setRetryAttempts(e.target.value)}
+                  onBlur={() => setRetryAttempts(String(clampInt(retryAttempts, 1, 5)))}
                 />
-                <span>times</span>
-                <label htmlFor="sched-retry-delay">Wait</label>
+                <span aria-hidden>times</span>
+                <span aria-hidden>Wait</span>
                 <input
                   id="sched-retry-delay"
+                  className="settings-input"
                   type="number"
                   min={1}
                   max={1440}
+                  aria-label="Minutes to wait between retries"
                   value={retryDelay}
-                  onChange={(e) => setRetryDelay(clampInt(parseInt(e.target.value, 10), 1, 1440))}
+                  onChange={(e) => setRetryDelay(e.target.value)}
+                  onBlur={() => setRetryDelay(String(clampInt(retryDelay, 1, 1440)))}
                 />
-                <span>minutes</span>
+                <span aria-hidden>minutes</span>
               </div>
             ) : null}
             <p className="modal-hint">Retries only failures that are likely temporary (exit errors, missing reports, launch failures). Waits longer after each attempt.</p>

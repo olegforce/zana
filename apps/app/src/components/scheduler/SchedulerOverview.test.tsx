@@ -155,6 +155,15 @@ describe('SchedulerOverview', () => {
     expect(screen.getByText('Open problems')).toBeTruthy();
     expect(screen.getByText('1 failed · 1 missed · 0 skipped')).toBeTruthy();
   });
+  it('does not flag a schedule whose older failure a later finished success closed (upgrade case)', () => {
+    const healed = task('Healed', { status: { runCount: 2, runs: [
+      { id: 'ok', at: new Date().toISOString(), result: 'success', durationMs: 10 },
+      { id: 'f', at: new Date(Date.now() - 3_600_000).toISOString(), result: 'error', message: 'exit 1' }
+    ] } });
+    mount([healed]);
+    expect(screen.queryByText(/need(s)? attention/)).toBeNull();
+    expect(screen.getByText('0 failed · 0 missed · 0 skipped')).toBeTruthy();
+  });
   it('keeps Review schedules when only a project is missing', () => {
     mount([task('Missing', { projectId: 'gone' })], { onReviewProblems: vi.fn() });
     expect(screen.getByRole('button', { name: 'Review schedules' })).toBeTruthy();

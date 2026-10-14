@@ -41,11 +41,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ProblemsPanel', () => {
-  it('is a full-width region and shows the healthy empty state', () => {
-    mount([make('ok', [{ id: 'a', at: ago(HOUR), result: 'success' }])]);
+  it('is a region and shows the healthy empty state only for the unfiltered Open view', () => {
+    mount([make('ok', [{ id: 'a', at: ago(HOUR), result: 'success' }]), make('Old', [failed('o', { at: ago(3 * 24 * HOUR) })])]);
     const region = screen.getByRole('region', { name: 'Problems' });
-    expect(region.className).toContain('problems-workbench--full');
+    expect(region.className).toBe('problems-workbench');
+    // Range narrows the view: an older open problem exists, so it isn't "healthy".
+    fireEvent.change(sel('Range'), { target: { value: '24h' } });
+    expect(screen.getByText('No runs match these filters.')).toBeTruthy();
+    cleanup();
+    mount([make('ok', [{ id: 'a', at: ago(HOUR), result: 'success' }])]);
     expect(screen.getByText('No open problems. Self-healing handled everything.')).toBeTruthy();
+  });
+
+  it('uses the styled overview controls for the filter bar', () => {
+    mount([make('A', [failed('r1')])]);
+    expect(document.querySelector('.schedule-filters.problems-filters')).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'Search schedules' }).closest('label')!.className).toBe('schedule-search');
+    const missed = within(screen.getByRole('group', { name: 'Outcome' })).getByRole('button', { name: 'Missed' });
+    expect(missed.className).toBe('inbox-filter-chip');
+    fireEvent.click(missed);
+    expect(missed.className).toBe('inbox-filter-chip on');
+    expect(document.querySelector('td > .problems-actions')).toBeNull();
   });
 
   it('lists open problems with schedule, project, outcome and attempts', () => {
@@ -55,6 +71,7 @@ describe('ProblemsPanel', () => {
     expect(within(row).getByText('Error')).toBeTruthy();
     expect(within(row).getByText('2/3')).toBeTruthy();
     expect(row.querySelector('time')!.getAttribute('title')).toMatch(/^\d{4}-/);
+    expect(row.querySelector('time')!.getAttribute('dateTime')).toMatch(/^\d{4}-/);
     fireEvent.click(within(row).getByRole('button', { name: 'Nightly' }));
     expect(props.onOpenSchedule).toHaveBeenCalledWith('Nightly');
   });
@@ -108,10 +125,50 @@ describe('ProblemsPanel', () => {
   it('retries a row, labels missed rows Run now, and reports the summary', async () => {
     h.retryRuns.mockResolvedValue({ ok: true, value: [{ scheduleId: 'A', runId: 'r1', ok: true, status: 'started' }] });
     mount([make('A', [failed('r1')]), make('B', [{ id: 'm', at: ago(HOUR), result: 'skipped', reasonCode: 'missed-asleep' }])]);
-    expect(screen.getByRole('button', { name: 'Run now B run' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry A run' }));
+    expect(screen.getByRole('button', { name: /^Run now B run from / })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Retry A run from / }));
     await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('1 started', 'info'));
     expect(h.retryRuns).toHaveBeenCalledWith([{ scheduleId: 'A', runId: 'r1' }]);
+  });
+
+  it('shows the server reason when a single retry fails, and a thrown call too', async () => {
+    h.retryRuns.mockResolvedValueOnce({ ok: true, value: [{ scheduleId: 'A', runId: 'r1', ok: false, error: 'enable the schedule to catch up missed runs' }] });
+    mount([make('A', [failed('r1')])]);
+    fireEvent.click(screen.getByRole('button', { name: /^Retry A run from / }));
+    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('Run failed: enable the schedule to catch up missed runs', 'error'));
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: /^Retry A run from / }) as HTMLButtonElement).disabled).toBe(false));
+    h.retryRuns.mockRejectedValueOnce(new Error('ipc down'));
+    fireEvent.click(screen.getByRole('button', { name: /^Retry A run from / }));
+    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('Run failed: ipc down', 'error'));
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: /^Dismiss A run from / }) as HTMLButtonElement).disabled).toBe(false));
+    h.dismissRuns.mockRejectedValueOnce(new Error('gone'));
+    fireEvent.click(screen.getByRole('button', { name: /^Dismiss A run from / }));
+    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('Dismiss failed: gone', 'error'));
+  });
+
+  it('hides Run now on a missed marker of a paused schedule', () => {
+    const marker = { id: 'm', at: ago(HOUR), result: 'skipped', reasonCode: 'missed-app-closed', marker: true } as Partial<ScheduleRun>;
+    mount([make('Paused', [marker], { enabled: false }), make('On', [{ ...marker, id: 'n' }])]);
+    expect(screen.queryByRole('button', { name: /^Run now Paused run/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Run now On run/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Dismiss Paused run/ })).toBeTruthy();
+  });
+
+  it('shows the attempt alone once manual retries pass the policy', () => {
+    mount([make('Over', [failed('r1', { attempt: 4 })], { retry: { attempts: 2, delayMinutes: 5 } })]);
+    const row = document.querySelector('tbody tr') as HTMLElement;
+    expect(within(row).getByText('4')).toBeTruthy();
+    expect(within(row).queryByText('4/3')).toBeNull();
+    expect(within(row).getByText('Attempt 4')).toBeTruthy();
+  });
+
+  it('searches schedules before the 500-row cap and marks a truncated list', () => {
+    const many = Array.from({ length: 501 }, (_, i) => failed(`r${i}`, { at: ago(HOUR + i * 1000) }));
+    mount([make('Busy', many), make('Rare', [failed('x', { at: ago(5 * 24 * HOUR) })])]);
+    expect(screen.getByRole('status').textContent).toBe('1–25 of 500+ runs');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search schedules' }), { target: { value: 'rare' } });
+    expect(rowCount()).toBe(1);
+    expect(screen.getByRole('status').textContent).toBe('1–1 of 1 runs');
   });
 
   it('hides Retry for non-retryable, id-less and closed rows; Dismiss only when open', () => {
@@ -126,40 +183,57 @@ describe('ProblemsPanel', () => {
     expect(screen.queryByRole('button', { name: /Dismiss NoId/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Retry Closed/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Dismiss Closed/ })).toBeNull();
-    expect((screen.getByRole('checkbox', { name: 'Select NoId run' }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /^Select NoId run from / }) as HTMLInputElement).disabled).toBe(true);
   });
 
   it('opens a session only while it is still listed', () => {
     h.terminals = { p1: [{ id: 'live' }] };
     const props = mount([make('Live', [failed('a', { sessionId: 'live' })]), make('Gone', [failed('b', { sessionId: 'gone' })])]);
-    expect(screen.queryByRole('button', { name: 'Open session for Gone run' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Open session for Live run' }));
+    expect(screen.queryByRole('button', { name: /^Open session for Gone run/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Open session for Live run from / }));
     expect(props.onOpenSession).toHaveBeenCalledWith('live', 'p1');
   });
 
   it('dismisses a row and summarises failures', async () => {
     h.dismissRuns.mockResolvedValueOnce({ ok: true, value: 1 }).mockResolvedValueOnce({ ok: false, message: 'x' });
     mount([make('A', [failed('r1')])]);
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss A run' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Dismiss A run from / }));
     await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('1 dismissed', 'info'));
-    await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Dismiss A run' }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss A run' }));
-    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('1 failed', 'error'));
+    await vi.waitFor(() => expect((screen.getByRole('button', { name: /^Dismiss A run from / }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /^Dismiss A run from / }));
+    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('Dismiss failed: x', 'error'));
   });
 
-  it('bulk retries selected and all retryable runs in batches of 50, summarising mixed results', async () => {
-    const runs = Array.from({ length: 120 }, (_, i) => failed(`r${i}`, { at: ago(HOUR + i * 1000) }));
-    h.retryRuns.mockImplementation(async (refs: Array<{ runId: string }>) => ({
-      ok: true,
-      value: refs.map((r, i) => ({ scheduleId: 'Big', runId: r.runId, ok: i % 10 !== 0, status: i % 2 ? 'queued' : 'started' }))
-    }));
-    mount([make('Big', runs)]);
+  it('bulk retry sends one ref per schedule (the newest), in batches of 50, like the server keeps one retry each', async () => {
+    // 120 schedules, each with 2 open problems: one retry per schedule is what will run.
+    const tasks = Array.from({ length: 120 }, (_, i) => make(`S${i}`, [
+      failed(`new${i}`, { at: ago(HOUR + i * 1000) }),
+      failed(`old${i}`, { at: ago(2 * HOUR + i * 1000) })
+    ]));
+    // Server-like: a second ref of the same schedule would replace the first.
+    h.retryRuns.mockImplementation(async (refs: Array<{ scheduleId: string; runId: string }>) => {
+      const seen = new Set<string>();
+      return {
+        ok: true,
+        value: refs.map((r, i) => {
+          const replaced = seen.has(r.scheduleId);
+          seen.add(r.scheduleId);
+          return replaced
+            ? { ...r, ok: false, error: 'replaced by a newer retry' }
+            : { ...r, ok: i % 10 !== 0, status: i % 2 ? 'queued' : 'started', ...(i % 10 === 0 ? { error: 'x' } : {}) };
+        })
+      };
+    });
+    mount(tasks);
     expect((screen.getByRole('button', { name: 'Retry selected' }) as HTMLButtonElement).disabled).toBe(true);
-    // Raise the limit so 120 rows are all listed (500 cap, paged at 25).
     fireEvent.click(screen.getByRole('button', { name: 'Retry all retryable (120)' }));
     await vi.waitFor(() => expect(h.retryRuns).toHaveBeenCalledTimes(3));
     expect(h.retryRuns.mock.calls.map((c) => c[0].length)).toEqual([50, 50, 20]);
+    const sent = h.retryRuns.mock.calls.flatMap((c) => c[0]);
+    expect(new Set(sent.map((r: { scheduleId: string }) => r.scheduleId)).size).toBe(120);
+    expect(sent.every((r: { runId: string }) => r.runId.startsWith('new'))).toBe(true);
     const [message, kind] = h.pushToast.mock.calls[0]!;
+    // Only the server's own failures (every 10th), never "replaced" ones.
     expect(message).toMatch(/^\d+ started, \d+ queued, 12 failed$/);
     expect(kind).toBe('error');
   });
@@ -167,9 +241,9 @@ describe('ProblemsPanel', () => {
   it('retries and dismisses only the selected rows, counting failed batches', async () => {
     h.retryRuns.mockResolvedValue({ ok: false, message: 'nope' });
     mount([make('A', [failed('r1')]), make('B', [failed('r2')])]);
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Select A run' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Select A run from / }));
     fireEvent.click(screen.getByRole('button', { name: 'Retry selected' }));
-    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('1 failed', 'error'));
+    await vi.waitFor(() => expect(h.pushToast).toHaveBeenCalledWith('Run failed: nope', 'error'));
     expect(h.retryRuns).toHaveBeenCalledWith([{ scheduleId: 'A', runId: 'r1' }]);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select all on this page' }));
     h.dismissRuns.mockResolvedValue({ ok: true, value: 2 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { product } from '../../lib/product-client.js';
 import type { ScheduleCatchUp, ScheduledTask, ScheduleRetryPolicy } from '@zana-ai/zcc-domain/product';
@@ -18,10 +18,14 @@ export function RecoveryCard({ tasks, onReview, refreshKey }: { tasks: readonly 
   const [unanswered, setUnanswered] = useState(false);
 
   useEffect(() => {
+    let active = true;
     product.config
       .get()
-      .then((c) => setUnanswered(!c.schedulerRecoveryIntro))
+      .then((c) => { if (active) setUnanswered(!c.schedulerRecoveryIntro); })
       .catch(() => {});
+    // "Not now" or "applied" in another window hides the card here too.
+    const off = product.config.onChanged?.((c) => { if (active) setUnanswered(!c.schedulerRecoveryIntro); });
+    return () => { active = false; off?.(); };
   }, [refreshKey]);
 
   if (!unanswered || classicSchedules(tasks).length === 0) return null;
@@ -51,16 +55,21 @@ export function RecoveryCard({ tasks, onReview, refreshKey }: { tasks: readonly 
 type MissedChoice = 'once' | 'skip' | 'all';
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, Number.isFinite(n) ? Math.round(n) : min));
+/** Number fields keep the raw text while typing and are clamped only on apply. */
+const clampText = (text: string, min: number, max: number) => clamp(parseInt(text, 10), min, max);
 
 export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTask[]; onClose: () => void }) {
   const classic = useMemo(() => classicSchedules(tasks), [tasks]);
   const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set(classic.map((t) => t.id)));
   const [missed, setMissed] = useState<MissedChoice>('once');
-  const [missedMax, setMissedMax] = useState(3);
+  const [missedMax, setMissedMax] = useState('3');
   const [retryOn, setRetryOn] = useState(false);
-  const [attempts, setAttempts] = useState(1);
-  const [delay, setDelay] = useState(10);
+  const [attempts, setAttempts] = useState('1');
+  const [delay, setDelay] = useState('10');
   const [applying, setApplying] = useState(false);
+  // Set on unmount: an apply loop still running must stop writing.
+  const cancelledRef = useRef(false);
+  useEffect(() => () => { cancelledRef.current = true; }, []);
   const [outcome, setOutcome] = useState<{ done: number; failed: string[] } | null>(null);
 
   const targets = classic.filter((t) => checked.has(t.id));
@@ -73,13 +82,14 @@ export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTa
   const apply = async () => {
     if (targets.length === 0 || applying) return;
     setApplying(true);
-    const catchUp: ScheduleCatchUp = missed === 'all' ? { mode: 'all', max: clamp(missedMax, 1, 10) } : { mode: missed };
+    const catchUp: ScheduleCatchUp = missed === 'all' ? { mode: 'all', max: clampText(missedMax, 1, 10) } : { mode: missed };
     const retry: ScheduleRetryPolicy | null = retryOn
-      ? { attempts: clamp(attempts, 1, 5), delayMinutes: clamp(delay, 1, 1440) }
+      ? { attempts: clampText(attempts, 1, 5), delayMinutes: clampText(delay, 1, 1440) }
       : null;
     let done = 0;
     const failed: string[] = [];
     for (const task of targets) {
+      if (cancelledRef.current) break;
       try {
         const result = await product.scheduler.update(task.id, { catchUp, ...(retry ? { retry } : {}) });
         if (result.ok) done++;
@@ -89,21 +99,26 @@ export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTa
       }
     }
     if (done > 0) await product.config.set({ schedulerRecoveryIntro: 'applied' }).catch(() => {});
+    if (cancelledRef.current) return;
     setOutcome({ done, failed });
     setApplying(false);
   };
+  // While writing, the dialog can't be dismissed: Cancel would look like it undid the writes.
+  const close = applying ? () => {} : onClose;
 
   return (
     <Modal
       title="Turn on recovery"
-      onClose={onClose}
+      onClose={close}
+      closeOnBackdrop={!applying}
+      hideClose={applying}
       className="recovery-dialog"
       footer={
         outcome ? (
           <button type="button" className="btn primary" onClick={onClose} autoFocus>Done</button>
         ) : (
           <>
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn" disabled={applying} onClick={onClose}>Cancel</button>
             <button type="button" className="btn primary" disabled={targets.length === 0 || applying} onClick={() => void apply()}>
               {applying ? 'Turning on…' : `Turn on for ${targets.length} ${targets.length === 1 ? 'schedule' : 'schedules'}`}
             </button>
@@ -138,28 +153,30 @@ export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTa
             </select>
             {missed === 'all' && (
               <div className="recovery-inline">
-                <label htmlFor="recovery-missed-max">Up to</label>
-                <input id="recovery-missed-max" type="number" min={1} max={10} value={missedMax}
-                  onChange={(e) => setMissedMax(clamp(parseInt(e.target.value, 10), 1, 10))} />
-                <span>missed times</span>
+                <span aria-hidden>Up to</span>
+                <input id="recovery-missed-max" className="settings-input" type="number" min={1} max={10} value={missedMax}
+                  aria-label="Missed runs to catch up" onChange={(e) => setMissedMax(e.target.value)} />
+                <span aria-hidden>missed times</span>
               </div>
             )}
           </div>
           <div className="scheduler-form-field">
-            <label className="scheduler-checkbox-row">
-              <input type="checkbox" checked={retryOn} onChange={(e) => setRetryOn(e.target.checked)} />
-              <span>Auto-retry temporary failures</span>
-            </label>
+            {/* Wrapped: a direct `label` child gets the uppercase field-label style. */}
+            <div>
+              <label className="scheduler-checkbox-row">
+                <input type="checkbox" checked={retryOn} onChange={(e) => setRetryOn(e.target.checked)} />
+                <span>Auto-retry temporary failures</span>
+              </label>
+            </div>
             {retryOn && (
               <div className="recovery-inline">
-                <label htmlFor="recovery-attempts">Up to</label>
-                <input id="recovery-attempts" type="number" min={1} max={5} value={attempts}
-                  onChange={(e) => setAttempts(clamp(parseInt(e.target.value, 10), 1, 5))} />
-                <span>times, wait</span>
-                <label htmlFor="recovery-delay" className="sr-only">Wait minutes</label>
-                <input id="recovery-delay" type="number" min={1} max={1440} value={delay}
-                  onChange={(e) => setDelay(clamp(parseInt(e.target.value, 10), 1, 1440))} />
-                <span>minutes</span>
+                <span aria-hidden>Up to</span>
+                <input id="recovery-attempts" className="settings-input" type="number" min={1} max={5} value={attempts}
+                  aria-label="Retry attempts" onChange={(e) => setAttempts(e.target.value)} />
+                <span aria-hidden>times, wait</span>
+                <input id="recovery-delay" className="settings-input" type="number" min={1} max={1440} value={delay}
+                  aria-label="Minutes to wait between retries" onChange={(e) => setDelay(e.target.value)} />
+                <span aria-hidden>minutes</span>
               </div>
             )}
           </div>

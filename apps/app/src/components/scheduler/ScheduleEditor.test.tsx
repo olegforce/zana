@@ -412,10 +412,19 @@ describe('ScheduleEditor', () => {
       const onSaved = await saved({ ...base, catchUp: { mode: 'all', max: 4 } });
       expect(missed().value).toBe('all');
       expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('4');
+      const max = document.querySelector('#sched-missed-max') as HTMLInputElement;
+      expect(max.getAttribute('aria-label')).toBe('Missed runs to catch up');
+      expect(max.className).toBe('settings-input');
+      // Typing keeps the raw text (no snapping to the minimum mid-edit); blur clamps.
+      input('#sched-missed-max', '');
+      expect(max.value).toBe('');
       input('#sched-missed-max', '99');
-      expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('10');
+      expect(max.value).toBe('99');
+      fireEvent.blur(max);
+      expect(max.value).toBe('10');
       input('#sched-missed-max', '0');
-      expect((document.querySelector('#sched-missed-max') as HTMLInputElement).value).toBe('1');
+      fireEvent.blur(max);
+      expect(max.value).toBe('1');
       input('#sched-missed-max', '7');
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
       await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -434,15 +443,37 @@ describe('ScheduleEditor', () => {
     it('turns retry on with clamped attempts and delay, and off again', async () => {
       const onSaved = await saved(base);
       fireEvent.change(retry(), { target: { value: 'on' } });
+      const attempts = document.querySelector('#sched-retry-attempts') as HTMLInputElement;
+      const delay = document.querySelector('#sched-retry-delay') as HTMLInputElement;
+      // Defaults match the recovery dialog: one retry, ten minutes later.
+      expect(attempts.value).toBe('1');
+      expect(delay.value).toBe('10');
+      expect(attempts.getAttribute('aria-label')).toBe('Retry attempts');
+      expect(delay.getAttribute('aria-label')).toBe('Minutes to wait between retries');
       input('#sched-retry-attempts', '9');
       input('#sched-retry-delay', '5000');
-      expect((document.querySelector('#sched-retry-attempts') as HTMLInputElement).value).toBe('5');
-      expect((document.querySelector('#sched-retry-delay') as HTMLInputElement).value).toBe('1440');
+      fireEvent.blur(attempts);
+      fireEvent.blur(delay);
+      expect(attempts.value).toBe('5');
+      expect(delay.value).toBe('1440');
       input('#sched-retry-attempts', '2');
       input('#sched-retry-delay', '15');
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
       await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
       expect(update.mock.calls[0]![1].retry).toEqual({ attempts: 2, delayMinutes: 15 });
+      cleanup();
+      update.mockClear();
+      // An empty or out-of-range entry is clamped when the field loses focus
+      // (clicking Save blurs it first), so what gets saved is always in range.
+      const typed = await saved(base);
+      fireEvent.change(retry(), { target: { value: 'on' } });
+      input('#sched-retry-attempts', '');
+      input('#sched-retry-delay', '0');
+      fireEvent.blur(document.querySelector('#sched-retry-attempts')!);
+      fireEvent.blur(document.querySelector('#sched-retry-delay')!);
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await vi.waitFor(() => expect(typed).toHaveBeenCalled());
+      expect(update.mock.calls[0]![1].retry).toEqual({ attempts: 1, delayMinutes: 1 });
       cleanup();
       update.mockClear();
       const again = await saved({ ...base, retry: { attempts: 2, delayMinutes: 15 } });

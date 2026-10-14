@@ -1,4 +1,4 @@
-import { SCHEDULE_REASONS, reasonLabel } from '@zana-ai/zcc-domain/schedule-health';
+import { SCHEDULE_REASONS, openRetryRefs, reasonLabel } from '@zana-ai/zcc-domain/schedule-health';
 import type {
   ScheduleRetryResult,
   ScheduleRunOutcome,
@@ -60,11 +60,12 @@ export function parseRunsArgs(args: string[], nowMs = Date.now()): Parsed<Schedu
     if (flag === '--outcome') {
       const list = splitList(value, OUTCOMES, 'outcome');
       if (!list.ok) return list;
-      query.outcomes = list.value;
+      // Repeated flags accumulate, like --schedule.
+      query.outcomes = [...new Set([...(query.outcomes ?? []), ...list.value])];
     } else if (flag === '--reason') {
       const list = splitList(value, REASONS, 'reason');
       if (!list.ok) return list;
-      query.reasonCodes = list.value;
+      query.reasonCodes = [...new Set([...(query.reasonCodes ?? []), ...list.value])];
     } else if (flag === '--since') {
       const since = parseSince(value, nowMs);
       if (!since) return bad(`invalid --since "${value}" (use 24h, 7d or an ISO time)`);
@@ -86,13 +87,14 @@ export function parseRunsArgs(args: string[], nowMs = Date.now()): Parsed<Schedu
   return { ok: true, value: query };
 }
 
-/** Parse `scheduleId:runId` references (split on the first colon). */
+/** Parse `scheduleId:runId` references. Split on the LAST colon: run ids are
+ *  UUIDs, but hand-written schedule ids may contain colons. */
 export function parseRefs(tokens: string[], max: number): Parsed<ScheduleRunRef[]> {
   if (!tokens.length) return bad('at least one <scheduleId:runId> is required');
   if (tokens.length > max) return bad(`at most ${max} runs per call`);
   const refs: ScheduleRunRef[] = [];
   for (const token of tokens) {
-    const colon = token.indexOf(':');
+    const colon = token.lastIndexOf(':');
     if (token.startsWith('--') || colon < 1 || colon === token.length - 1) return bad(`invalid run reference "${token}" (use <scheduleId>:<runId>)`);
     refs.push({ scheduleId: token.slice(0, colon), runId: token.slice(colon + 1) });
   }
@@ -117,7 +119,7 @@ export function formatRunsTable(result: ScheduleRunQueryResult): string {
     row.outcome,
     row.reason ? reasonLabel(row.reason) : '',
     String(row.run.attempt ?? 1),
-    `${row.scheduleId}:${row.run.id ?? ''}`
+    row.run.id ? `${row.scheduleId}:${row.run.id}` : '-'
   ]);
   const widths = header.map((h, i) => Math.max(h.length, ...body.map(r => r[i]!.length)));
   const line = (cells: string[]) => cells.map((c, i) => (i === cells.length - 1 ? c : c.padEnd(widths[i]!))).join('  ');
@@ -152,7 +154,12 @@ export async function runScheduleRunsCommand(
     if (!refs.ok) return errResult(`schedule dismiss: ${refs.error}`, 2);
     const res = await call('sched.dismiss', { refs: refs.value });
     if ('error' in res) return res.error;
-    return json ? jsonResult(res.value) : textResult(`Dismissed ${String(res.value)} of ${refs.value.length}.`);
+    const dismissed = Number(res.value);
+    // Like retry: any ref that wasn't dismissed makes the command fail.
+    if (dismissed < refs.value.length) {
+      return json ? { ...jsonResult(res.value), exitCode: 1 } : { ...textResult(`Dismissed ${dismissed} of ${refs.value.length}.`), exitCode: 1 };
+    }
+    return json ? jsonResult(res.value) : textResult(`Dismissed ${dismissed} of ${refs.value.length}.`);
   }
 
   const dryRun = args.includes('--dry-run');
@@ -164,8 +171,9 @@ export async function runScheduleRunsCommand(
   if (open) {
     const found = await call('sched.runs', { query: { state: 'open', limit: MAX_LIMIT } });
     if ('error' in found) return found.error;
-    const rows = (found.value as ScheduleRunQueryResult).rows.filter(row => row.manualRetry);
-    refs = rows.slice(0, MAX_RETRY_REFS).map(row => ({ scheduleId: row.scheduleId, runId: row.run.id ?? '' })).filter(ref => ref.runId);
+    const rows = (found.value as ScheduleRunQueryResult).rows.filter(row => row.manualRetry && row.run.id);
+    // One per schedule: each retry re-runs the schedule once.
+    refs = openRetryRefs(rows, MAX_RETRY_REFS);
     if (dryRun) {
       return json ? jsonResult({ dryRun: true, refs, total: rows.length })
         : textResult(refs.length ? `${refs.map(ref => `would retry  ${ref.scheduleId}:${ref.runId}`).join('\n')}${rows.length > refs.length ? `\n${refs.length} of ${rows.length}` : ''}` : 'Nothing to retry.');

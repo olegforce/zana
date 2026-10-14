@@ -113,7 +113,8 @@ export type ScheduleRunReasonCode =
   | 'launch-failed' | 'worker-not-started' | 'outcome-unknown' | 'project-missing'
   | 'concurrency-cap' | 'queue-full'
   | 'missed-asleep' | 'missed-app-closed'
-  | 'overlap' | 'in-flight';
+  | 'overlap' | 'in-flight'
+  | 'squad-failed' | 'squad-stopped';
 
 export interface ScheduleRun {
   id?: string;
