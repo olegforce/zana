@@ -250,7 +250,8 @@ export function SchedulerOverview({
     });
   }, [tasks]);
 
-  const matches = useMemo(() => filterSchedules(allSchedules, projectMap, search, filter), [allSchedules, projectMap, search, filter]);
+  // `tick`: the attention filter ages out with real time, like the banner and KPI.
+  const matches = useMemo(() => filterSchedules(allSchedules, projectMap, search, filter), [allSchedules, projectMap, search, filter, tick]);
   const pageSize = 8;
   const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);

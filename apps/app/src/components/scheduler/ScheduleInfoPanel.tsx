@@ -19,6 +19,7 @@ import type { ScheduledTask, ScheduleRun } from '@zana-ai/zcc-domain/product';
 import {
   SCHEDULE_REASONS,
   canManualRetry,
+  runManualRetry,
   isOpenProblem,
   isProblemRun,
   isRecoveryMode,
@@ -228,11 +229,10 @@ export function ScheduleInfoPanel({
           <ul className="scheduler-run-list">
             {runs.slice(0, Math.max(1, task.history?.retain ?? 10)).map((run, i) => {
               const reason = runReason(run);
-              const retryable = !isExternal && !!run.id
-                && canManualRetry({
-                  manualRetry: isProblemRun(run) && (reason ? SCHEDULE_REASONS[reason].manualRetry : true),
-                  open: isOpenProblem(run, Date.now(), closedBefore)
-                });
+              // The same predicate the server and Problems use (a paused schedule's
+              // missed marker can't be caught up, so no Run now there).
+              const retryable = !isExternal
+                && canManualRetry({ manualRetry: runManualRetry(task, run), open: isOpenProblem(run, Date.now(), closedBefore) });
               const busy = !!run.id && busyRuns.has(run.id);
               return (
               <li

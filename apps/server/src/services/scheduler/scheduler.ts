@@ -107,6 +107,10 @@ interface Live {
   /** Runtime-only third term of the timing anchor: the newest slot already
    *  handed to the run queue. Unset until a queue exists; never persisted. */
   queuedThroughMs?: number;
+  /** Runtime-only: a late gap handled without a marker (or whose marker write
+   *  failed). Advances the timing anchor so the gap isn't re-fired; never
+   *  persisted, so a restart re-detects the gap. */
+  handledThroughMs?: number;
   /** The un-floored slot (epoch ms) the armed timer is for; the slot a scheduled
    *  fire covers. Set by `arm`. */
   targetAt?: number;
@@ -198,6 +202,8 @@ interface FireOptions {
   lateCause?: 'asleep' | 'app-closed';
   /** Epoch ms the timer callback ran: lateness is measured here, not after the serial-queue wait. */
   firedAt?: number;
+  /** An automatic (policy-driven) retry, carried from its queue entry. */
+  auto?: true;
 }
 
 /** What a timer fire found out about the gap since the last handled slot. */
@@ -632,10 +638,7 @@ export class SchedulerManager extends EventEmitter {
     if (patch.retry !== undefined) {
       const retry = patch.retry === null ? undefined : normalizeRetry(patch.retry);
       if (retry) next.retry = retry; else delete next.retry;
-      if (!retry || retry.attempts < 1) {
-        delete next.status.pendingRetry;
-        this.cancelAutoRetries(id);
-      }
+      if (!retry || retry.attempts < 1) delete next.status.pendingRetry;
     }
     if (patch.inboxLevel !== undefined) next.inboxLevel = patch.inboxLevel;
     if (patch.autoCloseOnFinish !== undefined) next.autoCloseOnFinish = patch.autoCloseOnFinish;
@@ -661,6 +664,8 @@ export class SchedulerManager extends EventEmitter {
     await this.persist(next, definitionPatch, guard);
     live.task = next;
     this.disarm(id);
+    // Only once the write succeeded: a failed update leaves the retry chain as it was.
+    if (patch.retry !== undefined && !(next.retry && next.retry.attempts >= 1)) this.cancelAutoRetries(id);
     if (wasEnabled && !next.enabled) this.dropQueued(id, false);
     if (next.enabled) this.arm(id);
     this.armRetry(id);
@@ -1165,7 +1170,7 @@ export class SchedulerManager extends EventEmitter {
    * queued slot. With none of the newer terms it is exactly the last run.
    */
   private anchorMs(live: Live): number {
-    return anchorOf(live.task.status, live.queuedThroughMs);
+    return anchorOf(live.task.status, Math.max(live.queuedThroughMs ?? 0, live.handledThroughMs ?? 0));
   }
 
   /** Accounting floor: slots at or before it are never reported missed or late. */
@@ -1225,7 +1230,7 @@ export class SchedulerManager extends EventEmitter {
     const stale = this.classicStale(live.task, now);
     const targetAt = stale
       ? now + (parseEveryShared(live.task.schedule.every ?? '') ?? MIN_INTERVAL_MS)
-      : this.nextTargetFireMs(live.task, now, live.queuedThroughMs);
+      : this.nextTargetFireMs(live.task, now, Math.max(live.queuedThroughMs ?? 0, live.handledThroughMs ?? 0));
     live.targetAt = targetAt;
     live.staleSince = stale ? now : undefined;
     const rawDelay = targetAt - now;
@@ -1284,7 +1289,10 @@ export class SchedulerManager extends EventEmitter {
     if (!opts.manual && !isDeepStrictEqual(priorCadence, live.task.schedule)) {
       this.markDiscontinuity(live.task);
       try { await this.persist(live.task); } catch (error) { this.log(`persist ${id}`, error); }
-      this.arm(id); this.emit('changed'); return;
+      this.arm(id);
+      // A drained retry entry that doesn't start here returns through its timer.
+      if (opts.trigger === 'retry') this.armRetry(id);
+      this.emit('changed'); return;
     }
     if (live.task.status.runs.some(run => run.launchState === 'pending')) throw new Error('Unconfirmed worker launch');
 
@@ -1295,6 +1303,8 @@ export class SchedulerManager extends EventEmitter {
       live.staleSince = undefined;
       // While a previous run is alive it covers the gap; a marker written here
       // (before the overlap guard) could also push that live record out of history.
+      // Late fires follow a wake, when zombies still look alive: reap first.
+      this.deps.ptys.reapDeadSessions();
       if (!this.hasUnresolvedRun(live)) {
         try { await this.recordStaleInterval(id, since); } catch (error) { this.log(`stale ${id}`, error); }
       }
@@ -1304,13 +1314,17 @@ export class SchedulerManager extends EventEmitter {
     if (late && plan && !plan.run) {
       // Recovery `skip`: record the gap, run nothing, re-arm from the cursor. Not
       // while a previous run is alive: it covers the gap (see the stale case above).
+      // Whether or not a marker is written, the gap is handled: the runtime-only
+      // anchor makes the re-arm below target the next future slot, never this
+      // one again. (Not `slotCursorAt`: an in-memory status edit would differ from
+      // disk and keep a deferred reload spinning while the run lives.)
+      const handled = () => { live.handledThroughMs = Math.max(live.handledThroughMs ?? 0, late.last); };
+      this.deps.ptys.reapDeadSessions();
       if (!this.hasUnresolvedRun(live)) {
         try { await this.writeMissedMarker(id, late, plan.markerCount, late.first); }
-        catch (error) { this.log(`missed marker ${id}`, error); }
+        catch (error) { this.log(`missed marker ${id}`, error); handled(); }
       } else {
-        // No marker, but the gap is handled: move the cursor past it so the
-        // re-arm below targets the next future slot, not this one again.
-        live.task.status.slotCursorAt = new Date(late.last).toISOString();
+        handled();
       }
       if (live.task.enabled) this.arm(id);
       return;
@@ -1471,7 +1485,7 @@ export class SchedulerManager extends EventEmitter {
     const wasEnabled = live.task.enabled;
     // This retry is starting: the persisted `pendingRetry` it came from is consumed
     // (the reservation below writes the task without it).
-    if (opts.trigger === 'retry' && opts.retryOf && live.task.status.pendingRetry?.rootRunId === opts.retryOf) {
+    if (opts.trigger === 'retry' && live.task.status.pendingRetry) {
       delete live.task.status.pendingRetry;
       const timer = this.retryTimers.get(id);
       if (timer) clearTimeout(timer);
@@ -1603,7 +1617,7 @@ export class SchedulerManager extends EventEmitter {
     const retryScheduled = await this.scheduleRetryIfDue(id, runId);
     // The exit path held this chain's notice back (D9). When a retry attempt
     // can't even start and no further retry follows, the chain ends here: send it.
-    if (!retryScheduled && (opts.attempt ?? 1) > 1 && (live.task.inboxLevel ?? 'quiet') !== 'silent') {
+    if (!retryScheduled && opts.auto && (live.task.inboxLevel ?? 'quiet') !== 'silent') {
       const project = this.deps?.store.listProjects().find(candidate => candidate.id === live.task.projectId);
       const run = live.task.status.runs.find(candidate => candidate.id === runId);
       if (project && run) void this.notifyInboxOnExit(live.task, run, project, true);
@@ -2246,6 +2260,7 @@ export class SchedulerManager extends EventEmitter {
             attempt: entry.attempt,
             runId: entry.runId,
             lateCause: entry.lateCause,
+            ...(entry.auto ? { auto: true as const } : {}),
             fromQueue: true
           });
         } catch (error) {
@@ -2340,7 +2355,10 @@ export class SchedulerManager extends EventEmitter {
     if (!live.task.enabled || !(live.task.retry && live.task.retry.attempts >= 1)) { await this.clearPendingRetry(id); return; }
     const due = Date.parse(pending.dueAt);
     if (Number.isFinite(due) && due > Date.now() + 1_000) { this.armRetry(id); return; }
-    if (this.queue.some(entry => entry.taskId === id && entry.trigger === 'retry' && entry.retryOf === pending.rootRunId)) return;
+    // Any retry already queued for this schedule (a manual one included) serves
+    // this chain too: one run re-runs the schedule (D8). Never replace it.
+    if (this.queue.some(entry => entry.taskId === id && entry.trigger === 'retry')) return;
+    if (pending.attempt > live.task.retry.attempts + 1) { await this.clearPendingRetry(id); return; }
     const root = live.task.status.runs.find(run => run.id === pending.rootRunId);
     const slot = Date.parse(root?.slotAt ?? '');
     const queued = this.enqueue({
@@ -2480,6 +2498,7 @@ export class SchedulerManager extends EventEmitter {
       return { results, pending };
     }).then(async ({ results, pending }) => {
       if (!pending.length) return results;
+      const epoch = this.epoch;
       // Launch in a separate serial op so this call never holds the scheduler,
       // and answer within the CLI's control timeout: whatever hasn't started by
       // then is reported `queued` and starts as soon as the drain gets to it.
@@ -2487,14 +2506,18 @@ export class SchedulerManager extends EventEmitter {
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([drained, new Promise<void>(resolve => { timer = setTimeout(resolve, RETRY_REPORT_WAIT_MS); timer.unref?.(); })]);
       if (timer) clearTimeout(timer);
+      if (epoch !== this.epoch) {
+        return results.map(result => result.ok ? { ...result, ok: false, status: undefined, error: 'Scheduler stopped' } : result);
+      }
       for (const item of pending) {
         const result = results[item.index];
         if (!result.ok || this.queue.includes(item.entry)) continue;
         // The drain consumed the entry: it launched, unless the launch itself failed.
         const thrown = this.launchErrors.get(item.entry);
         if (thrown) { results[item.index] = { ...result, ok: false, status: undefined, error: thrown }; continue; }
+        // Match the entry that actually ran: refs merged into one entry share its launch.
         const newest = this.live.get(result.scheduleId)?.task.status.runs[0];
-        const failed = newest && newest.retryOf === item.root && newest.attempt === item.attempt
+        const failed = newest && newest.retryOf === (item.entry.retryOf ?? item.root) && newest.attempt === (item.entry.attempt ?? item.attempt)
           && (newest.reasonCode === 'launch-failed' || newest.reasonCode === 'project-missing');
         if (failed) results[item.index] = { ...result, ok: false, status: undefined, error: SCHEDULE_REASONS[newest.reasonCode!].label };
         else result.status = 'started';
@@ -2550,10 +2573,18 @@ export class SchedulerManager extends EventEmitter {
       if (wasIncomplete && live.task.status.lastRunSessionId === sessionId) {
         next.status.lastRunResult = 'success';
       }
+      // The exit path held this run's notice back when it scheduled a retry (D9);
+      // the promotion ends that chain, so it gets its one notice here.
+      const heldNotice = wasIncomplete && !!live.task.status.pendingRetry
+        && live.task.status.pendingRetry.rootRunId === (runs[idx].retryOf ?? runs[idx].id);
       await this.persist(next);
       this.publishRuntime(live, next);
       this.emit('changed');
       if (wasIncomplete) await this.onFinishedSuccess(live.task.id, runs[idx].id);
+      if (heldNotice && (live.task.inboxLevel ?? 'quiet') !== 'silent') {
+        const project = this.deps?.store.listProjects().find(candidate => candidate.id === live.task.projectId);
+        if (project) void this.notifyInboxOnExit(live.task, runs[idx], project, false);
+      }
       return;
     }
     this.log('attachReport', `no run found for session ${sessionId} (report dropped)`);

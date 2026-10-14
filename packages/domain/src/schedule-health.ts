@@ -116,10 +116,11 @@ export function isProblemRun(run: ScheduleRun): boolean {
 }
 
 /**
- * Epoch ms of the newest FINISHED success in a run history (`-Infinity` when
- * none). A later finished success closes earlier problems (D8). Reading it here
- * means history written before this version, which has no `resolvedBy`, is
- * closed too, with nothing rewritten (C2).
+ * Start time (epoch ms) of the newest FINISHED success in a run history
+ * (`-Infinity` when none). A problem that ENDED before a finished success
+ * started is closed (D8). Reading it here means history written before this
+ * version, which has no `resolvedBy`, is closed too, with nothing rewritten (C2).
+ * A Stop-hook "done · session open" success counts as finished, as the UI shows it.
  */
 export function newestSuccessMs(runs: readonly ScheduleRun[] | undefined): number {
   let newest = -Infinity;
@@ -137,10 +138,19 @@ export function newestSuccessMs(runs: readonly ScheduleRun[] | undefined): numbe
   return newest;
 }
 
+/** When a run ended (epoch ms): its finish time, else start + duration, else start. */
+function runEndMs(run: ScheduleRun, at: number): number {
+  const finished = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  if (Number.isFinite(finished)) return finished;
+  return typeof run.durationMs === 'number' && run.durationMs > 0 ? at + run.durationMs : at;
+}
+
 /**
  * A problem not yet resolved, dismissed, closed by a later success or aged out.
  * Pass `closedBeforeMs` (see {@link newestSuccessMs}) to apply read-time
- * closure; {@link taskOpenProblems} does this per schedule.
+ * closure: a problem that ended before that success started is closed. A long
+ * run that started earlier but failed after the success is NOT.
+ * {@link taskOpenProblems} applies this per schedule.
  */
 export function isOpenProblem(run: ScheduleRun, nowMs: number, closedBeforeMs = -Infinity): boolean {
   try {
@@ -148,7 +158,7 @@ export function isOpenProblem(run: ScheduleRun, nowMs: number, closedBeforeMs = 
     if (run.resolvedBy || run.dismissedAt) return false;
     const at = Date.parse(run.at);
     if (!Number.isFinite(at)) return false;
-    if (at < closedBeforeMs) return false;
+    if (runEndMs(run, at) < closedBeforeMs) return false;
     return nowMs - at <= OPEN_PROBLEM_MAX_AGE_MS;
   } catch {
     return false;
@@ -188,6 +198,24 @@ export function reasonLabel(code: ScheduleRunReasonCode | undefined): string {
 
 export function reasonHint(code: ScheduleRunReasonCode | undefined): string {
   return isReasonCode(code) ? SCHEDULE_REASONS[code].hint : '';
+}
+
+/**
+ * Whether the server accepts a manual retry of this run: a problem whose reason
+ * allows it, on a native schedule; a missed marker only while its schedule is
+ * enabled (catching up a paused schedule is refused). The single predicate every
+ * surface uses (UI rows, Problems, CLI, MCP and thread tools).
+ */
+export function runManualRetry(task: Pick<ScheduledTask, 'enabled' | 'external'>, run: ScheduleRun): boolean {
+  try {
+    if (!task || task.external || !run?.id || !isProblemRun(run)) return false;
+    const reason = runReason(run);
+    if (reason && !SCHEDULE_REASONS[reason].manualRetry) return false;
+    if (run.marker && !task.enabled) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether the UI offers Retry (or Run now for missed) on this row. */
@@ -302,7 +330,7 @@ export function collectRunRows(
           ...(reason ? { reason } : {}),
           problem,
           open,
-          manualRetry: problem && (reason ? SCHEDULE_REASONS[reason].manualRetry : true)
+          manualRetry: runManualRetry(task, run)
         }
       });
     }

@@ -188,7 +188,8 @@ describe('RecoveryDialog', () => {
     unmount();
     await act(async () => { pending[0]!({ ok: true, value: {} }); });
     expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.set).toHaveBeenCalledWith({ schedulerRecoveryIntro: 'applied' });
+    // Interrupted: not marked applied, so the card can offer the schedules not yet turned on.
+    expect(h.set).not.toHaveBeenCalledWith({ schedulerRecoveryIntro: 'applied' });
   });
 
   it('keeps the auto-retry checkbox out of the uppercase field-label style', () => {

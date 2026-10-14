@@ -64,6 +64,9 @@ const settle = (app: Handle) => app.window.evaluate(() => new Promise<void>(done
 async function useTheme(app: Handle, theme: 'light' | 'dark') {
   await app.window.evaluate(value => window.cc.config.set({ theme: value }), theme);
   await expect(app.window.locator('html')).toHaveAttribute('data-theme', theme);
+  // Buttons repaint after their colour transitions finish; a capture before that
+  // shows them in the previous theme's colours.
+  await app.window.waitForTimeout(600);
   await settle(app);
 }
 const subview = (app: Handle, name: 'Overview' | 'Schedules' | 'Problems') =>

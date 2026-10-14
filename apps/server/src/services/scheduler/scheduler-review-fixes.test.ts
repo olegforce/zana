@@ -177,8 +177,6 @@ describe('retry chains end where they should', () => {
   it('keeps pendingRetry persisted until the retry starts', async () => {
     const { manager, ptys, tasks } = await makeFixture([{ enabled: true, retry: policy }], { scheduledRunConcurrency: 1 });
     const id = tasks[0].id;
-    const [other] = (await makeFixture()).tasks;
-    void other;
     await manager.runNow(id);
     ptys.simulateExit(lastSession(ptys), 1);
     await settle(manager);
@@ -188,6 +186,9 @@ describe('retry chains end where they should', () => {
     await vi.advanceTimersByTimeAsync(10 * MIN + 1_000);
     expect(internals(manager).queue.some(entry => entry.trigger === 'retry' && entry.auto)).toBe(true);
     expect(T(manager, id).status.pendingRetry).toBeDefined();
+    // On disk too: a quit while the retry waits in the in-memory queue re-arms it next launch.
+    const saved = vi.mocked(saveSchedule).mock.calls.map(call => call[0] as ScheduledTask).filter(task => task.id === id).at(-1)!;
+    expect(saved.status.pendingRetry).toMatchObject({ attempt: 2 });
     manager.stopAll();
   });
 
@@ -301,6 +302,101 @@ describe('reload', () => {
     await manager.reload(id);
     expect(T(manager, id).schedule).toEqual({ every: '2h' });
     expect(saveSchedule).not.toHaveBeenCalled();
+    manager.stopAll();
+  });
+});
+
+describe('re-review of the fix round', () => {
+  const problem = (id: string) => ({ id, at: new Date(Date.now() - 2 * HOUR).toISOString(), result: 'error' as const, reasonCode: 'exit-nonzero' as const, durationMs: 1_000 });
+
+  it('any retry that starts consumes the pending retry (one run serves every chain)', async () => {
+    const { manager, ptys, tasks } = await makeFixture([{ enabled: true, retry: policy }]);
+    const id = tasks[0].id;
+    const live = internals(manager).live.get(id)!;
+    live.task.status.runs = [problem('B'), problem('A')];
+    live.task.status.pendingRetry = { rootRunId: 'A', attempt: 2, dueAt: new Date(Date.now() + 10 * MIN).toISOString() };
+    const [result] = await manager.retryRuns([{ scheduleId: id, runId: 'B' }]);
+    expect(result).toMatchObject({ ok: true, status: 'started' });
+    expect(ptys.createCalls).toHaveLength(1);
+    expect(T(manager, id).status.pendingRetry).toBeUndefined();
+    manager.stopAll();
+  });
+
+  it('a due automatic retry never replaces a manual retry already queued for the schedule', async () => {
+    const { manager, tasks } = await makeFixture([{ enabled: true, retry: policy }], { scheduledRunConcurrency: 1 });
+    const id = tasks[0].id;
+    const live = internals(manager).live.get(id)!;
+    live.task.status.runs = [problem('A')];
+    live.task.status.pendingRetry = { rootRunId: 'A', attempt: 2, dueAt: new Date(Date.now() - MIN).toISOString() };
+    internals(manager).queue.push({ taskId: id, trigger: 'retry', retryOf: 'B', attempt: 2, enqueuedAt: Date.now() });
+    await internals(manager).serial(() => (manager as unknown as { retryDue: (id: string) => Promise<void> }).retryDue(id));
+    expect(internals(manager).queue).toEqual([expect.objectContaining({ retryOf: 'B' })]);
+    expect(internals(manager).queue[0].auto).toBeUndefined();
+    manager.stopAll();
+  });
+
+  it('skip while a run is alive changes no stored status (no deferred-reload spin)', async () => {
+    const { manager, tasks } = await makeFixture([{ every: '1h', catchUp: { mode: 'skip' } }]);
+    const id = tasks[0].id;
+    await manager.runNow(id);
+    lateTask(manager, id, 3.5 * HOUR);
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(T(manager, id).status.slotCursorAt).toBeUndefined();
+    expect((internals(manager).live.get(id) as unknown as { handledThroughMs?: number }).handledThroughMs).toBeGreaterThan(0);
+    manager.stopAll();
+  });
+
+  it('a failed marker write does not refire every 5 s', async () => {
+    const { manager, tasks } = await makeFixture([{ every: '1h', catchUp: { mode: 'skip' } }]);
+    const id = tasks[0].id;
+    lateTask(manager, id, 3.5 * HOUR);
+    vi.mocked(saveSchedule).mockClear();
+    vi.mocked(saveSchedule).mockImplementation(() => { throw new Error('disk full'); });
+    await vi.advanceTimersByTimeAsync(5_100);
+    const attempts = vi.mocked(saveSchedule).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(vi.mocked(saveSchedule).mock.calls.length).toBe(attempts);
+    expect(Date.parse(T(manager, id).status.nextRunAt!)).toBeGreaterThan(Date.now());
+    vi.mocked(saveSchedule).mockReset();
+    manager.stopAll();
+  });
+
+  it('a manual retry that cannot start sends no chain notice (only automatic chains do)', async () => {
+    const { manager, ptys, tasks, inbox } = await makeFixture([{ enabled: true, inboxLevel: 'quiet' }]);
+    const id = tasks[0].id;
+    internals(manager).live.get(id)!.task.status.runs = [problem('A')];
+    vi.spyOn(ptys, 'create').mockImplementationOnce(() => { throw new Error('binary missing'); });
+    const [result] = await manager.retryRuns([{ scheduleId: id, runId: 'A' }]);
+    expect(result.ok).toBe(false);
+    expect(inbox.append).not.toHaveBeenCalled();
+    manager.stopAll();
+  });
+
+  it('a report that promotes an incomplete run whose notice was held back sends that one notice', async () => {
+    const { manager, ptys, tasks, inbox } = await makeFixture([{ enabled: true, inboxLevel: 'loud', retry: policy }]);
+    const id = tasks[0].id;
+    await manager.runNow(id);
+    ptys.simulateExit(lastSession(ptys), 0);
+    await settle(manager);
+    expect(inbox.append).not.toHaveBeenCalled();
+    await manager.attachReport(ptys.sessions[0].id, 'done after all');
+    await settle(manager);
+    expect(inbox.append).toHaveBeenCalledTimes(1);
+    expect(inbox.append).toHaveBeenCalledWith(expect.objectContaining({ comments: expect.stringContaining('success') }));
+    manager.stopAll();
+  });
+
+  it('a failed update leaves the retry chain as it was', async () => {
+    const { manager, ptys, tasks } = await makeFixture([{ enabled: true, retry: policy }]);
+    const id = tasks[0].id;
+    await manager.runNow(id);
+    ptys.simulateExit(lastSession(ptys), 1);
+    await settle(manager);
+    expect(internals(manager).retryTimers.size).toBe(1);
+    vi.mocked(saveSchedule).mockImplementationOnce(() => { throw new Error('read-only'); });
+    await expect(manager.update(id, { retry: null })).rejects.toThrow('read-only');
+    expect(internals(manager).retryTimers.size).toBe(1);
+    expect(T(manager, id).status.pendingRetry).toBeDefined();
     manager.stopAll();
   });
 });

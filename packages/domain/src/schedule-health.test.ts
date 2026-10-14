@@ -14,7 +14,9 @@ import {
   runReason,
   newestSuccessMs,
   taskOpenProblems,
-  countOpenProblems
+  countOpenProblems,
+  runManualRetry,
+  openRetryRefs
 } from './schedule-health.js';
 
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -185,6 +187,32 @@ describe('legacy history', () => {
     expect(countOpenProblems(tasks, NOW)).toEqual({ runs: 3, schedules: 2, byOutcome: { success: 0, error: 1, skipped: 1, incomplete: 0, missed: 1 } });
     expect(countOpenProblems([], NOW).runs).toBe(0);
   });
+  it('closes a problem by when it ENDED: a long run that failed after a success stays open', () => {
+    // A: started 6 h ago, failed 1 h ago (ran 5 h). B: a Run now 3 h ago that finished.
+    const longFailure = run({ id: 'A', at: iso(6 * H), durationMs: 5 * H, message: 'exit 1' });
+    const success = run({ id: 'B', at: iso(3 * H), result: 'success', durationMs: 60_000 });
+    const quickFailure = run({ id: 'C', at: iso(5 * H), durationMs: 60_000, message: 'exit 2' });
+    const open = taskOpenProblems(task('t', [success, longFailure, quickFailure]), NOW).map((r) => r.id);
+    expect(open).toEqual(['A']);
+    // finishedAt wins over duration when both are present.
+    const finished = run({ id: 'D', at: iso(6 * H), finishedAt: iso(4 * H), durationMs: 5 * H });
+    expect(taskOpenProblems(task('t', [success, finished]), NOW)).toEqual([]);
+  });
+  it('runManualRetry is the one rule every surface uses', () => {
+    const t = task('t', []);
+    expect(runManualRetry(t, run({ id: 'r', message: 'exit 1' }))).toBe(true);
+    expect(runManualRetry(t, run({ message: 'exit 1' }))).toBe(false);
+    expect(runManualRetry(t, run({ id: 'r', reasonCode: 'project-missing' }))).toBe(false);
+    expect(runManualRetry(t, run({ id: 'r', result: 'success' }))).toBe(false);
+    const marker = run({ id: 'm', result: 'skipped', reasonCode: 'missed-asleep', marker: true });
+    expect(runManualRetry(t, marker)).toBe(true);
+    // Catching up a paused schedule is refused by the server, so no surface offers it.
+    expect(runManualRetry({ ...t, enabled: false }, marker)).toBe(false);
+    expect(runManualRetry({ ...t, external: { kind: 'claude-loop', cron: '* * * * *' } }, run({ id: 'r', message: 'exit 1' }))).toBe(false);
+    const paused = collectRunRows([task('p', [marker], { enabled: false })], { state: 'open' }, NOW).rows[0];
+    expect(paused.manualRetry).toBe(false);
+    expect(openRetryRefs([paused])).toEqual([]);
+  });
   it('never treats a success as a problem, even one promoted from incomplete that keeps its old reason', () => {
     expect(isProblemRun(run({ result: 'success', reasonCode: 'no-report', message: 'exited without filing a schedule_report — possible silent failure', durationMs: 5 }))).toBe(false);
   });
@@ -193,7 +221,7 @@ describe('legacy history', () => {
 describe('collectRunRows', () => {
   const missed = run({ at: iso(2 * H), result: 'skipped', reasonCode: 'missed-asleep', marker: true, missed: { count: 3, from: iso(5 * H), to: iso(2 * H) } });
   const tasks = [
-    task('a', [run({ at: iso(1 * H) }), missed, run({ at: iso(3 * H), result: 'success' })]),
+    task('a', [run({ id: 'a1', at: iso(1 * H) }), missed, run({ at: iso(3 * H), result: 'success' })]),
     task('b', [run({ at: iso(4 * H), message: 'exit 2', dismissedAt: iso(0) }), run({ at: iso(30 * 24 * H), message: 'exit 3' })], { projectId: 'p2' }),
     task('x', [run({ at: iso(H) })], { external: { kind: 'claude-loop', cron: '* * * * *' } as never })
   ];

@@ -69,7 +69,8 @@ export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTa
   const [applying, setApplying] = useState(false);
   // Set on unmount: an apply loop still running must stop writing.
   const cancelledRef = useRef(false);
-  useEffect(() => () => { cancelledRef.current = true; }, []);
+  // Reset on (re)mount, flag on unmount: a remount must not start out cancelled.
+  useEffect(() => { cancelledRef.current = false; return () => { cancelledRef.current = true; }; }, []);
   const [outcome, setOutcome] = useState<{ done: number; failed: string[] } | null>(null);
 
   const targets = classic.filter((t) => checked.has(t.id));
@@ -98,8 +99,9 @@ export function RecoveryDialog({ tasks, onClose }: { tasks: readonly ScheduledTa
         failed.push(task.name);
       }
     }
-    if (done > 0) await product.config.set({ schedulerRecoveryIntro: 'applied' }).catch(() => {});
+    // Interrupted mid-loop: the card stays, so it can offer the schedules not yet turned on.
     if (cancelledRef.current) return;
+    if (done > 0) await product.config.set({ schedulerRecoveryIntro: 'applied' }).catch(() => {});
     setOutcome({ done, failed });
     setApplying(false);
   };
