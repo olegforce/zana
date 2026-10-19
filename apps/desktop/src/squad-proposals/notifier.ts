@@ -1,11 +1,10 @@
 import type { AgentState } from '@zana-ai/zcc-domain/product';
-import type { ExecutionRecord } from '@zana-ai/zcc-server/services/execution/store';
+import { executionReportTarget, reportedAttempt, type ExecutionRecord, type ExecutionReportTarget } from '@zana-ai/zcc-server/services/execution/store';
 import type { InboxInput } from '@zana-ai/zcc-server/services/inbox/inbox-store';
 import { shouldReplaySquadWorktreeTerminalEffects } from '../squad-worktree-lifecycle.js';
 import { createPtyReportQueue, type PtyReportQueueDeps } from './pty-report-queue.js';
 import { buildSquadBlockerReport, buildSquadReport, squadOutcomeLabel, type SquadWorktreeOutcome } from './report.js';
 
-type Proposal = NonNullable<ExecutionRecord['proposal']>;
 type Blocker = NonNullable<ExecutionRecord['blockers']>[number];
 
 const TERMINAL = new Set(['COMPLETED', 'FAILED', 'STOPPED']);
@@ -23,6 +22,10 @@ export interface SquadProposalNotifierDeps extends PtyReportQueueDeps {
   log(message: string, error?: unknown): void;
 }
 
+/**
+ * `[Squad report]` delivery to the conversation a run reports to: the agent that owns it
+ * (`execution.start`) or the one that proposed it (the Inbox card).
+ */
 export interface SquadProposalNotifier {
   /**
    * Report a terminal run. `worktree` is what the Squad worktree terminal handler did in
@@ -37,8 +40,8 @@ export interface SquadProposalNotifier {
   /**
    * Boot entry point, called once sessions and the server runtime are back. Until it runs,
    * `onTerminal` leaves records unreported (boot-time transitions would otherwise see every
-   * proposer as gone). It then delivers to live proposers, and for gone ones posts the
-   * Inbox result before marking the run reported.
+   * conversation as gone). It then delivers to live ones; for a gone proposer it still posts
+   * the Inbox result before marking the run reported.
    */
   replayUnreported(): Promise<void>;
 }
@@ -53,19 +56,19 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
   const safeLog = (message: string, error?: unknown) => { try { if (error === undefined) deps.log(message); else deps.log(message, error); } catch { /* logging must not throw */ } };
   const ptyQueue = createPtyReportQueue(deps, safeLog);
 
-  /** Hand `text` to the proposer. `settle` runs once it is delivered or dropped for good, never on dispose. */
-  async function deliver(proposal: Proposal, projectId: string, text: string, settle: () => void = () => undefined): Promise<void> {
+  /** Hand `text` to the conversation. `settle` runs once it is delivered or dropped for good, never on dispose. */
+  async function deliver(target: ExecutionReportTarget, projectId: string, text: string, settle: () => void = () => undefined): Promise<void> {
     let queued = false;
     try {
-      if (proposal.proposerKind === 'pty') {
-        if (!deps.ptyLive(proposal.proposerId)) return;
+      if (target.kind === 'pty') {
+        if (!deps.ptyLive(target.id)) return;
         queued = true;
-        ptyQueue.enqueue(proposal.proposerId, { text, settle });
+        ptyQueue.enqueue(target.id, { text, settle });
         return;
       }
-      if (!(await deps.threadLive(proposal.proposerId, projectId))) return;
-      const result = await deps.queueThreadTurn(proposal.proposerId, projectId, text);
-      if (!result.ok) safeLog(`squad proposal thread report not queued for ${proposal.proposerId}: ${result.reason ?? 'unknown'}`);
+      if (!(await deps.threadLive(target.id, projectId))) return;
+      const result = await deps.queueThreadTurn(target.id, projectId, text);
+      if (!result.ok) safeLog(`squad proposal thread report not queued for ${target.id}: ${result.reason ?? 'unknown'}`);
     } finally {
       if (!queued) settle();
     }
@@ -121,23 +124,27 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     };
   }
 
-  async function report(record: ExecutionRecord, given: SquadWorktreeOutcome | undefined, proposerLive: boolean | undefined): Promise<void> {
-    if (disposed || !record?.proposal || record.proposalNoticeVersion === record.attempt || !TERMINAL.has(record.state)) return;
+  const unreported = (record: ExecutionRecord): boolean =>
+    !!executionReportTarget(record) && reportedAttempt(record) !== record.attempt && TERMINAL.has(record.state);
+
+  async function report(record: ExecutionRecord, given: SquadWorktreeOutcome | undefined, targetLive: boolean | undefined): Promise<void> {
+    if (disposed || !record || !unreported(record)) return;
     const key = `${record.id}:${record.attempt}`;
     if (claimed.has(key)) return;
     claimed.add(key);
     let handedOff = false;
     try {
       const fresh = (await deps.getRecord(record.id)) ?? record;
-      const proposal = fresh.proposal;
-      if (!proposal || fresh.proposalNoticeVersion === fresh.attempt || !TERMINAL.has(fresh.state)) return;
+      const target = executionReportTarget(fresh);
+      if (!target || !unreported(fresh)) return;
       const outcome = worktreeOutcome(fresh, given);
       if (outcome === undefined) return;
-      const text = buildSquadReport(fresh, outcome === 'none' ? {} : { worktree: outcome });
-      const settle = settler(fresh, key, await postResult(fresh, text));
+      const text = buildSquadReport(fresh, { ...(outcome === 'none' ? {} : { worktree: outcome }), role: target.role });
+      // A proposer also gets the Inbox result entry; an owner already has the run on its board.
+      const settle = settler(fresh, key, target.role === 'owner' ? true : await postResult(fresh, text));
       handedOff = true;
-      if (proposerLive === false) { settle(); return; }
-      try { await deliver(proposal, fresh.projectId, text, settle); } catch (error) { safeLog(`squad proposal delivery failed for ${fresh.id}`, error); }
+      if (targetLive === false) { settle(); return; }
+      try { await deliver(target, fresh.projectId, text, settle); } catch (error) { safeLog(`squad proposal delivery failed for ${fresh.id}`, error); }
     } catch (error) {
       safeLog(`squad proposal report failed for ${record.id}`, error);
     } finally {
@@ -166,19 +173,20 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
   }
 
   async function onHumanBlocker(record: ExecutionRecord, blocker: Blocker): Promise<void> {
-    if (disposed || !record?.proposal || !firstSighting(record.id, blocker.id)) return;
+    const target = record ? executionReportTarget(record) : undefined;
+    if (disposed || !target || !firstSighting(record.id, blocker.id)) return;
     try {
-      await deliver(record.proposal, record.projectId, buildSquadBlockerReport(record, blocker));
+      await deliver(target, record.projectId, buildSquadBlockerReport(record, blocker, target.role));
     } catch (error) {
       safeLog(`squad proposal blocker report failed for ${record.id}`, error);
     }
   }
 
-  async function proposerLive(record: ExecutionRecord, proposal: Proposal): Promise<boolean> {
+  async function targetLive(record: ExecutionRecord, target: ExecutionReportTarget): Promise<boolean> {
     try {
-      return proposal.proposerKind === 'pty'
-        ? deps.ptyLive(proposal.proposerId)
-        : await deps.threadLive(proposal.proposerId, record.projectId);
+      return target.kind === 'pty'
+        ? deps.ptyLive(target.id)
+        : await deps.threadLive(target.id, record.projectId);
     } catch (error) {
       safeLog(`squad proposal replay liveness check failed for ${record.id}`, error);
       return false;
@@ -192,7 +200,8 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     try { records = await deps.listUnreported(); } catch (error) { safeLog('squad proposal replay list failed', error); return; }
     for (const record of records) {
       try {
-        if (record.proposal) await report(record, undefined, await proposerLive(record, record.proposal));
+        const target = executionReportTarget(record);
+        if (target) await report(record, undefined, await targetLive(record, target));
       } catch (error) {
         safeLog(`squad proposal replay failed for ${record.id}`, error);
       }

@@ -71,7 +71,12 @@ const executionStartSchema = z.strictObject({
   usageBudget: z.strictObject({ maxTokens: z.number().int().min(1).optional(), maxUsd: z.number().positive().optional() }).optional(),
   worktree: z.boolean().optional(),
   workflow: workflowSchema.optional(),
-  workUnits: z.array(workUnitSchema).min(1).max(100).optional()
+  workUnits: z.array(workUnitSchema).min(1).max(100).optional(),
+  /**
+   * true: the owner gets a [Squad report] when the run ends or needs a human answer. Opt-in, so
+   * an existing owner that polls execution.snapshot keeps exactly what it had.
+   */
+  notify: z.boolean().optional()
 });
 const executionStartFileSchema = z.strictObject({
   requestPath: z.string().min(1).max(2048)
@@ -101,6 +106,13 @@ const executionProducerEventSchema = {
   references: z.array(z.object({ label: z.string().min(1).max(2048), uri: z.string().min(1).max(2048) })).max(20).optional()
 };
 const executionMessageSchema = { ...executionControlSchema, slotId: z.string().min(1).max(2048), message: z.string().min(1).max(64 * 1024) };
+const executionRespondSchema = {
+  ...executionControlSchema,
+  slotId: z.string().min(1).max(2048).optional().describe('The slot to message. Pass slotId or blockerId, not both.'),
+  blockerId: z.string().min(1).max(2048).optional().describe('A human blocker of this run to answer, as named in its [Squad report].'),
+  clientRequestId: z.string().min(1).max(256).optional().describe('Idempotency key for a blocker answer; generated when omitted.'),
+  message: z.string().min(1).max(64 * 1024)
+};
 const executionCompleteSchema = { ...executionIdSchema, summary: z.string().min(1).max(64 * 1024) };
 const executionArtifactSchema = { ...executionIdSchema, name: z.string().min(1).max(512), mediaType: z.string().min(1).max(512), content: z.string().min(1).max(64 * 1024) };
 const executionPlanSchema = { ...executionIdSchema, workUnits: z.array(workUnitSchema).min(1).max(100) };
@@ -169,6 +181,8 @@ export interface RegisterExecutionToolOptions {
   handoffs?: ReturnType<typeof createExecutionHandoffStore>;
   validateHandoffTarget?: (sourceSessionId: string, targetSessionId: string, projectId: string) => boolean;
   approveHandoff?: (sourceSessionId: string, targetSessionId: string, projectId: string, executionId: string, operation: typeof EXECUTION_HANDOFF_OPERATION | typeof EXECUTION_RESUME_MONITOR_OPERATION) => Promise<boolean>;
+  /** How this route's session receives a `[Squad report]`: a CLI Agent PTY (default) or a Modern thread. */
+  reportKind?: 'pty' | 'thread';
 }
 
 function denied(name: string) {
@@ -428,7 +442,7 @@ export function registerExecutionTools(server: McpServer, options: RegisterExecu
     } catch (error) {
       return { isError: true, content: [{ type: 'text' as const, text: `execution.start failed: ${error instanceof Error ? error.message : String(error)}` }] };
     }
-    const { version, launchKind, launchDisplay, teamId, launchRequestId, jobTitle, summary, slots, deadlineMs, maxConcurrent, maxLaunches, maxTurnsPerClaim, maxClaimWallClockMs, usageBudget, workflow, workUnits, worktree } = start;
+    const { version, launchKind, launchDisplay, teamId, launchRequestId, jobTitle, summary, slots, deadlineMs, maxConcurrent, maxLaunches, maxTurnsPerClaim, maxClaimWallClockMs, usageBudget, workflow, workUnits, worktree, notify } = start;
     const request: ExecutionRequestV1 = {
       version, launchKind, ...(launchDisplay === undefined ? {} : { launchDisplay }), teamId, launchRequestId, jobTitle, summary, slots,
       ...(workflow === undefined ? {} : { workflow }), ...(workUnits === undefined ? {} : { workUnits }), coordinationMode: 'job-team',
@@ -442,7 +456,9 @@ export function registerExecutionTools(server: McpServer, options: RegisterExecu
         ...(usageBudget === undefined ? {} : { usageBudget })
       }
     };
-    const result = await options.service.start(options.sessionId!, options.projectId, request);
+    // An owner that asked for it gets a [Squad report] when the run ends or needs a human.
+    const result = await options.service.start(options.sessionId!, options.projectId, request,
+      notify === true ? { reportTo: { kind: options.reportKind ?? 'pty', id: options.sessionId!, role: 'owner' } } : undefined);
     return result.ok
       ? { content: [{ type: 'text' as const, text: JSON.stringify((({ resumeToken: _token, resumeTokenExpiresAt: _expiresAt, ...value }) => value)(result.value)) }] }
       : { isError: true, content: [{ type: 'text' as const, text: `execution.start failed: ${result.message}` }] };
@@ -464,7 +480,8 @@ export function registerExecutionTools(server: McpServer, options: RegisterExecu
     description: 'Bind this fresh session to an execution using a durable resume grant. Retry same token after a transient binding failure.', inputSchema: resumeBindingSchema
   }, async ({ executionId, token }) => {
     if (!await ownerAuthorized()) return denied('execution.resume_binding');
-    const result = await options.service.resumeBinding(options.sessionId!, options.projectId, executionId, token);
+    // An owner's reports follow it to this fresh session.
+    const result = await options.service.resumeBinding(options.sessionId!, options.projectId, executionId, token, options.reportKind ?? 'pty');
     return result.ok
       ? { content: [{ type: 'text' as const, text: JSON.stringify(result.value) }] }
       : { isError: true, content: [{ type: 'text' as const, text: `execution.resume_binding failed: ${result.message}` }] };
@@ -625,10 +642,24 @@ export function registerExecutionTools(server: McpServer, options: RegisterExecu
   });
 
   register('execution.respond', {
-    description: 'Deliver a response to one authorized execution slot.', inputSchema: executionMessageSchema
-  }, async ({ executionId, expectedStateVersion, slotId, message }) => {
+    description: 'Deliver a response to one authorized execution slot (slotId), or answer one of the run\'s human blockers (blockerId) as its owner, e.g. the question a [Squad report] named.',
+    inputSchema: executionRespondSchema
+  }, async ({ executionId, expectedStateVersion, slotId, blockerId, clientRequestId, message }) => {
+    if ((slotId === undefined) === (blockerId === undefined)) {
+      return { isError: true, content: [{ type: 'text' as const, text: 'execution.respond failed: pass exactly one of slotId or blockerId' }] };
+    }
+    if (blockerId !== undefined) {
+      // An owner answers from a CLI Agent or a Modern thread, so the owner gate applies.
+      if (!await ownerAuthorized()) return denied('execution.respond');
+      const answered = await options.service.respondToBlocker(
+        options.sessionId!, options.projectId, executionId, expectedStateVersion, blockerId, clientRequestId ?? `mcp:${randomUUID()}`, message
+      );
+      return answered.ok
+        ? { content: [{ type: 'text' as const, text: JSON.stringify({ executionId, blockerId, stateVersion: answered.value.stateVersion, state: answered.value.state }) }] }
+        : { isError: true, content: [{ type: 'text' as const, text: `execution.respond failed: ${answered.message}` }] };
+    }
     if (!authorized()) return denied('execution.respond');
-    const result = await options.service.respond(options.sessionId!, options.projectId, executionId, expectedStateVersion, slotId, message);
+    const result = await options.service.respond(options.sessionId!, options.projectId, executionId, expectedStateVersion, slotId!, message);
     return result.ok
       ? { content: [{ type: 'text' as const, text: JSON.stringify(result.value) }] }
       : { isError: true, content: [{ type: 'text' as const, text: `execution.respond failed: ${result.message}` }] };

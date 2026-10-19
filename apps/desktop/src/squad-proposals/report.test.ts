@@ -118,4 +118,26 @@ describe('buildSquadBlockerReport', () => {
     expect(text.length).toBeLessThanOrEqual(2048);
     expect(text.endsWith('Tell the user; do not answer it yourself.')).toBe(true);
   });
+
+  it('tells an owner how to answer, with the exact ids, on one line, within the cap', () => {
+    const text = buildSquadBlockerReport(record({ jobTitle: 't'.repeat(5000) }), { id: 'blk-1', question: 'Which?' } as never, 'owner');
+    expect(text.length).toBeLessThanOrEqual(2048);
+    expect(text).not.toMatch(/[\r\n]/);
+    expect(text).toContain('(execution e1, blocker blk-1). You own this run: answer with execution.respond');
+    expect(text.endsWith('It is also in the Inbox.')).toBe(true);
+  });
+
+  it('points an owner at execution.snapshot instead of repeating an id it could not type back', () => {
+    for (const id of ['b\n1', 'b  1', 'x'.repeat(300)]) {
+      const text = buildSquadBlockerReport(record(), { id, question: 'Which?' } as never, 'owner');
+      expect(text).toContain('(its execution and blocker ids are in execution.snapshot)');
+      expect(text).not.toMatch(/[\r\n]/);
+    }
+  });
+
+  it('closes an owner\'s terminal report for an owner', () => {
+    const text = buildSquadReport(record(), { role: 'owner' });
+    expect(text.endsWith('Tell the user what it did; execution.snapshot has the details.')).toBe(true);
+    expect(text).not.toContain('answers go through the Inbox');
+  });
 });

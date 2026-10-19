@@ -113,37 +113,73 @@ describe('start with a proposal', () => {
   }));
 });
 
-describe('proposal report marker', () => {
+describe('report marker', () => {
   it('is terminal-only, idempotent, keeps stateVersion and survives a reload', async () => fixture(async (filePath) => {
     const store = createExecutionStore({ filePath, id: () => 'execution-1' });
     const record = (await store.claim(claimInput({ proposal }) as never)).record;
-    await expect(store.markProposalReported(record.id, record.attempt)).rejects.toThrow('terminal proposal is unavailable');
-    await expect(store.markProposalReported('missing', 1)).rejects.toThrow('execution not found');
-    expect(await store.listUnreportedProposalExecutions()).toEqual([]);
+    await expect(store.markReported(record.id, record.attempt)).rejects.toThrow('terminal report target is unavailable');
+    await expect(store.markReported('missing', 1)).rejects.toThrow('execution not found');
+    expect(await store.listUnreportedExecutions()).toEqual([]);
 
     const stopped = await store.stopForPlanCorrection(record.id);
-    expect((await store.listUnreportedProposalExecutions()).map((r) => r.id)).toEqual([record.id]);
-    await expect(store.markProposalReported(record.id, stopped.attempt + 1)).rejects.toThrow('stale execution attempt');
+    expect((await store.listUnreportedExecutions()).map((r) => r.id)).toEqual([record.id]);
+    await expect(store.markReported(record.id, stopped.attempt + 1)).rejects.toThrow('stale execution attempt');
 
-    const marked = await store.markProposalReported(record.id, stopped.attempt);
-    expect(marked.proposalNoticeVersion).toBe(stopped.attempt);
+    const marked = await store.markReported(record.id, stopped.attempt);
+    expect(marked.reportNoticeVersion).toBe(stopped.attempt);
     expect(marked.stateVersion).toBe(stopped.stateVersion);
-    const again = await store.markProposalReported(record.id, stopped.attempt);
+    const again = await store.markReported(record.id, stopped.attempt);
     expect(again).toEqual(marked);
 
     const reloaded = createExecutionStore({ filePath });
-    expect((await reloaded.get(record.id))?.proposalNoticeVersion).toBe(stopped.attempt);
-    expect(await reloaded.listUnreportedProposalExecutions()).toEqual([]);
+    expect((await reloaded.get(record.id))?.reportNoticeVersion).toBe(stopped.attempt);
+    expect(await reloaded.listUnreportedExecutions()).toEqual([]);
   }));
 
-  it('lists only terminal proposal records not yet reported', async () => fixture(async (filePath) => {
+  it('lists terminal records with a report target (owner or proposer) not yet reported', async () => fixture(async (filePath) => {
     let n = 0;
     const store = createExecutionStore({ filePath, id: () => `execution-${++n}` });
     const withProposal = (await store.claim(claimInput({ proposal, launchRequestId: 'r1' }) as never)).record;
-    const withoutProposal = (await store.claim(claimInput({ launchRequestId: 'r2' }) as never)).record;
-    await store.stopForPlanCorrection(withProposal.id);
-    await store.stopForPlanCorrection(withoutProposal.id);
-    expect((await store.listUnreportedProposalExecutions()).map((r) => r.id)).toEqual([withProposal.id]);
+    const withoutTarget = (await store.claim(claimInput({ launchRequestId: 'r2' }) as never)).record;
+    const owned = (await store.claim(claimInput({ launchRequestId: 'r3', reportTo: { kind: 'thread', id: 'thread-9', role: 'owner' } }) as never)).record;
+    for (const record of [withProposal, withoutTarget, owned]) await store.stopForPlanCorrection(record.id);
+    expect((await store.listUnreportedExecutions()).map((r) => r.id).sort()).toEqual([withProposal.id, owned.id].sort());
+    expect((await store.get(owned.id))?.reportTo).toEqual({ kind: 'thread', id: 'thread-9', role: 'owner' });
+  }));
+
+  it('reads the earlier proposalNoticeVersion key as reported, without rewriting it', async () => fixture(async (filePath) => {
+    const store = createExecutionStore({ filePath, id: () => 'execution-1' });
+    const record = (await store.claim(claimInput({ proposal }) as never)).record;
+    const stopped = await store.stopForPlanCorrection(record.id);
+    const durable = JSON.parse(await readFile(filePath, 'utf8'));
+    durable.records[0].proposalNoticeVersion = stopped.attempt;
+    await writeFile(filePath, JSON.stringify(durable));
+    const reloaded = createExecutionStore({ filePath });
+    expect(await reloaded.listUnreportedExecutions()).toEqual([]);
+    expect(await reloaded.markReported(record.id, stopped.attempt)).toMatchObject({ proposalNoticeVersion: stopped.attempt });
+    expect((await reloaded.get(record.id))?.reportNoticeVersion).toBeUndefined();
+  }));
+
+  it.each([
+    ['an unknown kind', { kind: 'mesh', id: 's', role: 'owner' }],
+    ['an unknown role', { kind: 'pty', id: 's', role: 'boss' }],
+    ['an empty id', { kind: 'pty', id: '', role: 'owner' }]
+  ])('treats a malformed reportTo (%s) as a corrupt store', async (_name, bad) => fixture(async (filePath) => {
+    const store = createExecutionStore({ filePath, id: () => 'execution-1' });
+    await store.claim(claimInput({ proposal }) as never);
+    const durable = JSON.parse(await readFile(filePath, 'utf8'));
+    durable.records[0].reportTo = bad;
+    await writeFile(filePath, JSON.stringify(durable));
+    await expect(createExecutionStore({ filePath }).get('execution-1')).rejects.toThrow('corrupt execution store');
+  }));
+});
+
+describe('start with a report target', () => {
+  it('stores reportTo next to the proposal', async () => fixture(async (filePath) => {
+    const { store, svc } = service(filePath);
+    const reportTo = { kind: 'pty' as const, id: 'owner-session', role: 'owner' as const };
+    expect((await svc.start('owner', 'project-1', request, { reportTo })).ok).toBe(true);
+    expect((await store.get('execution-1'))?.reportTo).toEqual(reportTo);
   }));
 });
 

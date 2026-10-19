@@ -321,6 +321,14 @@ Only an explicit "run it now with X", "start X immediately" or "skip the Inbox"
 makes the agent start the Squad straight away with `execution.start`, as the run's
 owner. Either way the agent says in one line which path it took.
 
+An owner that starts the run with `notify: true` (the bundled skills do) gets the
+same `[Squad report]` when its run finishes or needs a human answer, so it doesn't
+have to poll; the reports follow it to a new session after Recover. It may answer
+such a question itself with `execution.respond` when what you told it decides it;
+otherwise it asks you, and the question is in your Inbox too. An owner gets no
+"Squad completed" Inbox entry: the run is on its board. Without `notify: true`,
+`execution.start` behaves as before.
+
 Rules: the Squad always runs in the proposing session's Project, and files must be
 inside that Project. Members of a running Squad cannot propose. Proposals expire
 after 7 days. If the Squad's orchestrator cannot write files, "Infer plan from

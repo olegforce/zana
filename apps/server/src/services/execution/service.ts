@@ -571,7 +571,10 @@ export class ExecutionService {
     return { ...request, resolvedModels: await this.deps.resolveTeamModelSnapshots(projectId, request) };
   }
 
-  async start(callerPrincipalId: string, projectId: string, request: ExecutionRequestV1, opts?: { proposal?: ExecutionRecord['proposal'] }): Promise<
+  async start(
+    callerPrincipalId: string, projectId: string, request: ExecutionRequestV1,
+    opts?: { proposal?: ExecutionRecord['proposal']; reportTo?: ExecutionRecord['reportTo'] }
+  ): Promise<
     { ok: true; value: ExecutionRecord & { resumeToken?: string; resumeTokenExpiresAt?: number } }
     | { ok: false; code: string; message: string; requirementFailure?: TeamRequirementFailure; availabilityUnknown?: TeamAvailabilityUnknown }
   > {
@@ -636,6 +639,7 @@ export class ExecutionService {
         ...(request.coordinationMode ? { coordinationMode: request.coordinationMode } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
         ...(opts?.proposal ? { proposal: opts.proposal } : {}),
+        ...(opts?.reportTo ? { reportTo: opts.reportTo } : {}),
         launchRequestId: request.launchRequestId,
         request: { version: 1, launchKind: request.launchKind ?? 'team', ...(request.launchDisplay ? { launchDisplay: request.launchDisplay } : {}), slots: request.slots, policy: effectivePolicy, workflow: request.workflow, resolvedModels, sourceBundle: request.sourceBundle, objective: request.objective, ...(request.worktree === undefined ? {} : { worktree: request.worktree }), ...(request.onComplete === undefined ? {} : { onComplete: request.onComplete }) },
         ...(request.workUnits ? { workUnits: request.workUnits } : {}),
@@ -2272,7 +2276,11 @@ export class ExecutionService {
       })),
       coordinationMode: reserved.coordinationMode
     };
-    const recovered = await this.start(callerPrincipalId, projectId, request, reserved.proposal ? { proposal: reserved.proposal } : undefined);
+    // The recovered run keeps its proposal and its report target.
+    const recovered = await this.start(callerPrincipalId, projectId, request, {
+      ...(reserved.proposal ? { proposal: reserved.proposal } : {}),
+      ...(reserved.reportTo ? { reportTo: reserved.reportTo } : {})
+    });
     if (!recovered.ok) return recovered;
     await this.deps.store.linkTimeoutSuccessor(source.id, clientRequestId, recovered.value.id);
     return { ok: true as const, value: recovered.value, source };
@@ -2693,7 +2701,8 @@ export class ExecutionService {
       : begin();
   }
 
-  async resumeBinding(callerPrincipalId: string, projectId: string, executionId: string, token: string) {
+  /** `reportKind`: how the binding session receives reports, so an owner's [Squad report]s follow it. */
+  async resumeBinding(callerPrincipalId: string, projectId: string, executionId: string, token: string, reportKind?: 'pty' | 'thread') {
     return this.serializeBinding(executionId, async () => {
       const record = await this.deps.store.getInProject(projectId, executionId);
       if (!record || isResumeGrantTerminal(record.state) || !this.deps.resumeGrants) {
@@ -2710,7 +2719,7 @@ export class ExecutionService {
       try {
         await this.deps.resumeGrants.consume({ token, executionId, projectId, effectiveOwnerPrincipalId: callerPrincipalId, generation: record.recoveryGeneration });
         this.pendingBindingOwners.set(executionId, callerPrincipalId);
-        const value = await this.deps.store.addEffectiveOwner(executionId, callerPrincipalId);
+        const value = await this.deps.store.addEffectiveOwner(executionId, callerPrincipalId, reportKind);
         this.pendingBindingOwners.delete(executionId);
         return { ok: true as const, value };
       } catch (error) {

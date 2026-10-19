@@ -41,9 +41,13 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
     'apps/server/src/services/execution/store.ts',
     'apps/server/src/services/execution/projection.ts',
     'apps/desktop/src/squad-worktree-runtime.ts',
-    'apps/desktop/src/squad-session-lifecycle.ts'
+    'apps/desktop/src/squad-session-lifecycle.ts',
+    'apps/server/src/services/execution/execution-mcp-tool.ts',
+    'apps/desktop/src/squad-proposals/notifier.ts'
   ]) {
-    expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/squad-proposal-flow.spec.ts', 'e2e/job-team-launch-ui.spec.ts']));
+    expect(boundarySpecs([path])).toEqual(expect.arrayContaining([
+      'e2e/squad-proposal-flow.spec.ts', 'e2e/squad-direct-report.spec.ts', 'e2e/job-team-launch-ui.spec.ts'
+    ]));
   }
   // Unrelated Squad and launcher files must not pull in the slow proposal specs.
   for (const path of [
@@ -244,7 +248,7 @@ it('includes the Squad proposal flow in the job-team E2E runner', async () => {
   try {
     await import('./run-jobteam-e2e.mjs');
     expect(main).toHaveBeenCalledOnce();
-    expect(main.mock.calls[0]![0]).toEqual(expect.arrayContaining(['--build', 'e2e/squad-proposal-flow.spec.ts']));
+    expect(main.mock.calls[0]![0]).toEqual(expect.arrayContaining(['--build', 'e2e/squad-proposal-flow.spec.ts', 'e2e/squad-direct-report.spec.ts']));
   } finally {
     process.exitCode = previousExitCode;
     vi.doUnmock('./run-electron-e2e.mjs');

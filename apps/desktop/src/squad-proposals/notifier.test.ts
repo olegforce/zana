@@ -537,3 +537,61 @@ describe('logging safety', () => {
     await expect(notifier.onTerminal(record())).resolves.toBeUndefined();
   });
 });
+
+describe('owner report target (agent-owned execution.start)', () => {
+  const ownerPty = () => record({ proposal: undefined, reportTo: { kind: 'pty', id: 's1', role: 'owner' } } as never);
+  const ownerThread = () => record({ proposal: undefined, reportTo: { kind: 'thread', id: 't1', role: 'owner' } } as never);
+
+  it('types the terminal report into the owner PTY and marks it reported, with no Inbox result entry', async () => {
+    const { deps, notifier } = setup({}, ownerPty);
+    await notifier.onTerminal(ownerPty());
+    expect(deps.reply).toHaveBeenCalledWith('s1', expect.stringContaining('[Squad report] "Ship it" completed'));
+    expect(deps.reply).toHaveBeenCalledWith('s1', expect.stringContaining('Tell the user what it did; execution.snapshot has the details.'));
+    expect(deps.appendInbox).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.markReported).toHaveBeenCalledWith('e1', 1);
+  });
+
+  it('tells the owner how to answer a human blocker itself', async () => {
+    const { deps, notifier } = setup({}, ownerPty);
+    await notifier.onHumanBlocker(ownerPty(), { id: 'b1', question: 'Which file?' } as never);
+    const text = String((deps.reply.mock.calls[0] as unknown[])[1]);
+    expect(text).toContain('is waiting for an answer: "Which file?" (execution e1, blocker b1). You own this run: answer with execution.respond');
+    expect(text).not.toContain('do not answer it yourself');
+  });
+
+  it('queues the report into an owner Modern thread', async () => {
+    const { deps, notifier } = setup({}, ownerThread);
+    await notifier.onTerminal(ownerThread());
+    expect(deps.queueThreadTurn).toHaveBeenCalledWith('t1', 'p1', expect.stringContaining('[Squad report]'));
+    expect(deps.appendInbox).not.toHaveBeenCalled();
+  });
+
+  it('prefers reportTo over the legacy proposal and honours the new reported mark', async () => {
+    const both = record({ reportTo: { kind: 'pty', id: 's9', role: 'proposer' } } as never);
+    const { deps, notifier } = setup({}, () => both);
+    await notifier.onTerminal(both);
+    expect(deps.reply).toHaveBeenCalledWith('s9', expect.any(String));
+    expect(deps.appendInbox).toHaveBeenCalledOnce();
+    const done = setup({}, () => record({ reportNoticeVersion: 1 } as never));
+    await done.notifier.onTerminal(record({ reportNoticeVersion: 1 } as never));
+    expect(done.deps.getRecord).not.toHaveBeenCalled();
+  });
+
+  it('logs an owner thread that could not take the report, and still marks the run', async () => {
+    const { deps, notifier } = setup({ queueThreadTurn: vi.fn(async () => ({ ok: false, reason: 'deferred_queue_full' })) }, ownerThread);
+    await notifier.onTerminal(ownerThread());
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('deferred_queue_full'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.markReported).toHaveBeenCalledWith('e1', 1);
+  });
+
+  it('replays an unreported owner run once, to its live owner', async () => {
+    const owned = ownerPty();
+    const { deps, notifier } = setup({ listUnreported: vi.fn(async () => [owned]) }, () => owned);
+    await notifier.replayUnreported();
+    await notifier.onTerminal(owned);
+    expect(deps.reply).toHaveBeenCalledOnce();
+    expect(deps.appendInbox).not.toHaveBeenCalled();
+  });
+});
