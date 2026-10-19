@@ -61,7 +61,7 @@ describe('squad proposal store', () => {
     ['a plan step without dependencies', { planSteps: [{ id: 'u1', title: 'One', writeScope: [] }] }],
     ['a proposer without an id', { proposer: { kind: 'pty' } }],
     ['a launched record without its execution', { state: 'launched' }],
-    ['a goal over the limit', { goal: 'x'.repeat(2049) }],
+    ['an empty goal', { goal: '' }],
     ['a non-finite timestamp', { expiresAt: null }]
   ])('treats a ledger holding %s as damaged', async (_name, patch) => {
     const d = dir();
@@ -70,6 +70,13 @@ describe('squad proposal store', () => {
     const store = createSquadProposalStore({ filePath, now: () => 9 });
     expect(await store.get('ok')).toBeUndefined();
     expect(readdirSync(d)).toContain('squad-proposals.corrupt-9.json');
+  });
+
+  it('keeps records written under other input caps (a later release or a downgrade)', async () => {
+    const filePath = join(dir(), 'squad-proposals.json');
+    const sources = Array.from({ length: 20 }, (_, i) => ({ path: `/p/f${i}.md`, relPath: `f${i}.md`, bytes: 5 * 1024 * 1024 }));
+    writeFileSync(filePath, JSON.stringify({ version: 1, revision: 0, records: [rec('a', { goal: 'x'.repeat(5000), title: 'y'.repeat(600), sources })] }));
+    expect(await createSquadProposalStore({ filePath }).get('a')).toMatchObject({ id: 'a' });
   });
 
   it('keeps a ledger whose records carry keys this version does not know', async () => {

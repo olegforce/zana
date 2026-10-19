@@ -199,12 +199,15 @@ describe('InboxDetail Squad proposal card', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('This Squad launch could not be dismissed. Try again.');
   });
 
-  it('shows the error and re-enables Dismiss when the host action throws', async () => {
-    state.hostRun.mockRejectedValue(new Error('IPC closed'));
+  it('shows a retry message, not the IPC error, and re-enables Dismiss when the host action throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    state.hostRun.mockRejectedValue(new Error("Error invoking remote method 'inbox:hostAction': boom"));
     render(view());
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect((await screen.findByRole('alert')).textContent).toBe('This Squad launch could not be dismissed: IPC closed');
+    expect((await screen.findByRole('alert')).textContent).toBe('This Squad launch could not be dismissed. Try again.');
     expect((screen.getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(warn).toHaveBeenCalledWith('[inbox] squad proposal dismiss failed', expect.any(Error));
+    warn.mockRestore();
   });
 
   it.each([

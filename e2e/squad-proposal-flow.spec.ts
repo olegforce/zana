@@ -33,6 +33,7 @@ const TITLE = 'Atlas site build';
 const DESIGN = '.zcc/library/designs/e2e-design.md';
 const PLAN = '.zcc/library/runbooks/e2e-plan.md';
 const GOAL = 'Build the Atlas site exactly as the attached plan describes.';
+const FAKE_ACP_PREFIX = 'FAKE_ACP: ';
 
 // Portable plan whose step ids match the fake cohort's SUCCESS_PLAN, so a seeded DAG runs end to end.
 const PLAN_MD = [
@@ -216,30 +217,32 @@ async function startModernThread(window: Page, projectId: string): Promise<strin
     const response = await fetch('/api/v1/threads/providers');
     return (await response.json()).providers.map((provider: { id: string }) => provider.id);
   }), { timeout: 30_000, intervals: [500] }).toContain('acp-opencode');
-  const threadId = await window.evaluate(async ({ projectId }) => {
+  const threadId = await window.evaluate(async ({ projectId, input }) => {
     const response = await fetch('/api/v1/threads', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        projectId, providerId: 'acp-opencode', model: 'fake/default', acpMode: 'plan', permissionMode: 'full',
-        input: 'Stand by; the Squad proposal is submitted out of band.'
-      })
+      body: JSON.stringify({ projectId, providerId: 'acp-opencode', model: 'fake/default', acpMode: 'plan', permissionMode: 'full', input })
     });
     const body = await response.json();
     if (!response.ok || !body?.ok) throw new Error(JSON.stringify(body));
     return body.value.id as string;
-  }, { projectId });
+  }, { projectId, input: `${FAKE_ACP_PREFIX}stand by; the Squad proposal is submitted out of band.` });
+  // The first turn must finish: a report is queued behind a turn still in progress.
   await expect.poll(async () => window.evaluate(async (id) =>
     ((await (await fetch(`/api/v1/threads/${encodeURIComponent(id)}`)).json()).thread?.status ?? 'missing') as string, threadId),
-  { timeout: 30_000, intervals: [500] }).toMatch(/^(starting|active|idle|stopping)$/);
+  { timeout: 30_000, intervals: [500] }).toBe('idle');
   return threadId;
 }
 
-/** Calls a thread's dynamic tool through the same host tool-call bridge a real ACP agent uses. */
+/**
+ * Calls a thread's dynamic tool through the same host tool-call bridge a real ACP agent uses.
+ * Plugin tool policy fails closed until every installed plugin server is up (Salesforce is
+ * installed by default), so a call refused as "not ready" is retried; nothing ran for it.
+ */
 function hostToolCaller(window: Page, home: string, threadId: string) {
   const origin = new URL(window.url()).origin;
   const auth = JSON.parse(readFileSync(join(home, '.zcc', 'auth.json'), 'utf8')) as { hostId: string; hostKey: string };
   let n = 0;
-  return async (tool: string, args: Record<string, unknown>) => {
+  const call = async (tool: string, args: Record<string, unknown>) => {
     n += 1;
     const response = await fetch(`${origin}/internal/hosts/tool-call`, {
       method: 'POST',
@@ -250,6 +253,14 @@ function hostToolCaller(window: Page, home: string, threadId: string) {
     });
     const body = await response.json() as { success?: boolean; contentItems?: Array<{ text?: string }> };
     return { status: response.status, success: body.success, text: (body.contentItems ?? []).map((item) => item.text ?? '').join('\n') };
+  };
+  return async (tool: string, args: Record<string, unknown>) => {
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      const result = await call(tool, args);
+      if (!result.text.includes('plugin tool policy not ready') || Date.now() > deadline) return result;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   };
 }
 
@@ -262,6 +273,17 @@ async function expectThreadCompletionReport(window: Page, threadId: string): Pro
   await expect.poll(async () => window.evaluate(async (id) =>
     JSON.stringify(await (await fetch(`/api/v1/threads/${id}/events?limit=200`)).json()), threadId),
   { timeout: 90_000, intervals: [1_000] }).toMatch(/\[Squad report\] \\*"Atlas site build\\*" completed after/);
+}
+
+/** The thread's status and its latest event types, for a failure message. */
+async function threadState(window: Page, threadId: string | null): Promise<string> {
+  if (!threadId) return 'no thread';
+  return window.evaluate(async (id) => {
+    const thread = (await (await fetch(`/api/v1/threads/${encodeURIComponent(id)}`)).json()).thread;
+    const { events } = await (await fetch(`/api/v1/threads/${encodeURIComponent(id)}/events?limit=60`)).json();
+    const types = (events as Array<{ sequence: number; type: string }>).map((event) => `${event.sequence}:${event.type}`).join(' ');
+    return `thread status=${thread?.status ?? 'missing'} events: ${types}`;
+  }, threadId).catch((error: unknown) => `thread state unavailable: ${String(error)}`);
 }
 
 async function removeModernProject(window: Page, projectId: string | null): Promise<void> {
@@ -377,6 +399,10 @@ test.describe('Modern proposer', () => {
       FAKE_ACP_MODEL_CONFIG: '1',
       FAKE_ACP_MODE_CONFIG: '1',
       FAKE_ACP_MODE_OPTIONS: 'build:Build,plan:Plan',
+      // Only prefixed lines script the fake agent. Default plugins (Design Docs, Salesforce)
+      // add instructions to the first turn, and words in them such as "change" would match the
+      // agent's "hang" command, leave the turn open and hold every queued report behind it.
+      FAKE_ACP_PROMPT_PREFIX: FAKE_ACP_PREFIX,
       ...(process.platform === 'linux' ? { ZCC_E2E_VISIBLE: '1' } : {})
     }
   });
@@ -390,9 +416,10 @@ test.describe('Modern proposer', () => {
     const agent = makeJobTeamCoordinatorBinary();
     const projectDir = mkdtempSync(join(tmpdir(), 'zcc-squad-proposal-modern-'));
     let projectId: string | null = null;
+    let threadId: string | null = null;
     try {
       projectId = await setUpModernProject(window, projectDir, agent.path);
-      const threadId = await startModernThread(window, projectId);
+      threadId = await startModernThread(window, projectId);
       const callTool = hostToolCaller(window, home, threadId);
       const check = await callTool('squad_plan_check', { path: PLAN });
       expect(check.success, `${check.text}\n${diagnostics.join('\n')}`).toBe(true);
@@ -406,7 +433,7 @@ test.describe('Modern proposer', () => {
       await expectThreadCompletionReport(window, threadId);
     } catch (error) {
       const log = existsSync(join(projectDir, '.fake-coordinator.log')) ? readFileSync(join(projectDir, '.fake-coordinator.log'), 'utf8').slice(-8192) : 'no fake coordinator log';
-      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${log}\n${diagnostics.join('\n').slice(-12_000)}`);
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${await threadState(window, threadId)}\n${log}\n${diagnostics.join('\n').slice(-12_000)}`);
     } finally {
       await removeModernProject(window, projectId);
       rmSync(projectDir, { recursive: true, force: true });

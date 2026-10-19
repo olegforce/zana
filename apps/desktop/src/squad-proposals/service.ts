@@ -23,6 +23,7 @@ import {
   confineToProject,
   goalPathOutsideProject,
   readConfinedSource,
+  type ConfinedSource,
   type SquadProposalFs
 } from './sources.js';
 import type { SquadProposalStore } from './store.js';
@@ -141,11 +142,11 @@ function resolveSquad(deps: SquadProposalServiceDeps, projectId: string, teamId:
 }
 
 /** Every source confined to the project, de-duplicated by realpath and within the size caps. */
-async function confineSources(fs: SquadProposalFs, projectRoot: string, rawSources: string[]): Promise<SquadProposalOutcome<SquadProposalSource[]>> {
+async function confineSources(fs: SquadProposalFs, projectRoot: string, rawSources: string[]): Promise<SquadProposalOutcome<ConfinedSource[]>> {
   if (rawSources.length > SQUAD_PROPOSAL_LIMITS.maxSources) {
     return fail('TOO_MANY_SOURCES', `At most ${SQUAD_PROPOSAL_LIMITS.maxSources} source files are allowed.`);
   }
-  const sources: SquadProposalSource[] = [];
+  const sources: ConfinedSource[] = [];
   const seen = new Set<string>();
   let total = 0;
   for (const raw of rawSources) {
@@ -156,14 +157,14 @@ async function confineSources(fs: SquadProposalFs, projectRoot: string, rawSourc
     if (confined.source.bytes > FILE_MAX_BYTES) return fail('SOURCE_TOO_LARGE', `${raw} is larger than 4 MiB.`);
     total += confined.source.bytes;
     if (total > TOTAL_MAX_BYTES) return fail('SOURCE_TOO_LARGE', 'The source files add up to more than 16 MiB.');
-    sources.push(confined.source);
+    sources.push({ source: confined.source, identity: confined.identity });
   }
   return ok(sources);
 }
 
 /** A provided plan must parse into steps from the sources (read through verified handles) plus the goal. */
 async function checkProvidedPlan(
-  deps: SquadProposalServiceDeps, projectRoot: string, sources: SquadProposalSource[], goal: string
+  deps: SquadProposalServiceDeps, projectRoot: string, sources: ConfinedSource[], goal: string
 ): Promise<SquadProposalOutcome<SquadPlanStep[]>> {
   let texts: string[];
   try { texts = await Promise.all(sources.map((s) => readConfinedSource(deps.fs, projectRoot, s))); } catch {
@@ -199,7 +200,9 @@ async function prepare(
     if (!plan.ok) return plan;
     planSteps = plan.value;
   }
-  return ok({ project, team, orchestrator, workers: Math.max(0, slots - 1), planning, sources: sources.value, ...(planSteps ? { planSteps } : {}) });
+  return ok({
+    project, team, orchestrator, workers: Math.max(0, slots - 1), planning, sources: sources.value.map((s) => s.source), ...(planSteps ? { planSteps } : {})
+  });
 }
 
 function newRecord(
@@ -370,7 +373,7 @@ export function createSquadProposalService(deps: SquadProposalServiceDeps) {
     const confined = await confineToProject(deps.fs, project.path, path);
     if (!confined.ok) return confined;
     if (confined.source.bytes > FILE_MAX_BYTES) return fail('SOURCE_TOO_LARGE', `${path} is larger than 4 MiB.`);
-    try { return ok(await readConfinedSource(deps.fs, project.path, confined.source)); } catch {
+    try { return ok(await readConfinedSource(deps.fs, project.path, confined)); } catch {
       return fail('SOURCE_UNREADABLE', `${path} could not be read, or it changed after it was checked.`);
     }
   }

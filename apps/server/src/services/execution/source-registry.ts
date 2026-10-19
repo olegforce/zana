@@ -291,6 +291,7 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
       if (!info.isFile()) throw new ExecutionSourceError('NOT_REGULAR_FILE', 'Execution source must be a regular file');
       // `path` is canonical, so the handle must be the file it names now: a folder on the
       // way swapped for a symlink after the realpath check would have opened another inode.
+      // Without openat this narrows the race rather than closing it.
       let canonical: Awaited<ReturnType<typeof stat>> | undefined;
       try { canonical = (await realpath(path)) === path ? await stat(path) : undefined; } catch { canonical = undefined; }
       if (!canonical || canonical.dev !== info.dev || canonical.ino !== info.ino) {

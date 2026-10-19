@@ -26,7 +26,9 @@ export interface SquadProposalFs {
 }
 
 type Failure = { ok: false; code: SquadProposalErrorCode; message: string };
-export type Confined = { ok: true; source: SquadProposalSource; identity: { dev: number; ino: number } } | Failure;
+/** A confined source and the device and inode its path resolved to when it was checked. */
+export interface ConfinedSource { source: SquadProposalSource; identity: { dev: number; ino: number } }
+export type Confined = ({ ok: true } & ConfinedSource) | Failure;
 
 const fail = (code: SquadProposalErrorCode, message: string): Failure => ({ ok: false, code, message });
 
@@ -88,18 +90,25 @@ async function readBounded(handle: SquadSourceHandle, size: number): Promise<str
   return buffer.subarray(0, offset).toString('utf8');
 }
 
+const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean => a.dev === b.dev && a.ino === b.ino;
+
 /**
- * Read a confined source through one handle. It is opened without following a final
- * symlink, and must then be the very file (device and inode) its path resolves to inside
- * the project, so a file or folder swapped in after the check is refused, never read.
+ * Read a confined source through one handle, opened without following a final symlink. The
+ * handle must be the file (device and inode) recorded when the source was confined, and the
+ * path must still resolve to that same file inside the project afterwards. A file or folder
+ * swapped in after the check is refused. Node has no openat, so a folder that keeps flipping
+ * to a symlink can only be narrowed, not ruled out; the agent could read such a file itself
+ * anyway, so this guards what a Squad is handed, not a sandbox.
  */
-export async function readConfinedSource(fs: SquadProposalFs, projectRoot: string, source: SquadProposalSource): Promise<string> {
+export async function readConfinedSource(fs: SquadProposalFs, projectRoot: string, confined: ConfinedSource): Promise<string> {
+  const { source, identity } = confined;
   const handle = await fs.open(source.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.size > FILE_MAX_BYTES) throw new Error('source is not a regular file within the size cap');
+    if (!sameFile(opened, identity)) throw new Error('source changed after it was checked');
     const current = await confineToProject(fs, projectRoot, source.path);
-    if (!current.ok || current.source.path !== source.path || current.identity.dev !== opened.dev || current.identity.ino !== opened.ino) {
+    if (!current.ok || current.source.path !== source.path || !sameFile(current.identity, opened)) {
       throw new Error('source changed after it was checked');
     }
     return await readBounded(handle, opened.size);

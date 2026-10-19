@@ -591,7 +591,9 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
       const ok = await runInboxHostAction(entry.id, { optionId: 'dismiss' });
       if (!ok) setSquadDismissError('This Squad launch could not be dismissed. Try again.');
     } catch (err) {
-      setSquadDismissError(`This Squad launch could not be dismissed: ${err instanceof Error ? err.message : String(err)}`);
+      // The IPC error names internals; the user gets the same retry message as a refused dismiss.
+      console.warn('[inbox] squad proposal dismiss failed', err);
+      setSquadDismissError('This Squad launch could not be dismissed. Try again.');
     } finally {
       setSquadDismissBusy(false);
     }

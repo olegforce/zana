@@ -78,29 +78,27 @@ export interface SquadProposalRecord {
   expiresAt: number;
 }
 
-const SOURCE_MAX_BYTES = 4 * 1024 * 1024;
-const PATH_MAX_CHARS = 4096;
 const timestamp = z.number().finite().nonnegative();
-const optionalText = (max: number) => z.string().max(max).optional();
 
 /**
- * A persisted proposal record, checked in full before the ledger is trusted. Unknown keys are
- * allowed (a newer Zana may add some); the bounds are the ones `squad_propose` enforces.
+ * A persisted proposal record, checked in full before the ledger is trusted. It checks types
+ * and structure only: input caps live in `squad_propose`, so a release that changes a cap (or a
+ * downgrade) never discards stored proposals. Unknown keys are allowed (a newer Zana may add some).
  */
 export const squadProposalRecordSchema = z.object({
   id: z.string().min(1),
   projectId: z.string().min(1),
   proposer: z.object({ kind: z.enum(['pty', 'thread']), id: z.string().min(1), title: z.string().optional() }),
   teamId: z.string().min(1),
-  goal: z.string().min(1).max(SQUAD_PROPOSAL_LIMITS.goalChars),
+  goal: z.string().min(1),
   planning: z.enum(['infer', 'provided']),
   sources: z.array(z.object({
-    path: z.string().min(1).max(PATH_MAX_CHARS),
-    relPath: z.string().min(1).max(PATH_MAX_CHARS),
-    bytes: z.number().int().nonnegative().max(SOURCE_MAX_BYTES)
-  })).max(SQUAD_PROPOSAL_LIMITS.maxSources),
-  title: optionalText(SQUAD_PROPOSAL_LIMITS.titleChars),
-  summary: optionalText(SQUAD_PROPOSAL_LIMITS.summaryChars),
+    path: z.string().min(1),
+    relPath: z.string().min(1),
+    bytes: z.number().int().nonnegative()
+  })),
+  title: z.string().optional(),
+  summary: z.string().optional(),
   planSteps: z.array(z.object({
     id: z.string().min(1),
     title: z.string(),

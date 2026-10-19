@@ -139,7 +139,11 @@ test('Modern owner starts a durable Job Team through the host tool-call bridge a
     // authenticated with the daemon's own self-host credentials.
     const rendererOrigin = new URL(window.url()).origin;
     const auth = JSON.parse(readFileSync(join(home, '.zcc', 'auth.json'), 'utf8')) as { hostId: string; hostKey: string };
-    const toolCall = await fetch(`${rendererOrigin}/internal/hosts/tool-call`, {
+    const launchRequestId = `e2e-modern-owner-job-${Date.now()}`;
+    // Plugin tool policy fails closed until every installed plugin server is up (Salesforce
+    // is installed by default), so a call refused as "not ready" is retried; nothing ran for it.
+    let attempt = 0;
+    const callStart = () => fetch(`${rendererOrigin}/internal/hosts/tool-call`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -151,12 +155,12 @@ test('Modern owner starts a durable Job Team through the host tool-call bridge a
         threadId,
         providerThreadId: threadId,
         turnId: 'e2e-modern-turn-1',
-        callId: 'e2e-modern-call-1',
+        callId: `e2e-modern-call-${++attempt}`,
         tool: 'execution_start',
         arguments: {
           version: 1,
           teamId: 'e2e-job-team',
-          launchRequestId: `e2e-modern-owner-job-${Date.now()}`,
+          launchRequestId,
           jobTitle: 'Modern durable job',
           summary: 'Full Job Team route started by a Modern owner.',
           workUnits: PLAN,
@@ -168,8 +172,17 @@ test('Modern owner starts a durable Job Team through the host tool-call bridge a
         }
       })
     });
-    const toolBody = await toolCall.json() as { success?: boolean; contentItems?: Array<{ text?: string }> };
-    const toolText = (toolBody.contentItems ?? []).map((item) => item.text ?? '').join('\n');
+    let toolCall: Response;
+    let toolBody: { success?: boolean; contentItems?: Array<{ text?: string }> };
+    let toolText: string;
+    const policyDeadline = Date.now() + 90_000;
+    for (;;) {
+      toolCall = await callStart();
+      toolBody = await toolCall.json() as { success?: boolean; contentItems?: Array<{ text?: string }> };
+      toolText = (toolBody.contentItems ?? []).map((item) => item.text ?? '').join('\n');
+      if (!toolText.includes('plugin tool policy not ready') || Date.now() > policyDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
     // The regression gate: a "session MCP is not authorized for this live session"
     // failure surfaces here as HTTP 200 with success:false (or a non-200 identity
     // rejection). Either fails this assertion with the underlying message.

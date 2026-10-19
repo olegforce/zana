@@ -149,6 +149,12 @@ describe('reading confined sources', () => {
     });
   });
 
+  it('refuses a file replaced after it was confined, even inside the project', async () => {
+    fsImpl = swapAtOpen((path) => { rmSync(path); writeFileSync(path, '# replaced'); });
+    expect(code(await svc.service.checkPlan(route, { path: 'plan.md' }))).toBe('SOURCE_UNREADABLE');
+    expect(resolveSquadPlan).not.toHaveBeenCalled();
+  });
+
   it('refuses a source that grew while it was read', async () => {
     fsImpl = {
       ...realFs,
