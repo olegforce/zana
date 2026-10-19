@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { mkdir, open, realpath, readdir, rm, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from 'node:path';
 import { atomicDurableWrite, createSerializedTransactionQueue } from '../harness-routing/storage.js';
+import { sourcePathRefusal, type SourcePolicy } from './source-policy.js';
 import type { ExecutionSourceCapabilityView, ExecutionSourceSnapshot } from '@zana-ai/zcc-domain/product';
 
 export const EXECUTION_SOURCE_LIMITS = Object.freeze({
@@ -347,27 +348,21 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
   }
 
   /**
-   * `withinRoot` (optional) confines every source to that directory, checked against the
-   * realpath taken here. `resolve` later requires the same realpath, so a symlink swapped in
-   * after this check cannot redirect the capability outside the root.
+   * `policy` (optional) confines every source to its allowed folders and refuses its protected
+   * ones, checked against the realpath taken here. `resolve` later requires the same realpath,
+   * so a symlink swapped in after this check cannot redirect the capability elsewhere. Picker
+   * selections pass no policy: the user chose the file.
    */
-  async function issue(input: { windowId: number; projectId: string; paths: string[]; withinRoot?: string }): Promise<ExecutionSourceCapabilityView[]> {
+  async function issue(input: { windowId: number; projectId: string; paths: string[]; policy?: SourcePolicy }): Promise<ExecutionSourceCapabilityView[]> {
     pruneCapabilities();
     if (input.paths.length > limits.maxFiles) throw new ExecutionSourceError('TOO_MANY_SOURCES', `Select at most ${limits.maxFiles} execution sources`);
-    let realRoot: string | undefined;
-    if (input.withinRoot !== undefined) {
-      try { realRoot = await realpath(input.withinRoot); } catch { throw new ExecutionSourceError('UNSUPPORTED_SOURCE', 'Execution source root is unavailable'); }
-    }
     const canonical: Array<{ exactPath: string; canonicalPath: string; representations: string[] }> = [];
     for (const exactPath of input.paths) {
       let real: string;
       try { real = await realpath(exactPath); } catch { throw new ExecutionSourceError('SOURCE_CHANGED', 'Selected execution source is unavailable'); }
-      if (realRoot !== undefined) {
-        const rel = relative(realRoot, real);
-        if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-          throw new ExecutionSourceError('UNSUPPORTED_SOURCE', 'Execution source is outside the project');
-        }
-      }
+      const refusal = input.policy ? sourcePathRefusal(real, input.policy) : undefined;
+      if (refusal === 'outside') throw new ExecutionSourceError('UNSUPPORTED_SOURCE', `${basename(real)} is outside the project, your home folder and the clone root`);
+      if (refusal === 'sensitive') throw new ExecutionSourceError('UNSUPPORTED_SOURCE', `${basename(real)} is in a protected location`);
       if (canonical.some(({ canonicalPath }) => canonicalPath === real)) throw new ExecutionSourceError('DUPLICATE_SOURCE', 'Duplicate execution source selected');
       canonical.push({ exactPath, canonicalPath: real, representations: pathRepresentations(exactPath, real) });
     }

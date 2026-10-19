@@ -118,6 +118,7 @@ import { verifyHarnesses } from '@zana-ai/zcc-host-daemon/harness/harness-verify
 import { IdleGatedInjector, suppressesInteractiveBlocked } from '@zana-ai/zcc-server/services/execution/idle-gated-injector';
 import { createExecutionArtifactStore } from '@zana-ai/zcc-server/services/execution/artifact-store';
 import { createExecutionSourceRegistry, ExecutionSourceError, type ExecutionSourcePathDescriptor } from '@zana-ai/zcc-server/services/execution/source-registry';
+import { resolveSourcePolicy, sourcePathRefusal, type SourcePolicy } from '@zana-ai/zcc-server/services/execution/source-policy';
 import { createExecutionHandoffStore } from '@zana-ai/zcc-server/services/execution/handoff-store';
 import { createResumeGrantStore } from '@zana-ai/zcc-server/services/execution/resume-grant-store';
 import { createResumeTokenStore } from '@zana-ai/zcc-server/services/execution/resume-token-store';
@@ -4802,48 +4803,25 @@ export function jobWorkerPrompt(input: {
 
 /**
  * A Team goal can name source files directly. Main resolves any file the operator
- * names that resolves under a Rule-2 trust anchor — the registered project root OR
- * the user's HOME — then sends it through the same registry as picker-selected
- * sources. The location of a named plan/source NEVER constrains where execution
- * happens (that is always the project); it is only a read input to snapshot, so a
- * plan kept outside the project (e.g. a doc vault under HOME) resolves too. The
- * sensitive HOME roots (`.ssh`, `.aws`, `.zcc`) stay blocked and write confinement
- * is enforced separately at execution time, so no raw write access is granted.
+ * names that the shared source policy allows (under the project root, HOME or the
+ * clone root, never a credential store or Zana's own state) and sends it through the
+ * same registry as picker-selected sources. The location of a named plan/source NEVER
+ * constrains where execution happens (that is always the project); it is only a read
+ * input to snapshot, so a plan kept outside the project (e.g. a doc vault under HOME)
+ * resolves too. Write confinement is enforced separately at execution time.
  */
 export async function goalExecutionSourcePaths(
   goal: string,
   home: string,
   userHome: string = homedir(),
-  /** `includeHome: false` keeps the project as the only base (agent-written goals, D3). */
-  opts: { includeHome?: boolean } = {}
+  /** The clone root, Zana's data folders and other protected paths: the rest of the source policy's bases. */
+  opts: { cloneRoot?: string; dataDirs?: readonly string[]; protectedRoots?: readonly string[] } = {}
 ): Promise<ExecutionSourcePathDescriptor[]> {
   const paths = new Map<string, ExecutionSourcePathDescriptor>();
-  // Allowed READ bases follow Rule 2's trust anchors: the target project root and
-  // the user's HOME. Either may be unresolvable (a remote/nonexistent project
-  // root, or an exotic HOME); a named source under whichever base resolves is
-  // still discoverable. Only if NEITHER resolves do we skip discovery entirely.
-  const bases: string[] = [];
-  try {
-    bases.push(await realpath(home));
-  } catch {
-    // `home` is a remote/nonexistent local project root — drop that base but keep
-    // the HOME base so a locally-referenced plan is still discoverable.
-  }
-  let realUserHome: string | undefined;
-  try {
-    realUserHome = await realpath(userHome);
-    if (opts.includeHome !== false) bases.push(realUserHome);
-  } catch {
-    // No resolvable HOME base either.
-  }
-  if (bases.length === 0) return [];
-  const sensitiveRoots = realUserHome
-    ? [join(realUserHome, '.ssh'), join(realUserHome, '.aws'), join(realUserHome, '.zcc')]
-    : [];
-  const withinAnyBase = (real: string): boolean => bases.some((base) => {
-    const rel = relative(base, real);
-    return rel !== '' && !(rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel));
-  });
+  // Allowed READ bases follow Rule 2's trust anchors (the project root, HOME and the clone
+  // root); a base that doesn't resolve (a remote project root) is dropped. Secrets inside
+  // them stay refused. One policy with Squad proposals and the source registry.
+  const policy = await resolveSourcePolicy(realpath, { projectRoot: home, home: userHome, ...opts });
   const rawCandidates: string[] = [];
   // 1. Quoted paths (preserves spaces in "C:\Program Files\..." or '/path with space/...')
   for (const m of goal.matchAll(/["'`]((?:[A-Za-z]:[/\\]|\/)[^"'`]+)["'`]/g)) {
@@ -4860,8 +4838,7 @@ export async function goalExecutionSourcePaths(
     for (const candidate of candidates) {
       try {
         const real = await realpath(candidate);
-        if (!withinAnyBase(real)) continue;
-        if (sensitiveRoots.some((root) => real === root || real.startsWith(`${root}${sep}`))) continue;
+        if (sourcePathRefusal(real, policy)) continue;
         const representations = new Set([candidate, real]);
         for (const path of [...representations]) {
           if (path.startsWith('/private/var/')) representations.add(path.slice('/private'.length));
@@ -5908,6 +5885,15 @@ const workerLivenessCache = new AgentLivenessCache((sessionId) => ptys.probeAgen
 
 
 // ---- Squad launch proposals (an agent prepares a Squad; the user reviews it in the Inbox) ----
+/**
+ * HOME, the clone root, Zana's data folder and the app's own data (Electron userData, with its
+ * cookies and source snapshots): with the project, the bases of the shared source policy.
+ */
+export function squadSourceBases(): { home: string; cloneRoot?: string; dataDirs: string[]; protectedRoots: string[] } {
+  const cloneRoot = store.getConfig().cloneRoot?.trim();
+  return { home: homedir(), ...(cloneRoot ? { cloneRoot } : {}), dataDirs: [electronZccDataDir()], protectedRoots: [app.getPath('userData')] };
+}
+
 export const squadProposalStore = createSquadProposalStore({
   filePath: join(app.getPath('userData'), 'squad-proposals.json')
 });
@@ -5987,12 +5973,13 @@ const squadProposalServiceDeps: SquadProposalServiceDeps = {
   expandTeamSlots,
   resolveSquadPlan: (planSource, texts) => resolveSquadPlan(planSource, texts),
   fs: { realpath, lstat, open: (path, flags) => openFile(path, flags) },
+  sourceBases: () => squadSourceBases(),
   inbox: { appendOnce: (input) => inboxStore.appendOnce(input) },
   actions: {
     bind: (entry, action) => inboxActionRegistry.bind(entry, action),
     markUnavailable: (kind, ref, message) => inboxActionRegistry.markUnavailable(kind, ref, message)
   },
-  issueSources: (windowId, projectId, paths, withinRoot) => executionSources.issue({ windowId: windowId as number, projectId, paths, withinRoot }),
+  issueSources: (windowId, projectId, paths, policy) => executionSources.issue({ windowId: windowId as number, projectId, paths, policy }),
   now: () => Date.now(),
   newId: () => randomUUID(),
   findLaunchedExecution: findExecutionForProposal,
@@ -6379,10 +6366,10 @@ export async function startTeamJobFromUi(
   if (sourceCapabilityIds.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Execution source capabilities require a trusted window' };
   }
-  // A proposed launch's goal is agent-written: only files inside the project may be attached
-  // from it (D3), so the HOME base is dropped. Without a proposal it applies exactly as before.
   const proposed = input.proposalId !== undefined;
-  const goalSourceDescriptors = await goalExecutionSourcePaths(originalGoal, project.path, undefined, { includeHome: !proposed });
+  // A proposed launch discovers goal paths exactly like a manual one: one source policy.
+  const sourceBases = squadSourceBases();
+  const goalSourceDescriptors = await goalExecutionSourcePaths(originalGoal, project.path, sourceBases.home, sourceBases);
   if (goalSourceDescriptors.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Goal execution sources require a trusted window' };
   }
@@ -6398,7 +6385,7 @@ export async function startTeamJobFromUi(
     const snapshot = await snapshotTeamJobSources({
       windowId: sourceContext?.windowId, projectId, launchRequestId, sourceCapabilityIds, goalSourceDescriptors,
       // Re-checked against the realpath issue() takes, so a symlink swapped in after discovery can't escape.
-      ...(proposal ? { withinRoot: project.path } : {})
+      policy: await resolveSourcePolicy(realpath, { projectRoot: project.path, ...sourceBases })
     });
     if (!snapshot.ok) return snapshot;
     const { sourceBundle } = snapshot;
@@ -6435,14 +6422,13 @@ async function snapshotTeamJobSources(args: {
   launchRequestId: string;
   sourceCapabilityIds: string[];
   goalSourceDescriptors: ExecutionSourcePathDescriptor[];
-  withinRoot?: string;
+  policy: SourcePolicy;
 }): Promise<{ ok: true; sourceBundle?: TeamJobSourceBundle } | { ok: false; code: string; message: string }> {
   const { windowId, projectId } = args;
   try {
     const goalSourceCapabilities = args.goalSourceDescriptors.length
       ? await executionSources.issue({
-        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath),
-        ...(args.withinRoot ? { withinRoot: args.withinRoot } : {})
+        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath), policy: args.policy
       })
       : [];
     const capabilityIds = [...new Set([...args.sourceCapabilityIds, ...goalSourceCapabilities.map(({ id }) => id)])];

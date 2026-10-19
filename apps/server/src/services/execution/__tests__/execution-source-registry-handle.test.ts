@@ -24,10 +24,10 @@ describe('execution source registry read handle', () => {
       await writeFile(join(dir, 'secret.md'), 'secret');
       const registry = createExecutionSourceRegistry({ rootDir: join(dir, 'store') });
       redirect.to = join(dir, 'secret.md');
-      await expect(registry.issue({ windowId: 7, projectId: 'p', paths: [join(dir, 'project', 'plan.md')], withinRoot: join(dir, 'project') }))
+      await expect(registry.issue({ windowId: 7, projectId: 'p', paths: [join(dir, 'project', 'plan.md')], policy: { roots: [join(dir, 'project')], home: join(dir, 'home') } }))
         .rejects.toMatchObject({ code: 'SOURCE_CHANGED' });
       redirect.to = undefined;
-      await expect(registry.issue({ windowId: 7, projectId: 'p', paths: [join(dir, 'project', 'plan.md')], withinRoot: join(dir, 'project') }))
+      await expect(registry.issue({ windowId: 7, projectId: 'p', paths: [join(dir, 'project', 'plan.md')], policy: { roots: [join(dir, 'project')], home: join(dir, 'home') } }))
         .resolves.toHaveLength(1);
     } finally {
       await rm(dir, { recursive: true, force: true });

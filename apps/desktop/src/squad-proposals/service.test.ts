@@ -7,7 +7,7 @@ import type { Persona, Team } from '@zana-ai/zcc-domain/product';
 import { ExecutionSourceError } from '@zana-ai/zcc-server/services/execution/source-registry';
 import { InboxActionOperatorError } from '../inbox-actions/registry.js';
 import { createSquadProposalStore } from './store.js';
-import { confineToProject, type SquadProposalFs } from './sources.js';
+import { confineSource, sourceScope, type SquadProposalFs, type SquadSourceScope } from './sources.js';
 import {
   SQUAD_LAUNCH_PROPOSAL_ACTION,
   createSquadProposalService,
@@ -16,6 +16,8 @@ import {
 
 let root: string;
 let outside: string;
+let homeDir: string;
+let cloneDir: string;
 let clock: number;
 let ids: number;
 let lookup: SquadProposalServiceDeps['lookupProposer'];
@@ -60,6 +62,7 @@ function build() {
     issueSources,
     now: () => clock,
     newId: () => `prop-${++ids}`,
+    sourceBases: () => ({ home: homeDir, cloneRoot: cloneDir }),
     logError
   });
   return { store, service, deps: undefined };
@@ -72,6 +75,8 @@ let svc: ReturnType<typeof build>;
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'squad-service-')));
   outside = realpathSync(mkdtempSync(join(tmpdir(), 'squad-outside-')));
+  homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'squad-home-')));
+  cloneDir = realpathSync(mkdtempSync(join(tmpdir(), 'squad-clones-')));
   mkdirSync(join(root, 'proj', 'docs'), { recursive: true });
   writeFileSync(join(root, 'proj', 'plan.md'), '# plan');
   writeFileSync(join(outside, 'secret.md'), 'x');
@@ -99,32 +104,61 @@ beforeEach(() => {
 
 const code = (r: { ok: boolean } & Record<string, unknown>) => (r.ok ? 'ok' : r.code);
 
-describe('confineToProject', () => {
+describe('confineSource', () => {
   const fs = realFs;
   const proj = () => join(root, 'proj');
+  let scope: SquadSourceScope;
+  beforeEach(async () => { scope = (await sourceScope(fs, proj(), { home: homeDir, cloneRoot: cloneDir }))!; });
 
   it('accepts relative and absolute paths inside the project', async () => {
-    const rel = await confineToProject(fs, proj(), 'plan.md');
+    const rel = await confineSource(fs, scope, 'plan.md');
     expect(rel).toMatchObject({ ok: true, source: { relPath: 'plan.md', bytes: 6, path: join(proj(), 'plan.md') } });
-    expect(await confineToProject(fs, proj(), join(proj(), 'plan.md'))).toMatchObject({ ok: true });
+    expect(rel.ok && rel.source.outsideProject).toBeUndefined();
+    expect(await confineSource(fs, scope, join(proj(), 'plan.md'))).toMatchObject({ ok: true });
   });
-  it('rejects escapes, symlinks, directories, the root itself and missing files', async () => {
-    expect(await confineToProject(fs, proj(), relative(join(root, 'proj'), join(outside, 'secret.md')))).toMatchObject({ code: 'SOURCE_OUTSIDE_PROJECT' });
-    expect(await confineToProject(fs, proj(), join(outside, 'secret.md'))).toMatchObject({ code: 'SOURCE_OUTSIDE_PROJECT' });
+  it('accepts a HOME or clone-root file outside the project, marked with its display path', async () => {
+    mkdirSync(join(homeDir, 'vault'));
+    writeFileSync(join(homeDir, 'vault', 'design.md'), '# design');
+    writeFileSync(join(cloneDir, 'plan.md'), '# plan');
+    expect(await confineSource(fs, scope, join(homeDir, 'vault', 'design.md'))).toMatchObject({
+      ok: true, source: { path: join(homeDir, 'vault', 'design.md'), relPath: join('~', 'vault', 'design.md'), outsideProject: true }
+    });
+    expect(await confineSource(fs, scope, join(cloneDir, 'plan.md'))).toMatchObject({ ok: true, source: { relPath: join(cloneDir, 'plan.md'), outsideProject: true } });
+  });
+  it('refuses credential stores and Zana\'s state, but reads Zana\'s library', async () => {
+    mkdirSync(join(homeDir, '.ssh'));
+    writeFileSync(join(homeDir, '.ssh', 'id_rsa'), 'PRIVATE');
+    mkdirSync(join(homeDir, '.zcc', 'library'), { recursive: true });
+    writeFileSync(join(homeDir, '.zcc', 'auth.json'), '{}');
+    writeFileSync(join(homeDir, '.zcc', 'library', 'x.md'), '# x');
+    const refused = await confineSource(fs, scope, join(homeDir, '.ssh', 'id_rsa'));
+    expect(refused).toMatchObject({ ok: false, code: 'SOURCE_NOT_ALLOWED', message: expect.stringContaining('protected location') });
+    expect(await confineSource(fs, scope, join(homeDir, '.zcc', 'auth.json'))).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
+    expect(await confineSource(fs, scope, join(homeDir, '.zcc', 'library', 'x.md'))).toMatchObject({ ok: true, source: { outsideProject: true } });
+    // A link inside the project can't reach a protected file.
+    symlinkSync(join(homeDir, '.ssh', 'id_rsa'), join(proj(), 'key.md'));
+    expect(await confineSource(fs, scope, 'key.md')).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
+  });
+  it('rejects paths outside every base, links out of them, directories, the root itself and missing files', async () => {
+    expect(await confineSource(fs, scope, relative(join(root, 'proj'), join(outside, 'secret.md')))).toMatchObject({
+      code: 'SOURCE_NOT_ALLOWED', message: expect.stringContaining('outside this project, your home folder and the clone root')
+    });
+    expect(await confineSource(fs, scope, join(outside, 'secret.md'))).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
+    expect(await confineSource(fs, scope, '/etc/hosts')).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
     symlinkSync(join(outside, 'secret.md'), join(proj(), 'link.md'));
-    expect(await confineToProject(fs, proj(), 'link.md')).toMatchObject({ code: 'SOURCE_OUTSIDE_PROJECT' });
-    expect(await confineToProject(fs, proj(), 'docs')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
-    expect(await confineToProject(fs, proj(), '.')).toMatchObject({ code: 'SOURCE_OUTSIDE_PROJECT' });
-    expect(await confineToProject(fs, proj(), 'nope.md')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
-    expect(await confineToProject(fs, join(root, 'gone'), 'x')).toMatchObject({ code: 'NOT_FOUND' });
+    expect(await confineSource(fs, scope, 'link.md')).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
+    expect(await confineSource(fs, scope, 'docs')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
+    expect(await confineSource(fs, scope, '.')).toMatchObject({ code: 'SOURCE_NOT_ALLOWED' });
+    expect(await confineSource(fs, scope, 'nope.md')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
+    expect(await sourceScope(fs, join(root, 'gone'), { home: homeDir })).toBeUndefined();
   });
   it('accepts a file whose name merely starts with two dots', async () => {
     writeFileSync(join(proj(), '..notes.md'), 'x');
-    expect(await confineToProject(fs, proj(), '..notes.md')).toMatchObject({ ok: true, source: { relPath: '..notes.md' } });
+    expect(await confineSource(fs, scope, '..notes.md')).toMatchObject({ ok: true, source: { relPath: '..notes.md' } });
   });
   it('reports an lstat failure as not a file', async () => {
     const broken = { ...fs, lstat: async () => { throw new Error('x'); } };
-    expect(await confineToProject(broken, proj(), 'plan.md')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
+    expect(await confineSource(broken, scope, 'plan.md')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
   });
 });
 
@@ -208,7 +242,7 @@ describe('propose', () => {
     expect(code(await run())).toBe('INVALID');
     slotCount = 4;
     expect(code(await run({ sources: Array.from({ length: 17 }, (_, i) => `f${i}`) }))).toBe('TOO_MANY_SOURCES');
-    expect(code(await run({ sources: [relative(join(root, 'proj'), join(outside, 'secret.md'))] }))).toBe('SOURCE_OUTSIDE_PROJECT');
+    expect(code(await run({ sources: [relative(join(root, 'proj'), join(outside, 'secret.md'))] }))).toBe('SOURCE_NOT_ALLOWED');
     expect(code(await run({ sources: ['docs'] }))).toBe('SOURCE_NOT_FILE');
     expect(appendOnce).not.toHaveBeenCalled();
   });
@@ -287,10 +321,10 @@ describe('propose', () => {
 
   it('refuses a goal that names a file outside the project (D3)', async () => {
     const r = await svc.service.propose(route, { ...input, goal: `Read ${join(outside, 'secret.md')} and build it` });
-    expect(r).toMatchObject({ ok: false, code: 'SOURCE_OUTSIDE_PROJECT', message: expect.stringContaining('secret.md') });
+    expect(r).toMatchObject({ ok: false, code: 'SOURCE_NOT_ALLOWED', message: expect.stringContaining('secret.md') });
     expect(appendOnce).not.toHaveBeenCalled();
     const quoted = await svc.service.propose(route, { ...input, goal: `Use "${join(outside, 'secret.md')}".` });
-    expect(code(quoted)).toBe('SOURCE_OUTSIDE_PROJECT');
+    expect(code(quoted)).toBe('SOURCE_NOT_ALLOWED');
   });
 
   it('accepts goal paths inside the project and ignores paths that do not exist', async () => {
@@ -352,6 +386,26 @@ describe('propose', () => {
     expect((await svc.store.get('prop-1'))).toMatchObject({ inboxEntryId: 'entry-squad-proposal:prop-1', title: 'Build the thing', state: 'pending' });
   });
 
+  it('attaches a design outside the project by its exact path, and shows where it is', async () => {
+    mkdirSync(join(homeDir, 'vault'));
+    const design = join(homeDir, 'vault', 'design.md');
+    writeFileSync(design, '# design');
+    const r = await svc.service.propose(route, { ...input, sources: ['plan.md', design] });
+    expect(r).toMatchObject({ ok: true, value: { sources: [{ path: 'plan.md', bytes: 6 }, { path: join('~', 'vault', 'design.md'), bytes: 8, outsideProject: true }] } });
+    const card = appendOnce.mock.calls[0]![0];
+    expect(card.comments).toContain(`- Files: plan.md, ${join('~', 'vault', 'design.md')} (outside the Project)`);
+    // Inbox documents open inside the project only; the outside file is named in the comments.
+    expect(card.docs).toEqual([{ path: 'plan.md' }]);
+    expect((await svc.store.get('prop-1'))?.sources[1]).toEqual({ path: design, relPath: join('~', 'vault', 'design.md'), bytes: 8, outsideProject: true });
+  });
+
+  it('refuses a goal naming a protected file, with the policy in the message', async () => {
+    mkdirSync(join(homeDir, '.aws'));
+    writeFileSync(join(homeDir, '.aws', 'credentials'), 'KEY');
+    const r = await svc.service.propose(route, { ...input, goal: `Use ${join(homeDir, '.aws', 'credentials')} to deploy` });
+    expect(r).toMatchObject({ ok: false, code: 'SOURCE_NOT_ALLOWED', message: expect.stringContaining('~/.aws') });
+  });
+
   it('uses the given title, a thread origin and the conversation fallback', async () => {
     lookup = async () => ({ kind: 'thread', id: 'th1', squadMember: false });
     await svc.service.propose(route, { teamId: 'team1', goal: 'g', planning: 'infer', title: 'Mine', summary: 'S' });
@@ -392,7 +446,7 @@ describe('checkPlan', () => {
   });
   it('rejects path problems and oversize text', async () => {
     const s = svc.service;
-    expect(code(await s.checkPlan(route, { path: join(outside, 'secret.md') }))).toBe('SOURCE_OUTSIDE_PROJECT');
+    expect(code(await s.checkPlan(route, { path: join(outside, 'secret.md') }))).toBe('SOURCE_NOT_ALLOWED');
     expect(code(await s.checkPlan(route, { text: 'x'.repeat(1_048_577) }))).toBe('INVALID');
     const big = join(root, 'proj', 'bigplan.md');
     writeFileSync(big, '');
@@ -441,8 +495,24 @@ describe('review', () => {
       title: 'Build the thing', sources: [{ id: 'src1', name: 'plan.md', byteSize: 6, expiresAt: 9 }],
       proposerTitle: 'Design chat', planStepCount: 2
     } });
-    // The project root is passed so the capability is confined against the realpath it issues.
-    expect(issueSources).toHaveBeenCalledWith(7, 'p1', [join(root, 'proj', 'plan.md')], join(root, 'proj'));
+    // The source policy is passed so the capability is checked against the realpath it issues.
+    expect(issueSources).toHaveBeenCalledWith(7, 'p1', [join(root, 'proj', 'plan.md')], expect.objectContaining({
+      roots: [join(root, 'proj'), homeDir, cloneDir], home: homeDir
+    }));
+  });
+  it('carries the path of a source outside the project into the composer', async () => {
+    writeFileSync(join(homeDir, 'notes.md'), '# notes');
+    await svc.service.propose(route, { ...input, sources: ['plan.md', join(homeDir, 'notes.md')] });
+    issueSources.mockResolvedValue([
+      { id: 'src1', name: 'plan.md', byteSize: 6, expiresAt: 9 },
+      { id: 'src2', name: 'notes.md', byteSize: 7, expiresAt: 9 }
+    ]);
+    const r = await svc.service.review(1, 'prop-2', allow);
+    expect(r).toMatchObject({ ok: true, value: { sources: [
+      { id: 'src1', name: 'plan.md' },
+      { id: 'src2', name: 'notes.md', path: join('~', 'notes.md'), outsideProject: true }
+    ] } });
+    expect(r.ok && r.value.sources[0]).not.toHaveProperty('outsideProject');
   });
   it('maps infer to freeform', async () => {
     await svc.service.propose(route, { teamId: 'team1', goal: 'g2', planning: 'infer', summary: 'S' });
@@ -531,7 +601,7 @@ describe('beginLaunch and markLaunched', () => {
       expandTeamSlots: () => Array.from({ length: slotCount }), resolveSquadPlan: resolveSquadPlan as never,
       fs: realFs, inbox: { appendOnce },
       actions: { bind, markUnavailable }, issueSources, now: () => clock, newId: () => 'unused',
-      findLaunchedExecution: find, logError
+      findLaunchedExecution: find, sourceBases: () => ({ home: homeDir }), logError
     });
     expect(await healing.beginLaunch('prop-1', 'p1')).toMatchObject({ ok: false, code: 'NOT_PENDING', message: 'A Squad was already started from this proposal.' });
     expect(find).toHaveBeenCalledWith('p1', 'prop-1');

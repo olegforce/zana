@@ -123,20 +123,36 @@ describe('goalExecutionSourcePaths', () => {
     expect(descriptors.map((d) => d.canonicalPath)).toContain(realpathSync(plan));
   });
 
-  it('keeps project files, including the project library, and drops HOME when includeHome is false', async () => {
+  it('reads Zana\'s library under ~/.zcc and the clone root, but never Zana\'s own credentials or state', async () => {
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-project-')));
     const userHome = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-userhome-')));
-    mkdirSync(join(project, '.zcc', 'library', 'designs'), { recursive: true });
-    const design = join(project, '.zcc', 'library', 'designs', 'design.md');
-    writeFileSync(design, '# design');
-    const notes = join(userHome, 'notes.md');
-    writeFileSync(notes, 'private');
-    const goal = `Build ${design} using ${notes}`;
+    const cloneRoot = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-clones-')));
+    mkdirSync(join(userHome, '.zcc', 'library', 'designs'), { recursive: true });
+    mkdirSync(join(userHome, '.zcc', 'plugins'), { recursive: true });
+    const design = join(userHome, '.zcc', 'library', 'designs', 'design.md');
+    const auth = join(userHome, '.zcc', 'auth.json');
+    const pluginState = join(userHome, '.zcc', 'plugins', 'settings.json');
+    const cloned = join(cloneRoot, 'plan.md');
+    for (const [path, text] of [[design, '# design'], [auth, '{}'], [pluginState, '{}'], [cloned, '# plan']] as const) writeFileSync(path, text);
 
-    const projectOnly = await goalExecutionSourcePaths(goal, project, userHome, { includeHome: false });
-    expect(projectOnly.map((d) => d.canonicalPath)).toEqual([design]);
-    const withHome = await goalExecutionSourcePaths(goal, project, userHome);
-    expect(withHome.map((d) => d.canonicalPath).sort()).toEqual([design, notes].sort());
+    const descriptors = await goalExecutionSourcePaths(`Build ${design} and ${cloned}; ignore ${auth} and ${pluginState}`, project, userHome, { cloneRoot });
+    expect(descriptors.map((d) => d.canonicalPath).sort()).toEqual([cloned, design].sort());
+  });
+
+  it('protects a ZCC_DATA_DIR data folder, the dev data folder and other protected roots as well as ~/.zcc', async () => {
+    const project = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-project-')));
+    const userHome = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-userhome-')));
+    const dataDir = join(userHome, 'zana-data');
+    const appData = join(userHome, 'app-data');
+    for (const dir of [dataDir, join(userHome, '.zcc-dev'), appData]) mkdirSync(dir);
+    const token = join(dataDir, 'host-enroll.token');
+    const devToken = join(userHome, '.zcc-dev', 'host-enroll.token');
+    const cookies = join(appData, 'Cookies');
+    for (const path of [token, devToken, cookies]) writeFileSync(path, 'secret');
+    const goal = `read ${token}, ${devToken} and ${cookies}`;
+    expect(await goalExecutionSourcePaths(goal, project, userHome, { dataDirs: [dataDir], protectedRoots: [appData] })).toEqual([]);
+    // Without them only the folders that are not Zana's are readable.
+    expect((await goalExecutionSourcePaths(goal, project, userHome)).map((d) => d.canonicalPath).sort()).toEqual([cookies, token].sort());
   });
 
   it('blocks a sensitive HOME root even when named in the goal', async () => {

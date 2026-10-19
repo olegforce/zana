@@ -300,9 +300,9 @@ cc.teams.launchAutonomous("feature-squad", projectId, "Implement [feature descri
 You can design in a CLI Agent or Modern session and hand the result to a Squad
 in the same Project.
 
-1. **Say it.** In the session, say "build it with <Squad>". The agent saves the
-   design (and a plan, if it has one) to the Project library, checks the plan, and
-   prepares the launch.
+1. **Say it.** In the session, say "build it with <Squad>". The agent uses the
+   design (and a plan, if it has one) it wrote or read, wherever it keeps them,
+   checks the plan, and prepares the launch.
 2. **Open the Inbox card.** A "Squad launch ready" card appears in the Inbox. It
    names the Squad, the planning mode and the files. Nothing has started.
 3. **Review.** Press **Review Squad launch**. The Squad composer opens already
@@ -321,8 +321,21 @@ Only an explicit "run it now with X", "start X immediately" or "skip the Inbox"
 makes the agent start the Squad straight away with `execution.start`, as the run's
 owner. Either way the agent says in one line which path it took.
 
-Rules: the Squad always runs in the proposing session's Project, and files must be
-inside that Project. Members of a running Squad cannot propose. Proposals expire
+Rules: the Squad always runs in the proposing session's Project. Its files can be
+in that Project, your home folder (for example a doc vault or `~/.zcc/library`) or
+the clone root. A file outside the Project shows its full path, marked "outside the
+Project", on the card and in the composer, so you see what leaves the checkout
+before Launch. Some locations are always refused, for proposals and for paths
+named in any Squad goal:
+- credential stores and agent sessions (`~/.ssh`, `~/.aws`, `~/.gnupg`,
+  `~/.config/gh`, `~/.config/gcloud`, `~/.netrc`, `~/.docker/config.json`,
+  `~/.codex`, `~/.cursor`, `~/.claude/sessions`), even through a symlink;
+- the app's own data;
+- Zana's data folders (`~/.zcc`, `~/.zcc-dev`, `~/.zcc-machines`, `ZCC_DATA_DIR`).
+  Only their `library`, `personas`, `teams`, `templates` and `saved` folders and
+  the checkouts Zana manages there can be read.
+
+A clone root that is a disk root, or that contains your home folder, is not used. Members of a running Squad cannot propose. Proposals expire
 after 7 days. If the Squad's orchestrator cannot write files, "Infer plan from
 goal" is refused; the agent proposes a plan it has written and checked instead
 (`planning: "provided"`). Use `defaultPlanning` on the Squad to preselect a mode.
