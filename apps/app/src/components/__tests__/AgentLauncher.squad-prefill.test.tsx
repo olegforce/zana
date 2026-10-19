@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SquadLaunchPrefill } from '@zana-ai/zcc-domain/squad-proposal';
 
@@ -24,7 +24,10 @@ vi.mock('../../store.js', () => ({
 }));
 vi.mock('../../lib/use-launch-mode-preference.js', () => ({ useLaunchModePreference: () => [state.stored, state.setStored] }));
 vi.mock('../../hooks/useDialogFocusTrap.js', () => ({ useDialogFocusTrap: () => undefined }));
-vi.mock('../composer/ComposerDraft.js', () => ({ ComposerDraftProvider: ({ children }: { children: unknown }) => <>{children as never}</> }));
+vi.mock('../composer/ComposerDraft.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../composer/ComposerDraft.js')>(),
+  ComposerDraftProvider: ({ children }: { children: unknown }) => <>{children as never}</>
+}));
 vi.mock('../AgentConversationHistory.js', () => ({ AgentConversationHistory: () => null }));
 vi.mock('../ThreadCommandComposer.js', () => ({ ThreadCommandComposer: () => <div data-testid="thread-composer" /> }));
 vi.mock('../LegacyAgentHomeComposer.js', () => ({ LegacyAgentHomeComposer: () => <div data-testid="agent-composer" /> }));
@@ -57,6 +60,15 @@ describe('AgentLauncher Squad pre-fill', () => {
   });
 
   it('uses the pre-fill project when no project is pinned', () => {
+    render(<AgentLauncher onClose={vi.fn()} initialMode="team" squadPrefill={prefill} />);
+    expect(state.teamProps.at(-1)).toMatchObject({ composerProjectId: 'p1' });
+  });
+
+  it('opens a proposal on its own draft, so a retained launcher draft cannot override its project', () => {
+    render(<AgentLauncher onClose={vi.fn()} initialMode="team" />);
+    act(() => { (state.teamProps.at(-1)!.onComposerProjectIdChange as (id: string) => void)('other'); });
+    expect(state.teamProps.at(-1)).toMatchObject({ composerProjectId: 'other' });
+    cleanup();
     render(<AgentLauncher onClose={vi.fn()} initialMode="team" squadPrefill={prefill} />);
     expect(state.teamProps.at(-1)).toMatchObject({ composerProjectId: 'p1' });
   });

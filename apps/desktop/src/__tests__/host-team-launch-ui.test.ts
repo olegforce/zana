@@ -282,7 +282,6 @@ describe('startTeamJobFromUi shared squad worktree', () => {
   });
 });
 
-
 describe('startTeamJobFromUi proposed launches', () => {
   const record = (id: string, extra: Record<string, unknown> = {}) => ({
     id, projectId: 'p1', proposer: { kind: 'thread' as const, id: 'thread-1', title: 'Design chat' }, teamId: 'team1',

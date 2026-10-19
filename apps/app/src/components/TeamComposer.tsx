@@ -1,6 +1,6 @@
 import { product } from '../lib/product-client.js';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, FileText, Folder, Loader2, Mic, Paperclip, Users, X } from 'lucide-react';
+import { ArrowUp, FileText, Folder, Loader2, Paperclip, Users, X } from 'lucide-react';
 import type { ExecutionSourceCapabilityView, Project, TeamAvailabilityUnknown, TeamCoordinationMode, TeamRequirementFailure } from '@zana-ai/zcc-domain/product';
 import {
   CommandComposer,
@@ -10,6 +10,7 @@ import {
 import { planningToCoordinationMode, type SquadLaunchPrefill } from '@zana-ai/zcc-domain/squad-proposal';
 import { VoiceRecordingBar } from './thread/voice/VoiceRecordingBar.js';
 import { useVoiceInput } from './thread/voice/useVoiceInput.js';
+import { VoiceMicButton } from './thread/voice/VoiceMicButton.js';
 import { useData, useTeams, useUi } from '../store.js';
 import { useShallow } from 'zustand/react/shallow';
 import { posixQuote } from '../lib/quote.js';
@@ -20,6 +21,7 @@ import { composerProjectOptions, preferredComposerProjectId, resolveComposerProj
 import { PluginComposerChrome } from '../plugins/PluginComposerChrome.js';
 import { ComposerPromptField } from './composer/ComposerPromptField.js';
 import { useComposerPromptField } from './composer/use-composer-prompt-field.js';
+import { useComposerSession, useComposerSetting } from './composer/ComposerDraft.js';
 import { PopoverPicklist } from './ui/PopoverPicklist.js';
 import { defaultAutonomousTeamId } from './autonomous-team-composer.js';
 import {
@@ -43,6 +45,7 @@ export function TeamComposer({
   prefill?: SquadLaunchPrefill;
   onClose?: () => void;
 } & ComposerProjectSelectionProps) {
+  const session = useComposerSession();
   const projects = useData((s) => s.projects);
   const loadProjects = useData((s) => s.loadProjects);
   const teams = useTeams(useShallow((s) => s.teams));
@@ -50,7 +53,7 @@ export function TeamComposer({
   const openProjectSettings = useUi((s) => s.openProjectSettings);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const lastProjectId = useData((s) => s.lastProjectId);
-  const [internalProjectId, setInternalProjectId] = useState(pinnedProject?.id ?? (composerProjectId || prefill?.projectId) ?? '');
+  const [internalProjectId, setInternalProjectId] = useComposerSetting(session, 'projectId', pinnedProject?.id ?? (composerProjectId || prefill?.projectId) ?? '');
   const projectId = pinnedProject?.id
     ?? (onComposerProjectIdChange ? (composerProjectId || internalProjectId) : internalProjectId);
   const setProjectId = (nextProjectId: string | ((current: string) => string)) => {
@@ -59,12 +62,12 @@ export function TeamComposer({
     onComposerProjectIdChange?.(resolved);
   };
   const preferredProjectId = preferredComposerProjectId({ projects, lastProjectId, selectedProjectId });
-  const [teamId, setTeamId] = useState(() => prefill?.teamId ?? '');
-  const [coordinationMode, setCoordinationMode] = useState<Extract<TeamCoordinationMode, 'structured' | 'freeform'>>(
+  const [teamId, setTeamId] = useComposerSetting(session, 'team.id', prefill?.teamId ?? '');
+  const [coordinationMode, setCoordinationMode] = useComposerSetting<Extract<TeamCoordinationMode, 'structured' | 'freeform'>>(session, 'team.coordination',
     () => prefill?.coordinationMode ?? useData.getState().teamDefaultCoordinationMode
   );
-  const [title, setTitle] = useState(() => prefill?.title ?? '');
-  const [summary, setSummary] = useState(() => prefill?.summary ?? '');
+  const [title, setTitle] = useComposerSetting(session, 'team.title', prefill?.title ?? '', { content: true });
+  const [summary, setSummary] = useComposerSetting(session, 'team.summary', prefill?.summary ?? '', { content: true });
   const [jobSources, setJobSources] = useState<ExecutionSourceCapabilityView[]>(() => prefill?.sources ?? []);
   // Pre-filled sources belong to `prefill.projectId`; keep them while the
   // project is still resolving to it.
@@ -190,6 +193,7 @@ export function TeamComposer({
     setRequirementFailure(null);
     setAvailabilityUnknown(null);
     setLaunching(true);
+    const revision = field.captureRevision();
     try {
       const serialized = field.serialize();
       let promptText = serialized.text;
@@ -247,7 +251,7 @@ export function TeamComposer({
         pushToast(message, 'error');
         return;
       }
-      field.clear();
+      field.clearIfRevision(revision);
       setTitle('');
       setSummary('');
       setJobSources([]);
@@ -429,28 +433,7 @@ export function TeamComposer({
                     <FileText size={14} aria-hidden="true" />
                   </ComposerIconButton>
                 </span>
-                <span className="composer-control-tooltip" data-tooltip={
-                  !voice.isSupported
-                    ? 'Voice input is not supported in this browser'
-                    : !voice.available
-                      ? 'Host daemon is not connected'
-                      : 'Start voice input'
-                }>
-                  <ComposerIconButton
-                    className="voice-input-btn voice-input-btn--icon"
-                    aria-label={
-                    !voice.isSupported
-                      ? 'Voice input is not supported in this browser'
-                      : !voice.available
-                        ? 'Host daemon is not connected'
-                        : 'Start voice input'
-                    }
-                    disabled={!voice.canStart}
-                    onClick={() => void voice.start()}
-                  >
-                    <Mic size={14} />
-                  </ComposerIconButton>
-                </span>
+                <VoiceMicButton voice={voice} />
                 <ComposerIconButton
                     className={`thread-command-send${launching ? ' is-sending' : ''}`}
                     aria-label={launching ? 'Launching squad' : 'Launch squad'}
