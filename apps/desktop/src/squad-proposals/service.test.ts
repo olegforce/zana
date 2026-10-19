@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -150,7 +150,8 @@ describe('reading confined sources', () => {
   });
 
   it('refuses a file replaced after it was confined, even inside the project', async () => {
-    fsImpl = swapAtOpen((path) => { rmSync(path); writeFileSync(path, '# replaced'); });
+    // Keep the old file alive so the new one can't reuse its inode number (ext4 and tmpfs do).
+    fsImpl = swapAtOpen((path) => { renameSync(path, `${path}.old`); writeFileSync(path, '# replaced'); });
     expect(code(await svc.service.checkPlan(route, { path: 'plan.md' }))).toBe('SOURCE_UNREADABLE');
     expect(resolveSquadPlan).not.toHaveBeenCalled();
   });
