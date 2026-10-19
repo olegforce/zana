@@ -103,8 +103,8 @@ export function TeamComposer({
     setTeamId((current) => defaultAutonomousTeamId(teams, current));
   }, [teams]);
 
-  // The auto-selected Squad's own planning default applies too, until the user
-  // picks a planning mode themselves. A reviewed proposal keeps its own mode.
+  // The selected Squad's planning default applies, whether picked or auto-selected, until
+  // the user picks a planning mode themselves. A reviewed proposal keeps its own mode.
   const planningTouchedRef = useRef(false);
   const selectedTeamPlanning = selectedTeam?.defaultPlanning;
   useEffect(() => {
@@ -386,12 +386,9 @@ export function TeamComposer({
                       label: team.name,
                       ...(team.description ? { description: team.description } : {})
                     }))}
-                    onChange={(nextTeamId) => {
-                      setTeamId(nextTeamId);
-                      // A reviewed proposal already chose its planning mode; only a plain pick adopts the Squad default.
-                      const planning = prefill ? undefined : teams.find((team) => team.id === nextTeamId)?.defaultPlanning;
-                      if (planning) setCoordinationMode(planningToCoordinationMode(planning));
-                    }}
+                    // The selected Squad's planning default is applied by the effect above, which
+                    // keeps a planning mode the user (or a reviewed proposal) already chose.
+                    onChange={setTeamId}
                     disabled={teams.length === 0}
                     emptyHint="No squads configured"
                   />

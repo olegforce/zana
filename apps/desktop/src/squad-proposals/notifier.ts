@@ -1,33 +1,25 @@
 import type { AgentState } from '@zana-ai/zcc-domain/product';
-import { SQUAD_PROPOSAL_LIMITS } from '@zana-ai/zcc-domain/squad-proposal';
 import type { ExecutionRecord } from '@zana-ai/zcc-server/services/execution/store';
 import type { InboxInput } from '@zana-ai/zcc-server/services/inbox/inbox-store';
 import { shouldReplaySquadWorktreeTerminalEffects } from '../squad-worktree-lifecycle.js';
+import { createPtyReportQueue, type PtyReportQueueDeps } from './pty-report-queue.js';
 import { buildSquadBlockerReport, buildSquadReport, squadOutcomeLabel, type SquadWorktreeOutcome } from './report.js';
 
 type Proposal = NonNullable<ExecutionRecord['proposal']>;
 type Blocker = NonNullable<ExecutionRecord['blockers']>[number];
-type Delivery = 'delivered' | 'queued' | 'dropped';
 
 const TERMINAL = new Set(['COMPLETED', 'FAILED', 'STOPPED']);
+/** Blocker ids are remembered per execution; this bounds how many executions are tracked at once. */
+const MAX_TRACKED_EXECUTIONS = 256;
 
-export interface SquadProposalNotifierDeps {
+export interface SquadProposalNotifierDeps extends PtyReportQueueDeps {
   getRecord(executionId: string): Promise<ExecutionRecord | undefined>;
   markReported(executionId: string, attempt: number): Promise<unknown>;
   listUnreported(): Promise<ExecutionRecord[]>;
-  reply(sessionId: string, text: string): boolean;
-  ptyLive(id: string): boolean;
-  ptyState(id: string): AgentState | undefined;
-  lastInputAt(id: string): number | undefined;
-  /** True for non-OSC harnesses (Codex, Cursor, Pi, OpenCode), which sit in `waiting` at rest. */
-  deliverableWhenWaiting(id: string): boolean;
   threadLive(threadId: string, projectId: string): Promise<boolean>;
   queueThreadTurn(threadId: string, projectId: string, text: string): Promise<{ ok: boolean; reason?: string }>;
   appendInbox(input: InboxInput): Promise<unknown>;
   pathExists(path: string): boolean;
-  now(): number;
-  setTimer(fn: () => void, ms: number): unknown;
-  clearTimer(handle: unknown): void;
   log(message: string, error?: unknown): void;
 }
 
@@ -52,68 +44,31 @@ export interface SquadProposalNotifier {
 }
 
 export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): SquadProposalNotifier {
-  const inFlight = new Set<string>();
-  const seenBlockers = new Set<string>();
-  const queues = new Map<string, string[]>();
-  const timers = new Map<string, unknown>();
+  /** Attempts being reported, or delivered without a durable Inbox result (left for boot replay). */
+  const claimed = new Set<string>();
+  const seenBlockers = new Map<string, Set<string>>();
   let disposed = false;
   let ready = false;
 
   const safeLog = (message: string, error?: unknown) => { try { if (error === undefined) deps.log(message); else deps.log(message, error); } catch { /* logging must not throw */ } };
+  const ptyQueue = createPtyReportQueue(deps, safeLog);
 
-  function clearSession(sessionId: string): void {
-    queues.delete(sessionId);
-    const handle = timers.get(sessionId);
-    if (handle !== undefined) {
-      timers.delete(sessionId);
-      try { deps.clearTimer(handle); } catch (error) { safeLog(`squad proposal timer clear failed for ${sessionId}`, error); }
-    }
-  }
-
-  function atRest(sessionId: string, state: AgentState | undefined): boolean {
-    return state === 'idle' || state === 'done' || (state === 'waiting' && deps.deliverableWhenWaiting(sessionId));
-  }
-
-  /** Deliver at most one queued item when the session is live, at rest and quiet. */
-  function flush(sessionId: string, stateHint?: AgentState): void {
-    const queue = queues.get(sessionId);
-    if (!queue?.length) return;
+  /** Hand `text` to the proposer. `settle` runs once it is delivered or dropped for good, never on dispose. */
+  async function deliver(proposal: Proposal, projectId: string, text: string, settle: () => void = () => undefined): Promise<void> {
+    let queued = false;
     try {
-      if (!deps.ptyLive(sessionId)) { clearSession(sessionId); return; }
-      if (!atRest(sessionId, stateHint ?? deps.ptyState(sessionId))) return;
-      const lastInput = deps.lastInputAt(sessionId);
-      if (lastInput !== undefined) {
-        const wait = lastInput + SQUAD_PROPOSAL_LIMITS.ptyQuietMs - deps.now();
-        if (wait > 0) {
-          if (!timers.has(sessionId)) {
-            timers.set(sessionId, deps.setTimer(() => { timers.delete(sessionId); if (!disposed) flush(sessionId); }, wait));
-          }
-          return;
-        }
+      if (proposal.proposerKind === 'pty') {
+        if (!deps.ptyLive(proposal.proposerId)) return;
+        queued = true;
+        ptyQueue.enqueue(proposal.proposerId, { text, settle });
+        return;
       }
-      const text = queue.shift() as string;
-      if (!deps.reply(sessionId, text)) safeLog(`squad proposal report not accepted by session ${sessionId}`);
-      if (!queue.length) clearSession(sessionId);
-    } catch (error) {
-      safeLog(`squad proposal flush failed for ${sessionId}`, error);
+      if (!(await deps.threadLive(proposal.proposerId, projectId))) return;
+      const result = await deps.queueThreadTurn(proposal.proposerId, projectId, text);
+      if (!result.ok) safeLog(`squad proposal thread report not queued for ${proposal.proposerId}: ${result.reason ?? 'unknown'}`);
+    } finally {
+      if (!queued) settle();
     }
-  }
-
-  async function deliver(proposal: Proposal, projectId: string, text: string): Promise<Delivery> {
-    if (proposal.proposerKind === 'pty') {
-      if (!deps.ptyLive(proposal.proposerId)) return 'dropped';
-      const queue = queues.get(proposal.proposerId) ?? [];
-      queue.push(text);
-      while (queue.length > SQUAD_PROPOSAL_LIMITS.ptyQueueMax) queue.shift();
-      queues.set(proposal.proposerId, queue);
-      const before = queue.length;
-      flush(proposal.proposerId);
-      return (queues.get(proposal.proposerId)?.length ?? 0) < before ? 'delivered' : 'queued';
-    }
-    if (!(await deps.threadLive(proposal.proposerId, projectId))) return 'dropped';
-    const result = await deps.queueThreadTurn(proposal.proposerId, projectId, text);
-    if (!result.ok) safeLog(`squad proposal thread report not queued for ${proposal.proposerId}: ${result.reason ?? 'unknown'}`);
-    return result.ok ? 'delivered' : 'dropped';
   }
 
   /** Worktree outcome for the report, or `undefined` while terminal effects are still pending. */
@@ -127,7 +82,8 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     return deps.pathExists(record.squadWorktree.path) ? 'kept' : 'missing';
   }
 
-  async function postResult(record: ExecutionRecord, text: string): Promise<void> {
+  /** The durable result entry; false when it could not be written. */
+  async function postResult(record: ExecutionRecord, text: string): Promise<boolean> {
     try {
       await deps.appendInbox({
         projectId: record.projectId,
@@ -139,16 +95,38 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
         dedupeKey: `squad-proposal-result:${record.id}:${record.attempt}`,
         report: true
       });
+      return true;
     } catch (error) {
       safeLog(`squad proposal result entry failed for ${record.id}`, error);
+      return false;
     }
+  }
+
+  /**
+   * Runs once the report is delivered or dropped for good. The run is marked reported only
+   * when its Inbox result is durable; otherwise it stays claimed here (no second delivery in
+   * this process) and unmarked, so boot replay posts and delivers it again.
+   */
+  function settler(record: ExecutionRecord, key: string, posted: boolean): () => void {
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      seenBlockers.delete(record.id);
+      if (!posted) return;
+      void Promise.resolve()
+        .then(() => deps.markReported(record.id, record.attempt))
+        .catch((error: unknown) => safeLog(`squad proposal report failed for ${record.id}`, error))
+        .finally(() => claimed.delete(key));
+    };
   }
 
   async function report(record: ExecutionRecord, given: SquadWorktreeOutcome | undefined, proposerLive: boolean | undefined): Promise<void> {
     if (disposed || !record?.proposal || record.proposalNoticeVersion === record.attempt || !TERMINAL.has(record.state)) return;
     const key = `${record.id}:${record.attempt}`;
-    if (inFlight.has(key)) return;
-    inFlight.add(key);
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    let handedOff = false;
     try {
       const fresh = (await deps.getRecord(record.id)) ?? record;
       const proposal = fresh.proposal;
@@ -156,16 +134,29 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
       const outcome = worktreeOutcome(fresh, given);
       if (outcome === undefined) return;
       const text = buildSquadReport(fresh, outcome === 'none' ? {} : { worktree: outcome });
-      await postResult(fresh, text);
-      if (proposerLive !== false) {
-        try { await deliver(proposal, fresh.projectId, text); } catch (error) { safeLog(`squad proposal delivery failed for ${fresh.id}`, error); }
-      }
-      await deps.markReported(fresh.id, fresh.attempt);
+      const settle = settler(fresh, key, await postResult(fresh, text));
+      handedOff = true;
+      if (proposerLive === false) { settle(); return; }
+      try { await deliver(proposal, fresh.projectId, text, settle); } catch (error) { safeLog(`squad proposal delivery failed for ${fresh.id}`, error); }
     } catch (error) {
       safeLog(`squad proposal report failed for ${record.id}`, error);
     } finally {
-      inFlight.delete(key);
+      if (!handedOff) claimed.delete(key);
     }
+  }
+
+  /** True the first time this blocker of this execution is seen. */
+  function firstSighting(executionId: string, blockerId: string): boolean {
+    let seen = seenBlockers.get(executionId);
+    if (seen?.has(blockerId)) return false;
+    if (!seen) {
+      seen = new Set();
+      seenBlockers.set(executionId, seen);
+      // The terminal report normally forgets an execution first; this only bounds runs that never end here.
+      while (seenBlockers.size > MAX_TRACKED_EXECUTIONS) seenBlockers.delete(seenBlockers.keys().next().value as string);
+    }
+    seen.add(blockerId);
+    return true;
   }
 
   async function onTerminal(record: ExecutionRecord, opts?: { worktree?: SquadWorktreeOutcome }): Promise<void> {
@@ -175,10 +166,7 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
   }
 
   async function onHumanBlocker(record: ExecutionRecord, blocker: Blocker): Promise<void> {
-    if (disposed || !record?.proposal) return;
-    const key = `${record.id}:${blocker.id}`;
-    if (seenBlockers.has(key)) return;
-    seenBlockers.add(key);
+    if (disposed || !record?.proposal || !firstSighting(record.id, blocker.id)) return;
     try {
       await deliver(record.proposal, record.projectId, buildSquadBlockerReport(record, blocker));
     } catch (error) {
@@ -186,20 +174,15 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     }
   }
 
-  function onState(sessionId: string, state: AgentState): void {
-    if (disposed) return;
-    flush(sessionId, state);
-  }
-
-  function forget(sessionId: string): void {
-    clearSession(sessionId);
-  }
-
-  function dispose(): void {
-    disposed = true;
-    for (const sessionId of [...new Set([...queues.keys(), ...timers.keys()])]) clearSession(sessionId);
-    inFlight.clear();
-    seenBlockers.clear();
+  async function proposerLive(record: ExecutionRecord, proposal: Proposal): Promise<boolean> {
+    try {
+      return proposal.proposerKind === 'pty'
+        ? deps.ptyLive(proposal.proposerId)
+        : await deps.threadLive(proposal.proposerId, record.projectId);
+    } catch (error) {
+      safeLog(`squad proposal replay liveness check failed for ${record.id}`, error);
+      return false;
+    }
   }
 
   async function replayUnreported(): Promise<void> {
@@ -209,22 +192,24 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     try { records = await deps.listUnreported(); } catch (error) { safeLog('squad proposal replay list failed', error); return; }
     for (const record of records) {
       try {
-        const proposal = record.proposal;
-        if (!proposal) continue;
-        let live = false;
-        try {
-          live = proposal.proposerKind === 'pty'
-            ? deps.ptyLive(proposal.proposerId)
-            : await deps.threadLive(proposal.proposerId, record.projectId);
-        } catch (error) {
-          safeLog(`squad proposal replay liveness check failed for ${record.id}`, error);
-        }
-        await report(record, undefined, live);
+        if (record.proposal) await report(record, undefined, await proposerLive(record, record.proposal));
       } catch (error) {
         safeLog(`squad proposal replay failed for ${record.id}`, error);
       }
     }
   }
 
-  return { onTerminal, onHumanBlocker, onState, forget, dispose, replayUnreported };
+  return {
+    onTerminal,
+    onHumanBlocker,
+    onState(sessionId, state) { if (!disposed) ptyQueue.flush(sessionId, state); },
+    forget(sessionId) { ptyQueue.forget(sessionId); },
+    dispose() {
+      disposed = true;
+      ptyQueue.dispose();
+      claimed.clear();
+      seenBlockers.clear();
+    },
+    replayUnreported
+  };
 }

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  SQUAD_PLAN_CHECK_JSON_SCHEMA,
+  SQUAD_PROPOSE_JSON_SCHEMA,
   registerSquadProposalTools,
   squadPlanCheckInputSchema,
   squadProposeInputSchema,
@@ -72,17 +74,37 @@ describe('registerSquadProposalTools', () => {
     expect(propose).toHaveBeenCalledWith({ projectId: 'p', sessionId: 's1' }, { teamId: 't', goal: 'g' });
   });
 
-  it('squad_propose formats dep errors and throws without a stack', async () => {
+  it('squad_propose formats dep errors, and logs a throw without passing its text on', async () => {
     const failed = setup({ propose: async () => ({ ok: false, code: 'TEAM_NOT_FOUND', message: 'no such team' }) });
     expect((await failed.tools.get('squad_propose')!({ teamId: 't', goal: 'g' })).content[0].text)
       .toBe('squad_propose failed: TEAM_NOT_FOUND: no such team');
-    const thrown = setup({ propose: async () => { throw new Error('kaput'); } });
+    const logError = vi.fn();
+    const thrown = setup({ propose: async () => { throw new Error('SQLITE_IOERR at /Users/me/.zcc/zcc.db'); }, logError });
     const res = await thrown.tools.get('squad_propose')!({ teamId: 't', goal: 'g' });
     expect(res.isError).toBe(true);
-    expect(res.content[0].text).toBe('squad_propose failed: INVALID: kaput');
-    const nonError = setup({ propose: async () => { throw 'str'; } });
-    expect((await nonError.tools.get('squad_propose')!({ teamId: 't', goal: 'g' })).content[0].text)
-      .toBe('squad_propose failed: INVALID: str');
+    expect(res.content[0].text).toBe('squad_propose failed: INVALID: unexpected error. Try again; if it keeps failing, tell the user.');
+    expect(logError).toHaveBeenCalledWith('squad_propose failed unexpectedly (project p, session s1)', expect.objectContaining({ message: expect.stringContaining('SQLITE_IOERR') }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const nonError = setup({ propose: async () => { throw 'str'; } });
+      expect((await nonError.tools.get('squad_propose')!({ teamId: 't', goal: 'g' })).content[0].text).not.toContain('str');
+      expect(consoleError).toHaveBeenCalledWith('squad_propose failed unexpectedly (project p, session s1)', 'str');
+      // A throwing logger never turns into a thrown tool call.
+      const loud = setup({ propose: async () => { throw new Error('x'); }, logError: () => { throw new Error('log'); } });
+      expect((await loud.tools.get('squad_propose')!({ teamId: 't', goal: 'g' })).isError).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('gives the Modern bridge the same bounds and help as the zod schemas', () => {
+    const zodPropose = z.toJSONSchema(z.object(squadProposeInputSchema)) as { properties: Record<string, Record<string, unknown>>; required: string[] };
+    for (const [key, prop] of Object.entries(SQUAD_PROPOSE_JSON_SCHEMA.properties)) {
+      expect(prop, key).toMatchObject(zodPropose.properties[key]!);
+    }
+    expect(SQUAD_PROPOSE_JSON_SCHEMA.required).toEqual(zodPropose.required);
+    const zodCheck = z.toJSONSchema(z.object(squadPlanCheckInputSchema)) as { properties: Record<string, Record<string, unknown>> };
+    for (const [key, prop] of Object.entries(SQUAD_PLAN_CHECK_JSON_SCHEMA.properties)) expect(prop, key).toMatchObject(zodCheck.properties[key]!);
   });
 
   it('squad_plan_check renders a valid plan and an invalid plan as success', async () => {
@@ -106,9 +128,11 @@ describe('registerSquadProposalTools', () => {
     const failed = setup({ checkPlan: async () => ({ ok: false, code: 'SOURCE_OUTSIDE_PROJECT', message: 'nope' }) });
     expect((await failed.tools.get('squad_plan_check')!({ path: '/etc/x' })).content[0].text)
       .toBe('squad_plan_check failed: SOURCE_OUTSIDE_PROJECT: nope');
-    const thrown = setup({ checkPlan: async () => { throw new Error('io'); } });
+    const logError = vi.fn();
+    const thrown = setup({ checkPlan: async () => { throw new Error('EIO /Users/me/x'); }, logError });
     expect((await thrown.tools.get('squad_plan_check')!({ path: 'x' })).content[0].text)
-      .toBe('squad_plan_check failed: INVALID: io');
+      .toBe('squad_plan_check failed: INVALID: unexpected error. Try again; if it keeps failing, tell the user.');
+    expect(logError).toHaveBeenCalledWith('squad_plan_check failed unexpectedly (project p, session s1)', expect.any(Error));
   });
 
   it('squad_plan_check rejects both, neither, and oversize text with INVALID', async () => {

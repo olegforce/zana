@@ -157,17 +157,33 @@ describe('onTerminal', () => {
     const markReported = vi.fn().mockRejectedValueOnce(new Error('disk')).mockResolvedValue(undefined);
     const { deps, notifier } = setup({ markReported });
     await notifier.onTerminal(record());
+    await vi.advanceTimersByTimeAsync(0);
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('report failed for e1'), expect.any(Error));
     await notifier.onTerminal(record());
     expect(markReported).toHaveBeenCalledTimes(2);
   });
 
-  it('still delivers and marks reported when the Inbox entry fails', async () => {
+  it('still delivers when the Inbox entry fails, but leaves the run unreported for boot replay', async () => {
     const { deps, notifier } = setup({ appendInbox: vi.fn(async () => { throw new Error('inbox down'); }) });
     await notifier.onTerminal(record());
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('result entry failed'), expect.any(Error));
     expect(deps.reply).toHaveBeenCalledOnce();
-    expect(deps.markReported).toHaveBeenCalledOnce();
+    expect(deps.markReported).not.toHaveBeenCalled();
+    // Claimed in this process: a second terminal call does not type the report again.
+    await notifier.onTerminal(record());
+    expect(deps.reply).toHaveBeenCalledOnce();
+  });
+
+  it('marks a run whose proposer is gone only once its Inbox result is written', async () => {
+    const appendInbox = vi.fn().mockRejectedValueOnce(new Error('inbox down')).mockResolvedValue(undefined);
+    const failing = setup({ appendInbox, listUnreported: vi.fn(async () => [record()]), ptyLive: vi.fn(() => false) });
+    await failing.notifier.replayUnreported();
+    expect(failing.deps.markReported).not.toHaveBeenCalled();
+    // The next boot retries both.
+    const next = createSquadProposalNotifier(failing.deps);
+    await next.replayUnreported();
+    expect(appendInbox).toHaveBeenCalledTimes(2);
+    expect(failing.deps.markReported).toHaveBeenCalledWith('e1', 1);
   });
 
   it('falls back to the passed record when the re-read finds nothing', async () => {
@@ -204,7 +220,22 @@ describe('PTY delivery gating', () => {
     ctx.setState(busy);
     await ctx.notifier.onTerminal(record());
     expect(ctx.deps.reply).not.toHaveBeenCalled();
-    expect(ctx.deps.markReported).toHaveBeenCalledOnce();
+    // A queued report is only marked once it is typed, so an exit before then replays it at boot.
+    expect(ctx.deps.markReported).not.toHaveBeenCalled();
+    ctx.notifier.onState('s1', 'idle');
+    expect(ctx.deps.reply).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.deps.markReported).toHaveBeenCalledWith('e1', 1);
+  });
+
+  it('leaves a queued report unmarked when the app shuts down before it is typed', async () => {
+    const ctx = setup();
+    ctx.setState('working');
+    await ctx.notifier.onTerminal(record());
+    ctx.notifier.dispose();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.deps.reply).not.toHaveBeenCalled();
+    expect(ctx.deps.markReported).not.toHaveBeenCalled();
   });
 
   it('delivers from waiting when the harness rests there', async () => {
@@ -302,13 +333,20 @@ describe('PTY delivery gating', () => {
     live.v = true;
     ctx.notifier.onState('s1', 'idle');
     expect(ctx.deps.reply).not.toHaveBeenCalled();
+    // Dropped for good with the session: the Inbox result stands, so the run is marked.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.deps.markReported).toHaveBeenCalledOnce();
   });
 
-  it('survives a throwing dep during a flush', async () => {
-    const ctx = setup({ lastInputAt: vi.fn(() => { throw new Error('boom'); }) });
+  it('survives a throwing dep during a flush and keeps the report queued', async () => {
+    const lastInputAt = vi.fn((): number | undefined => { throw new Error('boom'); });
+    const ctx = setup({ lastInputAt });
     await ctx.notifier.onTerminal(record());
     expect(ctx.deps.log).toHaveBeenCalledWith(expect.stringContaining('flush failed'), expect.any(Error));
-    expect(ctx.deps.markReported).toHaveBeenCalledOnce();
+    expect(ctx.deps.markReported).not.toHaveBeenCalled();
+    lastInputAt.mockReturnValue(undefined);
+    ctx.notifier.onState('s1', 'idle');
+    expect(ctx.deps.reply).toHaveBeenCalledOnce();
   });
 });
 
@@ -318,10 +356,13 @@ describe('forget and dispose', () => {
     ctx.setLastInput(Date.now() - 1_000);
     await ctx.notifier.onTerminal(record());
     expect(vi.getTimerCount()).toBe(1);
+    expect(ctx.deps.markReported).not.toHaveBeenCalled();
     ctx.notifier.forget('s1');
     expect(vi.getTimerCount()).toBe(0);
     ctx.notifier.onState('s1', 'idle');
     expect(ctx.deps.reply).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.deps.markReported).toHaveBeenCalledOnce();
   });
 
   it('forget ignores an unknown session and logs a failing clearTimer', async () => {
@@ -403,6 +444,24 @@ describe('onHumanBlocker', () => {
     expect(deps.reply).toHaveBeenCalledTimes(2);
     expect(deps.appendInbox).not.toHaveBeenCalled();
     expect(deps.markReported).not.toHaveBeenCalled();
+  });
+
+  it('forgets an execution\'s blockers once its terminal report is handled', async () => {
+    const { deps, notifier } = setup();
+    await notifier.onHumanBlocker(record({ state: 'RUNNING' as never }), blocker);
+    await notifier.onTerminal(record());
+    await notifier.onHumanBlocker(record({ state: 'RUNNING' as never }), blocker);
+    expect(deps.reply.mock.calls.filter((call) => String((call as unknown[])[1]).includes('Which file?'))).toHaveLength(2);
+  });
+
+  it('bounds how many executions it remembers blockers for', async () => {
+    const { deps, notifier } = setup();
+    for (let i = 0; i <= 256; i++) await notifier.onHumanBlocker(record({ id: `e${i}` }), blocker);
+    expect(deps.reply).toHaveBeenCalledTimes(257);
+    // The oldest execution was forgotten; the newest is still remembered.
+    await notifier.onHumanBlocker(record({ id: 'e0' }), blocker);
+    await notifier.onHumanBlocker(record({ id: 'e256' }), blocker);
+    expect(deps.reply).toHaveBeenCalledTimes(258);
   });
 
   it('never throws', async () => {

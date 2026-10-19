@@ -289,6 +289,13 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new ExecutionSourceError('NOT_REGULAR_FILE', 'Execution source must be a regular file');
+      // `path` is canonical, so the handle must be the file it names now: a folder on the
+      // way swapped for a symlink after the realpath check would have opened another inode.
+      let canonical: Awaited<ReturnType<typeof stat>> | undefined;
+      try { canonical = (await realpath(path)) === path ? await stat(path) : undefined; } catch { canonical = undefined; }
+      if (!canonical || canonical.dev !== info.dev || canonical.ino !== info.ino) {
+        throw new ExecutionSourceError('SOURCE_CHANGED', 'Execution source changed during read');
+      }
       const bytes = await readHandleBounded(handle, info.size, path, maxBytes);
       const after = await handle.stat();
       if (after.dev !== info.dev || after.ino !== info.ino || after.size !== info.size || !after.isFile()) {

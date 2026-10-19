@@ -57,7 +57,7 @@ import { createTeamProductOps } from './team-product-ops.js';
 import { jobCoordinatorPrompt } from './team-coordinator-prompt.js';
 import {
   createDesktopNativeRecovery, gateInvalidProvidedPlan, recoverSquadStateAtBoot, runSpawnLifecycle, slotRecoveryLaunch,
-  sweepUnretainedSquadWorktrees, teamAdmissionRequirements, teamJobFailureResponse
+  sweepUnretainedSquadWorktrees, teamAdmissionRequirements, teamJobFailureResponse, withProposalLaunch, findProposalExecution, type ProposalLaunchDeps
 } from './team-launch-support.js';
 import { openExecutionStorage } from './execution-storage.js';
 import { createPlanCorrectionHandoff, createPlanCorrectionHost } from './plan-correction/host.js';
@@ -280,7 +280,7 @@ import { SkillBundlesStore } from '@zana-ai/zcc-server/services/skills/skill-bun
 import { listCommands } from '@zana-ai/zcc-server/services/skills/commands';
 import { ScheduleGroupsStore } from '@zana-ai/zcc-server/services/scheduler/schedule-groups-store';
 import { watch as fsWatch, mkdirSync, type FSWatcher } from 'node:fs';
-import { lstat, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, open as openFile, realpath, rm } from 'node:fs/promises';
 import { personaCanWriteFiles, type SquadProposalInput } from '@zana-ai/zcc-domain/squad-proposal';
 import { createSquadProposalStore } from './squad-proposals/store.js';
 import { createSquadProposalService, SQUAD_LAUNCH_PROPOSAL_ACTION, type SquadProposalServiceDeps } from './squad-proposals/service.js';
@@ -5947,17 +5947,8 @@ export async function lookupProposer(sessionId: string, projectId: string) {
   return null;
 }
 
-/** Newest executions first, bounded to 5 pages (Rule 5); a proposal's run is always recent. */
-export async function findExecutionForProposal(projectId: string, proposalId: string): Promise<string | undefined> {
-  let before: number | undefined;
-  for (let page = 0; page < 5; page += 1) {
-    const { records, hasMore } = await executionStore.listInProject(projectId, before, 100);
-    const match = records.find((record) => record.proposal?.id === proposalId);
-    if (match) return match.id;
-    if (!hasMore || records.length === 0) return undefined;
-    before = records[records.length - 1]!.createdAt;
-  }
-  return undefined;
+export function findExecutionForProposal(projectId: string, proposalId: string): Promise<string | undefined> {
+  return findProposalExecution(executionStore, projectId, proposalId);
 }
 
 /** Queue one text turn into a Modern thread (utility child in prod, loopback product server in dev). */
@@ -5995,7 +5986,7 @@ const squadProposalServiceDeps: SquadProposalServiceDeps = {
   teamHostProblem: (project) => teamHostProblem(project as Project, localHostId()),
   expandTeamSlots,
   resolveSquadPlan: (planSource, texts) => resolveSquadPlan(planSource, texts),
-  fs: { realpath, lstat, readFile: (path, encoding) => readFile(path, encoding) },
+  fs: { realpath, lstat, open: (path, flags) => openFile(path, flags) },
   inbox: { appendOnce: (input) => inboxStore.appendOnce(input) },
   actions: {
     bind: (entry, action) => inboxActionRegistry.bind(entry, action),
@@ -6004,7 +5995,8 @@ const squadProposalServiceDeps: SquadProposalServiceDeps = {
   issueSources: (windowId, projectId, paths, withinRoot) => executionSources.issue({ windowId: windowId as number, projectId, paths, withinRoot }),
   now: () => Date.now(),
   newId: () => randomUUID(),
-  findLaunchedExecution: findExecutionForProposal
+  findLaunchedExecution: findExecutionForProposal,
+  logError: (context, error) => logMainError(context, error)
 };
 export const squadProposalService = createSquadProposalService(squadProposalServiceDeps);
 // squad_plan_check's route carries no session id: the MCP tool has already
@@ -6041,11 +6033,14 @@ inboxActionRegistry.register(SQUAD_LAUNCH_PROPOSAL_ACTION, squadProposalService.
  * awaited: delivery (thread liveness, queued turns) must never hold up the engine's
  * terminal path. The notifier never throws.
  */
-export async function handleSquadTerminalWithReport(record: Parameters<typeof squadWorktreeRuntime.handleSquadWorktreeTerminal>[0]): Promise<void> {
+export async function handleSquadTerminalWithReport(
+  record: Parameters<typeof squadWorktreeRuntime.handleSquadWorktreeTerminal>[0]
+): Promise<SquadWorktreeTerminalOutcome | undefined> {
   let worktree: SquadWorktreeTerminalOutcome | undefined;
   let failed = false;
   try {
     worktree = await squadWorktreeRuntime.handleSquadWorktreeTerminal(record);
+    return worktree;
   } catch (error) {
     failed = true;
     throw error;
@@ -6106,7 +6101,7 @@ const squadExecutionService = new SquadExecutionService({
   withExecutionLifecycleLock: withSquadWorktreeLifecycleLock,
   mayResumeRetainedWorktree: (executionId) => !squadWorktreeHasActiveFollowUp(executionId),
   prepareSquadWorktree: squadWorktreeRuntime.prepareSquadWorktree,
-  onTerminal: handleSquadTerminalWithReport,
+  onTerminal: async (record) => { await handleSquadTerminalWithReport(record); },
   onHumanBlocker: (record, blocker) => squadProposalNotifier.onHumanBlocker(record, blocker),
   clearResumeToken: (projectId, executionId) => executionResumeTokens.clear(projectId, executionId),
   cacheResumeToken: (projectId, executionId, token, expiresAt) => executionResumeTokens.set({ projectId, executionId, token, expiresAt }),
@@ -6386,89 +6381,140 @@ export async function startTeamJobFromUi(
   }
   // A proposed launch's goal is agent-written: only files inside the project may be attached
   // from it (D3), so the HOME base is dropped. Without a proposal it applies exactly as before.
-  const goalSourceDescriptors = await goalExecutionSourcePaths(
-    originalGoal, project.path, undefined, { includeHome: input.proposalId === undefined }
-  );
+  const proposed = input.proposalId !== undefined;
+  const goalSourceDescriptors = await goalExecutionSourcePaths(originalGoal, project.path, undefined, { includeHome: !proposed });
   if (goalSourceDescriptors.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Goal execution sources require a trusted window' };
   }
   // A proposed launch is bound to its stored proposal and must come from a trusted window.
-  const proposalId = typeof input.proposalId === 'string' ? input.proposalId.trim() : '';
-  let proposal: Extract<Awaited<ReturnType<typeof squadProposalService.beginLaunch>>, { ok: true }>['value']['proposal'] | undefined;
-  if (input.proposalId !== undefined) {
-    if (!sourceContext) {
-      return { ok: false, code: 'INVALID_CAPABILITY', message: 'Proposed Squad launches must be opened from the desktop app window.' };
-    }
-    const begun = await squadProposalService.beginLaunch(proposalId, projectId);
-    if (!begun.ok) return { ok: false, code: begun.code, message: begun.message };
-    proposal = begun.value.proposal;
+  if (proposed && !sourceContext) {
+    return { ok: false, code: 'INVALID_CAPABILITY', message: 'Proposed Squad launches must be opened from the desktop app window.' };
   }
-  // Every exit before a Squad starts (source errors, a refused plan, a failed or throwing
-  // start) releases the proposal's launch hold, so the user can retry at once.
-  let launched = false;
-  try {
+  const proposalId = proposed ? (typeof input.proposalId === 'string' ? input.proposalId.trim() : '') : undefined;
+  return withProposalLaunch(proposalLaunchDeps, proposalId, projectId, async (proposal) => {
     // Mint identity before snapshotting: source content lands in a dedicated,
     // immutable content store and execution ledger carries only bounded metadata.
     const launchRequestId = `ui:${randomUUID()}`;
-    let sourceBundle: Awaited<ReturnType<typeof executionSources.resolve>> | undefined;
-    try {
-      const goalSourceCapabilities = goalSourceDescriptors.length
-        ? await executionSources.issue({
-        windowId: sourceContext!.windowId, projectId, paths: goalSourceDescriptors.map(({ exactPath }) => exactPath),
-        // Re-checked against the realpath issue() takes, so a symlink swapped in after discovery can't escape.
-        ...(proposal ? { withinRoot: project.path } : {})
-      })
-        : [];
-      const allSourceCapabilityIds = [...new Set([...sourceCapabilityIds, ...goalSourceCapabilities.map(({ id }) => id)])];
-      if (allSourceCapabilityIds.length) {
-        sourceBundle = await executionSources.resolve({
-          windowId: sourceContext!.windowId,
-          projectId,
-          capabilityIds: allSourceCapabilityIds,
-          snapshotKey: launchRequestId.replace(/[^a-zA-Z0-9:_-]/g, '_')
-        });
-      }
-    } catch (error) {
-      return error instanceof ExecutionSourceError
-        ? { ok: false, code: error.code, message: error.message }
-        : { ok: false, code: 'SOURCE_SNAPSHOT_FAILED', message: error instanceof Error ? error.message : String(error) };
+    const snapshot = await snapshotTeamJobSources({
+      windowId: sourceContext?.windowId, projectId, launchRequestId, sourceCapabilityIds, goalSourceDescriptors,
+      // Re-checked against the realpath issue() takes, so a symlink swapped in after discovery can't escape.
+      ...(proposal ? { withinRoot: project.path } : {})
+    });
+    if (!snapshot.ok) return snapshot;
+    const { sourceBundle } = snapshot;
+    const built = await buildTeamJobStartRequest({
+      teamId, projectId, projectName: project.name, launchRequestId, coordinationMode, slots, attended: !!sourceContext,
+      goal: originalGoal, title: originalJobTitle, summary: originalSummary, sourceBundle, goalSourceDescriptors
+    });
+    if (!built.ok) return built.response;
+    const result = proposal
+      ? await squadExecutionService.start('interactive:local', projectId, built.request, { proposal })
+      : await squadExecutionService.start('interactive:local', projectId, built.request);
+    if (!result.ok && sourceBundle) await executionSources.removeSnapshot(sourceBundle.contentRef);
+    if (!result.ok) {
+      planCorrectionLaunchBinding.forgetLaunch(launchRequestId);
+      return teamJobFailureResponse(result);
     }
-    const capturedPathDescriptors = [...(sourceBundle?.pathDescriptors ?? []), ...goalSourceDescriptors];
-    const sanitizedGoal = (redactCapturedExecutionSourcePaths(originalGoal, capturedPathDescriptors) ?? originalGoal).slice(0, 4_000);
-    const sanitizedExplicitTitle = redactCapturedExecutionSourcePaths(originalJobTitle, capturedPathDescriptors)?.slice(0, 256) || undefined;
-    const sanitizedSummary = redactCapturedExecutionSourcePaths(originalSummary, capturedPathDescriptors)?.slice(0, 4_000) || undefined;
-    const sourceMetadata = sourceBundle?.sources.map(({ extractedText: _content, ...metadata }) => metadata);
-    // One resolver for interactive and triggered launches: "Plan provided in goal"
-    // (structured) must yield a complete durable DAG or park for plan correction;
-    // "Infer plan from goal" (freeform) leaves planning to the coordinator.
-    const resolvedPlan = resolveSquadPlan(
-      coordinationMode === 'structured' ? 'provided' : 'infer',
-      [...(sourceBundle?.sources ?? []).map((source) => source.extractedText), originalGoal]
-    );
-    const plannedWorkUnits = resolvedPlan.workUnits;
-    const providedPlanError = resolvedPlan.planError;
-    const planRefusal = await gateInvalidProvidedPlan(
-      { inboxStore, planCorrectionLaunchBinding },
-      { planError: providedPlanError, unattended: !sourceContext, projectId, projectName: project.name, launchRequestId }
-    );
-    if (planRefusal) return planRefusal;
-    const sanitizedJobTitle = await nameTeamExecution(launchRequestId, sanitizedGoal, sanitizedExplicitTitle);
-    const sharedTask = [
-      `Shared job goal: ${sanitizedGoal}`,
-      sanitizedSummary ? `Context: ${sanitizedSummary}` : '',
-      providedPlanError ? PlanCorrectionService.correctionPrompt(providedPlanError) : '',
-      'Work toward this goal. Coordinate through the Team orchestrator when one is present.'
-    ].filter(Boolean).join('\n\n');
-    const initialTask = slots.map((slot) => ({
-      initialTask: slot.role === 'orchestrator'
-        ? `${sharedTask}\n\nCoordinate workers, delegate role-specific work, and explicitly report execution completion with a summary when goal is met.`
-        : `${sharedTask}\n\nCheck orchestrator instructions and report progress or blockers to it.`
-    }));
-    const startRequest: ExecutionRequestV1 = {
+    return { ok: true, value: { executionId: result.value.id, state: result.value.state } };
+  });
+}
+
+const proposalLaunchDeps: ProposalLaunchDeps<NonNullable<ExecutionRecord['proposal']>> = {
+  beginLaunch: (proposalId, projectId) => squadProposalService.beginLaunch(proposalId, projectId),
+  markLaunched: (proposalId, executionId) => squadProposalService.markLaunched(proposalId, executionId),
+  releaseLaunch: (proposalId) => squadProposalService.releaseLaunch(proposalId),
+  logError: (context, error) => logMainError(context, error)
+};
+
+type TeamJobSourceBundle = Awaited<ReturnType<typeof executionSources.resolve>>;
+
+/** Issue capabilities for the goal-named paths, then snapshot every source of a Team job launch. */
+async function snapshotTeamJobSources(args: {
+  windowId: number | undefined;
+  projectId: string;
+  launchRequestId: string;
+  sourceCapabilityIds: string[];
+  goalSourceDescriptors: ExecutionSourcePathDescriptor[];
+  withinRoot?: string;
+}): Promise<{ ok: true; sourceBundle?: TeamJobSourceBundle } | { ok: false; code: string; message: string }> {
+  const { windowId, projectId } = args;
+  try {
+    const goalSourceCapabilities = args.goalSourceDescriptors.length
+      ? await executionSources.issue({
+        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath),
+        ...(args.withinRoot ? { withinRoot: args.withinRoot } : {})
+      })
+      : [];
+    const capabilityIds = [...new Set([...args.sourceCapabilityIds, ...goalSourceCapabilities.map(({ id }) => id)])];
+    if (!capabilityIds.length) return { ok: true };
+    const sourceBundle = await executionSources.resolve({
+      windowId: windowId!, projectId, capabilityIds, snapshotKey: args.launchRequestId.replace(/[^a-zA-Z0-9:_-]/g, '_')
+    });
+    return { ok: true, sourceBundle };
+  } catch (error) {
+    return error instanceof ExecutionSourceError
+      ? { ok: false, code: error.code, message: error.message }
+      : { ok: false, code: 'SOURCE_SNAPSHOT_FAILED', message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Redact captured source paths, resolve the plan and build the Squad start request. An
+ * invalid provided plan parks for correction (attended) or is refused (unattended).
+ */
+async function buildTeamJobStartRequest(args: {
+  teamId: string;
+  projectId: string;
+  projectName: string;
+  launchRequestId: string;
+  coordinationMode: 'structured' | 'freeform';
+  slots: ReturnType<typeof expandTeamSlots>;
+  attended: boolean;
+  goal: string;
+  title?: string;
+  summary?: string;
+  sourceBundle?: TeamJobSourceBundle;
+  goalSourceDescriptors: ExecutionSourcePathDescriptor[];
+}): Promise<{ ok: true; request: ExecutionRequestV1 } | { ok: false; response: TeamJobLaunchResponse }> {
+  const { sourceBundle, launchRequestId } = args;
+  const capturedPathDescriptors = [...(sourceBundle?.pathDescriptors ?? []), ...args.goalSourceDescriptors];
+  const sanitizedGoal = (redactCapturedExecutionSourcePaths(args.goal, capturedPathDescriptors) ?? args.goal).slice(0, 4_000);
+  const sanitizedExplicitTitle = redactCapturedExecutionSourcePaths(args.title, capturedPathDescriptors)?.slice(0, 256) || undefined;
+  const sanitizedSummary = redactCapturedExecutionSourcePaths(args.summary, capturedPathDescriptors)?.slice(0, 4_000) || undefined;
+  const sourceMetadata = sourceBundle?.sources.map(({ extractedText: _content, ...metadata }) => metadata);
+  // One resolver for interactive and triggered launches: "Plan provided in goal"
+  // (structured) must yield a complete durable DAG or park for plan correction;
+  // "Infer plan from goal" (freeform) leaves planning to the coordinator.
+  const resolvedPlan = resolveSquadPlan(
+    args.coordinationMode === 'structured' ? 'provided' : 'infer',
+    [...(sourceBundle?.sources ?? []).map((source) => source.extractedText), args.goal]
+  );
+  const plannedWorkUnits = resolvedPlan.workUnits;
+  const providedPlanError = resolvedPlan.planError;
+  const planRefusal = await gateInvalidProvidedPlan(
+    { inboxStore, planCorrectionLaunchBinding },
+    { planError: providedPlanError, unattended: !args.attended, projectId: args.projectId, projectName: args.projectName, launchRequestId }
+  );
+  if (planRefusal) return { ok: false, response: planRefusal };
+  const sanitizedJobTitle = await nameTeamExecution(launchRequestId, sanitizedGoal, sanitizedExplicitTitle);
+  const sharedTask = [
+    `Shared job goal: ${sanitizedGoal}`,
+    sanitizedSummary ? `Context: ${sanitizedSummary}` : '',
+    providedPlanError ? PlanCorrectionService.correctionPrompt(providedPlanError) : '',
+    'Work toward this goal. Coordinate through the Team orchestrator when one is present.'
+  ].filter(Boolean).join('\n\n');
+  const initialTask = args.slots.map((slot) => ({
+    initialTask: slot.role === 'orchestrator'
+      ? `${sharedTask}\n\nCoordinate workers, delegate role-specific work, and explicitly report execution completion with a summary when goal is met.`
+      : `${sharedTask}\n\nCheck orchestrator instructions and report progress or blockers to it.`
+  }));
+  return {
+    ok: true,
+    request: {
       version: 1,
-      teamId,
+      teamId: args.teamId,
       launchRequestId,
-      coordinationMode,
+      coordinationMode: args.coordinationMode,
       origin: 'explicit',
       jobTitle: sanitizedJobTitle,
       objective: sanitizedGoal,
@@ -6481,26 +6527,8 @@ export async function startTeamJobFromUi(
           ? {}
           : { deadlineMs: store.getConfig().autonomousTimeoutMs ?? AUTONOMOUS_DEFAULTS.timeoutMs })
       }
-    };
-    const result = proposal
-      ? await squadExecutionService.start('interactive:local', projectId, startRequest, { proposal })
-      : await squadExecutionService.start('interactive:local', projectId, startRequest);
-    if (!result.ok && sourceBundle) await executionSources.removeSnapshot(sourceBundle.contentRef);
-    if (!result.ok) {
-      planCorrectionLaunchBinding.forgetLaunch(launchRequestId);
-      return teamJobFailureResponse(result);
     }
-    // A Squad is running: from here the proposal must never be launched again.
-    launched = true;
-    if (proposal) {
-      // The Squad is already running; a ledger failure is logged, never surfaced as a failed launch.
-      try { await squadProposalService.markLaunched(proposalId, result.value.id); }
-      catch (error) { logMainError(`squad proposal ${proposalId} markLaunched`, error); }
-    }
-    return { ok: true, value: { executionId: result.value.id, state: result.value.state } };
-  } finally {
-    if (proposal && !launched) squadProposalService.releaseLaunch(proposalId);
-  }
+  };
 }
 
 /**

@@ -120,6 +120,160 @@ async function reviewAndLaunch(
   await expect(modal).toBeHidden();
 }
 
+type Electron = Parameters<typeof captureElectronScreenshot>[0];
+type OutputPath = (name: string) => string;
+
+const openInbox = (window: Page) => window.getByTestId('nav-inbox').or(window.getByTestId('project-nav-inbox')).click();
+
+/** The fake proposer checked the plan and proposed once; returns nothing, asserts both results. */
+async function expectPlanCheckedAndProposed(ctx: JobTeamContext): Promise<void> {
+  await expect.poll(() => loggedResult(readCoordinatorLog(ctx), 'propose[main]'), { timeout: 30_000, intervals: [500] }).not.toBeNull();
+  const log = readCoordinatorLog(ctx);
+  const check = loggedResult(log, 'plan_check');
+  expect(check?.ok, log).toBe(true);
+  expect(check?.value.ok).toBe(true);
+  expect(check?.value.steps.map((step: { id: string }) => step.id)).toEqual(['home', 'about', 'navigation-label', 'assemble']);
+  const proposed = loggedResult(log, 'propose[main]');
+  expect(proposed?.ok, log).toBe(true);
+  expect(proposed?.value).toMatchObject({ planning: 'provided', team: { id: 'e2e-job-team' } });
+}
+
+/** The host-owned card names the Squad, the planning mode and both documents. */
+async function expectProposalCard(window: Page, electron: Electron, outputPath: OutputPath): Promise<void> {
+  await openInboxCard(window, `Squad launch ready: ${TITLE}`);
+  const detail = window.locator('.inbox-detail');
+  await expect(detail.getByText('e2e-design.md').first()).toBeVisible();
+  await expect(detail.getByText('e2e-plan.md').first()).toBeVisible();
+  await expect(detail.getByText('Squad: E2E Job Team (E2E Orchestrator + 2 workers)')).toBeVisible();
+  await expect(detail.getByText(/Planning: Plan provided in goal/)).toBeVisible();
+  await expect(window.getByText('Nothing starts until you press Launch.').first()).toBeVisible();
+  await captureElectronScreenshot(electron, window, outputPath('01-inbox-card.png'));
+}
+
+/** The plan's question reaches the proposer before anyone answers it; then the user answers and the run writes its result. */
+async function expectBlockerReportThenAnswer(ctx: JobTeamContext, projectId: string, executionId: string): Promise<void> {
+  await expect.poll(() => readCoordinatorLog(ctx), { timeout: 120_000, intervals: [1_000] })
+    .toMatch(/\[Squad report\] .*is waiting for an answer in the Inbox: .*Which label should result\.txt use\?/);
+  await answerAndExpectResult(ctx.window, ctx.projectDir, projectId, executionId);
+}
+
+async function answerAndExpectResult(window: Page, projectDir: string, projectId: string, executionId: string): Promise<void> {
+  await answerJobBlockerThroughUi({ window, projectId, executionId, jobTitle: TITLE });
+  await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
+  expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');
+}
+
+/** The completion report lands in the proposer's terminal and in the Inbox. */
+async function expectCompletionReported(ctx: JobTeamContext): Promise<void> {
+  await expect.poll(() => readCoordinatorLog(ctx), { timeout: 120_000, intervals: [1_000] })
+    .toMatch(/\[Squad report\] .*Atlas site build.* completed/);
+  await openInbox(ctx.window);
+  await expect(ctx.window.locator('.inbox-row').filter({ hasText: `Squad completed: ${TITLE}` }).first()).toBeVisible({ timeout: 30_000 });
+}
+
+/** The proposal card says it was launched (no buttons), and Squad details names where it started. */
+async function expectLaunchedCardAndOrigin(window: Page, electron: Electron, outputPath: OutputPath, proposerTitle: string): Promise<void> {
+  await window.locator('.inbox-row').filter({ hasText: `Squad launch ready: ${TITLE}` }).first().click();
+  await expect(window.getByText(`Launched as "${TITLE}". Open it from the Agents board.`)).toBeVisible({ timeout: 15_000 });
+  await expect(window.getByRole('button', { name: 'Review Squad launch' })).toHaveCount(0);
+  await window.getByTestId('nav-agents').or(window.getByTestId('project-nav-agents')).click();
+  await window.locator('.agent-card').filter({ hasText: TITLE }).first().click();
+  const details = window.getByLabel('Squad details');
+  await expect(details.getByText('Loading Squad details…')).toHaveCount(0, { timeout: 15_000 });
+  await expect(details.getByText('Started from', { exact: true })).toBeVisible();
+  await expect(details.locator('dt:text-is("Started from") + dd')).toContainText(proposerTitle);
+  await captureElectronScreenshot(electron, window, outputPath('03-squad-details-started-from.png'));
+}
+
+/** Personas, a provided-plan Squad, and the project, for a Modern proposer. Returns the project id. */
+async function setUpModernProject(window: Page, projectDir: string, agentPath: string): Promise<string> {
+  writeProjectFiles(projectDir);
+  await window.evaluate((bin) => window.cc.config.set({
+    teamJobLaunchEnabled: true, sponsorPromptDismissed: true, claudeBinary: bin, harnessOpenCodeEnabled: true, opencodeBinary: undefined
+  }), agentPath);
+  await window.evaluate(() => window.cc.personas.save({
+    id: 'e2e-orchestrator', name: 'E2E Orchestrator', description: 'Durable test coordinator',
+    baseProfile: 'claude', permissionMode: 'default', systemPrompt: '', deniedTools: ['Write', 'Edit']
+  }));
+  await window.evaluate(() => window.cc.personas.save({
+    id: 'e2e-worker', name: 'E2E Worker', description: 'Durable test worker',
+    baseProfile: 'claude', permissionMode: 'default', systemPrompt: ''
+  }));
+  await window.evaluate(() => window.cc.teams.save({
+    id: 'e2e-job-team', name: 'E2E Job Team', description: 'Modern proposer team',
+    slots: [{ personaId: 'e2e-worker', quantity: 2 }], orchestratorPersonaId: 'e2e-orchestrator', defaultPlanning: 'provided'
+  }));
+  return window.evaluate(async (path) => {
+    const result = await window.cc.projects.add(path);
+    if (!result.ok) throw new Error(result.message ?? 'projects.add failed');
+    return result.value.id;
+  }, projectDir);
+}
+
+/** A live Modern thread on the fake ACP agent. Returns the thread id. */
+async function startModernThread(window: Page, projectId: string): Promise<string> {
+  await expect.poll(async () => window.evaluate(async () => {
+    const response = await fetch('/api/v1/threads/providers');
+    return (await response.json()).providers.map((provider: { id: string }) => provider.id);
+  }), { timeout: 30_000, intervals: [500] }).toContain('acp-opencode');
+  const threadId = await window.evaluate(async ({ projectId }) => {
+    const response = await fetch('/api/v1/threads', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectId, providerId: 'acp-opencode', model: 'fake/default', acpMode: 'plan', permissionMode: 'full',
+        input: 'Stand by; the Squad proposal is submitted out of band.'
+      })
+    });
+    const body = await response.json();
+    if (!response.ok || !body?.ok) throw new Error(JSON.stringify(body));
+    return body.value.id as string;
+  }, { projectId });
+  await expect.poll(async () => window.evaluate(async (id) =>
+    ((await (await fetch(`/api/v1/threads/${encodeURIComponent(id)}`)).json()).thread?.status ?? 'missing') as string, threadId),
+  { timeout: 30_000, intervals: [500] }).toMatch(/^(starting|active|idle|stopping)$/);
+  return threadId;
+}
+
+/** Calls a thread's dynamic tool through the same host tool-call bridge a real ACP agent uses. */
+function hostToolCaller(window: Page, home: string, threadId: string) {
+  const origin = new URL(window.url()).origin;
+  const auth = JSON.parse(readFileSync(join(home, '.zcc', 'auth.json'), 'utf8')) as { hostId: string; hostKey: string };
+  let n = 0;
+  return async (tool: string, args: Record<string, unknown>) => {
+    n += 1;
+    const response = await fetch(`${origin}/internal/hosts/tool-call`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${auth.hostKey}`, 'x-zcc-host-id': auth.hostId },
+      body: JSON.stringify({
+        sessionId: threadId, threadId, providerThreadId: threadId, turnId: `e2e-turn-${n}`, callId: `e2e-call-${n}`, tool, arguments: args
+      })
+    });
+    const body = await response.json() as { success?: boolean; contentItems?: Array<{ text?: string }> };
+    return { status: response.status, success: body.success, text: (body.contentItems ?? []).map((item) => item.text ?? '').join('\n') };
+  };
+}
+
+/**
+ * The thread received the COMPLETION report as a queued/sent turn. The blocker report also
+ * starts with "[Squad report]" and arrives first, so match the completion text. Events are
+ * JSON-stringified, so the quotes around the title arrive escaped.
+ */
+async function expectThreadCompletionReport(window: Page, threadId: string): Promise<void> {
+  await expect.poll(async () => window.evaluate(async (id) =>
+    JSON.stringify(await (await fetch(`/api/v1/threads/${id}/events?limit=200`)).json()), threadId),
+  { timeout: 90_000, intervals: [1_000] }).toMatch(/\[Squad report\] \\*"Atlas site build\\*" completed after/);
+}
+
+async function removeModernProject(window: Page, projectId: string | null): Promise<void> {
+  if (!projectId) return;
+  await window.evaluate(async (id) => {
+    for (const session of await window.cc.terminals.list(id)) {
+      try { await window.cc.terminals.close(session.id); } catch { /* best-effort */ }
+    }
+    try { await window.cc.projects.remove(id); } catch { /* best-effort */ }
+  }, projectId).catch(() => undefined);
+}
+
 test.describe('CLI Agent proposer', () => {
   test.use({
     e2e: true,
@@ -130,10 +284,10 @@ test.describe('CLI Agent proposer', () => {
 
   test('proposes a Squad, launches it from the Inbox card, and gets the reports back', async ({ app }, testInfo) => {
     const ctx = createJobTeamContext(app, { tmpPrefix: 'zcc-squad-proposal-', scenario: undefined });
-    const { window, projectDir } = ctx;
+    const outputPath: OutputPath = (name) => testInfo.outputPath(name);
     try {
-      writeProjectFiles(projectDir);
-      writeFileSync(join(projectDir, '.e2e-proposal.json'), JSON.stringify({
+      writeProjectFiles(ctx.projectDir);
+      writeFileSync(join(ctx.projectDir, '.e2e-proposal.json'), JSON.stringify({
         planPath: PLAN,
         proposals: [{ label: 'main', input: {
           teamId: 'e2e-job-team', goal: GOAL, sources: [DESIGN, PLAN], title: TITLE,
@@ -148,58 +302,14 @@ test.describe('CLI Agent proposer', () => {
         teamExtra: { defaultPlanning: 'provided' }
       });
 
-      // The proposer checked the plan and proposed.
-      await expect.poll(() => loggedResult(readCoordinatorLog(ctx), 'propose[main]'), { timeout: 30_000, intervals: [500] }).not.toBeNull();
-      const log = readCoordinatorLog(ctx);
-      const check = loggedResult(log, 'plan_check');
-      expect(check?.ok, log).toBe(true);
-      expect(check?.value.ok).toBe(true);
-      expect(check?.value.steps.map((step: { id: string }) => step.id)).toEqual(['home', 'about', 'navigation-label', 'assemble']);
-      const proposed = loggedResult(log, 'propose[main]');
-      expect(proposed?.ok, log).toBe(true);
-      expect(proposed?.value).toMatchObject({ planning: 'provided', team: { id: 'e2e-job-team' } });
-
-      // The Inbox card, with both documents.
-      await openInboxCard(window, `Squad launch ready: ${TITLE}`);
-      const detail = window.locator('.inbox-detail');
-      await expect(detail.getByText('e2e-design.md').first()).toBeVisible();
-      await expect(detail.getByText('e2e-plan.md').first()).toBeVisible();
-      await expect(detail.getByText('Squad: E2E Job Team (E2E Orchestrator + 2 workers)')).toBeVisible();
-      await expect(detail.getByText(/Planning: Plan provided in goal/)).toBeVisible();
-      await expect(window.getByText('Nothing starts until you press Launch.').first()).toBeVisible();
-      await captureElectronScreenshot(app.electron, window, testInfo.outputPath('01-inbox-card.png'));
-
+      await expectPlanCheckedAndProposed(ctx);
+      await expectProposalCard(ctx.window, app.electron, outputPath);
       // Review opens the pre-filled composer; Launch starts the run.
-      await reviewAndLaunch(window, (name) => testInfo.outputPath(name), app.electron, 'E2E propose Squad');
-      const executionId = await findJobExecutionId(window, projectId, TITLE);
-
-      // The waiting question reaches the proposer before anyone answers it.
-      await expect.poll(() => readCoordinatorLog(ctx), { timeout: 120_000, intervals: [1_000] })
-        .toMatch(/\[Squad report\] .*is waiting for an answer in the Inbox: .*Which label should result\.txt use\?/);
-      await answerJobBlockerThroughUi({ window, projectId, executionId, jobTitle: TITLE });
-
-      await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
-      expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');
-
-      // The completion report: into the proposer's terminal and into the Inbox.
-      await expect.poll(() => readCoordinatorLog(ctx), { timeout: 120_000, intervals: [1_000] })
-        .toMatch(/\[Squad report\] .*Atlas site build.* completed/);
-      await window.getByTestId('nav-inbox').or(window.getByTestId('project-nav-inbox')).click();
-      await expect(window.locator('.inbox-row').filter({ hasText: `Squad completed: ${TITLE}` }).first()).toBeVisible({ timeout: 30_000 });
-
-      // The proposal card now says it was launched, and the buttons are gone.
-      await window.locator('.inbox-row').filter({ hasText: `Squad launch ready: ${TITLE}` }).first().click();
-      await expect(window.getByText(`Launched as "${TITLE}". Open it from the Agents board.`)).toBeVisible({ timeout: 15_000 });
-      await expect(window.getByRole('button', { name: 'Review Squad launch' })).toHaveCount(0);
-
-      // Squad details names where it started.
-      await window.getByTestId('nav-agents').or(window.getByTestId('project-nav-agents')).click();
-      await window.locator('.agent-card').filter({ hasText: TITLE }).first().click();
-      const details = window.getByLabel('Squad details');
-      await expect(details.getByText('Loading Squad details…')).toHaveCount(0, { timeout: 15_000 });
-      await expect(details.getByText('Started from', { exact: true })).toBeVisible();
-      await expect(details.locator('dt:text-is("Started from") + dd')).toContainText('E2E propose Squad');
-      await captureElectronScreenshot(app.electron, window, testInfo.outputPath('03-squad-details-started-from.png'));
+      await reviewAndLaunch(ctx.window, outputPath, app.electron, 'E2E propose Squad');
+      const executionId = await findJobExecutionId(ctx.window, projectId, TITLE);
+      await expectBlockerReportThenAnswer(ctx, projectId, executionId);
+      await expectCompletionReported(ctx);
+      await expectLaunchedCardAndOrigin(ctx.window, app.electron, outputPath, 'E2E propose Squad');
     } catch (error) {
       throw jobTeamFailure(ctx, error);
     } finally {
@@ -281,95 +391,24 @@ test.describe('Modern proposer', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'zcc-squad-proposal-modern-'));
     let projectId: string | null = null;
     try {
-      writeProjectFiles(projectDir);
-      await window.evaluate((bin) => window.cc.config.set({
-        teamJobLaunchEnabled: true, sponsorPromptDismissed: true, claudeBinary: bin, harnessOpenCodeEnabled: true, opencodeBinary: undefined
-      }), agent.path);
-      await window.evaluate(() => window.cc.personas.save({
-        id: 'e2e-orchestrator', name: 'E2E Orchestrator', description: 'Durable test coordinator',
-        baseProfile: 'claude', permissionMode: 'default', systemPrompt: '', deniedTools: ['Write', 'Edit']
-      }));
-      await window.evaluate(() => window.cc.personas.save({
-        id: 'e2e-worker', name: 'E2E Worker', description: 'Durable test worker',
-        baseProfile: 'claude', permissionMode: 'default', systemPrompt: ''
-      }));
-      await window.evaluate(() => window.cc.teams.save({
-        id: 'e2e-job-team', name: 'E2E Job Team', description: 'Modern proposer team',
-        slots: [{ personaId: 'e2e-worker', quantity: 2 }], orchestratorPersonaId: 'e2e-orchestrator', defaultPlanning: 'provided'
-      }));
-      projectId = await window.evaluate(async (path) => {
-        const result = await window.cc.projects.add(path);
-        if (!result.ok) throw new Error(result.message ?? 'projects.add failed');
-        return result.value.id;
-      }, projectDir);
-
-      await expect.poll(async () => window.evaluate(async () => {
-        const response = await fetch('/api/v1/threads/providers');
-        return (await response.json()).providers.map((provider: { id: string }) => provider.id);
-      }), { timeout: 30_000, intervals: [500] }).toContain('acp-opencode');
-      const threadId = await window.evaluate(async ({ projectId }) => {
-        const response = await fetch('/api/v1/threads', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            projectId, providerId: 'acp-opencode', model: 'fake/default', acpMode: 'plan', permissionMode: 'full',
-            input: 'Stand by; the Squad proposal is submitted out of band.'
-          })
-        });
-        const body = await response.json();
-        if (!response.ok || !body?.ok) throw new Error(JSON.stringify(body));
-        return body.value.id as string;
-      }, { projectId });
-      await expect.poll(async () => window.evaluate(async (id) =>
-        ((await (await fetch(`/api/v1/threads/${encodeURIComponent(id)}`)).json()).thread?.status ?? 'missing') as string, threadId),
-      { timeout: 30_000, intervals: [500] }).toMatch(/^(starting|active|idle|stopping)$/);
-
-      // The same host tool-call bridge a real ACP dynamic tool uses.
-      const origin = new URL(window.url()).origin;
-      const auth = JSON.parse(readFileSync(join(home, '.zcc', 'auth.json'), 'utf8')) as { hostId: string; hostKey: string };
-      const callTool = async (tool: string, args: Record<string, unknown>, n: number) => {
-        const response = await fetch(`${origin}/internal/hosts/tool-call`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${auth.hostKey}`, 'x-zcc-host-id': auth.hostId },
-          body: JSON.stringify({
-            sessionId: threadId, threadId, providerThreadId: threadId, turnId: `e2e-turn-${n}`, callId: `e2e-call-${n}`, tool, arguments: args
-          })
-        });
-        const body = await response.json() as { success?: boolean; contentItems?: Array<{ text?: string }> };
-        return { status: response.status, success: body.success, text: (body.contentItems ?? []).map((item) => item.text ?? '').join('\n') };
-      };
-      const check = await callTool('squad_plan_check', { path: PLAN }, 1);
+      projectId = await setUpModernProject(window, projectDir, agent.path);
+      const threadId = await startModernThread(window, projectId);
+      const callTool = hostToolCaller(window, home, threadId);
+      const check = await callTool('squad_plan_check', { path: PLAN });
       expect(check.success, `${check.text}\n${diagnostics.join('\n')}`).toBe(true);
       expect(JSON.parse(check.text)).toMatchObject({ ok: true });
-      const proposed = await callTool('squad_propose', {
-        teamId: 'e2e-job-team', goal: GOAL, sources: [DESIGN, PLAN], title: TITLE
-      }, 2);
+      const proposed = await callTool('squad_propose', { teamId: 'e2e-job-team', goal: GOAL, sources: [DESIGN, PLAN], title: TITLE });
       expect(proposed.success, `${proposed.text}\n${diagnostics.join('\n')}`).toBe(true);
 
       await openInboxCard(window, `Squad launch ready: ${TITLE}`);
       await reviewAndLaunch(window, (name) => testInfo.outputPath(`modern-${name}`), app.electron);
-      const executionId = await findJobExecutionId(window, projectId, TITLE);
-      await answerJobBlockerThroughUi({ window, projectId, executionId, jobTitle: TITLE });
-      await expect.poll(() => existsSync(join(projectDir, 'result.txt')), { timeout: 15_000 }).toBe(true);
-      expect(readFileSync(join(projectDir, 'result.txt'), 'utf8')).toContain('LABEL: About Atlas');
-
-      // The thread received the COMPLETION report as a queued/sent turn. The blocker report
-      // also starts with "[Squad report]" and arrives first, so match the completion text.
-      // Events are JSON-stringified, so the quotes around the title arrive escaped.
-      await expect.poll(async () => window.evaluate(async (id) =>
-        JSON.stringify(await (await fetch(`/api/v1/threads/${id}/events?limit=200`)).json()), threadId),
-      { timeout: 90_000, intervals: [1_000] }).toMatch(/\[Squad report\] \\*"Atlas site build\\*" completed after/);
+      await answerAndExpectResult(window, projectDir, projectId, await findJobExecutionId(window, projectId, TITLE));
+      await expectThreadCompletionReport(window, threadId);
     } catch (error) {
       const log = existsSync(join(projectDir, '.fake-coordinator.log')) ? readFileSync(join(projectDir, '.fake-coordinator.log'), 'utf8').slice(-8192) : 'no fake coordinator log';
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${log}\n${diagnostics.join('\n').slice(-12_000)}`);
     } finally {
-      if (projectId) {
-        await window.evaluate(async (id) => {
-          for (const session of await window.cc.terminals.list(id)) {
-            try { await window.cc.terminals.close(session.id); } catch { /* best-effort */ }
-          }
-          try { await window.cc.projects.remove(id); } catch { /* best-effort */ }
-        }, projectId).catch(() => undefined);
-      }
+      await removeModernProject(window, projectId);
       rmSync(projectDir, { recursive: true, force: true });
       agent.cleanup();
     }

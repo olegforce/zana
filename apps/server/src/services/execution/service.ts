@@ -1169,6 +1169,14 @@ export class ExecutionService {
     return changed;
   }
 
+  /** Fire-and-forget `onHumanBlocker`; a throwing or rejecting hook is logged, never propagated. */
+  private fireHumanBlocker(record: ExecutionRecord, blocker: NonNullable<ExecutionRecord['blockers']>[number]): void {
+    const hook = this.deps.onHumanBlocker;
+    if (!hook) return;
+    const report = (error: unknown) => (this.deps.logError ?? ((context: string, cause: unknown) => console.error(context, cause)))(`execution human blocker hook failed for ${record.id}/${blocker.id}`, error);
+    try { void Promise.resolve(hook(record, blocker)).catch(report); } catch (error) { report(error); }
+  }
+
   /**
    * Human-escalation half of {@link escalateKickoffFailures}: block the churning
    * unit to a HUMAN_BLOCKER, wake the (parked) coordinator, and mirror the blocker
@@ -1180,14 +1188,6 @@ export class ExecutionService {
    * quietly; a genuine persistence failure is surfaced (NOT swallowed as "skipped")
    * so a churning unit left neither reassigned nor blocked is visible.
    */
-  /** Fire-and-forget `onHumanBlocker`; a throwing or rejecting hook is logged, never propagated. */
-  private fireHumanBlocker(record: ExecutionRecord, blocker: NonNullable<ExecutionRecord['blockers']>[number]): void {
-    const hook = this.deps.onHumanBlocker;
-    if (!hook) return;
-    const report = (error: unknown) => (this.deps.logError ?? ((context: string, cause: unknown) => console.error(context, cause)))(`execution human blocker hook failed for ${record.id}/${blocker.id}`, error);
-    try { void Promise.resolve(hook(record, blocker)).catch(report); } catch (error) { report(error); }
-  }
-
   private async blockKickoffToHuman(reclaimed: ExecutionRecord, unit: NonNullable<ExecutionRecord['workUnits']>[number]): Promise<boolean> {
     try {
       const updated = await this.deps.store.blockKickoffFailure(reclaimed.id, unit.id);

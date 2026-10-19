@@ -36,6 +36,8 @@ export interface RegisterSquadProposalToolsOpts {
   propose?: SquadProposeDep;
   checkPlan?: SquadPlanCheckDep;
   validateRouteIdentity?: (sessionId: string, projectId: string) => boolean | Promise<boolean>;
+  /** Unexpected dependency failures, with tool and route context; defaults to console.error. */
+  logError?: (context: string, error: unknown) => void;
 }
 
 export const SQUAD_PROPOSE_DESCRIPTION =
@@ -50,31 +52,59 @@ export const SQUAD_PLAN_CHECK_DESCRIPTION =
  * instead of the SDK's generic invalid-params text.
  */
 const TRANSPORT = {
+  teamIdChars: 256,
+  pathChars: 4096,
   goalChars: SQUAD_PROPOSAL_LIMITS.goalChars * 4,
   titleChars: SQUAD_PROPOSAL_LIMITS.titleChars * 4,
   summaryChars: SQUAD_PROPOSAL_LIMITS.summaryChars * 4,
   maxSources: SQUAD_PROPOSAL_LIMITS.maxSources * 4
 } as const;
 
+const FIELD_HELP = {
+  teamId: 'The id of the Squad to propose (from list_teams).',
+  goal: `What the Squad should accomplish (at most ${SQUAD_PROPOSAL_LIMITS.goalChars} characters).`,
+  planning: "'infer': the orchestrator plans. 'provided': a portable plan in sources is used.",
+  sources: `Project file paths to attach (design, plan); at most ${SQUAD_PROPOSAL_LIMITS.maxSources}. Must be inside this project.`,
+  title: `Short card title (at most ${SQUAD_PROPOSAL_LIMITS.titleChars} characters).`,
+  summary: `One-paragraph summary for the card (at most ${SQUAD_PROPOSAL_LIMITS.summaryChars} characters).`,
+  planPath: 'Project file path of the plan.',
+  planText: 'The plan text (at most 1 MiB).'
+} as const;
+
 export const squadProposeInputSchema = {
-  teamId: z.string().min(1).max(256).describe('The id of the Squad to propose (from list_teams).'),
-  goal: z.string().min(1).max(TRANSPORT.goalChars).describe(`What the Squad should accomplish (at most ${SQUAD_PROPOSAL_LIMITS.goalChars} characters).`),
-  planning: z
-    .enum(['infer', 'provided'])
-    .optional()
-    .describe("'infer': the orchestrator plans. 'provided': a portable plan in sources is used."),
-  sources: z
-    .array(z.string().min(1).max(4096))
-    .max(TRANSPORT.maxSources)
-    .optional()
-    .describe(`Project file paths to attach (design, plan); at most ${SQUAD_PROPOSAL_LIMITS.maxSources}. Must be inside this project.`),
-  title: z.string().max(TRANSPORT.titleChars).optional().describe(`Short card title (at most ${SQUAD_PROPOSAL_LIMITS.titleChars} characters).`),
-  summary: z.string().max(TRANSPORT.summaryChars).optional().describe(`One-paragraph summary for the card (at most ${SQUAD_PROPOSAL_LIMITS.summaryChars} characters).`)
+  teamId: z.string().min(1).max(TRANSPORT.teamIdChars).describe(FIELD_HELP.teamId),
+  goal: z.string().min(1).max(TRANSPORT.goalChars).describe(FIELD_HELP.goal),
+  planning: z.enum(['infer', 'provided']).optional().describe(FIELD_HELP.planning),
+  sources: z.array(z.string().min(1).max(TRANSPORT.pathChars)).max(TRANSPORT.maxSources).optional().describe(FIELD_HELP.sources),
+  title: z.string().max(TRANSPORT.titleChars).optional().describe(FIELD_HELP.title),
+  summary: z.string().max(TRANSPORT.summaryChars).optional().describe(FIELD_HELP.summary)
 };
 
 export const squadPlanCheckInputSchema = {
-  path: z.string().min(1).max(4096).optional().describe('Project file path of the plan.'),
-  text: z.string().optional().describe('The plan text (at most 1 MiB).')
+  path: z.string().min(1).max(TRANSPORT.pathChars).optional().describe(FIELD_HELP.planPath),
+  text: z.string().optional().describe(FIELD_HELP.planText)
+};
+
+/** The same bounds and help as JSON Schema, for the Modern thread bridge (which doesn't take zod). */
+export const SQUAD_PROPOSE_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    teamId: { type: 'string', minLength: 1, maxLength: TRANSPORT.teamIdChars, description: FIELD_HELP.teamId },
+    goal: { type: 'string', minLength: 1, maxLength: TRANSPORT.goalChars, description: FIELD_HELP.goal },
+    planning: { type: 'string', enum: ['infer', 'provided'], description: FIELD_HELP.planning },
+    sources: { type: 'array', maxItems: TRANSPORT.maxSources, items: { type: 'string', minLength: 1, maxLength: TRANSPORT.pathChars }, description: FIELD_HELP.sources },
+    title: { type: 'string', maxLength: TRANSPORT.titleChars, description: FIELD_HELP.title },
+    summary: { type: 'string', maxLength: TRANSPORT.summaryChars, description: FIELD_HELP.summary }
+  },
+  required: ['teamId', 'goal']
+};
+
+export const SQUAD_PLAN_CHECK_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', minLength: 1, maxLength: TRANSPORT.pathChars, description: FIELD_HELP.planPath },
+    text: { type: 'string', description: FIELD_HELP.planText }
+  }
 };
 
 const NOT_LIVE_MESSAGE = 'NOT_LIVE: originating session is not live in this project.';
@@ -92,13 +122,16 @@ async function isLive(opts: RegisterSquadProposalToolsOpts, sessionId: string): 
   }
 }
 
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 export function registerSquadProposalTools(server: McpServer, opts: RegisterSquadProposalToolsOpts): void {
   const { sessionId, propose, checkPlan } = opts;
   if (!sessionId || !propose) return;
+  // A dependency that throws is a bug or an outage: log the cause, give the agent a stable error without internals.
+  const unexpected = (tool: string, err: unknown) => {
+    try {
+      (opts.logError ?? ((context, error) => console.error(context, error)))(`${tool} failed unexpectedly (project ${opts.projectId}, session ${sessionId})`, err);
+    } catch { /* logging must not throw */ }
+    return errorResult(`${tool} failed: INVALID: unexpected error. Try again; if it keeps failing, tell the user.`);
+  };
 
   server.registerTool(
     'squad_propose',
@@ -111,7 +144,7 @@ export function registerSquadProposalTools(server: McpServer, opts: RegisterSqua
           ? { content: [{ type: 'text' as const, text: JSON.stringify(res.value) }] }
           : errorResult(`squad_propose failed: ${res.code}: ${res.message}`);
       } catch (err) {
-        return errorResult(`squad_propose failed: INVALID: ${describeError(err)}`);
+        return unexpected('squad_propose', err);
       }
     }
   );
@@ -135,7 +168,7 @@ export function registerSquadProposalTools(server: McpServer, opts: RegisterSqua
           ? { content: [{ type: 'text' as const, text: JSON.stringify(res.value) }] }
           : errorResult(`squad_plan_check failed: ${res.code}: ${res.message}`);
       } catch (err) {
-        return errorResult(`squad_plan_check failed: INVALID: ${describeError(err)}`);
+        return unexpected('squad_plan_check', err);
       }
     }
   );

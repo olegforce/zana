@@ -3,6 +3,7 @@
  * thread proposes a Squad run, the user reviews it in the composer, and main
  * launches it. No I/O; shared by main, the MCP tools and the renderer.
  */
+import { z } from 'zod';
 import type { Persona } from './product.js';
 
 /** How the Squad's plan is produced: the orchestrator infers it, or the goal/sources provide it. */
@@ -76,6 +77,45 @@ export interface SquadProposalRecord {
   updatedAt: number;
   expiresAt: number;
 }
+
+const SOURCE_MAX_BYTES = 4 * 1024 * 1024;
+const PATH_MAX_CHARS = 4096;
+const timestamp = z.number().finite().nonnegative();
+const optionalText = (max: number) => z.string().max(max).optional();
+
+/**
+ * A persisted proposal record, checked in full before the ledger is trusted. Unknown keys are
+ * allowed (a newer Zana may add some); the bounds are the ones `squad_propose` enforces.
+ */
+export const squadProposalRecordSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  proposer: z.object({ kind: z.enum(['pty', 'thread']), id: z.string().min(1), title: z.string().optional() }),
+  teamId: z.string().min(1),
+  goal: z.string().min(1).max(SQUAD_PROPOSAL_LIMITS.goalChars),
+  planning: z.enum(['infer', 'provided']),
+  sources: z.array(z.object({
+    path: z.string().min(1).max(PATH_MAX_CHARS),
+    relPath: z.string().min(1).max(PATH_MAX_CHARS),
+    bytes: z.number().int().nonnegative().max(SOURCE_MAX_BYTES)
+  })).max(SQUAD_PROPOSAL_LIMITS.maxSources),
+  title: optionalText(SQUAD_PROPOSAL_LIMITS.titleChars),
+  summary: optionalText(SQUAD_PROPOSAL_LIMITS.summaryChars),
+  planSteps: z.array(z.object({
+    id: z.string().min(1),
+    title: z.string(),
+    dependencies: z.array(z.string()),
+    writeScope: z.array(z.string())
+  })).optional(),
+  state: z.enum(['pending', 'launched', 'dismissed', 'expired']),
+  inboxEntryId: z.string().optional(),
+  executionId: z.string().optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  expiresAt: timestamp
+}).refine((record) => record.state !== 'launched' || typeof record.executionId === 'string', {
+  message: 'a launched proposal names its execution'
+});
 
 export interface SquadProposalResult {
   proposalId: string;

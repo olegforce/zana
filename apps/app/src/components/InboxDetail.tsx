@@ -37,6 +37,7 @@ import { AgentLauncher } from './AgentLauncher.js';
 import type { SquadLaunchPrefill } from '@zana-ai/zcc-domain/squad-proposal';
 import { inspectAgentSession } from '../lib/inspect-session.js';
 import { QuestionBlock } from './InboxQuestionBlock.js';
+import { InboxSquadProposalSurface } from './InboxSquadProposalSurface.js';
 import { MarkdownContent } from './MarkdownContent.js';
 import { InboxDocContent, readInboxDocPreview } from './InboxDocContent.js';
 import { renderReportHtml, type ReportDoc } from '../lib/renderReportHtml.js';
@@ -589,6 +590,8 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
     try {
       const ok = await runInboxHostAction(entry.id, { optionId: 'dismiss' });
       if (!ok) setSquadDismissError('This Squad launch could not be dismissed. Try again.');
+    } catch (err) {
+      setSquadDismissError(`This Squad launch could not be dismissed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSquadDismissBusy(false);
     }
@@ -600,31 +603,21 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
     // click; refresh so a launched or cancelled proposal updates the card.
     void resolveInboxHostAction(entry);
   };
-  // Dismiss needs main's host action. Until the first lookup lands, say so; a later
-  // re-resolve keeps the known action, and the buttons, mounted so focus survives.
-  const squadProposalSurface = !entry.squadProposal ? null : ownershipError ? (
-    <div className="inbox-reply" role="alert">
-      Couldn't check this Squad launch.
-      <button type="button" onClick={() => void resolveInboxHostAction(entry)}>Retry</button>
-    </div>
-  ) : ownershipLoading && !hostAction ? (
-    <div className="inbox-reply" role="status">Checking this Squad launch…</div>
-  ) : !hostAction || hostAction.unavailable || hostAction.status === 'done' ? (
-    <div className="inbox-reply"><div className="inbox-detail-unavailable" role="status">{hostAction?.message ?? 'This Squad launch is no longer available.'}</div></div>
-  ) : (
-      <div className="inbox-reply" data-testid="squad-proposal-surface">
-        <p>Review opens the Squad composer filled in. Nothing starts until you press Launch.</p>
-        {/* Main's reason (e.g. "This Squad launch is starting.") wins over the generic dismiss text. */}
-        {hostAction.message ? <p role="alert">{hostAction.message}</p> : squadDismissError ? <p role="alert">{squadDismissError}</p> : null}
-        {squadReviewError ? <p role="alert">{squadReviewError}</p> : null}
-        <div className="inbox-reply-actions">
-          <button type="button" className="btn primary" disabled={squadReviewBusy || squadDismissBusy || !projectAlive} onClick={() => void reviewSquadProposal()}>
-            {squadReviewBusy ? 'Opening…' : 'Review Squad launch'}
-          </button>
-          <button type="button" className="btn" disabled={squadReviewBusy || squadDismissBusy} onClick={() => void dismissSquadProposal()}>Dismiss</button>
-        </div>
-      </div>
-  );
+  const squadProposalSurface = entry.squadProposal ? (
+    <InboxSquadProposalSurface
+      hostAction={hostAction}
+      ownershipLoading={ownershipLoading}
+      ownershipError={ownershipError}
+      projectAlive={projectAlive}
+      reviewBusy={squadReviewBusy}
+      dismissBusy={squadDismissBusy}
+      reviewError={squadReviewError}
+      dismissError={squadDismissError}
+      onRetry={() => void resolveInboxHostAction(entry)}
+      onReview={() => void reviewSquadProposal()}
+      onDismiss={() => void dismissSquadProposal()}
+    />
+  ) : null;
   // Host action ownership permits only viewing its recorded origin. A fresh or
   // resumed terminal could escape the host-controlled worktree and authority.
   const ownershipPending = ownershipLoading || ownershipError;

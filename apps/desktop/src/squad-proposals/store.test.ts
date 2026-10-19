@@ -55,11 +55,43 @@ describe('squad proposal store', () => {
     expect(readdirSync(d).filter((f) => f.startsWith('squad-proposals.corrupt-'))).toHaveLength(1);
   });
 
+  it.each([
+    ['a source without its byte count', { sources: [{ path: '/p/plan.md', relPath: 'plan.md' }] }],
+    ['a source with a negative size', { sources: [{ path: '/p/plan.md', relPath: 'plan.md', bytes: -1 }] }],
+    ['a plan step without dependencies', { planSteps: [{ id: 'u1', title: 'One', writeScope: [] }] }],
+    ['a proposer without an id', { proposer: { kind: 'pty' } }],
+    ['a launched record without its execution', { state: 'launched' }],
+    ['a goal over the limit', { goal: 'x'.repeat(2049) }],
+    ['a non-finite timestamp', { expiresAt: null }]
+  ])('treats a ledger holding %s as damaged', async (_name, patch) => {
+    const d = dir();
+    const filePath = join(d, 'squad-proposals.json');
+    writeFileSync(filePath, JSON.stringify({ version: 1, revision: 0, records: [rec('ok'), { ...rec('bad'), ...patch }] }));
+    const store = createSquadProposalStore({ filePath, now: () => 9 });
+    expect(await store.get('ok')).toBeUndefined();
+    expect(readdirSync(d)).toContain('squad-proposals.corrupt-9.json');
+  });
+
+  it('keeps a ledger whose records carry keys this version does not know', async () => {
+    const filePath = join(dir(), 'squad-proposals.json');
+    writeFileSync(filePath, JSON.stringify({ version: 1, revision: 0, records: [{ ...rec('a'), futureField: { x: 1 } }] }));
+    expect(await createSquadProposalStore({ filePath }).get('a')).toMatchObject({ id: 'a', futureField: { x: 1 } });
+  });
+
+  it('refuses to write a record that would damage the ledger, and keeps the others', async () => {
+    const store = createSquadProposalStore({ filePath: join(dir(), 's.json') });
+    await store.create(rec('a'));
+    await expect(store.create(rec('b', { sources: [{ path: '', relPath: '', bytes: 0 }] }))).rejects.toThrow('invalid squad proposal record b');
+    await expect(store.update('a', (r) => { r.state = 'launched'; })).rejects.toThrow('invalid squad proposal record a');
+    expect(await store.get('a')).toMatchObject({ state: 'pending' });
+    expect(await store.get('b')).toBeUndefined();
+  });
+
   it('prunes oldest finished records first and keeps pending ones', async () => {
     const store = createSquadProposalStore({ filePath: join(dir(), 's.json'), maxRecords: 3 });
     await store.create(rec('old-pending', { createdAt: 1 }));
     await store.create(rec('done1', { createdAt: 2, state: 'dismissed' }));
-    await store.create(rec('done2', { createdAt: 3, state: 'launched' }));
+    await store.create(rec('done2', { createdAt: 3, state: 'launched', executionId: 'e2' }));
     await store.create(rec('new', { createdAt: 4 }));
     expect(await store.get('done1')).toBeUndefined();
     expect(await store.get('old-pending')).toBeDefined();
@@ -74,7 +106,7 @@ describe('squad proposal store', () => {
     const store = createSquadProposalStore({ filePath: join(dir(), 's.json') });
     await store.create(rec('due', { expiresAt: 10 }));
     await store.create(rec('later', { expiresAt: 100 }));
-    await store.create(rec('done', { expiresAt: 10, state: 'launched' }));
+    await store.create(rec('done', { expiresAt: 10, state: 'launched', executionId: 'e1' }));
     const expired = await store.expireDue(10);
     expect(expired.map((r) => r.id)).toEqual(['due']);
     expect((await store.get('due'))?.state).toBe('expired');

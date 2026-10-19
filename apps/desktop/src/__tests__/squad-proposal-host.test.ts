@@ -157,6 +157,12 @@ describe('list_teams canInferPlan', () => {
   });
 });
 
+describe('findExecutionForProposal', () => {
+  it('finds nothing for a proposal that never launched', async () => {
+    expect(await host.findExecutionForProposal('p1', 'never-launched')).toBeUndefined();
+  });
+});
+
 describe('queueThreadTurnForProposal fallback (no utility child)', () => {
   it('POSTs a queue-if-active text turn to the product server', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true }));
@@ -269,10 +275,11 @@ describe('report-back wiring', () => {
     const report = vi.spyOn(host.squadProposalNotifier, 'onTerminal').mockImplementation(async () => { order.push('report'); });
     try {
       const done = { ...record('pty'), state: 'COMPLETED' } as never;
-      await host.handleSquadTerminalWithReport(done);
+      // The outcome is returned too, so session-exit teardown keeps the typed contract.
+      expect(await host.handleSquadTerminalWithReport(done)).toBe('merged');
       expect(report).toHaveBeenLastCalledWith(done, { worktree: 'merged' });
       // Nothing applied in this call (e.g. team teardown pending): the notifier gets no outcome and waits.
-      await host.handleSquadTerminalWithReport(done);
+      expect(await host.handleSquadTerminalWithReport(done)).toBeUndefined();
       expect(report).toHaveBeenLastCalledWith(done, undefined);
       expect(order).toEqual(['lifecycle', 'report', 'lifecycle', 'report']);
     } finally {

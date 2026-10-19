@@ -199,6 +199,14 @@ describe('InboxDetail Squad proposal card', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('This Squad launch could not be dismissed. Try again.');
   });
 
+  it('shows the error and re-enables Dismiss when the host action throws', async () => {
+    state.hostRun.mockRejectedValue(new Error('IPC closed'));
+    render(view());
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('This Squad launch could not be dismissed: IPC closed');
+    expect((screen.getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it.each([
     [{ unavailable: true, message: 'This Squad launch has expired.' }, 'This Squad launch has expired.'],
     [{ status: 'done' as const, message: 'Squad launched.' }, 'Squad launched.']

@@ -315,6 +315,12 @@ in the same Project.
    cannot answer the Squad's questions, stop it or steer it; you stay the owner.
    Answers go through the Inbox.
 
+**Review first or start now.** How you phrase it picks the path. "Build it with
+X", "prepare a launch for X" or anything unclear gets the review-first card above.
+Only an explicit "run it now with X", "start X immediately" or "skip the Inbox"
+makes the agent start the Squad straight away with `execution.start`, as the run's
+owner. Either way the agent says in one line which path it took.
+
 Rules: the Squad always runs in the proposing session's Project, and files must be
 inside that Project. Members of a running Squad cannot propose. Proposals expire
 after 7 days. If the Squad's orchestrator cannot write files, "Infer plan from

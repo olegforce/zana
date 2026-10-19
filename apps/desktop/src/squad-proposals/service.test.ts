@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Persona, Team } from '@zana-ai/zcc-domain/product';
+import { ExecutionSourceError } from '@zana-ai/zcc-server/services/execution/source-registry';
 import { InboxActionOperatorError } from '../inbox-actions/registry.js';
 import { createSquadProposalStore } from './store.js';
+import { confineToProject, type SquadProposalFs } from './sources.js';
 import {
   SQUAD_LAUNCH_PROPOSAL_ACTION,
-  confineToProject,
   createSquadProposalService,
   type SquadProposalServiceDeps
 } from './service.js';
@@ -23,6 +24,9 @@ const bind = vi.fn();
 const markUnavailable = vi.fn();
 const issueSources = vi.fn();
 const resolveSquadPlan = vi.fn();
+const logError = vi.fn();
+const realFs: SquadProposalFs = { realpath: fsp.realpath, lstat: fsp.lstat, open: fsp.open };
+let fsImpl: SquadProposalFs;
 
 const writer: Persona = { id: 'orch', name: 'Lead' } as Persona;
 const reader: Persona = { id: 'ro', name: 'Planner', deniedTools: ['Write', 'Edit'] } as Persona;
@@ -46,12 +50,17 @@ function build() {
     teamHostProblem: () => hostProblem,
     expandTeamSlots: () => Array.from({ length: slotCount }),
     resolveSquadPlan: resolveSquadPlan as never,
-    fs: { realpath: fsp.realpath, lstat: fsp.lstat, readFile: (p, e) => (readFails ? Promise.reject(new Error('EIO')) : fsp.readFile(p, e)) },
+    fs: {
+      realpath: (p) => fsImpl.realpath(p),
+      lstat: (p) => fsImpl.lstat(p),
+      open: (p, f) => (readFails ? Promise.reject(new Error('EIO')) : fsImpl.open(p, f))
+    },
     inbox: { appendOnce },
     actions: { bind, markUnavailable },
     issueSources,
     now: () => clock,
-    newId: () => `prop-${++ids}`
+    newId: () => `prop-${++ids}`,
+    logError
   });
   return { store, service, deps: undefined };
 }
@@ -83,13 +92,15 @@ beforeEach(() => {
   slotCount = 4;
   projectOk = true;
   readFails = false;
+  fsImpl = realFs;
+  logError.mockReset();
   svc = build();
 });
 
 const code = (r: { ok: boolean } & Record<string, unknown>) => (r.ok ? 'ok' : r.code);
 
 describe('confineToProject', () => {
-  const fs = { realpath: fsp.realpath, lstat: fsp.lstat, readFile: (p: string, e: 'utf8') => fsp.readFile(p, e) };
+  const fs = realFs;
   const proj = () => join(root, 'proj');
 
   it('accepts relative and absolute paths inside the project', async () => {
@@ -114,6 +125,44 @@ describe('confineToProject', () => {
   it('reports an lstat failure as not a file', async () => {
     const broken = { ...fs, lstat: async () => { throw new Error('x'); } };
     expect(await confineToProject(broken, proj(), 'plan.md')).toMatchObject({ code: 'SOURCE_NOT_FILE' });
+  });
+});
+
+describe('reading confined sources', () => {
+  const swapAtOpen = (swap: (path: string) => string | void): SquadProposalFs => ({
+    ...realFs,
+    open: async (path, flags) => fsp.open(swap(path) ?? path, flags)
+  });
+
+  it('refuses a source replaced by a symlink after it was checked', async () => {
+    fsImpl = swapAtOpen((path) => { rmSync(path); symlinkSync(join(outside, 'secret.md'), path); });
+    expect(await svc.service.propose(route, input)).toMatchObject({ ok: false, code: 'SOURCE_UNREADABLE' });
+    expect(appendOnce).not.toHaveBeenCalled();
+  });
+
+  it('refuses a handle that is not the file the path resolves to (a swapped folder)', async () => {
+    // The opened handle points outside while the path still resolves inside: device/inode differ.
+    fsImpl = swapAtOpen(() => join(outside, 'secret.md'));
+    expect(code(await svc.service.propose(route, input))).toBe('SOURCE_UNREADABLE');
+    expect(await svc.service.checkPlan(route, { path: 'plan.md' })).toEqual({
+      ok: false, code: 'SOURCE_UNREADABLE', message: 'plan.md could not be read, or it changed after it was checked.'
+    });
+  });
+
+  it('refuses a source that grew while it was read', async () => {
+    fsImpl = {
+      ...realFs,
+      open: async (path, flags) => {
+        const handle = await fsp.open(path, flags);
+        return { stat: async () => { const st = await handle.stat(); return Object.assign(st, { size: st.size - 1 }); }, read: handle.read.bind(handle), close: () => handle.close() } as never;
+      }
+    };
+    expect(code(await svc.service.checkPlan(route, { path: 'plan.md' }))).toBe('SOURCE_UNREADABLE');
+  });
+
+  it('reads an unchanged source through the verified handle', async () => {
+    expect(code(await svc.service.checkPlan(route, { path: 'plan.md' }))).toBe('ok');
+    expect(resolveSquadPlan).toHaveBeenCalledWith('provided', ['# plan']);
   });
 });
 
@@ -245,8 +294,30 @@ describe('propose', () => {
   it('fails cleanly when the Inbox card action cannot be bound', async () => {
     bind.mockReturnValue(false);
     const r = await svc.service.propose(route, input);
-    expect(r).toMatchObject({ ok: false, code: 'INVALID', message: expect.stringContaining('could not be registered') });
+    expect(r).toEqual({ ok: false, code: 'INVALID', message: 'Could not create the Inbox card for this Squad launch. Try again.' });
+    expect(logError).toHaveBeenCalledWith('squad proposal prop-1 card', expect.objectContaining({ message: 'the Inbox card action could not be registered' }));
     expect(await svc.store.listPending('p1')).toHaveLength(0);
+  });
+
+  it('still reports a live, bound card when recording its entry id fails', async () => {
+    const update = svc.store.update.bind(svc.store);
+    vi.spyOn(svc.store, 'update').mockImplementation(async (id, mutate) => {
+      const probe = { inboxEntryId: undefined } as { inboxEntryId?: string };
+      mutate(probe as never);
+      if (probe.inboxEntryId) throw new Error('disk full at /Users/me/.zcc');
+      return update(id, mutate);
+    });
+    const r = await svc.service.propose(route, input);
+    expect(r).toMatchObject({ ok: true, value: { proposalId: 'prop-1', inboxEntryId: 'entry-squad-proposal:prop-1' } });
+    expect(logError).toHaveBeenCalledWith('squad proposal prop-1 inbox entry id', expect.any(Error));
+    expect(await svc.store.get('prop-1')).toMatchObject({ state: 'pending' });
+  });
+
+  it('logs an unexpected failure and returns a message without its internals', async () => {
+    lookup = async () => { throw new Error('SQLITE_BUSY: /Users/me/.zcc/zcc.db'); };
+    const r = await svc.service.propose(route, input);
+    expect(r).toEqual({ ok: false, code: 'INVALID', message: 'The Squad launch proposal failed unexpectedly. Try again.' });
+    expect(logError).toHaveBeenCalledWith('squad proposal propose', expect.objectContaining({ message: expect.stringContaining('SQLITE_BUSY') }));
   });
 
   it('creates the record and the Inbox card', async () => {
@@ -288,6 +359,7 @@ describe('propose', () => {
     appendOnce.mockRejectedValue(new Error('inbox down'));
     const r = await svc.service.propose(route, input);
     expect(r).toMatchObject({ ok: false, code: 'INVALID' });
+    expect(!r.ok && r.message).not.toContain('inbox down');
     expect((await svc.store.get('prop-1'))?.state).toBe('dismissed');
   });
 
@@ -395,12 +467,21 @@ describe('review', () => {
     expect(code(await svc.service.review(1, 'prop-2', allow))).toBe('NOT_PENDING');
   });
   it('maps source registry errors to SOURCE_UNREADABLE with the original code', async () => {
-    issueSources.mockRejectedValue(Object.assign(new Error('file changed'), { code: 'SOURCE_CHANGED' }));
-    const r = await svc.service.review(1, 'prop-1', allow);
-    expect(r).toMatchObject({ ok: false, code: 'SOURCE_UNREADABLE' });
-    expect(!r.ok && r.message).toContain('SOURCE_CHANGED');
+    issueSources.mockRejectedValue(new ExecutionSourceError('SOURCE_CHANGED', 'plan.md changed after selection'));
+    expect(await svc.service.review(1, 'prop-1', allow)).toEqual({
+      ok: false, code: 'SOURCE_UNREADABLE', message: 'The source files could not be attached (SOURCE_CHANGED): plan.md changed after selection'
+    });
+    // Anything else (an fs error naming a full path) is logged, never shown.
+    issueSources.mockRejectedValue(Object.assign(new Error("ENOENT: no such file, stat '/Users/me/secret'"), { code: 'ENOENT' }));
+    expect(await svc.service.review(1, 'prop-1', allow)).toEqual({ ok: false, code: 'SOURCE_UNREADABLE', message: 'The source files could not be attached. Try again.' });
+    expect(logError).toHaveBeenCalledWith('squad proposal prop-1 review sources', expect.objectContaining({ code: 'ENOENT' }));
     issueSources.mockRejectedValue('weird');
     expect(await svc.service.review(1, 'prop-1', allow)).toMatchObject({ code: 'SOURCE_UNREADABLE' });
+  });
+  it('returns a stable message when the review itself fails unexpectedly', async () => {
+    vi.spyOn(svc.store, 'get').mockRejectedValueOnce(new Error('ledger at /Users/me/.zcc locked'));
+    expect(await svc.service.review(1, 'prop-1', allow)).toEqual({ ok: false, code: 'INVALID', message: 'Opening this Squad launch failed unexpectedly. Try again.' });
+    expect(logError).toHaveBeenCalledWith('squad proposal prop-1 review', expect.any(Error));
   });
 });
 
@@ -441,9 +522,9 @@ describe('beginLaunch and markLaunched', () => {
       projects: { get: () => ({ id: 'p1', name: 'Proj', path: join(root, 'proj') }) },
       teams: { get: () => teamRecord }, personas: { get: (id) => personaMap[id] }, teamHostProblem: () => undefined,
       expandTeamSlots: () => Array.from({ length: slotCount }), resolveSquadPlan: resolveSquadPlan as never,
-      fs: { realpath: fsp.realpath, lstat: fsp.lstat, readFile: fsp.readFile }, inbox: { appendOnce },
+      fs: realFs, inbox: { appendOnce },
       actions: { bind, markUnavailable }, issueSources, now: () => clock, newId: () => 'unused',
-      findLaunchedExecution: find
+      findLaunchedExecution: find, logError
     });
     expect(await healing.beginLaunch('prop-1', 'p1')).toMatchObject({ ok: false, code: 'NOT_PENDING', message: 'A Squad was already started from this proposal.' });
     expect(find).toHaveBeenCalledWith('p1', 'prop-1');
@@ -461,6 +542,20 @@ describe('beginLaunch and markLaunched', () => {
     await svc.service.markLaunched('prop-1', 'exec-1');
     expect(await svc.store.get('prop-1')).toMatchObject({ state: 'dismissed' });
     expect((await svc.store.get('prop-1'))?.executionId).toBeUndefined();
+  });
+  it('lets only one of two concurrent Launch presses through', async () => {
+    const [first, second] = await Promise.all([svc.service.beginLaunch('prop-1', 'p1'), svc.service.beginLaunch('prop-1', 'p1')]);
+    expect([code(first), code(second)].sort()).toEqual(['NOT_PENDING', 'ok']);
+  });
+  it('releases the hold when the launch check fails, and keeps internals out of the message', async () => {
+    vi.spyOn(svc.store, 'get').mockRejectedValueOnce(new Error('ledger at /Users/me/.zcc locked'));
+    expect(await svc.service.beginLaunch('prop-1', 'p1')).toEqual({ ok: false, code: 'INVALID', message: 'This Squad launch could not start. Try again.' });
+    expect(logError).toHaveBeenCalledWith('squad proposal prop-1 launch', expect.any(Error));
+    expect(code(await svc.service.beginLaunch('prop-1', 'p1'))).toBe('ok');
+  });
+  it('releases the hold after refusing an unknown or handled proposal', async () => {
+    expect(code(await svc.service.beginLaunch('prop-1', 'other'))).toBe('NOT_FOUND');
+    expect(code(await svc.service.beginLaunch('prop-1', 'p1'))).toBe('ok');
   });
   it('lets the user retry at once after a failed start', async () => {
     await svc.service.beginLaunch('prop-1', 'p1');

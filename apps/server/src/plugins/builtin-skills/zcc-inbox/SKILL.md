@@ -353,7 +353,8 @@ because each UI's provider applies its MCP namespace:
 | Propose a Squad launch to the user | `mcp__zcc-inbox__squad_propose` | `zcc_squad_propose` |
 
 `execution.start` is for agent-owned orchestration: you own the run and monitor
-it. To hand a design to a Squad the **user** launches, use the subsection below.
+it. Use it to build a design only when the user explicitly asks to start now;
+otherwise hand it to a Squad the **user** launches (the subsection below).
 
 1. Build one bounded `execution.start` request with squad `teamId`, a unique
    `launchRequestId`, and one `initialTask` per expanded slot: each worker slot
@@ -374,12 +375,27 @@ durable state, and completion.
 
 ### Hand a design to a Squad
 
-When the user wants a design built by a Squad **they** launch, do not call
-`execution.start`. Save the files to the project library, run `squad_plan_check`,
-pick a Squad with `list_teams`, then call `squad_propose`. The user reviews the
-Inbox card and presses Launch. Follow the steps in the `brainstorm` skill
-("When the user wants it built"). A `[Squad report]` message later is for you to
-summarise to the user, not to act on.
+When the user wants a design built by a Squad, how they phrase it picks the
+path. Review first is the default.
+
+| User says (examples) | Path | Tools |
+|---|---|---|
+| "build it with X", "prepare a launch for X", "propose X for this plan", "set up X to build this" | Review first | `squad_plan_check` → `list_teams` → `squad_propose`; tell the user to open the "Squad launch ready" Inbox card |
+| "run this with X now", "start X on this now", "launch X immediately, no review", "skip the Inbox and run it with X" | Start now | `execution.start` (you own the run; monitor with `execution.snapshot`) |
+| Anything else, or unclear | Review first | Same as row 1 |
+
+Start now only when the user's message explicitly asks to start immediately. Do not
+infer it from urgency or from "go ahead". If unsure, propose and tell the user they
+can say "run it now with X" next time to skip the Inbox.
+
+Say which path you took, in one line: "Prepared a Squad launch for your review in
+the Inbox" or "Started X now; I own the run". The user can then catch a misroute.
+
+Review first: save the files to the project library, run `squad_plan_check`, pick
+a Squad with `list_teams`, then call `squad_propose`; do not call `execution.start`.
+The user reviews the Inbox card and presses Launch. Follow the steps in the
+`brainstorm` skill ("When the user wants it built"). A `[Squad report]` message
+later is for you to summarise to the user, not to act on.
 
 **Check a remote build:**
 

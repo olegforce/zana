@@ -2,25 +2,56 @@ import { mkdir } from 'node:fs/promises';
 import { renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { atomicDurableWrite, createSerializedTransactionQueue, hashBytes, readRawFile } from '@zana-ai/zcc-server/services/harness-routing/storage';
-import { SQUAD_PROPOSAL_LIMITS, type SquadProposalRecord } from '@zana-ai/zcc-domain/squad-proposal';
+import { SQUAD_PROPOSAL_LIMITS, squadProposalRecordSchema, type SquadProposalRecord } from '@zana-ai/zcc-domain/squad-proposal';
 
 interface StateFile { version: 1; revision: number; records: SquadProposalRecord[]; }
+interface Snapshot { state: StateFile; hash: string | null }
 
 const queue = createSerializedTransactionQueue();
-const STATES = ['pending', 'launched', 'dismissed', 'expired'];
 
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
-function optString(value: unknown): boolean { return value === undefined || typeof value === 'string'; }
-function validRecord(value: unknown): value is SquadProposalRecord {
-  if (!value || typeof value !== 'object') return false;
-  const r = value as Partial<SquadProposalRecord>;
-  const proposer = r.proposer as Partial<SquadProposalRecord['proposer']> | undefined;
-  return typeof r.id === 'string' && typeof r.projectId === 'string' && typeof r.teamId === 'string'
-    && typeof r.goal === 'string' && (r.planning === 'infer' || r.planning === 'provided')
-    && !!proposer && (proposer.kind === 'pty' || proposer.kind === 'thread') && typeof proposer.id === 'string'
-    && Array.isArray(r.sources) && STATES.includes(r.state ?? '')
-    && optString(r.title) && optString(r.summary) && optString(r.inboxEntryId) && optString(r.executionId)
-    && Number.isFinite(r.createdAt) && Number.isFinite(r.updatedAt) && Number.isFinite(r.expiresAt);
+/** Writes are checked against the same schema as reads, so this store never persists a record that would void the ledger. */
+function assertValidRecord(record: SquadProposalRecord): void {
+  if (!squadProposalRecordSchema.safeParse(record).success) throw new Error(`invalid squad proposal record ${record.id}`);
+}
+function empty(): Snapshot { return { state: { version: 1, revision: 0, records: [] }, hash: null }; }
+
+/** The ledger only when it, and every record in it, has the expected shape. */
+function decodeLedger(bytes: Buffer): StateFile | undefined {
+  try {
+    const parsed = JSON.parse(bytes.toString('utf8')) as Partial<StateFile>;
+    if (parsed.version !== 1 || !Number.isInteger(parsed.revision) || !Array.isArray(parsed.records)) return undefined;
+    return parsed.records.every((record) => squadProposalRecordSchema.safeParse(record).success) ? parsed as StateFile : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read the ledger. A damaged one is kept aside as evidence and the store starts empty: it must not block boot. */
+function readLedger(filePath: string, now: () => number): Snapshot {
+  let bytes: Buffer | null = null;
+  try { bytes = readRawFile(filePath); } catch { bytes = null; }
+  if (!bytes) return empty();
+  const state = decodeLedger(bytes);
+  if (state) return { state, hash: hashBytes(bytes) };
+  try { renameSync(filePath, join(dirname(filePath), `squad-proposals.corrupt-${now()}.json`)); } catch { /* best effort */ }
+  return empty();
+}
+
+/** Drop the oldest finished records beyond the cap; pending ones are never evicted. */
+function prune(state: StateFile, maxRecords: number): void {
+  const excess = state.records.length - maxRecords;
+  if (excess <= 0) return;
+  const doomed = new Set(
+    state.records.filter((r) => r.state !== 'pending').sort((a, b) => a.createdAt - b.createdAt).slice(0, excess).map((r) => r.id)
+  );
+  state.records = state.records.filter((r) => !doomed.has(r.id));
+}
+
+async function persist(filePath: string, snapshot: Snapshot): Promise<void> {
+  snapshot.state.revision += 1;
+  await mkdir(dirname(filePath), { recursive: true });
+  atomicDurableWrite(filePath, Buffer.from(JSON.stringify(snapshot.state)), { expectedHash: snapshot.hash });
 }
 
 export interface SquadProposalStoreOptions {
@@ -35,48 +66,16 @@ export type SquadProposalStore = ReturnType<typeof createSquadProposalStore>;
 export function createSquadProposalStore(options: SquadProposalStoreOptions) {
   const now = options.now ?? Date.now;
   const maxRecords = options.maxRecords ?? SQUAD_PROPOSAL_LIMITS.maxRecords;
-
-  function empty(): { state: StateFile; hash: string | null } {
-    return { state: { version: 1, revision: 0, records: [] }, hash: null };
-  }
-  function read(): { state: StateFile; hash: string | null } {
-    let bytes: Buffer | null = null;
-    try { bytes = readRawFile(options.filePath); } catch { bytes = null; }
-    if (!bytes) return empty();
-    try {
-      const parsed = JSON.parse(bytes.toString('utf8')) as Partial<StateFile>;
-      if (parsed.version !== 1 || !Number.isInteger(parsed.revision) || !Array.isArray(parsed.records) || !parsed.records.every(validRecord)) {
-        throw new Error('invalid shape');
-      }
-      return { state: parsed as StateFile, hash: hashBytes(bytes) };
-    } catch {
-      // Keep the evidence, start empty: a damaged ledger must not block boot.
-      try { renameSync(options.filePath, join(dirname(options.filePath), `squad-proposals.corrupt-${now()}.json`)); } catch { /* best effort */ }
-      return empty();
-    }
-  }
-  /** Drop the oldest finished records beyond the cap; pending ones are never evicted. */
-  function prune(state: StateFile): void {
-    let excess = state.records.length - maxRecords;
-    if (excess <= 0) return;
-    const doomed = new Set(
-      state.records.filter((r) => r.state !== 'pending').sort((a, b) => a.createdAt - b.createdAt).slice(0, excess).map((r) => r.id)
-    );
-    state.records = state.records.filter((r) => !doomed.has(r.id));
-  }
-  async function persist(state: StateFile, expectedHash: string | null): Promise<void> {
-    state.revision += 1;
-    await mkdir(dirname(options.filePath), { recursive: true });
-    atomicDurableWrite(options.filePath, Buffer.from(JSON.stringify(state)), { expectedHash });
-  }
+  const read = () => readLedger(options.filePath, now);
 
   return {
     async create(record: SquadProposalRecord): Promise<SquadProposalRecord> {
       return queue.run(async () => {
+        assertValidRecord(record);
         const snapshot = read();
         snapshot.state.records.push(clone(record));
-        prune(snapshot.state);
-        await persist(snapshot.state, snapshot.hash);
+        prune(snapshot.state, maxRecords);
+        await persist(options.filePath, snapshot);
         return clone(record);
       });
     },
@@ -99,8 +98,9 @@ export function createSquadProposalStore(options: SquadProposalStoreOptions) {
         mutate(next);
         next.id = id;
         next.updatedAt = now();
+        assertValidRecord(next);
         snapshot.state.records[index] = next;
-        await persist(snapshot.state, snapshot.hash);
+        await persist(options.filePath, snapshot);
         return clone(next);
       });
     },
@@ -116,7 +116,7 @@ export function createSquadProposalStore(options: SquadProposalStoreOptions) {
             expired.push(clone(record));
           }
         }
-        if (expired.length) await persist(snapshot.state, snapshot.hash);
+        if (expired.length) await persist(options.filePath, snapshot);
         return expired;
       });
     }

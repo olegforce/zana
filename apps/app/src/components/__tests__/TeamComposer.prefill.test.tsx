@@ -274,6 +274,14 @@ describe('TeamComposer prefill', () => {
     }
   });
 
+  it('keeps a planning mode the user picked when another Squad is then picked', () => {
+    render(<TeamComposer />);
+    fireEvent.click(screen.getByTestId('team-coordination-mode:freeform'));
+    fireEvent.click(screen.getByTestId('team-picker:t2'));
+    expect(screen.getByTestId('team-picker').getAttribute('data-value')).toBe('t2');
+    expect(screen.getByTestId('team-coordination-mode').getAttribute('data-value')).toBe('freeform');
+  });
+
   it('keeps a reviewed proposal\'s planning mode when another team is picked', () => {
     render(<TeamComposer prefill={{ ...prefill, teamId: 't1', coordinationMode: 'freeform' }} />);
     fireEvent.click(screen.getByTestId('team-picker:t2'));
