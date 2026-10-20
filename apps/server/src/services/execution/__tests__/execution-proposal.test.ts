@@ -238,18 +238,42 @@ describe('blocker report marker', () => {
     expect(await store.listUnreportedBlockers()).toEqual([]);
   }));
 
-  it('rejects an unknown run, blocker or missing target, and keeps at most 100 ids', async () => fixture(async (filePath) => {
+  it('rejects an unknown run or blocker', async () => fixture(async (filePath) => {
     const { store } = await blockedRun(filePath);
     await expect(store.markBlockerReported('missing', 'blocker')).rejects.toThrow('execution not found');
     await expect(store.markBlockerReported('execution-1', 'nope')).rejects.toThrow('execution blocker not found');
+  }));
+
+  it('keeps at most 100 ids, and prunes resolved or gone ones first so an open blocker is never evicted', async () => fixture(async (filePath) => {
+    await blockedRun(filePath);
     const durable = JSON.parse(await readFile(filePath, 'utf8'));
-    durable.records[0].reportedBlockerIds = Array.from({ length: 100 }, (_, i) => `old-${i}`);
+    const record = durable.records[0];
+    const template = record.blockers[0];
+    const resolved = Array.from({ length: 60 }, (_, i) => ({ ...template, id: `res-${i}`, resolved: true }));
+    record.blockers = [{ ...template, id: 'old-open' }, ...resolved, template];
+    // 100 ids, the oldest being a still-open blocker: a plain "newest 100" cap would evict it.
+    record.reportedBlockerIds = ['old-open', ...resolved.map((b) => b.id), ...Array.from({ length: 39 }, (_, i) => `gone-${i}`)];
+    expect(record.reportedBlockerIds).toHaveLength(100);
     await writeFile(filePath, JSON.stringify(durable));
     const full = createExecutionStore({ filePath });
     const marked = await full.markBlockerReported('execution-1', 'blocker');
+    expect(marked.reportedBlockerIds).toEqual(['old-open', 'blocker']);
+    // old-open stays reported, so it is not replayed after a restart; only a never-reported one would be.
+    expect((await full.listUnreportedBlockers()).map((r) => r.id)).toEqual([]);
+  }));
+
+  it('caps the ids at 100 even when every one is an open blocker', async () => fixture(async (filePath) => {
+    await blockedRun(filePath);
+    const durable = JSON.parse(await readFile(filePath, 'utf8'));
+    const record = durable.records[0];
+    const template = record.blockers[0];
+    const open = Array.from({ length: 100 }, (_, i) => ({ ...template, id: `open-${i}` }));
+    record.blockers = [...open.slice(0, 99), template];
+    record.reportedBlockerIds = open.slice(0, 99).map((b) => b.id);
+    await writeFile(filePath, JSON.stringify(durable));
+    const marked = await createExecutionStore({ filePath }).markBlockerReported('execution-1', 'blocker');
     expect(marked.reportedBlockerIds).toHaveLength(100);
     expect(marked.reportedBlockerIds?.at(-1)).toBe('blocker');
-    expect(marked.reportedBlockerIds?.[0]).toBe('old-1');
   }));
 
   it('refuses a run with no report target', async () => fixture(async (filePath) => {
@@ -402,20 +426,29 @@ describe('owner answers and report-back follow-through', () => {
   }));
 
   it('retries a versionless owner answer on a concurrent write, at most five times', async () => fixture(async (filePath) => {
-    const { svc } = await blocked(filePath);
-    const enqueue = vi.spyOn(svc as unknown as { enqueueOwnedBlocker: (...args: unknown[]) => Promise<unknown> }, 'enqueueOwnedBlocker');
-    enqueue.mockResolvedValueOnce({ ok: false, code: 'CONFLICT', message: 'stale' });
+    const { store, svc } = await blocked(filePath);
+    // A real concurrent write: another writer bumps stateVersion just before the answer is enqueued.
+    const enqueue = store.enqueueBlockerDelivery.bind(store);
+    let calls = 0;
+    let conflicts = 0;
+    store.enqueueBlockerDelivery = (async (...args: Parameters<typeof enqueue>) => {
+      calls += 1;
+      if (conflicts > 0) {
+        conflicts -= 1;
+        await store.event(args[0], (await store.get(args[0]))!.stateVersion, 'info', 'concurrent write');
+      }
+      return enqueue(...args);
+    }) as typeof store.enqueueBlockerDelivery;
+    conflicts = 1;
     await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', undefined, 'blocker', 'c1', 'Atlas')).resolves.toMatchObject({ ok: true });
-    expect(enqueue).toHaveBeenCalledTimes(2);
-    enqueue.mockReset();
-    enqueue.mockResolvedValue({ ok: false, code: 'CONFLICT', message: 'stale' });
+    expect(calls).toBe(2);
+    calls = 0; conflicts = 99;
     await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', undefined, 'blocker', 'c2', 'Atlas')).resolves.toMatchObject({ ok: false, code: 'CONFLICT' });
-    expect(enqueue).toHaveBeenCalledTimes(5);
-    enqueue.mockReset();
-    enqueue.mockResolvedValue({ ok: false, code: 'CONFLICT', message: 'stale' });
-    await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', 3, 'blocker', 'c3', 'Atlas')).resolves.toMatchObject({ ok: false, code: 'CONFLICT' });
-    expect(enqueue).toHaveBeenCalledTimes(1);
-    enqueue.mockRestore();
+    expect(calls).toBe(5);
+    calls = 0; conflicts = 99;
+    const current = (await store.get('execution-1'))!.stateVersion;
+    await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', current, 'blocker', 'c3', 'Atlas')).resolves.toMatchObject({ ok: false, code: 'CONFLICT' });
+    expect(calls).toBe(1);
   }));
 
   it('does not re-offer blockers when resume_binding passes no report kind', async () => fixture(async (filePath) => {
