@@ -34,9 +34,11 @@ export function boundarySpecs(paths) {
     if (/desktop-browser/.test(path)) add('desktop-browser-broker');
     if (/mobile-relay|mobile\/|mobile-/.test(path)) add('mobile-shell', 'mobile-relay-upload');
     if (/services\/scheduler\/|components\/scheduler\/|views\/scheduler\/|schedule-health/.test(path)) add('scheduler-self-healing', 'scheduler-overview', 'scheduler-detail', 'scheduler-cron');
-    if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
+    if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection|execution-mcp-tool)/.test(path)) add('squad-proposal-flow', 'squad-direct-report', 'job-team-launch-ui');
     // The shared source policy and registry feed proposals and manual launches only (#385).
     if (/services\/execution\/(source-policy|source-registry)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
+    // Owner report-back: the service, the MCP server that carries execution.start, and the notifier/report text.
+    if (/services\/execution\/service\.ts|services\/mcp\/mcp-server|squad-proposals\/(notifier|report)/.test(path)) add('squad-direct-report');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }
   return [...specs].sort();
