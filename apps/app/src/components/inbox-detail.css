@@ -3,7 +3,7 @@
 
 .inbox-detail {
   max-width: 760px;
-  padding: 0 28px 48px;
+  padding: 0 28px;
 }
 
 .inbox-detail .inbox-detail-header {
@@ -159,7 +159,24 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  margin-top: 22px;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--bg-base);
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  margin: 22px -28px 0;
+  padding: 10px 28px 12px;
+}
+
+.inbox-detail-dock::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--bg-base));
+  pointer-events: none;
 }
 
 .inbox-detail-dock .inbox-reply,

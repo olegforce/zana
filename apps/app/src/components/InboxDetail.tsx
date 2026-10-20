@@ -1,5 +1,5 @@
 import { product } from '../lib/product-client.js';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Bookmark, BookmarkCheck, BotMessageSquare, Code2, Copy, CornerDownLeft, Download, ExternalLink, FileText, FolderOpen, Send, Sparkles, Star, Trash2 } from 'lucide-react';
 import './inbox-detail.css';
@@ -895,6 +895,15 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
         </div>
       )}
 
+      {relatedSuggestions.length > 0 && (
+        <RelatedNextSteps
+          suggestions={relatedSuggestions}
+          onOpen={() => {
+            setNav('suggestions');
+          }}
+        />
+      )}
+
       <div className="inbox-detail-dock">
         <div className="inbox-detail-footer">
           {canOpen ? (
@@ -925,15 +934,6 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
         </div>
          {(ownershipLoading || ownershipError || hostAction || questionFirst) ? null : answerSurface}
       </div>
-
-      {relatedSuggestions.length > 0 && (
-        <RelatedNextSteps
-          suggestions={relatedSuggestions}
-          onOpen={() => {
-            setNav('suggestions');
-          }}
-        />
-      )}
 
       {launcherOpen && aliveProject && (
         <AgentLauncher
@@ -1181,6 +1181,8 @@ function RelatedNextSteps({
  * to a confirmation line; the user can reply again via the "reply again" link
  * if the agent asks a follow-up on the same session.
  */
+const REPLY_MIN_HEIGHT = 72;
+
 function ReplyBox({
   entry,
   sessionId,
@@ -1210,6 +1212,19 @@ function ReplyBox({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [reopened, setReopened] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Grow with the draft so a long reply stays visible inside the pinned bar.
+  // Reset before measuring so deleting lines shrinks it again.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const max = Math.max(REPLY_MIN_HEIGHT, Math.round(window.innerHeight * 0.4));
+    input.style.height = '0px';
+    const next = Math.min(Math.max(input.scrollHeight, REPLY_MIN_HEIGHT), max);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > max ? 'auto' : 'hidden';
+  }, [text]);
 
   const dead = !sessionId && !!onAnswerDeadSession;
   const busy = sending || deadSessionBusy;
@@ -1263,6 +1278,7 @@ function ReplyBox({
   return (
     <div className="inbox-reply">
       <textarea
+        ref={inputRef}
         className="inbox-reply-input"
         autoFocus={autoFocus}
         value={text}
