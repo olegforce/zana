@@ -201,12 +201,12 @@ const OWNER_RESPOND_SCHEMA = {
   type: 'object',
   properties: {
     executionId: { type: 'string' },
-    expectedStateVersion: { type: 'number', description: 'The stateVersion from execution_snapshot.' },
+    expectedStateVersion: { type: 'number', description: 'Optional: the stateVersion from execution_snapshot. Omit it to answer against the latest state.' },
     blockerId: { type: 'string', description: 'The human blocker to answer, as named in its [Squad report].' },
     clientRequestId: { type: 'string', description: 'Idempotency key; generated when omitted.' },
     message: { type: 'string' }
   },
-  required: ['executionId', 'expectedStateVersion', 'blockerId', 'message']
+  required: ['executionId', 'blockerId', 'message']
 };
 
 const OWNER_SNAPSHOT_SCHEMA = {

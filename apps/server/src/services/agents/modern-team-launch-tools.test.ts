@@ -86,6 +86,22 @@ describe('createModernTeamLaunchSource', () => {
     expect(calls[0].input).toEqual({ requestPath: '/tmp/req.json' });
   });
 
+  it('execution_respond leaves expectedStateVersion optional and forwards a call without it', async () => {
+    const calls: CallMcpToolArgs[] = [];
+    const src = source(
+      { mcpBaseUrl: 'http://127.0.0.1:9', teamLaunchEnabled: false, teamJobLaunchEnabled: true },
+      async (args) => { calls.push(args); return { ok: true, text: '{"ok":true}' }; }
+    );
+    const respond = tool(src, 'execution_respond');
+    const schema = respond.inputSchema as { properties: Record<string, unknown>; required: string[] };
+    expect(schema.properties).toHaveProperty('expectedStateVersion');
+    expect(schema.required).toEqual(['executionId', 'blockerId', 'message']);
+    const input = { executionId: 'execution-1', blockerId: 'b1', message: 'Atlas' };
+    await expect(respond.execute(input, ctx())).resolves.toBe('{"ok":true}');
+    expect(calls[0]).toMatchObject({ name: 'execution.respond', input });
+    expect(calls[0].input).not.toHaveProperty('expectedStateVersion');
+  });
+
   it('does not call the route when job launch is disabled', async () => {
     const spy = vi.fn(async () => ({ ok: true, text: '{}' }));
     const src = source({ mcpBaseUrl: 'http://127.0.0.1:9', teamLaunchEnabled: true }, spy);
