@@ -266,3 +266,27 @@ button.inbox-reply-again:hover {
   text-decoration: none;
   background: var(--bg-hover);
 }
+
+.inbox-view-detail:focus { outline: none; }
+
+.inbox-reply-composer { gap: 8px; }
+.inbox-reply-composer-hint {
+  margin-left: auto;
+  font-family: inherit;
+}
+
+.inbox-quote-selection {
+  position: fixed;
+  z-index: 20;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+}
+.inbox-quote-selection:hover { border-color: var(--border-strong); }
