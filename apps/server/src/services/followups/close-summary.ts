@@ -24,7 +24,7 @@
  * rather than whatever a possibly-disabled add-on happened to cache.
  */
 
-import type { LlmRunResult } from '@zana-ai/zcc-domain/product';
+import type { CloseFollowupFailure, LlmRunResult } from '@zana-ai/zcc-domain/product';
 import type { TranscriptRef } from './idle-triage.js';
 
 /** What the summarizer needs to know about a session to summarize it. */
@@ -94,7 +94,9 @@ export interface CloseSummaryDeps {
   closeTerminal?: (sessionId: string) => boolean;
   /**
    * File a durable follow-up for an agent being closed, returning the new
-   * follow-up's id (or null when nothing was created). Wired from the host's
+   * follow-up's id. Returning null means the create FAILED and the implementation has
+   * already logged why (the desktop host does), so the service records `write-failed`
+   * without logging it a second time; a throw is logged by the service. Wired from the host's
    * `FollowUpManager`; the origin/session attribution is host-stamped by the
    * caller (Rule 1), never agent free-text. Required only by
    * {@link CloseSummaryService.summarizeAndFollowUp}; absent elsewhere.
@@ -110,11 +112,7 @@ export interface CloseSummaryDeps {
 }
 
 /** Why a close-summary step produced nothing; names mirror {@link CloseSummaryService.summarizeOne}. */
-export interface CloseSummaryFailure {
-  reason: 'empty' | 'summary-failed' | 'unparseable' | 'write-failed';
-  /** The LLM or write error text, trimmed to {@link FAILURE_DETAIL_MAX}. */
-  detail?: string;
-}
+export type CloseSummaryFailure = CloseFollowupFailure;
 
 const FAILURE_DETAIL_MAX = 200;
 
@@ -261,10 +259,15 @@ export class CloseSummaryService {
    * Record one failure and log it once. `empty` (an agent with no transcript yet) is normal and
    * only reported to the caller, not logged as an error.
    */
-  private fail(failures: CloseSummaryFailure[], reason: CloseSummaryFailure['reason'], err?: unknown): void {
+  private fail(
+    failures: CloseSummaryFailure[],
+    reason: CloseSummaryFailure['reason'],
+    err?: unknown,
+    alreadyLogged = false
+  ): void {
     const detail = failureDetail(err);
     failures.push(detail ? { reason, detail } : { reason });
-    if (reason !== 'empty') this.deps.log?.('close-summary', detail ? `${reason}: ${detail}` : reason);
+    if (reason !== 'empty' && !alreadyLogged) this.deps.log?.('close-summary', detail ? `${reason}: ${detail}` : reason);
   }
 
   /**
@@ -286,10 +289,14 @@ export class CloseSummaryService {
       .map((id) => ({ id, session: this.deps.getSession(id) }))
       .filter(
         (e): e is { id: string; session: CloseSummarySessionInfo } =>
-          e.session !== null &&
-          e.session.projectId === projectId &&
-          this.deps.hasTranscript(e.session.profile)
-      );
+          e.session !== null && e.session.projectId === projectId
+      )
+      .filter((e) => {
+        // A valid project session without a readable transcript is reported, not silently dropped.
+        if (this.deps.hasTranscript(e.session.profile)) return true;
+        this.fail(failures, 'empty');
+        return false;
+      });
 
     const resolved = await mapWithConcurrency(
       eligible,
@@ -427,7 +434,7 @@ export class CloseSummaryService {
               `\n\n_Filed when the agent was closed from the Agents view._`
           });
           if (created != null) followedUp++;
-          else this.fail(failures, 'write-failed', 'the follow-up was not created');
+          else this.fail(failures, 'write-failed', 'the follow-up was not created', true);
         } catch (err) {
           /* follow-up is best-effort */
           this.fail(failures, 'write-failed', err);

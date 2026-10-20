@@ -74,7 +74,27 @@ describe('close summary failures', () => {
     const { svc, log } = make({ createFollowUp: async () => null });
     const res = await svc.summarizeAndFollowUp('p', ['s1']);
     expect(res).toMatchObject({ summarized: 1, followedUp: 0, failures: [{ reason: 'write-failed' }] });
+    // The host already logged its own error before returning null: no second entry here.
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('logs a thrown follow-up error exactly once', async () => {
+    const { svc, log } = make({ createFollowUp: async () => { throw new Error('db locked'); } });
+    await svc.summarizeAndFollowUp('p', ['s1']);
     expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith('close-summary', 'write-failed: db locked');
+  });
+
+  it('reports empty for a project session without a transcript, and discards unknown or cross-project ones', async () => {
+    const sessions: Record<string, { projectId: string; profile: string; cwd: string; title: string } | null> = {
+      mine: { projectId: 'p', profile: 'shell', cwd: '/x', title: 'A' },
+      other: { projectId: 'q', profile: 'shell', cwd: '/x', title: 'B' },
+      gone: null
+    };
+    const { svc, log } = make({ getSession: (id: string) => sessions[id] ?? null, hasTranscript: () => false });
+    const res = await svc.summarizeAndFollowUp('p', ['mine', 'other', 'gone']);
+    expect(res).toEqual({ summarized: 0, followedUp: 0, failures: [{ reason: 'empty' }] });
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('reports a follow-up write failure', async () => {

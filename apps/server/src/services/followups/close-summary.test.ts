@@ -479,7 +479,7 @@ describe('CloseSummaryService.summarizeAndFollowUp', () => {
     expect(deps.createFollowUp).not.toHaveBeenCalled();
   });
 
-  it('confines to the project — foreign/stale/non-claude ids are dropped', async () => {
+  it('confines to the project — foreign/stale ids are dropped; a non-claude project session is reported empty', async () => {
     const deps = makeDeps({
       getSession: (id) =>
         id === 'foreign'
@@ -492,7 +492,7 @@ describe('CloseSummaryService.summarizeAndFollowUp', () => {
     });
     const svc = new CloseSummaryService(deps);
     const res = await svc.summarizeAndFollowUp('p1', ['mine', 'foreign', 'gone', 'shell']);
-    expect(res).toEqual({ summarized: 1, followedUp: 1 });
+    expect(res).toEqual({ summarized: 1, followedUp: 1, failures: [{ reason: 'empty' }] });
     expect(deps.createFollowUp).toHaveBeenCalledTimes(1);
   });
 

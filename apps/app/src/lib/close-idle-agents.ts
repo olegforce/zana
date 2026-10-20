@@ -1,14 +1,11 @@
-import type { AgentState } from '@zana-ai/zcc-domain/product';
+import type { AgentState, CloseFollowupFailure } from '@zana-ai/zcc-domain/product';
+
+export type { CloseFollowupFailure };
 
 export type CloseIdleAgentsResult = {
   closed: number;
   summarized: number;
   followedUp: number;
-};
-
-export type CloseFollowupFailure = {
-  reason: 'empty' | 'summary-failed' | 'unparseable' | 'write-failed';
-  detail?: string;
 };
 
 /**
@@ -25,6 +22,8 @@ export function closedToastMessage(
   if (summarized > 0) bits.push(`${summarized} summarized to inbox`);
   if (followedUp > 0) {
     bits.push(`${followedUp} follow-up${followedUp === 1 ? '' : 's'} filed`);
+    // The inbox summary write failed but the follow-up still went in: say the summary is lost.
+    if (summarized === 0 && failures?.some((f) => f.reason === 'write-failed')) bits.push('could not save the summary');
   } else if (summarized > 0) {
     // A failed follow-up write must not read as "nothing to file".
     if (failures?.some((f) => f.reason === 'write-failed')) bits.push('could not file the follow-up');

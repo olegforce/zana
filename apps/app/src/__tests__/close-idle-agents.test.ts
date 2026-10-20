@@ -246,6 +246,10 @@ describe('closedToastMessage', () => {
 
   it('says the follow-up could not be filed when its write failed after a summary', () => {
     expect(closedToastMessage(1, 1, 0, [{ reason: 'write-failed', detail: 'disk' }])).toBe('Closed 1 agent · 1 summarized to inbox · could not file the follow-up.');
+    // Inbox write failed but the follow-up was filed: the lost summary is mentioned.
+    expect(closedToastMessage(1, 0, 1, [{ reason: 'write-failed' }])).toBe('Closed 1 agent · 1 follow-up filed · could not save the summary.');
+    expect(closedToastMessage(1, 0, 1)).toBe('Closed 1 agent · 1 follow-up filed.');
+    expect(closedToastMessage(1, 1, 1, [{ reason: 'write-failed' }])).toBe('Closed 1 agent · 1 summarized to inbox · 1 follow-up filed.');
     expect(closedToastMessage(1, 1, 0, [])).toBe('Closed 1 agent · 1 summarized to inbox · no unfinished work found.');
   });
 
