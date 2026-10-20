@@ -229,10 +229,14 @@ export function runSpawnLifecycle<T>(
   return lifecycle?.withSpawnLock ? lifecycle.withSpawnLock(spawn) : spawn();
 }
 
+/** Ids of launches still running, so an overlapping launch cannot trade a replayed id for a new one. */
+const inFlightSourceIds = new Set<string>();
+
 /**
  * A failed launch may already have consumed the attached source capabilities, so the
  * renderer would be left with dead chips. Hand back freshly re-issued ones with every
  * failure; a throwing launch with attachments becomes a LAUNCH_FAILED response.
+ * A second launch that reuses ids of one still running gets its failure back unchanged.
  */
 export async function withRenewedSources(
   launch: () => Promise<TeamJobLaunchResponse>,
@@ -241,25 +245,35 @@ export async function withRenewedSources(
   logError: (context: string, error: unknown) => void,
   discardRetired?: (ids: string[]) => void
 ): Promise<TeamJobLaunchResponse> {
-  let failure: Exclude<TeamJobLaunchResponse, { ok: true }>;
+  const overlapping = capabilityIds.some((id) => inFlightSourceIds.has(id));
+  const owned = overlapping ? [] : [...new Set(capabilityIds)];
+  for (const id of owned) inFlightSourceIds.add(id);
   try {
-    const result = await launch();
-    if (result.ok) {
-      // The files were consumed for good; forget them so a replayed id cannot be exchanged for a new one.
-      if (capabilityIds.length) discardRetired?.([...capabilityIds]);
-      return result;
+    let failure: Exclude<TeamJobLaunchResponse, { ok: true }>;
+    try {
+      const result = await launch();
+      if (result.ok) {
+        // The files were consumed for good; forget them so a replayed id cannot be exchanged for a new one.
+        if (capabilityIds.length && !overlapping) {
+          try { discardRetired?.([...capabilityIds]); } catch (error) { logError('team-job-discard-sources', error); }
+        }
+        return result;
+      }
+      if (!capabilityIds.length) return result;
+      failure = result;
+    } catch (error) {
+      if (!capabilityIds.length) throw error;
+      logError('team-job-launch', error);
+      failure = { ok: false, code: 'LAUNCH_FAILED', message: error instanceof Error ? error.message : String(error) };
     }
-    if (!capabilityIds.length) return result;
-    failure = result;
-  } catch (error) {
-    if (!capabilityIds.length) throw error;
-    logError('team-job-launch', error);
-    failure = { ok: false, code: 'LAUNCH_FAILED', message: error instanceof Error ? error.message : String(error) };
-  }
-  try {
-    return { ...failure, sources: await reissue([...capabilityIds]) };
-  } catch (error) {
-    logError('team-job-renew-sources', error);
-    return failure;
+    if (overlapping) return failure;
+    try {
+      return { ...failure, sources: await reissue([...capabilityIds]) };
+    } catch (error) {
+      logError('team-job-renew-sources', error);
+      return failure;
+    }
+  } finally {
+    for (const id of owned) inFlightSourceIds.delete(id);
   }
 }

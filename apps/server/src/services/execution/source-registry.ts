@@ -49,7 +49,6 @@ interface Capability {
   issuedAt: number;
   expiresAt: number;
   used: boolean;
-  rootRealPath?: string;
 }
 
 interface RetiredCapability {
@@ -62,7 +61,6 @@ interface RetiredCapability {
   name: string;
   digest: string;
   retiredAt: number;
-  rootRealPath?: string;
 }
 
 export type ExecutionSourceDropReason = 'moved' | 'unreadable' | 'too-large' | 'unknown';
@@ -296,8 +294,7 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
     retired.set(capability.id, {
       id: capability.id, windowId: capability.windowId, projectId: capability.projectId, path: capability.path,
       exactPath: capability.exactPath, representations: [...capability.representations], name: capability.name,
-      digest: capability.digest, retiredAt: now(),
-      ...(capability.rootRealPath !== undefined ? { rootRealPath: capability.rootRealPath } : {})
+      digest: capability.digest, retiredAt: now()
     });
     trimRetired();
   }
@@ -457,8 +454,7 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
       const issuedAt = now();
       const capability: Capability = {
         id: id(), windowId: input.windowId, projectId: input.projectId, path, exactPath, representations, name: basename(path),
-        byteSize: bytes.byteLength, digest: digest(bytes), issuedAt, expiresAt: issuedAt + ttlMs, used: false,
-        ...(realRoot !== undefined ? { rootRealPath: realRoot } : {})
+        byteSize: bytes.byteLength, digest: digest(bytes), issuedAt, expiresAt: issuedAt + ttlMs, used: false
       };
       capabilities.set(capability.id, capability);
       createdIds.push(capability.id);
@@ -522,8 +518,7 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
         const capability: Capability = {
           id: id(), windowId: input.windowId, projectId: input.projectId, path: record.path, exactPath: record.exactPath,
           representations: [...record.representations], name: record.name, byteSize: bytes.byteLength, digest: digest(bytes),
-          issuedAt, expiresAt: issuedAt + ttlMs, used: false,
-          ...(record.rootRealPath !== undefined ? { rootRealPath: record.rootRealPath } : {})
+          issuedAt, expiresAt: issuedAt + ttlMs, used: false
         };
         capabilities.set(capability.id, capability);
         retired.delete(previousId);

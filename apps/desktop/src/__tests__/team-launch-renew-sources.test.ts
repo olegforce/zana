@@ -85,4 +85,29 @@ describe('withRenewedSources', () => {
     expect(passed).toEqual(ids);
     expect(passed).not.toBe(ids);
   });
+
+  it('does not re-issue ids while another launch with the same ids is still running', async () => {
+    const s = setup(); let finish!: (r: TeamJobLaunchResponse) => void;
+    const first = run(() => new Promise<TeamJobLaunchResponse>((resolve) => { finish = resolve; }), ['x'], s);
+    const second = await run(async () => ({ ok: false, code: 'REPLAYED_CAPABILITY', message: 'used' }), ['x'], s);
+    expect(second).toEqual({ ok: false, code: 'REPLAYED_CAPABILITY', message: 'used' });
+    expect(s.reissue).not.toHaveBeenCalled();
+    finish({ ok: false, code: 'X', message: 'm' });
+    expect(await first).toMatchObject({ sources });
+    // released: the same ids may be renewed again afterwards
+    expect(await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['x'], s)).toMatchObject({ sources });
+  });
+
+  it('releases the in-flight ids when the launch throws', async () => {
+    const s = setup();
+    await run(async () => { throw new Error('boom'); }, ['y'], s);
+    expect(await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['y'], s)).toMatchObject({ sources });
+  });
+
+  it('keeps a successful launch successful when discarding throws', async () => {
+    const s = setup(); const ok: TeamJobLaunchResponse = { ok: true, value: { executionId: 'e', state: 'RUNNING' } };
+    const error = new Error('disk');
+    expect(await withRenewedSources(async () => ok, ['z'], s.reissue, s.logError, () => { throw error; })).toBe(ok);
+    expect(s.logError).toHaveBeenCalledWith('team-job-discard-sources', error);
+  });
 });
