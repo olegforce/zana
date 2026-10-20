@@ -37,6 +37,7 @@ export function boundarySpecs(paths) {
     if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
     // Close with follow-up crosses the main/renderer seam: the summary, its failure reasons and the toast (#352).
     if (/followups\/close-summary|lib\/close-idle-agents|claude-cli-provider|main-claude-binary/.test(path)) add('close-with-follow-up-needs-you');
+    if (/execution-source-picker|ipc\/execution-board|services\/execution\/source-registry|team-launch-support|TeamComposer|team-composer-sources/.test(path)) add('squad-source-retry');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }
   return [...specs].sort();
