@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { registerExecutionTools } from '../execution-mcp-tool.js';
+import { outcomeAck, registerExecutionTools } from '../execution-mcp-tool.js';
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ type: string; text?: string }> }>;
 
@@ -110,6 +110,32 @@ describe('Squad outcome tool acknowledgements', () => {
   it('passes a non-record value through unchanged', async () => {
     const { tools } = setup({ note: 'plain' });
     expect(JSON.parse(text(await tools.get('execution.work.release')!(base)))).toEqual({ note: 'plain' });
+  });
+
+  it('counts nothing for a record without work units', () => {
+    expect(outcomeAck({ id: 'execution-1', state: 'STARTING' } as never, 'unit-0')).toEqual({
+      ok: true, executionId: 'execution-1', executionState: 'STARTING', workUnitId: 'unit-0', status: null, claimGeneration: null,
+      remaining: { claimed: 0, pending: 0, blocked: 0 }
+    });
+  });
+
+  it('passes the claim fence and the blocker audience through to the service', async () => {
+    const { service, tools } = setup();
+    const fence = { claimId: 'claim-1', claimGeneration: 3 };
+    await tools.get('execution.work.complete')!({ ...base, ...fence, result: 'done' });
+    expect(service.completeWork).toHaveBeenCalledWith(expect.anything(), 'unit-0', 'done', fence, true, undefined);
+    await tools.get('execution.work.block')!({ ...base, ...fence, blockerId: 'b1', question: 'Which?', audience: 'coordinator' });
+    expect(service.blockWork).toHaveBeenCalledWith(expect.anything(), 'unit-0', { id: 'b1', question: 'Which?', options: undefined, audience: 'coordinator' }, fence, true);
+    await tools.get('execution.work.release')!({ ...base, ...fence });
+    expect(service.releaseWork).toHaveBeenCalledWith(expect.anything(), 'unit-0', fence, true);
+  });
+
+  it('drops the structuredResult hint when looking up the unit fails', async () => {
+    const { service, tools } = setup();
+    service.workUnitDeclaresOutput.mockRejectedValueOnce(new Error('store unavailable'));
+    const reply = await tools.get('execution.work.complete')!({ ...base, result: 'x'.repeat(2049) });
+    expect(reply.isError).toBe(true);
+    expect(text(reply)).not.toContain('structuredResult');
   });
 
   it('keeps error replies unchanged', async () => {
