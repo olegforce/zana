@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TeamJobLaunchResponse, TeamJobRenewedSources } from '@zana-ai/zcc-domain/product';
-import { withRenewedSources } from '../team-launch-support.js';
+import { scopedSourceRenewal, withRenewedSources } from '../team-launch-support.js';
 
 const sources: TeamJobRenewedSources = {
   renewed: [{ previousId: 'a', source: { id: 'b', name: 'n.md', byteSize: 1, expiresAt: 5 }, changed: false }],
@@ -9,6 +9,17 @@ const sources: TeamJobRenewedSources = {
 const setup = (reissue = vi.fn().mockResolvedValue(sources)) => ({ reissue, logError: vi.fn() });
 const run = (launch: () => Promise<TeamJobLaunchResponse>, ids: string[], s = setup()) =>
   withRenewedSources(launch, ids, s.reissue, s.logError);
+
+describe('scopedSourceRenewal', () => {
+  it('binds re-issue and discard to one window and Project', async () => {
+    const registry = { reissue: vi.fn().mockResolvedValue(sources), discardRetired: vi.fn() };
+    const scoped = scopedSourceRenewal(registry, 7, 'p1');
+    expect(await scoped.reissue(['a'])).toBe(sources);
+    expect(registry.reissue).toHaveBeenCalledExactlyOnceWith({ windowId: 7, projectId: 'p1', capabilityIds: ['a'] });
+    scoped.discardRetired(['a']);
+    expect(registry.discardRetired).toHaveBeenCalledExactlyOnceWith({ windowId: 7, projectId: 'p1', capabilityIds: ['a'] });
+  });
+});
 
 describe('withRenewedSources', () => {
   it('passes a success through without re-issuing', async () => {

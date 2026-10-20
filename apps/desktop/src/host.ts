@@ -58,7 +58,7 @@ import { jobCoordinatorPrompt } from './team-coordinator-prompt.js';
 import {
   createDesktopNativeRecovery, gateInvalidProvidedPlan, recoverSquadStateAtBoot, runSpawnLifecycle, slotRecoveryLaunch,
   sweepUnretainedSquadWorktrees, teamAdmissionRequirements, teamJobFailureResponse, withProposalLaunch, findProposalExecution, type ProposalLaunchDeps,
-  withRenewedSources
+  withRenewedSources, scopedSourceRenewal
 } from './team-launch-support.js';
 import { openExecutionStorage } from './execution-storage.js';
 import { createPlanCorrectionHandoff, createPlanCorrectionHost } from './plan-correction/host.js';
@@ -6391,6 +6391,7 @@ export async function startTeamJobFromUi(
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Proposed Squad launches must be opened from the desktop app window.' };
   }
   const proposalId = proposed ? (typeof input.proposalId === 'string' ? input.proposalId.trim() : '') : undefined;
+  const renewal = scopedSourceRenewal(executionSources, sourceContext?.windowId, projectId);
   return withRenewedSources(() => withProposalLaunch(proposalLaunchDeps, proposalId, projectId, async (proposal) => {
     // Mint identity before snapshotting: source content lands in a dedicated,
     // immutable content store and execution ledger carries only bounded metadata.
@@ -6416,8 +6417,7 @@ export async function startTeamJobFromUi(
       return teamJobFailureResponse(result);
     }
     return { ok: true, value: { executionId: result.value.id, state: result.value.state } };
-  }), sourceCapabilityIds, (ids) => executionSources.reissue({ windowId: sourceContext!.windowId, projectId, capabilityIds: ids }), logMainError,
-  (ids) => executionSources.discardRetired({ windowId: sourceContext!.windowId, projectId, capabilityIds: ids }));
+  }), sourceCapabilityIds, renewal.reissue, logMainError, renewal.discardRetired);
 }
 
 const proposalLaunchDeps: ProposalLaunchDeps<NonNullable<ExecutionRecord['proposal']>> = {

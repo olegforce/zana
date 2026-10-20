@@ -229,6 +229,21 @@ export function runSpawnLifecycle<T>(
   return lifecycle?.withSpawnLock ? lifecycle.withSpawnLock(spawn) : spawn();
 }
 
+type ScopedSourceInput = { windowId: number; projectId: string; capabilityIds: string[] };
+
+/** Bind the registry's re-issue and discard to one window and Project for `withRenewedSources`. */
+export function scopedSourceRenewal(
+  registry: { reissue(input: ScopedSourceInput): Promise<TeamJobRenewedSources>; discardRetired(input: ScopedSourceInput): void },
+  windowId: number | undefined,
+  projectId: string
+): { reissue: (ids: string[]) => Promise<TeamJobRenewedSources>; discardRetired: (ids: string[]) => void } {
+  // Ids reach the helper only from a trusted window (startTeamJobFromUi checks this first).
+  return {
+    reissue: (ids) => registry.reissue({ windowId: windowId!, projectId, capabilityIds: ids }),
+    discardRetired: (ids) => registry.discardRetired({ windowId: windowId!, projectId, capabilityIds: ids })
+  };
+}
+
 /** Ids of launches still running, so an overlapping launch cannot trade a replayed id for a new one. */
 const inFlightSourceIds = new Set<string>();
 /** In-flight ids another launch also submitted; whichever launch consumed them, neither may renew them. */
