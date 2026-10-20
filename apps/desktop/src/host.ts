@@ -333,6 +333,7 @@ import { Overseer, type OverseerToolEvent } from '@zana-ai/zcc-server/services/f
 import { OverseerAuditRing } from '@zana-ai/zcc-server/services/followups/overseer-audit';
 import { ContentScreen, type ContentScreenEvent, buildWarningText } from './window/content-screen.js';
 import { HeartbeatService } from '@zana-ai/zcc-server/services/followups/heartbeat';
+import { createApiErrorResume, handleApiErrorStop } from './api-error-resume-wiring.js';
 import { LocalExtensionWatcher } from '@zana-ai/zcc-server/services/extensions/local-extension-watcher';
 import { AutonomousRunSupervisor, AUTONOMOUS_DEFAULTS } from '@zana-ai/zcc-server/services/agents/autonomous-run-supervisor';
 import { AutoCloseIdleService } from '@zana-ai/zcc-server/services/followups/auto-close-idle';
@@ -1958,6 +1959,8 @@ const heartbeat = new HeartbeatService({
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (handle) => clearTimeout(handle)
 });
+/** Resume after API errors by user rule (Settings → Agents). Absent config = off. */
+const apiErrorResume = createApiErrorResume({ getConfig: () => store.getConfig(), ptys, agentStatus, inboxStore, suppressesInteractiveBlocked, logMainError });
 /**
  * Autonomous team runs: orchestrator + workers driven toward a goal until the
  * orchestrator declares done (it ends its own session via
@@ -7078,6 +7081,7 @@ function wireBridgeListeners() {
     transcriptSource.forget(sessionId);
     // Same release for the OpenCode session-id resolver's cache (Rule 5).
     heartbeat.remove(sessionId);
+    apiErrorResume.forget(sessionId);
     // Drop a session that exits while working so a dead pty can't pin the Mac
     // awake; releases (after grace) if it was the last working agent.
     keepAwake.remove(sessionId);
@@ -7565,6 +7569,7 @@ function registerIpc() {
     set offLoudInboxAppended(value) { offLoudInboxAppended = value; },
     get openProjectWindow() { return openProjectWindow; },
     get overseerAudit() { return overseerAudit; },
+    get apiErrorResume() { return apiErrorResume; },
     get packAndInstallLocal() { return packAndInstallLocal; },
     get pendingWhatsNew() { return pendingWhatsNew; },
     set pendingWhatsNew(value) { pendingWhatsNew = value; },
@@ -8362,6 +8367,7 @@ async function bootstrapNormal() {
        // A lifecycle Stop is the authoritative end of an interactive turn. The
        // tracker keeps fallback behaviour for harnesses that never send one.
        agentStatus.turnFinished(sessionId);
+       apiErrorResume.cancel(sessionId);
        void scheduler.onAgentFinished(sessionId).catch(error => logMainError('scheduler Stop', error));
       // A goal worker finishing its turn is the trigger to evaluate + branch
       // (achieved / re-spawn / escalate). No-op for non-goal sessions.
@@ -8385,6 +8391,7 @@ async function bootstrapNormal() {
         if (event?.kind === 'requested') agentStatus.inputRequested(sessionId, event.key);
         else if (event?.kind === 'resolved') agentStatus.inputResolved(sessionId, event.keys);
         else if (event?.kind === 'interrupted') agentStatus.turnFinished(sessionId);
+        else if (event?.kind === 'api-error-stop') handleApiErrorStop({ service: apiErrorResume, agentStatus, logMainError }, sessionId, event);
         return;
       }
       if (action === 'blocked') {
@@ -8402,7 +8409,10 @@ async function bootstrapNormal() {
           return;
         }
         agentStatus.markBlocked(sessionId);
-      } else agentStatus.turnStarted(sessionId);
+      } else {
+        apiErrorResume.cancel(sessionId);
+        agentStatus.turnStarted(sessionId);
+      }
       // Diagnostic: confirms the hook reached the main process. The emit to the
       // renderer is debounced (~250ms), so the red/grey dot is the real proof
       // the state landed — this line just proves the curl callback arrived.

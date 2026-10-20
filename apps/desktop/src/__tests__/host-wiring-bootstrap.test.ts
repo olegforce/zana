@@ -656,6 +656,32 @@ describe('host bootstrap wiring', () => {
     await hook(project.id, 'ov', JSON.stringify({ tool_name: 'Bash', tool_input: 'string-input' }));
   });
 
+  it('turns a StopFailure notify body into an API-error stop and cancels on new turns', async () => {
+    const hook = h.mcpDeps.onNotifyHook;
+    const stop = JSON.stringify({ hook_event_name: 'StopFailure', error: 'unknown', error_details: 'Provider anthropic not found' });
+    h.ptys.sessions.set('af1', sessionFixture({ id: 'af1', projectId: project.id, profile: 'claude' }));
+    h.ptys.sessions.set('af-exited', sessionFixture({ id: 'af-exited', projectId: project.id, profile: 'claude', status: 'exited' }));
+    const onStop = vi.spyOn(ctx().apiErrorResume, 'onApiErrorStop').mockResolvedValue(undefined);
+    hook(project.id, 'af1', 'unblocked', stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onStop).toHaveBeenCalledWith('af1', expect.objectContaining({ text: expect.stringContaining('Provider anthropic') }));
+    hook('other-project', 'af1', 'unblocked', stop);
+    hook(project.id, 'af-exited', 'unblocked', stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    onStop.mockRestore();
+    hook(project.id, 'af1', 'unblocked');
+    h.mcpDeps.onStopHook(project.id, 'af1');
+    await settle();
+  });
+
+  it('forgets resume state on pty exit and exposes the service to IPC', async () => {
+    h.ptys.sessions.set('af2', sessionFixture({ id: 'af2' }));
+    h.ptys.emit('exit', 'af2', 0);
+    await settle();
+    expect(ctx().apiErrorResume.check).toBeTypeOf('function');
+    expect(await ctx().apiErrorResume.check('nothing', [])).toEqual({ ruleId: null, skipped: [] });
+  });
+
   it('renders AskUserQuestion hook payloads only when enabled and well formed', async () => {
     const hook = h.mcpDeps.onQuestionHook;
     h.ptys.sessions.set('q1', sessionFixture({ id: 'q1', projectId: project.id }));
