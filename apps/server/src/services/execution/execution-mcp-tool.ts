@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, open, realpath, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import type { ExecutionCohortBinding, ExecutionRequestV1, ExecutionService } from './service.js';
+import { MAX_BLOCKER_ANSWER_BYTES, type ExecutionCohortBinding, type ExecutionRequestV1, type ExecutionService } from './service.js';
 import type { ExecutionRecord } from './store.js';
 import { EXECUTION_HANDOFF_OPERATION, EXECUTION_RESUME_MONITOR_OPERATION, type createExecutionHandoffStore } from './handoff-store.js';
 import { MAX_TEAM_INITIAL_TASK_BYTES } from '../launch/team-lifecycle-store.js';
@@ -106,8 +106,7 @@ const executionProducerEventSchema = {
   references: z.array(z.object({ label: z.string().min(1).max(2048), uri: z.string().min(1).max(2048) })).max(20).optional()
 };
 const executionMessageSchema = { ...executionControlSchema, slotId: z.string().min(1).max(2048), message: z.string().min(1).max(64 * 1024) };
-/** Same cap as ExecutionService.deliverToBlocker, checked here so the caller gets the real reason. */
-const MAX_BLOCKER_ANSWER_BYTES = 16 * 1024;
+/** Same cap as ExecutionService.deliverToBlocker (one shared constant), checked here so the caller gets the real reason. */
 const executionRespondSchema = {
   ...executionIdSchema,
   expectedStateVersion: z.number().int().min(0).optional().describe('Required with slotId. Optional with blockerId: omitted means the latest state.'),
@@ -139,7 +138,7 @@ const executionWorkFailureSchema = {
   failureCode: z.enum(EXECUTION_FAILURE_CODES).optional()
 };
 const executionWorkBlockSchema = { ...executionWorkSchema, blockerId: z.string().min(1).max(2048), question: z.string().min(1).max(2048), options: z.array(z.string().min(1).max(2048)).max(20).optional(), audience: z.enum(['human', 'coordinator']).optional() };
-const executionWorkAnswerSchema = { ...executionIdSchema, blockerId: z.string().min(1).max(2048), answer: z.string().min(1).max(16 * 1024) };
+const executionWorkAnswerSchema = { ...executionIdSchema, blockerId: z.string().min(1).max(2048), answer: z.string().min(1).max(MAX_BLOCKER_ANSWER_BYTES) };
 const executionDeliveryAckSchema = {
   deliveryId: z.string().min(1).max(2048), leaseId: z.string().min(1).max(2048), delivered: z.boolean(),
   error: z.string().min(1).max(1024).optional()

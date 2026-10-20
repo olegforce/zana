@@ -376,6 +376,8 @@ function extractLifecycleInfo(lifecycle: any): ExtractedLifecycle | undefined {
  *  text (Rule 5 bound) — a chosen label fits; a whole upstream document won't be
  *  pasted into the task prompt. Mirrors the projection's `MAX_UNIT_RESULT_CHARS`. */
 export const MAX_DEP_RESULT_CHARS = 2_048;
+/** Largest answer a human or owner agent may deliver to one blocker (UTF-8 bytes). */
+export const MAX_BLOCKER_ANSWER_BYTES = 16 * 1024;
 
 /** Summary stamped when the engine auto-finalizes a fully-completed DAG that the
  *  orchestrator never explicitly closed. A later coordinator execution.complete
@@ -1858,7 +1860,7 @@ export class ExecutionService {
    */
   async answerBlockerByCoordinator(binding: ExecutionCohortBinding, blockerId: string, answer: string) {
     if (binding.role !== 'orchestrator') return deniedBound('only coordinator can answer a coordinator-directed blocker');
-    if (!blockerId.trim() || !answer.trim() || Buffer.byteLength(answer, 'utf8') > 16 * 1024) {
+    if (!blockerId.trim() || !answer.trim() || Buffer.byteLength(answer, 'utf8') > MAX_BLOCKER_ANSWER_BYTES) {
       return { ok: false as const, code: 'INVALID', message: 'invalid execution blocker answer request' };
     }
     const record = await this.getBound(binding);
@@ -2523,7 +2525,7 @@ export class ExecutionService {
    * version (retrying on a concurrent write): the open blocker id already prevents a double answer.
    */
   async respondToHumanBlockerAsOwner(callerPrincipalId: string, projectId: string, executionId: string, expectedStateVersion: number | undefined, blockerId: string, clientRequestId: string, message: string) {
-    if (!blockerId.trim() || !clientRequestId.trim() || !message.trim() || Buffer.byteLength(message, 'utf8') > 16 * 1024) {
+    if (!blockerId.trim() || !clientRequestId.trim() || !message.trim() || Buffer.byteLength(message, 'utf8') > MAX_BLOCKER_ANSWER_BYTES) {
       return { ok: false as const, code: 'INVALID', message: 'invalid execution blocker delivery request' };
     }
     for (let attempt = 0; ; attempt += 1) {
@@ -2866,7 +2868,7 @@ export class ExecutionService {
     text: string,
     resume: boolean
   ) {
-    if (!blockerId.trim() || !clientRequestId.trim() || !text.trim() || Buffer.byteLength(text, 'utf8') > 16 * 1024) {
+    if (!blockerId.trim() || !clientRequestId.trim() || !text.trim() || Buffer.byteLength(text, 'utf8') > MAX_BLOCKER_ANSWER_BYTES) {
       return { ok: false as const, code: 'INVALID', message: 'invalid execution blocker delivery request' };
     }
     const record = await this.getAuthorizedForControl(callerPrincipalId, projectId, executionId);
