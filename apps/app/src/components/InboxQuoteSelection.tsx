@@ -14,8 +14,8 @@ interface Placement {
   top: number;
 }
 
-/** Floating "Quote in reply" button for a text selection inside the message body or its files. */
-export function InboxQuoteSelection({ entryId, rootRef }: { entryId: string; rootRef: RefObject<HTMLElement | null> }) {
+/** Tracks the current quotable selection inside `rootRef` and where its floating button belongs. */
+function useQuoteSelection(entryId: string, rootRef: RefObject<HTMLElement | null>) {
   const [placement, setPlacement] = useState<Placement | null>(null);
 
   useEffect(() => {
@@ -68,6 +68,12 @@ export function InboxQuoteSelection({ entryId, rootRef }: { entryId: string; roo
     };
   }, [entryId, rootRef]);
 
+  return [placement, setPlacement] as const;
+}
+
+/** Floating "Quote in reply" button for a text selection inside the message body or its files. */
+export function InboxQuoteSelection({ entryId, rootRef }: { entryId: string; rootRef: RefObject<HTMLElement | null> }) {
+  const [placement, setPlacement] = useQuoteSelection(entryId, rootRef);
   if (!placement) return null;
   return (
     <button

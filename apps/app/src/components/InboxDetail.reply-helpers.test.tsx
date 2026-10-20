@@ -219,6 +219,63 @@ describe('InboxDetail reply helpers', () => {
     }
   });
 
+  it('re-measures a long draft when the window is resized, and stops listening on unmount', async () => {
+    live();
+    vi.stubGlobal('innerHeight', 1000);
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => 450 });
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    try {
+      const { unmount } = await ready();
+      fireEvent.change(input(), { target: { value: 'tall' } });
+      expect(input().style.height).toBe('400px');
+      expect(input().style.overflowY).toBe('auto');
+      vi.stubGlobal('innerHeight', 2000);
+      act(() => { window.dispatchEvent(new Event('resize')); });
+      expect(input().style.height).toBe('450px');
+      expect(input().style.overflowY).toBe('hidden');
+      const handler = add.mock.calls.find((c) => c[0] === 'resize')![1];
+      unmount();
+      expect(remove).toHaveBeenCalledWith('resize', handler);
+    } finally {
+      delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
+  it('sizes the textarea when it mounts after a collapsed "Replied to" box reopens with an unchanged draft', async () => {
+    live();
+    state.answered = { one: true };
+    vi.stubGlobal('innerHeight', 1000);
+    useInboxReplyDrafts.getState().setDraft('one', 'a long\nkept\ndraft');
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => 300 });
+    try {
+      await ready();
+      expect(screen.getByText('Replied to')).toBeTruthy();
+      press('r');
+      expect(input().style.height).toBe('300px');
+    } finally {
+      delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
+  it.each(['resolved', 'queued'])('offers neither R nor Quote in reply on a collapsed execution-linked box (%s)', async (blocker) => {
+    live();
+    state.entries = [entry('one', { executionId: 'exec', blockerId: 'b' } as Partial<InboxEntry>)];
+    state.blocker = blocker;
+    await ready();
+    press('r');
+    expect(useInboxReplyDrafts.getState().composeRequest).toBeNull();
+    expect(document.querySelector('.inbox-quote-selection')).toBeNull();
+  });
+
+  it('still offers R on an execution-linked box whose blocker is actionable', async () => {
+    live();
+    state.entries = [entry('one', { executionId: 'exec', blockerId: 'b' } as Partial<InboxEntry>)];
+    await ready();
+    press('r');
+    expect(document.activeElement).toBe(input());
+  });
+
   it('restores the scroller tabindex on unmount', async () => {
     live();
     const { unmount } = await ready();

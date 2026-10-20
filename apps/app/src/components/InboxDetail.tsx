@@ -48,7 +48,7 @@ import { inboxPrimaryTitle, inboxShortTitle, inboxContextLine } from '../lib/inb
 import { classifyEntry } from '@zana-ai/zcc-domain/feed-categories';
 import { resolveAnswerSurface } from '../lib/answerSurface.js';
 import { respondToInboxBlocker } from '../lib/inboxBlockerRespond.js';
-import { useExecutionInboxBlockerState } from '../lib/executionInboxBlockerState.js';
+import { useExecutionInboxBlockerState, type ExecutionInboxBlockerState } from '../lib/executionInboxBlockerState.js';
 import { isClaudeProfile, knownProfile, projectDefaultProfile } from '../lib/launchProfile.js';
 import type {
   InboxDoc,
@@ -540,9 +540,14 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
   // Unknown ownership is fail-closed until main confirms this exact entry is non-host.
   const ownershipLoading = ownership?.loading ?? true;
   const ownershipError = ownership?.error === true;
+  const answered = useInboxAnswered((s) => !!s.answeredIds[entry.id]);
+  const blockerState = useExecutionInboxBlockerState(entry, answered);
+  // An execution-linked box is collapsed (and cannot reopen) once its blocker is no longer actionable.
+  const blockerClosed = !!entry.executionId && !!entry.blockerId
+    && blockerState !== 'actionable' && blockerState !== 'unknown';
   // True when the dock shows a ReplyBox or the reopen shell (R and Quote in reply target it).
   const replyTarget = !questionFirst && !hostAction && !squadDetailsNotice && !ownershipLoading && !ownershipError
-    && projectAlive && !threadLookup.loading && !threadLookup.error && questionSet.length === 0
+    && projectAlive && !threadLookup.loading && !threadLookup.error && questionSet.length === 0 && !blockerClosed
     && (!!originatingThread || (deliveryMode === 'live' && !!aliveSession) || deliveryMode === 'reopen');
 
   // A new compose request opens the collapsed reopen shell; a mounted ReplyBox focuses itself.
@@ -707,6 +712,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
             ) : (
               <ReplyBox
                 entry={entry}
+                blockerState={blockerState}
                 sessionTitle={originatingThread.title}
                 onReply={answerOnThread}
               />
@@ -724,6 +730,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
             ) : (
               <ReplyBox
                 entry={entry}
+                blockerState={blockerState}
                 sessionId={aliveSession.id}
                 sessionTitle={aliveSession.title}
               />
@@ -743,6 +750,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
               ) : (
                 <ReplyBox
                   entry={entry}
+                  blockerState={blockerState}
                   sessionTitle={sessionTitleForTombstone(entry)}
                   onAnswerDeadSession={answerOnDeadSession}
                   deadSessionBusy={reopening}
@@ -1233,9 +1241,12 @@ function RelatedNextSteps({
  * if the agent asks a follow-up on the same session.
  */
 const REPLY_MIN_HEIGHT = 72;
+/** The reply box never grows past this share of the window height. */
+const REPLY_MAX_VIEWPORT_RATIO = 0.4;
 
 function ReplyBox({
   entry,
+  blockerState,
   sessionId,
   sessionTitle,
   onReply,
@@ -1244,6 +1255,8 @@ function ReplyBox({
   autoFocus = false
 }: {
   entry: InboxEntry;
+  /** Execution blocker state, computed once by InboxDetail so R and Quote agree with the collapsed box. */
+  blockerState: ExecutionInboxBlockerState;
   /** The LIVE session to inject into — the originating tab, or a reopened one.
    *  Absent in dead-session mode (the session ended); then `onAnswerDeadSession`
    *  carries the answer by reopening the agent. */
@@ -1259,7 +1272,6 @@ function ReplyBox({
   autoFocus?: boolean;
 }) {
   const answered = useInboxAnswered((s) => !!s.answeredIds[entry.id]);
-  const blockerState = useExecutionInboxBlockerState(entry, answered);
   const draft = useInboxReplyDrafts((s) => s.drafts[entry.id] ?? '');
   // The store drops whitespace-only text, so a leading space or Enter lives here until real text follows.
   const [blank, setBlank] = useState('');
@@ -1275,25 +1287,31 @@ function ReplyBox({
   const [reopened, setReopened] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Grow with the draft so a long reply stays visible inside the pinned bar.
-  // Reset before measuring so deleting lines shrinks it again.
-  useLayoutEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    // The stylesheet may cap lower than 40% (mobile); size and overflow must follow the cap that applies.
-    const cssMax = parseFloat(getComputedStyle(input).maxHeight);
-    const max = Math.max(REPLY_MIN_HEIGHT, Math.min(Math.round(window.innerHeight * 0.4), Number.isFinite(cssMax) ? cssMax : Infinity));
-    input.style.height = '0px';
-    const next = Math.min(Math.max(input.scrollHeight, REPLY_MIN_HEIGHT), max);
-    input.style.height = `${next}px`;
-    input.style.overflowY = input.scrollHeight > max ? 'auto' : 'hidden';
-  }, [text]);
-
   const dead = !sessionId && !!onAnswerDeadSession;
   const busy = sending || deadSessionBusy;
   const executionLinked = !!entry.executionId && !!entry.blockerId;
   const collapsed = (executionLinked ? blockerState !== 'actionable' && blockerState !== 'unknown' : answered) && !reopened;
 
+  // Grow with the draft so a long reply stays visible inside the pinned bar.
+  // Reset before measuring so deleting lines shrinks it again.
+  const resize = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    // The stylesheet may cap lower than 40% (mobile); size and overflow must follow the cap that applies.
+    const cssMax = parseFloat(getComputedStyle(input).maxHeight);
+    const max = Math.max(REPLY_MIN_HEIGHT, Math.min(Math.round(window.innerHeight * REPLY_MAX_VIEWPORT_RATIO), Number.isFinite(cssMax) ? cssMax : Infinity));
+    input.style.height = '0px';
+    const next = Math.min(Math.max(input.scrollHeight, REPLY_MIN_HEIGHT), max);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > max ? 'auto' : 'hidden';
+  }, []);
+  // Also on mount: the textarea is absent while the "Replied to" box is collapsed, so `collapsed` is a dependency.
+  useLayoutEffect(resize, [text, collapsed, resize]);
+  // The cap follows the window, so a resize must re-measure a long draft.
+  useEffect(() => {
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, [resize]);
   // A compose request (R, Quote in reply) expands a collapsed box, then focuses it with the caret at the end.
   useEffect(() => {
     const previous = seenCompose.current;

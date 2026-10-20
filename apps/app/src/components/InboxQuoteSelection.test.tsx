@@ -75,16 +75,18 @@ describe('InboxQuoteSelection', () => {
     expect(scrollerRemove).toHaveBeenCalledWith('scroll', expect.any(Function));
   });
 
-  it('cancels a pending debounce on unmount', () => {
+  it('cancels its own pending debounce timer on unmount', () => {
     vi.useFakeTimers();
     try {
-      const clear = vi.spyOn(globalThis, 'clearTimeout');
       const { unmount } = render(<Harness />);
+      const set = vi.spyOn(globalThis, 'setTimeout');
+      const clear = vi.spyOn(globalThis, 'clearTimeout');
       select('inside');
       act(() => { document.dispatchEvent(new Event('selectionchange')); });
+      const debounce = set.mock.results[set.mock.calls.findIndex((c) => c[1] === 120)]!.value;
+      expect(debounce).toBeDefined();
       unmount();
-      const callsBefore = clear.mock.calls.length;
-      expect(callsBefore).toBeGreaterThan(0);
+      expect(clear).toHaveBeenCalledWith(debounce);
       act(() => { vi.advanceTimersByTime(200); });
       expect(screen.queryByText('Quote in reply')).toBeNull();
     } finally {
