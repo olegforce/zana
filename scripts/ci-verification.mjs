@@ -39,6 +39,7 @@ export function boundarySpecs(paths) {
     if (/services\/execution\/(source-policy|source-registry)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
     // Owner report-back: the service, the MCP server that carries execution.start, and the notifier/report text.
     if (/services\/execution\/service\.ts|services\/mcp\/mcp-server|squad-proposals\/(notifier|report)/.test(path)) add('squad-direct-report');
+    if (/execution-source-picker|ipc\/execution-board|services\/execution\/source-registry|team-launch-support|TeamComposer|team-composer-sources/.test(path)) add('squad-source-retry');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }
   return [...specs].sort();
