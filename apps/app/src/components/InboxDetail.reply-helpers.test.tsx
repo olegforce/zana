@@ -6,7 +6,7 @@ import type { InboxEntry } from '@zana-ai/zcc-domain/product';
 
 const project = vi.hoisted(() => ({ id: 'p', name: 'My project', path: '/project' }));
 const state = vi.hoisted(() => ({
-  compact: false, structured: false, action: null as unknown, selected: 'one', answered: {} as Record<string, boolean>, terminals: {} as Record<string, unknown[]>, reply: vi.fn(), reopenAnswer: vi.fn(), saved: false, kept: false, missing: false,
+  compact: false, structured: false, action: null as unknown, selected: 'one', answered: {} as Record<string, boolean>, blocker: 'actionable', terminals: {} as Record<string, unknown[]>, reply: vi.fn(), reopenAnswer: vi.fn(), saved: false, kept: false, missing: false,
   entries: [] as InboxEntry[],
   readFile: vi.fn(), readDataUrl: vi.fn(), resolveDoc: vi.fn(), copy: vi.fn(), openIn: vi.fn(), save: vi.fn(), keep: vi.fn(), remove: vi.fn(), exportPdf: vi.fn(), select: vi.fn(), markRead: vi.fn()
 }));
@@ -39,9 +39,9 @@ vi.mock('./AgentLauncher.js', () => ({ AgentLauncher: ({ initialPrompt }: { init
 vi.mock('./InboxQuestionBlock.js', () => ({ QuestionBlock: () => <div data-testid="question">Question</div> }));
 vi.mock('./MarkdownContent.js', () => ({ MarkdownContent: ({ text }: { text: string }) => <p>{text}</p>, DocContent: ({ content }: { content: string }) => <p>{content}</p> }));
 vi.mock('../lib/renderReportHtml.js', () => ({ renderReportHtml: vi.fn(async () => '<p>Report</p>') }));
-vi.mock('../lib/executionInboxBlockerState.js', () => ({ useExecutionInboxBlockerState: () => 'actionable' }));
+vi.mock('../lib/executionInboxBlockerState.js', () => ({ useExecutionInboxBlockerState: () => state.blocker }));
 import { InboxDetail } from './InboxDetail.js';
-import { useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
+import { composeSeqFor, useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
 
 
 const view = () => <MemoryRouter><section className="inbox-view"><div className="inbox-view-detail"><InboxDetail visible /></div></section></MemoryRouter>;
@@ -55,8 +55,8 @@ const entry = (id: string, extra: Partial<InboxEntry> = {}): InboxEntry => ({ id
 describe('InboxDetail reply helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequests: {} });
-    state.structured = false; state.action = null; state.missing = false; state.selected = 'one'; state.terminals = {}; state.answered = {};
+    useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequest: null });
+    state.structured = false; state.action = null; state.missing = false; state.selected = 'one'; state.terminals = {}; state.answered = {}; state.blocker = 'actionable';
     state.reply.mockResolvedValue(true);
     state.entries = [entry('one'), entry('two')];
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
@@ -145,14 +145,14 @@ describe('InboxDetail reply helpers', () => {
       state.entries = [entry('one', { question: { options: [{ id: 'a', label: 'A' }] } } as Partial<InboxEntry>)];
       const q = await ready();
       press('r');
-      expect(useInboxReplyDrafts.getState().composeRequests.one).toBeUndefined();
+      expect(useInboxReplyDrafts.getState().composeRequest).toBeNull();
       q.unmount();
       state.structured = false;
       state.entries = [entry('one', { squadProposal: { proposalId: 'p1' } } as Partial<InboxEntry>)];
       state.action = { entryId: 'one', kind: 'squad-proposal', status: 'pending' };
       await ready();
       press('r');
-      expect(useInboxReplyDrafts.getState().composeRequests.one).toBeUndefined();
+      expect(useInboxReplyDrafts.getState().composeRequest).toBeNull();
     });
   });
 
@@ -166,5 +166,79 @@ describe('InboxDetail reply helpers', () => {
     expect(scroller.tabIndex).toBe(-1);
     expect(document.activeElement).toBe(scroller);
     expect(useInboxReplyDrafts.getState().drafts.one).toBe('keep me');
+  });
+
+  it('shows a kept draft in reopen mode after switching entries, without taking focus', async () => {
+    state.entries = [entry('one', { sessionId: undefined }), entry('two', { sessionId: undefined })];
+    const { rerender } = await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave a reply' }));
+    fireEvent.change(input(), { target: { value: 'kept' } });
+    state.selected = 'two';
+    rerender(view());
+    expect(screen.getByRole('button', { name: 'Leave a reply' })).toBeTruthy();
+    state.selected = 'one';
+    rerender(view());
+    expect(input().value).toBe('kept');
+    expect(document.activeElement).not.toBe(input());
+  });
+
+  it('has no R target or quote button on a Squad result notice', async () => {
+    state.entries = [entry('one', { sessionId: undefined, executionId: 'exec', squadNotice: 'proposal-result' } as Partial<InboxEntry>)];
+    await ready();
+    expect(screen.queryByLabelText('Reply to the originating agent')).toBeNull();
+    press('r');
+    expect(useInboxReplyDrafts.getState().composeRequest).toBeNull();
+    expect(document.querySelector('.inbox-quote-selection')).toBeNull();
+  });
+
+  it('keeps a leading space or newline typed into an empty box', async () => {
+    live();
+    await ready();
+    fireEvent.change(input(), { target: { value: ' ' } });
+    expect(input().value).toBe(' ');
+    fireEvent.change(input(), { target: { value: ' x' } });
+    expect(useInboxReplyDrafts.getState().drafts.one).toBe(' x');
+  });
+
+  it('overflows once the content exceeds the stylesheet cap that is lower than 40%', async () => {
+    live();
+    vi.stubGlobal('innerHeight', 800);
+    const original = window.getComputedStyle;
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = original(el, pseudo);
+      return el instanceof HTMLTextAreaElement ? ({ ...style, maxHeight: '180px' } as CSSStyleDeclaration) : style;
+    });
+    Object.defineProperty(HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => 250 });
+    try {
+      await ready();
+      fireEvent.change(input(), { target: { value: 'tall' } });
+      expect(input().style.height).toBe('180px');
+      expect(input().style.overflowY).toBe('auto');
+    } finally {
+      delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
+  it('restores the scroller tabindex on unmount', async () => {
+    live();
+    const { unmount } = await ready();
+    const scroller = document.querySelector('.inbox-view-detail')!;
+    expect(scroller.getAttribute('tabindex')).toBe('-1');
+    unmount();
+    expect(scroller.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('does not arm focus for a compose request on a collapsed execution-linked box', async () => {
+    live();
+    state.entries = [entry('one', { executionId: 'exec', blockerId: 'b' } as Partial<InboxEntry>)];
+    state.blocker = 'resolved';
+    await ready();
+    act(() => { useInboxReplyDrafts.getState().requestCompose('one'); });
+    expect(composeSeqFor('one')(useInboxReplyDrafts.getState())).toBe(1);
+    state.blocker = 'actionable';
+    document.body.focus();
+    cleanup();
+    await ready();
+    expect(document.activeElement).not.toBe(input());
   });
 });

@@ -210,3 +210,5 @@ body:has(.app-shell[data-mobile='true']) .modal.inbox-mobile-actions-sheet {
 @media (hover: none) {
   .app-shell[data-mobile='true'] .inbox-sidebar-list .inbox-row:not(.active):hover { background: transparent; }
 }
+
+.app-shell[data-mobile='true'] .inbox-detail:has(> .inbox-detail-dock) { padding-bottom: 0; }

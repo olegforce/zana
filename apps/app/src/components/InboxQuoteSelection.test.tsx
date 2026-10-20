@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InboxQuoteSelection } from './InboxQuoteSelection.js';
-import { useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
+import { composeSeqFor, useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
 
 function Harness({ show = true }: { show?: boolean }) {
   const ref = createRef<HTMLDivElement>();
@@ -30,7 +30,7 @@ const select = (testId: string) => {
 const settle = () => act(async () => { document.dispatchEvent(new Event('selectionchange')); await new Promise((r) => setTimeout(r, 150)); });
 
 describe('InboxQuoteSelection', () => {
-  beforeEach(() => useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequests: {} }));
+  beforeEach(() => useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequest: null }));
   afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.restoreAllMocks(); });
 
   it('shows for a selection in the comments and not outside', async () => {
@@ -50,7 +50,7 @@ describe('InboxQuoteSelection', () => {
     fireEvent.mouseDown(screen.getByText('Quote in reply'));
     fireEvent.click(screen.getByText('Quote in reply'));
     expect(useInboxReplyDrafts.getState().drafts.e1).toBe('> Should the skipped case block merge?\n- ');
-    expect(useInboxReplyDrafts.getState().composeRequests.e1).toBe(1);
+    expect(composeSeqFor('e1')(useInboxReplyDrafts.getState())).toBe(1);
     expect(screen.queryByText('Quote in reply')).toBeNull();
     expect(window.getSelection()!.rangeCount).toBe(0);
   });
@@ -73,5 +73,22 @@ describe('InboxQuoteSelection', () => {
     unmount();
     expect(docRemove.mock.calls.map((c) => c[0])).toEqual(expect.arrayContaining(['selectionchange', 'keydown']));
     expect(scrollerRemove).toHaveBeenCalledWith('scroll', expect.any(Function));
+  });
+
+  it('cancels a pending debounce on unmount', () => {
+    vi.useFakeTimers();
+    try {
+      const clear = vi.spyOn(globalThis, 'clearTimeout');
+      const { unmount } = render(<Harness />);
+      select('inside');
+      act(() => { document.dispatchEvent(new Event('selectionchange')); });
+      unmount();
+      const callsBefore = clear.mock.calls.length;
+      expect(callsBefore).toBeGreaterThan(0);
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.queryByText('Quote in reply')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

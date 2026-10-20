@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Bookmark, BookmarkCheck, BotMessageSquare, Code2, Copy, CornerDownLeft, Download, ExternalLink, FileText, FolderOpen, Send, Sparkles, Star, Trash2 } from 'lucide-react';
 import './inbox-detail.css';
-import { useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
+import { composeSeqFor, useInboxReplyDrafts } from '../stores/inbox-reply-drafts.js';
 import { InboxQuoteSelection } from './InboxQuoteSelection.js';
 import { useCompactLayout } from '../hooks/useCompactLayout.js';
 import { createResultCache, useInboxThread } from '../hooks/useInboxThread.js';
@@ -185,9 +185,11 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
   const [reopenedSessionId, setReopenedSessionId] = useState<string | null>(null);
   // In reopen mode, a plain (non-question) report doesn't auto-open the answer
   // box — it shows a quiet "Reply…" button. This tracks the user expanding it.
-  const [replyExpanded, setReplyExpanded] = useState(false);
+  // A kept draft keeps the box open when the entry is selected again, without taking focus.
+  const [replyExpanded, setReplyExpanded] = useState(() => !!useInboxReplyDrafts.getState().drafts[entry.id]);
+  const [focusReply, setFocusReply] = useState(false);
   const detailRef = useRef<HTMLDivElement>(null);
-  const composeCount = useInboxReplyDrafts((s) => s.composeRequests[entry.id] ?? 0);
+  const composeCount = useInboxReplyDrafts(composeSeqFor(entry.id));
   const seenCompose = useRef(composeCount);
 
   const aliveProject = projects.find((p) => p.id === entry.projectId) ?? null;
@@ -538,15 +540,18 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
   const ownershipLoading = ownership?.loading ?? true;
   const ownershipError = ownership?.error === true;
   // True when the dock shows a ReplyBox or the reopen shell (R and Quote in reply target it).
-  const replyTarget = !questionFirst && !hostAction && !ownershipLoading && !ownershipError
+  const replyTarget = !questionFirst && !hostAction && !squadDetailsNotice && !ownershipLoading && !ownershipError
     && projectAlive && !threadLookup.loading && !threadLookup.error && questionSet.length === 0
     && (!!originatingThread || (deliveryMode === 'live' && !!aliveSession) || deliveryMode === 'reopen');
 
   // A new compose request opens the collapsed reopen shell; a mounted ReplyBox focuses itself.
   useEffect(() => {
-    if (composeCount === seenCompose.current) return;
+    const previous = seenCompose.current;
     seenCompose.current = composeCount;
+    // 0 means the latest request now targets another entry.
+    if (composeCount === 0 || composeCount === previous) return;
     setReplyExpanded(true);
+    setFocusReply(true);
   }, [composeCount]);
 
   // R jumps to the reply box. isInboxListShortcut ignores typing, modals and modifier keys.
@@ -564,7 +569,13 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
   // Esc in the reply box hands focus to this scroller, so j / k / R work again.
   useEffect(() => {
     const scroller = detailRef.current?.closest<HTMLElement>('.inbox-view-detail');
-    if (scroller) scroller.tabIndex = -1;
+    if (!scroller) return;
+    const previous = scroller.getAttribute('tabindex');
+    scroller.tabIndex = -1;
+    return () => {
+      if (previous === null) scroller.removeAttribute('tabindex');
+      else scroller.setAttribute('tabindex', previous);
+    };
   }, []);
   const hostActionSurface = squadDetailsNotice && (!hostAction || hostAction.kind === 'squad-worktree-lifecycle') ? (
     <div className="inbox-reply" role="status">
@@ -734,7 +745,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
                   sessionTitle={sessionTitleForTombstone(entry)}
                   onAnswerDeadSession={answerOnDeadSession}
                   deadSessionBusy={reopening}
-                  autoFocus={replyExpanded}
+                  autoFocus={focusReply}
                 />
               )
             ) : (
@@ -742,7 +753,7 @@ function Detail({ entry, onDelete, onBack }: { entry: InboxEntry; onDelete: () =
                 <button
                   type="button"
                   className="inbox-reply-composer"
-                  onClick={() => setReplyExpanded(true)}
+                  onClick={() => { setReplyExpanded(true); setFocusReply(true); }}
                   aria-label="Leave a reply"
                   aria-keyshortcuts="R"
                 >
@@ -1248,9 +1259,15 @@ function ReplyBox({
 }) {
   const answered = useInboxAnswered((s) => !!s.answeredIds[entry.id]);
   const blockerState = useExecutionInboxBlockerState(entry, answered);
-  const text = useInboxReplyDrafts((s) => s.drafts[entry.id] ?? '');
-  const setText = (value: string) => useInboxReplyDrafts.getState().setDraft(entry.id, value);
-  const composeCount = useInboxReplyDrafts((s) => s.composeRequests[entry.id] ?? 0);
+  const draft = useInboxReplyDrafts((s) => s.drafts[entry.id] ?? '');
+  // The store drops whitespace-only text, so a leading space or Enter lives here until real text follows.
+  const [blank, setBlank] = useState('');
+  const text = draft || blank;
+  const setText = (value: string) => {
+    setBlank(value.trim() === '' ? value : '');
+    useInboxReplyDrafts.getState().setDraft(entry.id, value);
+  };
+  const composeCount = useInboxReplyDrafts(composeSeqFor(entry.id));
   const seenCompose = useRef(composeCount);
   const wantFocus = useRef(false);
   const [sending, setSending] = useState(false);
@@ -1262,7 +1279,9 @@ function ReplyBox({
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input) return;
-    const max = Math.max(REPLY_MIN_HEIGHT, Math.round(window.innerHeight * 0.4));
+    // The stylesheet may cap lower than 40% (mobile); size and overflow must follow the cap that applies.
+    const cssMax = parseFloat(getComputedStyle(input).maxHeight);
+    const max = Math.max(REPLY_MIN_HEIGHT, Math.min(Math.round(window.innerHeight * 0.4), Number.isFinite(cssMax) ? cssMax : Infinity));
     input.style.height = '0px';
     const next = Math.min(Math.max(input.scrollHeight, REPLY_MIN_HEIGHT), max);
     input.style.height = `${next}px`;
@@ -1276,10 +1295,13 @@ function ReplyBox({
 
   // A compose request (R, Quote in reply) expands a collapsed box, then focuses it with the caret at the end.
   useEffect(() => {
-    if (composeCount === seenCompose.current) return;
+    const previous = seenCompose.current;
     seenCompose.current = composeCount;
+    if (composeCount === 0 || composeCount === previous) return;
+    // A collapsed execution-linked box cannot open, so there is nothing to focus later.
+    if (collapsed && executionLinked) return;
     wantFocus.current = true;
-    if (collapsed && !executionLinked) setReopened(true);
+    if (collapsed) setReopened(true);
   });
   useEffect(() => {
     const input = inputRef.current;
@@ -1306,6 +1328,7 @@ function ReplyBox({
     }
     if (ok) {
       useInboxReplyDrafts.getState().clearDraft(entry.id);
+      setBlank('');
       setReopened(false);
     }
   };

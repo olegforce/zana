@@ -3,7 +3,12 @@
 
 .inbox-detail {
   max-width: 760px;
-  padding: 0 28px;
+  padding: 0 28px 48px;
+}
+
+/* The pinned bar sits on the pane edge; surfaces without one keep their breathing room. */
+.inbox-detail:has(> .inbox-detail-dock) {
+  padding-bottom: 0;
 }
 
 .inbox-detail .inbox-detail-header {

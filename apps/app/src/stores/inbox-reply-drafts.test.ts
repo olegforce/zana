@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MAX_REPLY_DRAFTS, useInboxReplyDrafts } from './inbox-reply-drafts.js';
+import { MAX_REPLY_DRAFTS, composeSeqFor, useInboxReplyDrafts } from './inbox-reply-drafts.js';
 
 const s = () => useInboxReplyDrafts.getState();
 
 describe('useInboxReplyDrafts', () => {
   beforeEach(() => {
-    useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequests: {} });
+    useInboxReplyDrafts.setState({ drafts: {}, order: [], composeRequest: null });
   });
 
   it('stores and deletes drafts; blank text deletes', () => {
@@ -34,23 +34,26 @@ describe('useInboxReplyDrafts', () => {
     expect(s().drafts.new).toBe('x');
   });
 
-  it('requestCompose increments per id', () => {
+  it('requestCompose keeps one request, so the state stays bounded', () => {
     s().requestCompose('a');
     s().requestCompose('a');
-    s().requestCompose('b');
-    expect(s().composeRequests).toEqual({ a: 2, b: 1 });
+    expect(composeSeqFor('a')(s())).toBe(2);
+    for (let i = 0; i < MAX_REPLY_DRAFTS + 10; i++) s().requestCompose(`e${i}`);
+    expect(composeSeqFor('a')(s())).toBe(0);
+    expect(composeSeqFor(`e${MAX_REPLY_DRAFTS + 9}`)(s())).toBe(MAX_REPLY_DRAFTS + 12);
+    expect(Object.keys(s().composeRequest ?? {})).toEqual(['entryId', 'seq']);
   });
 
   it('appendQuote updates the draft and requests compose', () => {
     s().setDraft('a', 'note ');
     s().appendQuote('a', 'q');
     expect(s().drafts.a).toBe('note\n\n> q\n- ');
-    expect(s().composeRequests.a).toBe(1);
+    expect(composeSeqFor('a')(s())).toBe(1);
   });
 
   it('appendQuote with an empty selection still requests compose', () => {
     s().appendQuote('a', ' ');
     expect(s().drafts.a).toBeUndefined();
-    expect(s().composeRequests.a).toBe(1);
+    expect(composeSeqFor('a')(s())).toBe(1);
   });
 });
