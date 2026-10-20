@@ -1439,8 +1439,8 @@ const llmService = new LlmService(new Map<LlmProviderId, LlmProvider>());
  *  they read the encrypted key from safeStorage at call time and resolve to an
  *  honest `ok:false` "no API key configured" when absent, so a key added/removed
  *  later takes effect without a re-register. */
-function rebuildProviders(_config: AppConfig): void {
-  llmService.setProvider(new ClaudeCliProvider(mainClaudeBinaryGetter(store)));
+function rebuildProviders(): void {
+  llmService.setProvider(new ClaudeCliProvider(mainClaudeBinaryGetter(store, join(electronZccDataDir(), 'config.json'))));
   llmService.setProvider(new OpenAiProvider(() => getOpenAiKey()));
   llmService.setProvider(new GeminiProvider(() => getGeminiKey()));
 }
@@ -7513,7 +7513,6 @@ function registerIpc() {
     get ptys() { return ptys; },
     get quickPrompts() { return quickPrompts; },
     get readLiveSessionStats() { return readLiveSessionStats; },
-    get rebuildProviders() { return rebuildProviders; },
     get registerExtensionProject() { return registerExtensionProject; },
     get reportTeamTask() { return reportTeamTask; },
     get resolveTheme() { return resolveTheme; },
@@ -7853,7 +7852,7 @@ async function bootstrapNormal() {
   // data dir was guaranteed present. Re-bind it now that the store can resolve
   // its config so a custom `claudeBinary` takes effect this session (not just
   // after the next config:set / restart).
-  rebuildProviders(store.getConfig());
+  rebuildProviders();
   // Repair PATH before any pty/opener/scheduler spawn. A GUI launch
   // (Finder/Dock) inherits a minimal PATH that omits ~/.local/bin,
   // /opt/homebrew/bin, etc. — so a bare `claude` spawn would ENOENT and
