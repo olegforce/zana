@@ -152,6 +152,12 @@ describe('buildSquadBlockerReport', () => {
     expect(text.endsWith('It is also in the Inbox.')).toBe(true);
   });
 
+  it('tells an owner to leave expectedStateVersion out rather than fetch a stateVersion', () => {
+    const text = buildSquadBlockerReport(record(), { id: 'blk-1', question: 'Which?' } as never, 'owner');
+    expect(text).toContain('execution.respond (executionId, blockerId and your message; leave expectedStateVersion out)');
+    expect(text).not.toContain('stateVersion from execution.snapshot');
+  });
+
   it('points an owner at execution.snapshot instead of repeating an id it could not type back', () => {
     for (const id of ['b\n1', 'b  1', 'x'.repeat(300)]) {
       const text = buildSquadBlockerReport(record(), { id, question: 'Which?' } as never, 'owner');
