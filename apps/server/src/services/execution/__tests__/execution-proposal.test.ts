@@ -389,6 +389,50 @@ describe('owner answers and report-back follow-through', () => {
     expect(result).toMatchObject({ ok: false, message: 'blocker blocker is for the coordinator, not the owner' });
   }));
 
+  it('refuses an invalid, unknown or already answered owner blocker answer', async () => fixture(async (filePath) => {
+    const { svc } = await blocked(filePath);
+    const answer = (over: Partial<{ execution: string; blocker: string; request: string; message: string; caller: string }> = {}) =>
+      svc.respondToHumanBlockerAsOwner(over.caller ?? 'owner', 'project-1', over.execution ?? 'execution-1', undefined, over.blocker ?? 'blocker', over.request ?? 'c1', over.message ?? 'Atlas');
+    for (const bad of [{ blocker: ' ' }, { request: ' ' }, { message: ' ' }, { message: 'x'.repeat(16 * 1024 + 1) }]) {
+      await expect(answer(bad)).resolves.toMatchObject({ ok: false, code: 'INVALID' });
+    }
+    await expect(answer({ execution: 'missing' })).resolves.toMatchObject({ ok: false, code: 'NOT_FOUND', message: 'execution not found for caller' });
+    await expect(answer({ caller: 'someone-else' })).resolves.toMatchObject({ ok: false, code: 'NOT_FOUND', message: 'execution not found for caller' });
+    await expect(answer({ blocker: 'nope' })).resolves.toMatchObject({ ok: false, code: 'NOT_FOUND', message: 'execution blocker not found' });
+  }));
+
+  it('retries a versionless owner answer on a concurrent write, at most five times', async () => fixture(async (filePath) => {
+    const { svc } = await blocked(filePath);
+    const enqueue = vi.spyOn(svc as unknown as { enqueueOwnedBlocker: (...args: unknown[]) => Promise<unknown> }, 'enqueueOwnedBlocker');
+    enqueue.mockResolvedValueOnce({ ok: false, code: 'CONFLICT', message: 'stale' });
+    await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', undefined, 'blocker', 'c1', 'Atlas')).resolves.toMatchObject({ ok: true });
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    enqueue.mockReset();
+    enqueue.mockResolvedValue({ ok: false, code: 'CONFLICT', message: 'stale' });
+    await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', undefined, 'blocker', 'c2', 'Atlas')).resolves.toMatchObject({ ok: false, code: 'CONFLICT' });
+    expect(enqueue).toHaveBeenCalledTimes(5);
+    enqueue.mockReset();
+    enqueue.mockResolvedValue({ ok: false, code: 'CONFLICT', message: 'stale' });
+    await expect(svc.respondToHumanBlockerAsOwner('owner', 'project-1', 'execution-1', 3, 'blocker', 'c3', 'Atlas')).resolves.toMatchObject({ ok: false, code: 'CONFLICT' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    enqueue.mockRestore();
+  }));
+
+  it('does not re-offer blockers when resume_binding passes no report kind', async () => fixture(async (filePath) => {
+    const onHumanBlocker = vi.fn();
+    const grants = createResumeGrantStore({ filePath: `${filePath}.grants`, token: () => 'resume-token' });
+    const { store, svc } = service(filePath, { resumeGrants: grants, onHumanBlocker });
+    const started = await svc.start('owner', 'project-1', jobTeam, { reportTo: ownerTarget });
+    if (!started.ok || !started.value.resumeToken) throw new Error('missing resume token');
+    await svc.dispatchReady(coordinator);
+    await svc.blockWork(worker, 'a', { id: 'blocker', question: 'Choose?' });
+    onHumanBlocker.mockClear();
+    await expect(svc.resumeBinding('thread-2', 'project-1', 'execution-1', started.value.resumeToken)).resolves.toMatchObject({ ok: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onHumanBlocker).not.toHaveBeenCalled();
+    expect((await store.get('execution-1'))?.reportTo?.id).toBe('owner-session');
+  }));
+
   it('re-offers open unreported human blockers when resume_binding moves the owner target, and only then', async () => fixture(async (filePath) => {
     const onHumanBlocker = vi.fn();
     const grants = createResumeGrantStore({ filePath: `${filePath}.grants`, token: () => 'resume-token' });
