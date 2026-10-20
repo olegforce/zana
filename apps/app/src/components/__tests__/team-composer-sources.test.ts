@@ -29,15 +29,31 @@ describe('applyRenewedSources', () => {
   });
 
   it('has a generic notice when no name is known', () => {
-    expect(applyRenewedSources([], { renewed: [], dropped: [{ previousId: 'a', reason: 'unknown' }] }).notices)
+    expect(applyRenewedSources([chip('a', '')], { renewed: [], dropped: [{ previousId: 'a', reason: 'unknown' }] }).notices)
       .toEqual(['Attach a source again; it is no longer available.']);
-    expect(applyRenewedSources([], { renewed: [], dropped: [{ previousId: 'a', reason: 'too-large' }] }).notices)
+    expect(applyRenewedSources([chip('a', '')], { renewed: [], dropped: [{ previousId: 'a', reason: 'too-large' }] }).notices)
       .toEqual(['A source is now too large. Attach a smaller file.']);
   });
 
   it('notes a changed file', () => {
     const out = applyRenewedSources([chip('a')], { renewed: [{ previousId: 'a', source: chip('a2', 'a.md'), changed: true }], dropped: [] });
     expect(out.notices).toEqual(['a.md changed since you attached it. Launching again uses the current version.']);
+  });
+
+  it('gives no notice for a chip that is no longer present', () => {
+    const out = applyRenewedSources([chip('a')], {
+      renewed: [{ previousId: 'gone', source: chip('g2'), changed: true }],
+      dropped: [{ previousId: 'gone2', name: 'q', reason: 'moved' }]
+    });
+    expect(out.notices).toEqual([]);
+  });
+
+  it('never yields two chips with the same id', () => {
+    const out = applyRenewedSources([chip('a'), chip('b'), chip('c')], {
+      renewed: [{ previousId: 'a', source: chip('b'), changed: false }, { previousId: 'b', source: chip('b'), changed: false }],
+      dropped: []
+    });
+    expect(out.sources.map(({ id }) => id)).toEqual(['b', 'c']);
   });
 
   it('ignores ids that are no longer present', () => {

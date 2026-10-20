@@ -25,14 +25,21 @@ export function applyRenewedSources(
 ): { sources: ExecutionSourceCapabilityView[]; notices: string[] } {
   const renewed = new Map(renewal.renewed.map((entry) => [entry.previousId, entry]));
   const dropped = new Set(renewal.dropped.map(({ previousId }) => previousId));
-  const nameOf = (id: string) => current.find((chip) => chip.id === id)?.name;
+  const nameOf = (id: string) => current.find((chip) => chip.id === id)?.name || undefined;
+  const present = new Set(current.map(({ id }) => id));
+  const seen = new Set<string>();
   const sources = current.flatMap((chip) => {
     if (dropped.has(chip.id)) return [];
-    return [renewed.get(chip.id)?.source ?? chip];
+    const next = renewed.get(chip.id)?.source ?? chip;
+    if (seen.has(next.id)) return [];
+    seen.add(next.id);
+    return [next];
   });
+  // Only chips still on screen need a word; one the user removed mid-launch stays quiet.
   const notices = [
-    ...renewal.dropped.map((entry) => droppedNotice(entry.reason, entry.name ?? nameOf(entry.previousId))),
-    ...renewal.renewed.filter((entry) => entry.changed)
+    ...renewal.dropped.filter((entry) => present.has(entry.previousId))
+      .map((entry) => droppedNotice(entry.reason, entry.name ?? nameOf(entry.previousId))),
+    ...renewal.renewed.filter((entry) => entry.changed && present.has(entry.previousId))
       .map((entry) => `${entry.source.name} changed since you attached it. Launching again uses the current version.`)
   ];
   return { sources, notices };

@@ -194,4 +194,25 @@ describe('TeamComposer renewed sources after a failed launch', () => {
     expect(screen.queryByText('one.md')).toBeNull();
     expect(screen.queryByText('two.md')).toBeNull();
   });
+
+  it('stays quiet about a dropped chip the user removed during the launch, and separates the sentences', async () => {
+    let finish!: (value: unknown) => void;
+    startJob.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    await attach();
+    fireEvent.click(screen.getByTestId('team-command-send'));
+    await waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByLabelText('Remove two.md'));
+    await act(async () => { finish({ ok: false, code: 'BOOM', message: 'two.md moved or disappeared', sources: renewal }); });
+    await waitFor(() => expect(screen.getByTestId('team-command-error')).toBeTruthy());
+    expect(screen.getByTestId('team-command-error').textContent).toBe('Squad launch failed: two.md moved or disappeared');
+    expect(pushToast).not.toHaveBeenCalledWith(expect.stringContaining('Attach two.md again'), 'error');
+  });
+
+  it('puts a full stop between the failure message and the attach-again notice', async () => {
+    startJob.mockResolvedValueOnce({ ok: false, code: 'BOOM', message: 'two.md moved or disappeared', sources: renewal });
+    await attach();
+    fireEvent.click(screen.getByTestId('team-command-send'));
+    await waitFor(() => expect(screen.getByTestId('team-command-error').textContent)
+      .toBe("Squad launch failed: two.md moved or disappeared. Attach two.md again; it moved or can't be read."));
+  });
 });

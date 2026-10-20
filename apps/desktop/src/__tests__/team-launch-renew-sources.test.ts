@@ -18,6 +18,16 @@ describe('withRenewedSources', () => {
     expect(s.reissue).not.toHaveBeenCalled();
   });
 
+  it('discards the retired records after a successful launch, only when ids were attached', async () => {
+    const s = setup(); const discard = vi.fn();
+    const ok: TeamJobLaunchResponse = { ok: true, value: { executionId: 'e', state: 'RUNNING' } };
+    await withRenewedSources(async () => ok, ['a'], s.reissue, s.logError, discard);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['a']);
+    await withRenewedSources(async () => ok, [], s.reissue, s.logError, discard);
+    await withRenewedSources(async () => ({ ok: false, code: 'X', message: 'm' }), ['a'], s.reissue, s.logError, discard);
+    expect(discard).toHaveBeenCalledOnce();
+  });
+
   it('passes a failure through when no ids were given', async () => {
     const s = setup();
     const fail: TeamJobLaunchResponse = { ok: false, code: 'X', message: 'm' };

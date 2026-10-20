@@ -238,12 +238,18 @@ export async function withRenewedSources(
   launch: () => Promise<TeamJobLaunchResponse>,
   capabilityIds: readonly string[],
   reissue: (ids: string[]) => Promise<TeamJobRenewedSources>,
-  logError: (context: string, error: unknown) => void
+  logError: (context: string, error: unknown) => void,
+  discardRetired?: (ids: string[]) => void
 ): Promise<TeamJobLaunchResponse> {
   let failure: Exclude<TeamJobLaunchResponse, { ok: true }>;
   try {
     const result = await launch();
-    if (result.ok || !capabilityIds.length) return result;
+    if (result.ok) {
+      // The files were consumed for good; forget them so a replayed id cannot be exchanged for a new one.
+      if (capabilityIds.length) discardRetired?.([...capabilityIds]);
+      return result;
+    }
+    if (!capabilityIds.length) return result;
     failure = result;
   } catch (error) {
     if (!capabilityIds.length) throw error;

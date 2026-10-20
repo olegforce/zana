@@ -500,7 +500,8 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
       try {
         let real: string;
         try { real = await realpath(record.path); } catch { drop('moved'); continue; }
-        if (real !== record.path || (record.rootRealPath !== undefined && outsideRoot(real, record.rootRealPath))) { drop('moved'); continue; }
+        // record.path is the realpath `issue` proved inside the root, so equality keeps it inside.
+        if (real !== record.path) { drop('moved'); continue; }
         const existing = findLive(record.path);
         if (existing) {
           existing.representations = [...new Set([...existing.representations, ...record.representations])];
@@ -533,6 +534,17 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
       }
     }
     return result;
+  }
+
+  /**
+   * Forget the retired records of ids a successful launch consumed, so a replayed id cannot
+   * be exchanged for a fresh capability.
+   */
+  function discardRetired(input: { windowId: number; projectId: string; capabilityIds: string[] }): void {
+    for (const capabilityId of input.capabilityIds) {
+      const record = retired.get(capabilityId);
+      if (record && record.windowId === input.windowId && record.projectId === input.projectId) retired.delete(capabilityId);
+    }
   }
 
   async function resolve(input: { windowId: number; projectId: string; capabilityIds: string[]; snapshotKey: string }): Promise<{
@@ -717,5 +729,5 @@ export function createExecutionSourceRegistry(options: RegistryOptions) {
     await rm(join(target, '..'), { recursive: true, force: true });
   }
 
-  return { issue, reissue, resolve, list, read, pruneSnapshots, removeSnapshot };
+  return { issue, reissue, discardRetired, resolve, list, read, pruneSnapshots, removeSnapshot };
 }

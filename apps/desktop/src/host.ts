@@ -6416,7 +6416,8 @@ export async function startTeamJobFromUi(
       return teamJobFailureResponse(result);
     }
     return { ok: true, value: { executionId: result.value.id, state: result.value.state } };
-  }), sourceCapabilityIds, (ids) => executionSources.reissue({ windowId: sourceContext!.windowId, projectId, capabilityIds: ids }), logMainError);
+  }), sourceCapabilityIds, (ids) => executionSources.reissue({ windowId: sourceContext!.windowId, projectId, capabilityIds: ids }), logMainError,
+  (ids) => executionSources.discardRetired({ windowId: sourceContext!.windowId, projectId, capabilityIds: ids }));
 }
 
 const proposalLaunchDeps: ProposalLaunchDeps<NonNullable<ExecutionRecord['proposal']>> = {

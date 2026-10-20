@@ -40,6 +40,17 @@ describe('execution source registry reissue', () => {
     await expect(resolve(r, [out.renewed[0].source.id])).resolves.toBeTruthy();
   }));
 
+  it('gives nothing back for ids a successful launch consumed once they are discarded', async () => fixture(async (dir, clock) => {
+    const file = join(dir, 'a.txt');
+    await writeFile(file, 'alpha');
+    const r = make(dir, clock);
+    const [cap] = await issue(r, [file]);
+    await resolve(r, [cap.id]);
+    r.discardRetired({ windowId: 99, projectId: P, capabilityIds: [cap.id] }); // other window: ignored
+    r.discardRetired({ windowId: W, projectId: P, capabilityIds: [cap.id, 'never-issued'] });
+    expect(await reissue(r, [cap.id])).toEqual({ renewed: [], dropped: [{ previousId: cap.id, reason: 'unknown' }] });
+  }));
+
   it('renews the first file and drops the second when resolve threw half way', async () => fixture(async (dir, clock) => {
     const a = join(dir, 'a.txt'); const b = join(dir, 'b.txt');
     await writeFile(a, 'alpha'); await writeFile(b, 'beta');
@@ -150,7 +161,7 @@ describe('execution source registry reissue', () => {
     expect((await reissue(r, [cap.id])).dropped[0].reason).toBe('unreadable');
   }));
 
-  it('drops a symlink swapped outside withinRoot as moved', async () => fixture(async (dir, clock) => {
+  it('drops a path whose parent was swapped for a symlink as moved (realpath no longer equals the issued path)', async () => fixture(async (dir, clock) => {
     const root = join(dir, 'root'); const outside = join(dir, 'outside');
     await mkdir(join(root, 'sub'), { recursive: true }); await mkdir(outside);
     await writeFile(join(root, 'sub', 'a.txt'), 'alpha');

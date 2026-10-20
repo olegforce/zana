@@ -259,7 +259,7 @@ export function TeamComposer({
           return;
         }
         const message = `Squad launch failed: ${res.message ?? res.code}`;
-        setError([message, ...notices].join(' '));
+        setError([notices.length ? message.replace(/[.!?]?$/, '.') : message, ...notices].join(' '));
         pushToast(message, 'error');
         for (const notice of notices) pushToast(notice, 'error');
         return;
