@@ -963,7 +963,7 @@ function httpProduct(): Pick<
         return body;
       },
       closeFollowup: async (threadId) => {
-        const body = await apiJson<{ ok: boolean; summarized: number; followedUp: number }>(
+        const body = await apiJson<Awaited<ReturnType<CcApi['threads']['closeFollowup']>>>(
           `/threads/${encodeURIComponent(threadId)}/close-followup`,
           {
             method: 'POST',

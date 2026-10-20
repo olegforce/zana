@@ -57,6 +57,18 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
   }
 });
 
+it('selects the close-with-follow-up spec for the close summary seams', () => {
+  for (const path of [
+    'apps/server/src/services/followups/close-summary.ts',
+    'apps/app/src/lib/close-idle-agents.ts',
+    'packages/llm/src/claude-cli-provider.ts',
+    'apps/desktop/src/main-claude-binary.ts'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/close-with-follow-up-needs-you.spec.ts');
+  }
+  expect(boundarySpecs(['apps/server/src/services/followups/other-service.ts'])).not.toContain('e2e/close-with-follow-up-needs-you.spec.ts');
+});
+
 it('selects the scheduler specs for scheduler seams', () => {
   for (const path of ['apps/server/src/services/scheduler/scheduler.ts', 'apps/app/src/components/scheduler/ProblemsPanel.tsx', 'apps/app/src/views/scheduler/SchedulerView.tsx', 'packages/domain/src/schedule-health.ts']) {
     expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/scheduler-self-healing.spec.ts', 'e2e/scheduler-overview.spec.ts', 'e2e/scheduler-detail.spec.ts', 'e2e/scheduler-cron.spec.ts']));

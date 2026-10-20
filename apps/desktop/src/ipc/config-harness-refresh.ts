@@ -11,12 +11,14 @@ const runtimeKeys = [
 export function reconcileHarnessConfig(
   previous: AppConfig,
   next: AppConfig,
-  effects: { invalidate(): void; rebuildProviders(config: AppConfig): void }
+  effects: {
+    invalidate(): void;
+    /** Unused: the claude-cli provider reads its binary from the store on every run. */
+    rebuildProviders?(config: AppConfig): void;
+  }
 ): void {
   if (runtimeKeys.some((key) => previous[key] !== next[key])
     || JSON.stringify(previous.harnesses) !== JSON.stringify(next.harnesses)) {
     effects.invalidate();
   }
-  const binary = (config: AppConfig) => config.harnesses?.byId?.claude?.binary ?? config.claudeBinary;
-  if (binary(previous) !== binary(next)) effects.rebuildProviders(next);
 }

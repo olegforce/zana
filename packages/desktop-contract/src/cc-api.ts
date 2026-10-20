@@ -764,7 +764,13 @@ export interface CcApi {
       cancel(threadId: string, interactionId: string): Promise<PendingInteraction>;
     };
     archive(threadId: string): Promise<{ ok: boolean }>;
-    closeFollowup(threadId: string): Promise<{ ok: boolean; summarized: number; followedUp: number }>;
+    closeFollowup(threadId: string): Promise<{
+      ok: boolean;
+      summarized: number;
+      followedUp: number;
+      /** Why a step produced nothing; absent from older main. */
+      failures?: Array<{ reason: 'empty' | 'summary-failed' | 'unparseable' | 'write-failed'; detail?: string }>;
+    }>;
     fork(threadId: string, options?: { sourceSeqEnd?: number }): Promise<Result<{
       id: string;
       projectId: string;
@@ -1068,7 +1074,12 @@ export interface CcApi {
     closeFollowup(
       projectId: string,
       sessionIds: string[]
-    ): Promise<{ summarized: number; followedUp: number }>;
+    ): Promise<{
+      summarized: number;
+      followedUp: number;
+      /** Why a step produced nothing; absent from older main. */
+      failures?: Array<{ reason: 'empty' | 'summary-failed' | 'unparseable' | 'write-failed'; detail?: string }>;
+    }>;
   };
   config: {
     get(): Promise<AppConfig>;

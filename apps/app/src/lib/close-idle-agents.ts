@@ -6,6 +6,40 @@ export type CloseIdleAgentsResult = {
   followedUp: number;
 };
 
+export type CloseFollowupFailure = {
+  reason: 'empty' | 'summary-failed' | 'unparseable' | 'write-failed';
+  detail?: string;
+};
+
+/**
+ * Toast text after a bulk close. When nothing was summarized the wording says why
+ * if main reported `failures`; without them (older main) it keeps the generic hint.
+ */
+export function closedToastMessage(
+  closed: number,
+  summarized: number,
+  followedUp: number,
+  failures?: CloseFollowupFailure[]
+): string {
+  const bits = [`Closed ${closed} agent${closed === 1 ? '' : 's'}`];
+  if (summarized > 0) bits.push(`${summarized} summarized to inbox`);
+  if (followedUp > 0) {
+    bits.push(`${followedUp} follow-up${followedUp === 1 ? '' : 's'} filed`);
+  } else if (summarized > 0) {
+    // A failed follow-up write must not read as "nothing to file".
+    if (failures?.some((f) => f.reason === 'write-failed')) bits.push('could not file the follow-up');
+    else bits.push('no unfinished work found');
+  } else {
+    // Raw CLI detail stays in the main-process log; the toast says what happened in plain words.
+    if (failures?.some((f) => f.reason === 'summary-failed')) bits.push('the AI summary failed (details in the log)');
+    else if (failures?.some((f) => f.reason === 'unparseable')) bits.push('the AI reply could not be understood');
+    else if (failures?.some((f) => f.reason === 'write-failed')) bits.push('could not save the summary or follow-up');
+    else bits.push('no readable transcript found');
+  }
+  return `${bits.join(' · ')}.`;
+}
+
+
 export function selectCloseableIdleIds(
   sessionIds: string[],
   statusById: Record<string, AgentState | undefined>,
@@ -38,11 +72,11 @@ export async function runCloseIdleAgents(input: {
     closeFollowup: (
       projectId: string,
       ids: string[]
-    ) => Promise<{ summarized: number; followedUp: number }>;
+    ) => Promise<{ summarized: number; followedUp: number; failures?: CloseFollowupFailure[] }>;
     closeTerminal: (sessionId: string, projectId: string) => Promise<void>;
     pushBusyToast: (requestedCount: number) => void;
     pushErrorToast: (err: unknown) => void;
-    pushClosedToast: (closed: number, summarized: number, followedUp: number) => void;
+    pushClosedToast: (closed: number, summarized: number, followedUp: number, failures?: CloseFollowupFailure[]) => void;
     pushProgressToast: (count: number) => string;
     dismissProgressToast: (id: string) => void;
   };
@@ -62,12 +96,14 @@ export async function runCloseIdleAgents(input: {
   try {
     let summarized = 0;
     let followedUp = 0;
+    let failures: CloseFollowupFailure[] | undefined;
     if (summarize) {
       progressToastId = deps.pushProgressToast(ids.length);
       try {
         const res = await deps.closeFollowup(projectId, ids);
         summarized = res.summarized;
         followedUp = res.followedUp;
+        failures = res.failures;
       } catch (err) {
         deps.pushErrorToast(err);
       }
@@ -86,7 +122,7 @@ export async function runCloseIdleAgents(input: {
       deps.dismissProgressToast(progressToastId);
       progressToastId = undefined;
     }
-    if (closed > 0) deps.pushClosedToast(closed, summarized, followedUp);
+    if (closed > 0) deps.pushClosedToast(closed, summarized, followedUp, failures);
     return { closed, summarized, followedUp };
   } finally {
     if (progressToastId) deps.dismissProgressToast(progressToastId);

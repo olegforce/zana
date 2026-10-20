@@ -11,15 +11,15 @@ describe('committed harness config refresh', () => {
     const next = config({ [key]: '/new/binary' });
     reconcileHarnessConfig(config(), next, hooks);
     expect(hooks.invalidate).toHaveBeenCalledOnce();
-    expect(hooks.rebuildProviders).toHaveBeenCalledTimes(key === 'claudeBinary' ? 1 : 0);
+    expect(hooks.rebuildProviders).not.toHaveBeenCalled();
   });
-  it('refreshes the provider after a canonical binary change even with stale flat fields', () => {
+  it('invalidates after a canonical binary change without rebuilding providers (the getter reads live)', () => {
     const hooks = effects();
     const previous = config({ harnesses: { byId: { claude: { binary: '/old/claude' } } } });
     const next = config({ harnesses: { byId: { claude: { binary: '/new/claude' } } } });
     reconcileHarnessConfig(previous, next, hooks);
     expect(hooks.invalidate).toHaveBeenCalledOnce();
-    expect(hooks.rebuildProviders).toHaveBeenCalledWith(next);
+    expect(hooks.rebuildProviders).not.toHaveBeenCalled();
   });
   it('invalidates canonical enable changes without rebuilding an unchanged provider', () => {
     const hooks = effects();

@@ -30,12 +30,12 @@ beforeEach(() => {
 });
 
 describe('config.set window state', () => {
-  it('invalidates the runtime cache and rebuilds providers after committing a binary change', () => {
+  it('invalidates the runtime cache (providers read the binary live) after committing a binary change', () => {
     h.verifyState.cache = { cached: true };
     const next = h.handlers.get(IPC.config.set)!({ claudeBinary: '/configured/claude' });
     expect(h.setConfig).toHaveBeenCalledWith({ claudeBinary: '/configured/claude' });
     expect(h.verifyState.cache).toBeUndefined();
-    expect(h.rebuildProviders).toHaveBeenCalledWith(next);
+    expect(h.rebuildProviders).not.toHaveBeenCalled();
     expect(h.safeSend).toHaveBeenCalledWith(IPC.config.onChanged, next);
   });
   it('rejects persistence failures so neither IPC nor HTTP acknowledges an unapplied config', () => {
