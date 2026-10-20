@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { LaunchProfileId, Persona, Project, Team, TeamJobLaunchResponse } from '@zana-ai/zcc-domain/product';
+import type { LaunchProfileId, Persona, Project, Team, TeamJobLaunchResponse, TeamJobRenewedSources } from '@zana-ai/zcc-domain/product';
 import type { ExecutionRecord } from '@zana-ai/zcc-server/services/execution/store';
 import type { InboxInput } from '@zana-ai/zcc-server/services/inbox/inbox-store';
 import { compatibleNativeRecoverySnapshots, nativeRecoveryLaunchSlot } from './team-native-recovery.js';
@@ -227,4 +227,33 @@ export function runSpawnLifecycle<T>(
   spawn: () => Promise<T>
 ): Promise<T> {
   return lifecycle?.withSpawnLock ? lifecycle.withSpawnLock(spawn) : spawn();
+}
+
+/**
+ * A failed launch may already have consumed the attached source capabilities, so the
+ * renderer would be left with dead chips. Hand back freshly re-issued ones with every
+ * failure; a throwing launch with attachments becomes a LAUNCH_FAILED response.
+ */
+export async function withRenewedSources(
+  launch: () => Promise<TeamJobLaunchResponse>,
+  capabilityIds: readonly string[],
+  reissue: (ids: string[]) => Promise<TeamJobRenewedSources>,
+  logError: (context: string, error: unknown) => void
+): Promise<TeamJobLaunchResponse> {
+  let failure: Exclude<TeamJobLaunchResponse, { ok: true }>;
+  try {
+    const result = await launch();
+    if (result.ok || !capabilityIds.length) return result;
+    failure = result;
+  } catch (error) {
+    if (!capabilityIds.length) throw error;
+    logError('team-job-launch', error);
+    failure = { ok: false, code: 'LAUNCH_FAILED', message: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    return { ...failure, sources: await reissue([...capabilityIds]) };
+  } catch (error) {
+    logError('team-job-renew-sources', error);
+    return failure;
+  }
 }

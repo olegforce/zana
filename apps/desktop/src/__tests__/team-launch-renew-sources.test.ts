@@ -1,0 +1,78 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { TeamJobLaunchResponse, TeamJobRenewedSources } from '@zana-ai/zcc-domain/product';
+import { withRenewedSources } from '../team-launch-support.js';
+
+const sources: TeamJobRenewedSources = {
+  renewed: [{ previousId: 'a', source: { id: 'b', name: 'n.md', byteSize: 1, expiresAt: 5 }, changed: false }],
+  dropped: []
+};
+const setup = (reissue = vi.fn().mockResolvedValue(sources)) => ({ reissue, logError: vi.fn() });
+const run = (launch: () => Promise<TeamJobLaunchResponse>, ids: string[], s = setup()) =>
+  withRenewedSources(launch, ids, s.reissue, s.logError);
+
+describe('withRenewedSources', () => {
+  it('passes a success through without re-issuing', async () => {
+    const s = setup();
+    const ok: TeamJobLaunchResponse = { ok: true, value: { executionId: 'e', state: 'RUNNING' } };
+    expect(await run(async () => ok, ['a'], s)).toBe(ok);
+    expect(s.reissue).not.toHaveBeenCalled();
+  });
+
+  it('passes a failure through when no ids were given', async () => {
+    const s = setup();
+    const fail: TeamJobLaunchResponse = { ok: false, code: 'X', message: 'm' };
+    expect(await run(async () => fail, [], s)).toBe(fail);
+    expect(s.reissue).not.toHaveBeenCalled();
+  });
+
+  it('adds sources to a plain failure', async () => {
+    expect(await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['a'])).toEqual({ ok: false, code: 'X', message: 'm', sources });
+  });
+
+  it('keeps requirementFailure and adds sources', async () => {
+    const requirementFailure = { workUnits: [] };
+    expect(await run(async () => ({ ok: false, code: 'REQUIREMENT_UNAVAILABLE', message: 'm', requirementFailure }), ['a']))
+      .toMatchObject({ code: 'REQUIREMENT_UNAVAILABLE', requirementFailure, sources });
+  });
+
+  it('keeps availabilityUnknown and adds sources', async () => {
+    const availabilityUnknown = { failedSources: ['skills' as const] };
+    expect(await run(async () => ({ ok: false, code: 'CAPABILITY_AVAILABILITY_UNKNOWN', message: 'm', availabilityUnknown }), ['a']))
+      .toMatchObject({ code: 'CAPABILITY_AVAILABILITY_UNKNOWN', availabilityUnknown, sources });
+  });
+
+  it('turns a throwing launch with ids into LAUNCH_FAILED with sources and logs once', async () => {
+    const s = setup(); const error = new Error('boom');
+    expect(await run(async () => { throw error; }, ['a'], s)).toEqual({ ok: false, code: 'LAUNCH_FAILED', message: 'boom', sources });
+    expect(s.logError).toHaveBeenCalledOnce();
+    expect(s.logError).toHaveBeenCalledWith('team-job-launch', error);
+  });
+
+  it('stringifies a non-Error throw', async () => {
+    expect(await run(async () => { throw 'plain'; }, ['a'])).toMatchObject({ code: 'LAUNCH_FAILED', message: 'plain' });
+  });
+
+  it('rethrows a throwing launch when no ids were given', async () => {
+    const s = setup();
+    await expect(run(async () => { throw new Error('boom'); }, [], s)).rejects.toThrow('boom');
+    expect(s.reissue).not.toHaveBeenCalled();
+    expect(s.logError).not.toHaveBeenCalled();
+  });
+
+  it('returns the failure without sources when reissue throws, logging once', async () => {
+    const error = new Error('nope');
+    const s = setup(vi.fn().mockRejectedValue(error));
+    const result = await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['a'], s);
+    expect(result).toEqual({ ok: false, code: 'X', message: 'm' });
+    expect(s.logError).toHaveBeenCalledOnce();
+    expect(s.logError).toHaveBeenCalledWith('team-job-renew-sources', error);
+  });
+
+  it('gives reissue a copy of the ids', async () => {
+    const s = setup(); const ids = ['a', 'b'];
+    await run(async () => ({ ok: false, code: 'X', message: 'm' }), ids, s);
+    const passed = s.reissue.mock.calls[0][0];
+    expect(passed).toEqual(ids);
+    expect(passed).not.toBe(ids);
+  });
+});
