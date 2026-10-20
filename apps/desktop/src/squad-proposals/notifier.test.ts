@@ -530,12 +530,14 @@ describe('blocker report survives a restart', () => {
 
   it('does not mark an owner blocker whose conversation is gone, and re-sends it once the target moves', async () => {
     let live = false;
-    const { deps, notifier } = setup({ ptyLive: vi.fn((id: string) => live || id === 'new') }, owner);
+    let current = owner();
+    const { deps, notifier } = setup({ ptyLive: vi.fn((id: string) => live || id === 'new') }, () => current);
     await notifier.onHumanBlocker(owner(), blocker as never);
     await vi.advanceTimersByTimeAsync(0);
     expect(deps.markBlockerReported).not.toHaveBeenCalled();
     // resume_binding moved the target: the service offers the blocker again.
-    await notifier.onHumanBlocker(owner({ reportTo: { kind: 'pty', id: 'new', role: 'owner' } }), blocker as never);
+    current = owner({ reportTo: { kind: 'pty', id: 'new', role: 'owner' } });
+    await notifier.onHumanBlocker(current, blocker as never);
     await vi.advanceTimersByTimeAsync(0);
     expect(deps.reply).toHaveBeenCalledWith('new', expect.stringContaining('blocker b1'));
     expect(deps.markBlockerReported).toHaveBeenCalledWith('e1', 'b1');
@@ -561,6 +563,34 @@ describe('blocker report survives a restart', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(deps.reply).not.toHaveBeenCalled();
     expect(deps.markBlockerReported).toHaveBeenCalledWith('e1', 'b1');
+  });
+
+  it('re-offers a queued blocker report to the current target when resume_binding moved it while it waited', async () => {
+    let current = owner({ blockers: [blocker] as never });
+    const { deps, notifier } = setup({}, () => current);
+    const typedAt = Date.now();
+    deps.lastInputAt.mockImplementation((id: string) => (id === 's1' ? typedAt : undefined));
+    await notifier.onHumanBlocker(owner(), blocker as never);
+    expect(deps.reply).not.toHaveBeenCalled();
+    // The owner target moves to a fresh session; the old PTY stays live and quiet time passes.
+    current = owner({ reportTo: { kind: 'pty', id: 'new', role: 'owner' }, blockers: [blocker] as never });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deps.reply).not.toHaveBeenCalledWith('s1', expect.anything());
+    expect(deps.reply).toHaveBeenCalledOnce();
+    expect(deps.reply).toHaveBeenCalledWith('new', expect.stringContaining('blocker b1'));
+    expect(deps.markBlockerReported).toHaveBeenCalledOnce();
+    expect(deps.markBlockerReported).toHaveBeenCalledWith('e1', 'b1');
+  });
+
+  it('does not mark the blocker reported for the old target when it moved and the new one is gone', async () => {
+    let current = owner({ blockers: [blocker] as never });
+    const { deps, notifier } = setup({ ptyLive: vi.fn((id: string) => id === 's1') }, () => current);
+    deps.lastInputAt.mockReturnValue(Date.now());
+    await notifier.onHumanBlocker(owner(), blocker as never);
+    current = owner({ reportTo: { kind: 'pty', id: 'new', role: 'owner' }, blockers: [blocker] as never });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deps.reply).not.toHaveBeenCalled();
+    expect(deps.markBlockerReported).not.toHaveBeenCalled();
   });
 
   it('boot replay skips a record without its own reportTo (written before report-back)', async () => {

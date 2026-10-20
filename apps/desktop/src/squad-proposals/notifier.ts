@@ -189,7 +189,10 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
     // Before boot replay the conversations are not restored: leave it to replayBlockers instead of reading them as gone.
     if (disposed || !ready || !target || record.reportedBlockerIds?.includes(blocker.id) || !firstSighting(record.id, blocker.id)) return;
     // Marked once delivered or dropped for good; a dispose before that leaves it for boot replay.
+    // Not marked when the report target moved while it waited: the new target still has to get it.
+    let moved = false;
     const settle = () => {
+      if (moved) return;
       void Promise.resolve()
         .then(() => deps.markBlockerReported(record.id, blocker.id))
         .catch((error: unknown) => safeLog(`squad proposal blocker mark failed for ${record.id}`, error));
@@ -202,7 +205,17 @@ export function createSquadProposalNotifier(deps: SquadProposalNotifierDeps): Sq
       const fresh = await deps.getRecord(record.id);
       const current = fresh?.blockers?.find((candidate) => candidate.id === blocker.id);
       // Only a blocker the store says is resolved is dropped; anything unclear is still delivered.
-      return current?.resolved !== true;
+      if (current?.resolved === true) return false;
+      const now = fresh ? executionReportTarget(fresh) : undefined;
+      if (fresh && now && (now.kind !== target.kind || now.id !== target.id)) {
+        // resume_binding moved the target while this report waited for a quiet old session: drop this
+        // item unmarked and offer the blocker to the current target (its first offer was ignored as seen).
+        moved = true;
+        seenBlockers.get(record.id)?.delete(blocker.id);
+        void onHumanBlocker(fresh, blocker).catch((error: unknown) => safeLog(`squad proposal blocker re-offer failed for ${record.id}`, error));
+        return false;
+      }
+      return true;
     };
     try {
       await deliver(target, record.projectId, buildSquadBlockerReport(record, blocker, target.role), settle, { stillWanted, ...(onGone ? { onGone } : {}) });
