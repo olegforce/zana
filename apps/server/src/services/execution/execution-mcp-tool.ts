@@ -117,10 +117,11 @@ const executionWorkHeartbeatSchema = {
   turnCount: z.number().int().min(0).max(10_000).optional()
 };
 const executionWorkAssignSchema = { ...executionIdSchema, workUnitId: z.string().min(1).max(2048), assignedSlotId: z.string().min(1).max(2048) };
-// The schema bound is looser than the real cap so the handler can name the limit in its error.
-const EXECUTION_RESULT_SCHEMA_MAX_CHARS = 64 * 1024;
+// No schema max on `result`: any over-cap result must reach the handler so it names the real limit.
+// A schema max never bounded memory (the transport parses the body before validation), and the
+// store keeps at most MAX_STRING characters, so dropping the old 64 KiB bound loses no protection.
 const EXECUTION_RESULT_MAX_CHARS = 2048;
-const executionWorkResultSchema = { ...executionWorkSchema, result: z.string().min(1).max(EXECUTION_RESULT_SCHEMA_MAX_CHARS), structuredResult: z.unknown().optional() };
+const executionWorkResultSchema = { ...executionWorkSchema, result: z.string().min(1), structuredResult: z.unknown().optional() };
 const executionWorkFailureSchema = {
   ...executionWorkSchema,
   failure: z.string().min(1).max(EXECUTION_FAILURE_DETAIL_MAX_CHARS),
@@ -401,7 +402,11 @@ export function registerExecutionTools(server: McpServer, options: RegisterExecu
     if (!authorized()) return denied('execution.work.complete'); const bound = await binding(executionId); if (!bound) return boundDenied('execution.work.complete');
     if (result.length > EXECUTION_RESULT_MAX_CHARS) {
       // structuredResult is only accepted for a unit that declares an output, so only then is it advice that works.
-      const hint = await options.service.workUnitDeclaresOutput(bound, workUnitId).catch(() => false) ? ' Put the detail in structuredResult.' : '';
+      const declaresOutput = await options.service.workUnitDeclaresOutput(bound, workUnitId).catch((error: unknown) => {
+        console.error(`[execution-mcp] tool execution.work.complete could not check declared output for execution ${executionId} work unit ${workUnitId}`, error);
+        return false;
+      });
+      const hint = declaresOutput ? ' Put the detail in structuredResult.' : '';
       return { isError: true, content: [{ type: 'text' as const, text: `execution.work.complete failed: result is ${result.length} chars; max ${EXECUTION_RESULT_MAX_CHARS}. Shorten it to a summary of at most ${EXECUTION_RESULT_MAX_CHARS} characters.${hint}` }] };
     }
     return outcomeResult('execution.work.complete', workUnitId, await options.service.completeWork(bound, workUnitId, result, claimId && claimGeneration ? { claimId, claimGeneration } : undefined, true, structuredResult));

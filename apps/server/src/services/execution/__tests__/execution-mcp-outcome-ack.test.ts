@@ -95,9 +95,32 @@ describe('Squad outcome tool acknowledgements', () => {
     const input = z.object(schemas.get('execution.work.complete')!);
     const call = { executionId: 'execution-1', workUnitId: 'unit-0' };
     expect(input.safeParse({ ...call, result: 'x'.repeat(2049) }).success).toBe(true);
-    expect(input.safeParse({ ...call, result: 'x'.repeat(64 * 1024 + 1) }).success).toBe(false);
+    expect(input.safeParse({ ...call, result: 'x'.repeat(70_000) }).success).toBe(true);
     // The other outcome tools keep their own caps.
     expect(z.object(schemas.get('execution.work.block')!).safeParse({ ...call, blockerId: 'b', question: 'q'.repeat(2049) }).success).toBe(false);
+  });
+
+  it('names the limit for a 70,000-char result', async () => {
+    const { tools, service } = setup();
+    const reply = await tools.get('execution.work.complete')!({ ...base, result: 'x'.repeat(70_000) });
+    expect(reply.isError).toBe(true);
+    expect(text(reply)).toContain('70000');
+    expect(text(reply)).toContain('max 2048');
+    expect(service.completeWork).not.toHaveBeenCalled();
+  });
+
+  it('logs and falls back when the declared-output check fails', async () => {
+    const { tools, service } = setup();
+    const boom = new Error('lookup failed');
+    service.workUnitDeclaresOutput.mockRejectedValueOnce(boom);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reply = await tools.get('execution.work.complete')!({ ...base, result: 'x'.repeat(2049) });
+    expect(text(reply)).toContain('max 2048');
+    expect(text(reply)).not.toContain('structuredResult');
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('execution.work.complete'), boom);
+    expect(spy.mock.calls[0]![0]).toContain('execution-1');
+    expect(spy.mock.calls[0]![0]).toContain('unit-0');
+    spy.mockRestore();
   });
 
   it('accepts exactly 2048 chars', async () => {
