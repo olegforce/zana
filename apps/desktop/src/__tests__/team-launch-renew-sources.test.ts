@@ -93,9 +93,30 @@ describe('withRenewedSources', () => {
     expect(second).toEqual({ ok: false, code: 'REPLAYED_CAPABILITY', message: 'used' });
     expect(s.reissue).not.toHaveBeenCalled();
     finish({ ok: false, code: 'X', message: 'm' });
-    expect(await first).toMatchObject({ sources });
+    // contested: the second launch may have consumed them, so the first renews nothing either
+    expect(await first).toEqual({ ok: false, code: 'X', message: 'm' });
+    expect(s.reissue).not.toHaveBeenCalled();
     // released: the same ids may be renewed again afterwards
     expect(await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['x'], s)).toMatchObject({ sources });
+  });
+
+  it('renews a launch that was never overlapped, even after an unrelated overlap ended', async () => {
+    const s = setup(); let finish!: (r: TeamJobLaunchResponse) => void;
+    const first = run(() => new Promise<TeamJobLaunchResponse>((resolve) => { finish = resolve; }), ['p'], s);
+    await run(async () => ({ ok: false, code: 'X', message: 'm' }), ['q'], s);
+    finish({ ok: false, code: 'X', message: 'm' });
+    expect(await first).toMatchObject({ sources });
+  });
+
+  it('discards the retired records when an overlapping launch succeeds', async () => {
+    const s = setup(); const discard = vi.fn(); let finish!: (r: TeamJobLaunchResponse) => void;
+    const ok: TeamJobLaunchResponse = { ok: true, value: { executionId: 'e', state: 'RUNNING' } };
+    const first = withRenewedSources(() => new Promise<TeamJobLaunchResponse>((resolve) => { finish = resolve; }), ['w'], s.reissue, s.logError, discard);
+    expect(await withRenewedSources(async () => ok, ['w'], s.reissue, s.logError, discard)).toBe(ok);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['w']);
+    finish({ ok: false, code: 'REPLAYED_CAPABILITY', message: 'used' });
+    expect(await first).toEqual({ ok: false, code: 'REPLAYED_CAPABILITY', message: 'used' });
+    expect(s.reissue).not.toHaveBeenCalled();
   });
 
   it('releases the in-flight ids when the launch throws', async () => {
