@@ -34,7 +34,7 @@ const scrollTo = (pane: Locator, fraction: number) =>
   pane.evaluate((el, f) => { el.scrollTop = (el.scrollHeight - el.clientHeight) * f; }, fraction);
 const height = (box: Locator) => box.evaluate((el) => el.getBoundingClientRect().height);
 
-test('reply bar stays pinned at every scroll position, width and theme', async ({ app }, testInfo) => {
+test('reply bar stays pinned at every scroll position, width and theme', async ({ app }) => {
   const page = app.window;
   await page.getByTestId('nav-inbox').click();
   await openEntry(page, 'Long inbox report');
@@ -64,7 +64,6 @@ test('reply bar stays pinned at every scroll position, width and theme', async (
       }).toBe(true);
       const top = (await dock.boundingBox())!.y;
       pinnedTop ??= top;
-      if (width === 1600 && fraction === 0.5) await page.screenshot({ path: testInfo.outputPath(`pinned-bar-middle-${theme}.png`) });
       expect(Math.abs(top - pinnedTop)).toBeLessThanOrEqual(1);
       expect(await dock.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
     }
@@ -75,7 +74,7 @@ test('reply bar stays pinned at every scroll position, width and theme', async (
   }
 });
 
-test('reply box grows to a cap, Esc/R round-trip, quote and the draft survives switching entries', async ({ app }, testInfo) => {
+test('reply box grows to a cap, Esc/R round-trip, quote and the draft survives switching entries', async ({ app }) => {
   const page = app.window;
   await app.electron.evaluate(({ BrowserWindow }) => {
     const main = BrowserWindow.getAllWindows().find((c) => !c.webContents.getURL().startsWith('devtools:'))!;
@@ -99,7 +98,6 @@ test('reply box grows to a cap, Esc/R round-trip, quote and the draft survives s
   await expect.poll(() => height(input)).toBeLessThanOrEqual(innerHeight * 0.4 + 1);
   expect(await input.evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto');
   expect(await input.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('composer-at-cap.png') });
 
   // 3. Esc leaves the box, R comes back with the text intact.
   await input.press('Escape');
@@ -116,7 +114,6 @@ test('reply box grows to a cap, Esc/R round-trip, quote and the draft survives s
   await paragraph.click({ clickCount: 3 });
   const quote = page.getByRole('button', { name: 'Quote in reply' });
   await expect(quote).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('quote-in-reply-button.png') });
   await quote.click();
   await expect(input).toHaveValue(/^> Paragraph 3: .*\n- $/);
   await expect(input).toBeFocused();
