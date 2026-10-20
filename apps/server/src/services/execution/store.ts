@@ -311,7 +311,7 @@ export interface ExecutionRecord {
   reportTo?: ExecutionReportTarget;
   /** `attempt` whose terminal report was already handled. */
   reportNoticeVersion?: number;
-  /** Before `reportNoticeVersion`: the same mark, written only for proposed runs. Read, never written. */
+  /** Legacy terminal-report mark from before `reportNoticeVersion`. Read for every run; still written for proposal-backed runs so a downgrade does not type their report again. */
   proposalNoticeVersion?: number;
   /** Blockers already reported to `reportTo`, so a restart neither repeats nor drops one. Newest last, at most {@link MAX_REPORTED_BLOCKER_IDS}. */
   reportedBlockerIds?: string[];
@@ -1437,7 +1437,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
 
   /**
    * Record that a human blocker was reported to the run's report target. Idempotent; keeps the
-   * newest {@link MAX_REPORTED_BLOCKER_IDS}. Like {@link markReported} it never bumps stateVersion.
+   * open blockers' ids, newest {@link MAX_REPORTED_BLOCKER_IDS}. Like {@link markReported} it never bumps stateVersion.
    */
   async function markBlockerReported(executionId: string, blockerId: string): Promise<ExecutionRecord> {
     return storeQueue.run(async () => {
@@ -1448,7 +1448,10 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       const safeBlockerId = string(blockerId, 'blocker id');
       if (!record.blockers?.some((blocker) => blocker.id === safeBlockerId)) throw new Error('execution blocker not found');
       if (record.reportedBlockerIds?.includes(safeBlockerId)) return clone(record);
-      record.reportedBlockerIds = [...(record.reportedBlockerIds ?? []), safeBlockerId].slice(-MAX_REPORTED_BLOCKER_IDS);
+      // Drop ids of blockers that are resolved or gone first, so the cap never evicts an open one.
+      const open = new Set((record.blockers ?? []).filter((blocker) => !blocker.resolved).map((blocker) => blocker.id));
+      const kept = (record.reportedBlockerIds ?? []).filter((id) => open.has(id));
+      record.reportedBlockerIds = [...kept, safeBlockerId].slice(-MAX_REPORTED_BLOCKER_IDS);
       record.updatedAt = now();
       persist(snapshot.state, snapshot.hash);
       return clone(record);
