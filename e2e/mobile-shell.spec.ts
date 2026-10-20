@@ -10,7 +10,7 @@ import {
   MOBILE_BRIDGE_VERSION
 } from '../packages/mobile-bridge/src/index.js';
 
-// The composer mic only renders with Experimental → voice input on (#377).
+// The composer mic only renders once Settings → Experimental → voice input is on (#377).
 test.use({ launchEnv: { ZCC_FAKE_PROVIDER: '1' }, initialConfig: { voiceInputEnabled: true } });
 test('Mobile pairs to built Electron, uses phone navigation, reads and sends a live thread', async ({
   app
