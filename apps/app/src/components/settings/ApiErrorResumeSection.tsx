@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import {
   API_ERROR_RESUME_DEFAULTS,
@@ -10,14 +10,14 @@ import {
 import { CheckboxField, Section } from '@/components/settings/FormFields';
 import './api-error-resume.css';
 
-const EMPTY: ApiErrorResumeConfig = { enabled: false, rules: [], maxPerWindow: 3, windowMinutes: 15 };
 const D = API_ERROR_RESUME_DEFAULTS;
+const EMPTY: ApiErrorResumeConfig = { enabled: false, rules: [], maxPerWindow: D.maxPerWindow, windowMinutes: D.windowMinutes };
 
 type CheckResult =
   | { kind: 'unavailable' }
   | { kind: 'match'; n: number; message: string; delaySeconds: number }
   | { kind: 'none' }
-  | { kind: 'skipped'; ns: number[] };
+  | { kind: 'skipped'; lines: string[] };
 
 let ruleSeq = 0;
 const newId = () => `r${Date.now().toString(36)}${(ruleSeq++).toString(36)}`;
@@ -44,19 +44,37 @@ export function ApiErrorResumeSection({
   const current = config.apiErrorResume ?? EMPTY;
   const [checkText, setCheckText] = useState('');
   const [result, setResult] = useState<CheckResult | null>(null);
+  // Rows never saved yet live here, so a save elsewhere can't wipe a half-filled row.
+  const [pending, setPending] = useState<ApiErrorResumeRule[]>([]);
+  // The last valid version of each stored rule: a rule mid-edit keeps it when other fields save.
+  const lastValid = useRef(new Map<string, ApiErrorResumeRule>());
+  const checkSeq = useRef(0);
+  for (const r of current.rules) if (!ruleError(r)) lastValid.current.set(r.id, r);
+  const rows = [...current.rules, ...pending];
 
-  const sendable = (rules: ApiErrorResumeRule[]) => rules.filter((r) => !ruleError(r));
+  const sendable = (rules: ApiErrorResumeRule[]) =>
+    rules.flatMap((r) => (!ruleError(r) ? [r] : lastValid.current.get(r.id) ? [lastValid.current.get(r.id)!] : []));
   const draft = (patch: Partial<ApiErrorResumeConfig>) =>
     onConfigDraft({ ...config, apiErrorResume: { ...current, ...patch } });
-  // Always a whole object; rows that would be rejected are never persisted.
+  // Always a whole object; a rule that is invalid right now keeps its last saved version.
   const save = (patch: Partial<ApiErrorResumeConfig>) => {
     const next = { ...current, ...patch };
     return onUpdate({ apiErrorResume: { ...next, rules: sendable(next.rules) } });
   };
-  const editRule = (index: number, patch: Partial<ApiErrorResumeRule>) =>
-    draft({ rules: current.rules.map((r, i) => (i === index ? { ...r, ...patch } : r)) });
-  const commit = (rules: ApiErrorResumeRule[], index: number) => {
-    if (!ruleError(rules[index])) void save({ rules });
+  const apply = (id: string, patch: Partial<ApiErrorResumeRule>, commit: boolean) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    const updated = { ...row, ...patch };
+    if (pending.some((r) => r.id === id)) {
+      if (commit && !ruleError(updated)) {
+        setPending(pending.filter((r) => r.id !== id));
+        void save({ rules: [...current.rules, updated] });
+      } else setPending(pending.map((r) => (r.id === id ? updated : r)));
+      return;
+    }
+    const rules = current.rules.map((r) => (r.id === id ? updated : r));
+    draft({ rules });
+    if (commit && !ruleError(updated)) void save({ rules });
   };
   const addRule = (partial: Partial<ApiErrorResumeRule> = {}) => {
     const rule: ApiErrorResumeRule = {
@@ -64,21 +82,28 @@ export function ApiErrorResumeSection({
       delaySeconds: D.delaySeconds, enabled: true, ...partial
     };
     if (partial.match) void save({ rules: [...current.rules, rule] });
-    else draft({ rules: [...current.rules, rule] });
+    else setPending([...pending, rule]);
   };
-  const removeRule = (index: number) => void save({ rules: current.rules.filter((_, i) => i !== index) });
+  const removeRule = (id: string) => {
+    if (pending.some((r) => r.id === id)) setPending(pending.filter((r) => r.id !== id));
+    else void save({ rules: current.rules.filter((r) => r.id !== id) });
+  };
 
   const runCheck = async () => {
     const api = (window as unknown as { cc?: { apiErrorResume?: { check: (i: { text: string; rules: unknown }) => Promise<any> } } }).cc?.apiErrorResume;
     if (!api) return setResult({ kind: 'unavailable' });
-    const rules = sendable(current.rules);
-    const res = await api.check({ text: checkText, rules });
-    const indexOf = (id: string) => rules.findIndex((r) => r.id === id) + 1;
+    const seq = ++checkSeq.current;
+    const res = await api.check({ text: checkText, rules: sendable(current.rules) });
+    if (seq !== checkSeq.current) return; // a newer Check is in flight
+    const indexOf = (id: string) => rows.findIndex((r) => r.id === id) + 1;
     if (res.ruleId) {
       return setResult({ kind: 'match', n: indexOf(res.ruleId), message: res.message ?? D.message, delaySeconds: res.delaySeconds ?? D.delaySeconds });
     }
-    const slow = (res.skipped ?? []).filter((s: { reason: string }) => s.reason === 'timeout');
-    setResult(slow.length ? { kind: 'skipped', ns: slow.map((s: { ruleId: string }) => indexOf(s.ruleId)) } : { kind: 'none' });
+    const lines = (res.skipped ?? []).map((s: { ruleId: string; reason: string }) =>
+      s.reason === 'timeout'
+        ? `Rule ${indexOf(s.ruleId)} took too long to check and was skipped.`
+        : `Rule ${indexOf(s.ruleId)} could not be checked right now. Try again.`);
+    setResult(lines.length ? { kind: 'skipped', lines } : { kind: 'none' });
   };
 
   return (
@@ -98,7 +123,7 @@ export function ApiErrorResumeSection({
         <>
           <div className="api-error-resume-rules" data-settings-target="agents.api-error-resume-rules">
             <ul className="team-slot-list api-error-resume-list">
-              {current.rules.map((rule, i) => {
+              {rows.map((rule, i) => {
                 const error = ruleError(rule);
                 return (
                   <li key={rule.id} className="api-error-resume-row">
@@ -108,8 +133,8 @@ export function ApiErrorResumeSection({
                         type="text"
                         aria-label={`When the error matches (rule ${i + 1})`}
                         value={rule.match}
-                        onChange={(e) => editRule(i, { match: e.target.value })}
-                        onBlur={() => commit(current.rules, i)}
+                        onChange={(e) => apply(rule.id, { match: e.target.value }, false)}
+                        onBlur={() => apply(rule.id, {}, true)}
                       />
                     </label>
                     <label className="api-error-resume-regex">
@@ -117,11 +142,7 @@ export function ApiErrorResumeSection({
                         type="checkbox"
                         aria-label={`Regex (rule ${i + 1})`}
                         checked={rule.matchMode === 'regex'}
-                        onChange={(e) => {
-                          const rules = current.rules.map((r, j) => (j === i ? { ...r, matchMode: e.target.checked ? 'regex' as const : 'contains' as const } : r));
-                          draft({ rules });
-                          commit(rules, i);
-                        }}
+                        onChange={(e) => apply(rule.id, { matchMode: e.target.checked ? 'regex' : 'contains' }, true)}
                       />
                       Regex
                     </label>
@@ -131,8 +152,8 @@ export function ApiErrorResumeSection({
                         type="text"
                         aria-label={`Send (rule ${i + 1})`}
                         value={rule.message}
-                        onChange={(e) => editRule(i, { message: e.target.value })}
-                        onBlur={() => commit(current.rules, i)}
+                        onChange={(e) => apply(rule.id, { message: e.target.value }, false)}
+                        onBlur={() => apply(rule.id, {}, true)}
                       />
                     </label>
                     <label>
@@ -145,17 +166,14 @@ export function ApiErrorResumeSection({
                         value={rule.delaySeconds}
                         onChange={(e) => {
                           const n = parseInt(e.target.value, 10);
-                          if (!Number.isNaN(n)) editRule(i, { delaySeconds: n });
+                          if (!Number.isNaN(n)) apply(rule.id, { delaySeconds: n }, false);
                         }}
-                        onBlur={(e) => {
-                          const n = clamp(parseInt(e.target.value, 10), D.minDelaySeconds, D.maxDelaySeconds, D.delaySeconds);
-                          const rules = current.rules.map((r, j) => (j === i ? { ...r, delaySeconds: n } : r));
-                          draft({ rules });
-                          commit(rules, i);
-                        }}
+                        onBlur={(e) =>
+                          apply(rule.id, { delaySeconds: clamp(parseInt(e.target.value, 10), D.minDelaySeconds, D.maxDelaySeconds, D.delaySeconds) }, true)
+                        }
                       />
                     </label>
-                    <button type="button" className="settings-btn" aria-label={`Remove rule ${i + 1}`} onClick={() => removeRule(i)}>
+                    <button type="button" className="settings-btn" aria-label={`Remove rule ${i + 1}`} onClick={() => removeRule(rule.id)}>
                       Remove
                     </button>
                     {error && <p className="api-error-resume-error" role="alert">{error}</p>}
@@ -166,7 +184,7 @@ export function ApiErrorResumeSection({
             <div className="api-error-resume-actions">
               <button type="button" className="settings-btn" onClick={() => addRule()}>Add rule</button>
               {API_ERROR_RESUME_SUGGESTIONS.filter(
-                (s) => !current.rules.some((r) => r.match.toLowerCase() === s.match!.toLowerCase())
+                (s) => !rows.some((r) => r.match.toLowerCase() === s.match!.toLowerCase())
               ).map((s) => (
                 <button key={s.match} type="button" className="settings-btn" onClick={() => addRule(s)}>
                   + {s.match}
@@ -181,17 +199,17 @@ export function ApiErrorResumeSection({
             <div className="api-error-resume-cap-line">
               Stop after
               <input
-                type="number" min={1} max={10} aria-label="Messages before stopping"
+                type="number" min={D.minPerWindow} max={D.maxPerWindowLimit} aria-label="Messages before stopping"
                 value={current.maxPerWindow}
                 onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n)) draft({ maxPerWindow: n }); }}
-                onBlur={(e) => void save({ maxPerWindow: clamp(parseInt(e.target.value, 10), 1, 10, D.maxPerWindow) })}
+                onBlur={(e) => void save({ maxPerWindow: clamp(parseInt(e.target.value, 10), D.minPerWindow, D.maxPerWindowLimit, D.maxPerWindow) })}
               />
               messages in
               <input
-                type="number" min={5} max={120} aria-label="Minutes in the window"
+                type="number" min={D.minWindowMinutes} max={D.maxWindowMinutes} aria-label="Minutes in the window"
                 value={current.windowMinutes}
                 onChange={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n)) draft({ windowMinutes: n }); }}
-                onBlur={(e) => void save({ windowMinutes: clamp(parseInt(e.target.value, 10), 5, 120, D.windowMinutes) })}
+                onBlur={(e) => void save({ windowMinutes: clamp(parseInt(e.target.value, 10), D.minWindowMinutes, D.maxWindowMinutes, D.windowMinutes) })}
               />
               minutes for one agent, then mark it as needing you.
             </div>
@@ -214,7 +232,7 @@ export function ApiErrorResumeSection({
                 {result.kind === 'unavailable' && 'Check is only available in the desktop app.'}
                 {result.kind === 'match' && `Matches rule ${result.n}: Zana would send “${result.message}” after ${result.delaySeconds} s.`}
                 {result.kind === 'none' && 'No rule matches. Zana would leave the agent waiting for you.'}
-                {result.kind === 'skipped' && result.ns.map((n) => `Rule ${n} took too long to check and was skipped.`).join(' ')}
+                {result.kind === 'skipped' && result.lines.join(' ')}
               </p>
             )}
           </div>

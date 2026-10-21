@@ -40,11 +40,45 @@ describe('ApiErrorResumeSection', () => {
     expect(screen.getByText('+ Connection lost mid-response')).toBeTruthy();
   });
 
-  it('Add rule adds a draft row without saving', () => {
-    const { onUpdate, onConfigDraft } = setup(on());
+  it('Add rule adds a local draft row that saves once it is valid', () => {
+    const { onUpdate } = setup(on());
     fireEvent.click(screen.getByText('Add rule'));
     expect(onUpdate).not.toHaveBeenCalled();
-    expect(onConfigDraft.mock.calls[0][0].apiErrorResume.rules).toHaveLength(1);
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'ab' } });
+    fireEvent.blur(input);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toBe('At least 4 characters');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules.map((r: any) => r.match)).toEqual(['rate limited']);
+    expect(screen.queryByLabelText('When the error matches (rule 2)')).toBeNull();
+  });
+
+  it('a blank draft row can be removed and survives a suggestion click', () => {
+    const { onUpdate } = setup(on());
+    fireEvent.click(screen.getByText('Add rule'));
+    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toHaveLength(1);
+    expect(screen.getByLabelText('When the error matches (rule 1)')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Remove rule 1'));
+    expect(screen.queryByLabelText('When the error matches (rule 1)')).toBeNull();
+  });
+
+  it('keeps the saved version of a rule that is mid-edit when something else saves', () => {
+    const saved = rule({ id: 'a', matchMode: 'regex', match: 'claude-(a|b)' });
+    const other = rule({ id: 'b', match: 'second rule' });
+    const mid = { ...saved, match: 'claude-(' };
+    const { onUpdate } = setup(on([mid, other]));
+    // first render saw only the broken version: nothing valid to fall back on
+    fireEvent.click(screen.getByLabelText('Remove rule 2'));
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toEqual([]);
+    cleanup();
+    const view = render(<ApiErrorResumeSection config={on([saved, other])} onUpdate={onUpdate} onConfigDraft={vi.fn()} />);
+    view.rerender(<ApiErrorResumeSection config={on([mid, other])} onUpdate={onUpdate} onConfigDraft={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText('Remove rule 2'));
+    const sent = onUpdate.mock.calls[1][0].apiErrorResume.rules;
+    expect(sent).toEqual([saved]);
   });
 
   it('typing drafts and blur saves a valid rule', () => {
@@ -119,9 +153,29 @@ describe('ApiErrorResumeSection', () => {
     check.mockResolvedValueOnce({ ruleId: null, skipped: [] });
     fireEvent.click(screen.getByText('Check'));
     await screen.findByText('No rule matches. Zana would leave the agent waiting for you.');
-    check.mockResolvedValueOnce({ ruleId: null, skipped: [{ ruleId: 'b', reason: 'timeout' }, { ruleId: 'a', reason: 'invalid' }] });
+    check.mockResolvedValueOnce({ ruleId: null, skipped: [{ ruleId: 'b', reason: 'timeout' }, { ruleId: 'a', reason: 'unavailable' }] });
     fireEvent.click(screen.getByText('Check'));
-    await screen.findByText('Rule 2 took too long to check and was skipped.');
+    await screen.findByText('Rule 2 took too long to check and was skipped. Rule 1 could not be checked right now. Try again.');
+  });
+
+  it('numbers the matching rule by its row even when an earlier row is invalid', async () => {
+    setup(on([rule({ id: 'bad', match: 'ab' }), rule({ id: 'good', match: 'second rule' })]));
+    check.mockResolvedValueOnce({ ruleId: 'good', message: 'continue', delaySeconds: 20, skipped: [] });
+    fireEvent.click(screen.getByText('Check'));
+    await screen.findByText(/Matches rule 2:/);
+  });
+
+  it('ignores an older Check answer that arrives after a newer one', async () => {
+    setup(on([rule()]));
+    let first!: (v: unknown) => void;
+    check.mockImplementationOnce(() => new Promise((r) => { first = r; }));
+    check.mockResolvedValueOnce({ ruleId: null, skipped: [] });
+    fireEvent.click(screen.getByText('Check'));
+    fireEvent.click(screen.getByText('Check'));
+    await screen.findByText('No rule matches. Zana would leave the agent waiting for you.');
+    first({ ruleId: 'a', message: 'continue', delaySeconds: 20, skipped: [] });
+    await Promise.resolve();
+    expect(screen.queryByText(/Matches rule/)).toBeNull();
   });
 
   it('Check says it is desktop-only when the API is missing', async () => {

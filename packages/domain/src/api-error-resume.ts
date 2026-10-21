@@ -30,6 +30,10 @@ export const API_ERROR_RESUME_DEFAULTS = {
   maxDelaySeconds: 600,
   maxPerWindow: 3,
   windowMinutes: 15,
+  minPerWindow: 1,
+  maxPerWindowLimit: 10,
+  minWindowMinutes: 5,
+  maxWindowMinutes: 120,
   maxRules: 20,
   minMatchChars: 4,
   maxMatchChars: 300,
@@ -120,8 +124,8 @@ export function normalizeApiErrorResume(raw: unknown): ApiErrorResumeConfig | un
   return {
     enabled: raw.enabled === true,
     rules,
-    maxPerWindow: clampInt(raw.maxPerWindow, 1, 10, D.maxPerWindow),
-    windowMinutes: clampInt(raw.windowMinutes, 5, 120, D.windowMinutes)
+    maxPerWindow: clampInt(raw.maxPerWindow, D.minPerWindow, D.maxPerWindowLimit, D.maxPerWindow),
+    windowMinutes: clampInt(raw.windowMinutes, D.minWindowMinutes, D.maxWindowMinutes, D.windowMinutes)
   };
 }
 

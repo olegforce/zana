@@ -185,6 +185,74 @@ describe('fire-time guards', () => {
   });
 });
 
+describe('cancel while matching, rested state, edited rules', () => {
+  const slowRegex = () => {
+    const slow = rule({ matchMode: 'regex', match: 'foo.*bar' });
+    const s = setup({ config: { rules: [slow] } });
+    const waiting: ((r: RegexMatchResult) => void)[] = [];
+    s.deps.matchRegex.mockImplementation(() => new Promise<RegexMatchResult>((r) => { waiting.push(r); }));
+    return { s, release: (r: RegexMatchResult) => waiting.splice(0).forEach((w) => w(r)) };
+  };
+  it('a cancel during the match stops the stale error from arming', async () => {
+    const { s, release } = slowRegex();
+    const stopped = s.svc.onApiErrorStop('s1', err);
+    s.svc.cancel('s1');
+    release('match');
+    await stopped;
+    vi.advanceTimersByTime(60000);
+    expect(s.deps.reply).not.toHaveBeenCalled();
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining('a new turn started'));
+  });
+  it('a forget during the match stops it too, and a later stop still works', async () => {
+    const { s, release } = slowRegex();
+    const stopped = s.svc.onApiErrorStop('s1', err);
+    s.svc.forget('s1');
+    release('match');
+    await stopped;
+    vi.advanceTimersByTime(60000);
+    expect(s.deps.reply).not.toHaveBeenCalled();
+    const again = s.svc.onApiErrorStop('s1', err);
+    release('match');
+    await again;
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).toHaveBeenCalledTimes(1);
+  });
+  it('a newer stop supersedes an older one still matching', async () => {
+    const { s, release } = slowRegex();
+    const first = s.svc.onApiErrorStop('s1', err);
+    const second = s.svc.onApiErrorStop('s1', err);
+    release('match');
+    await Promise.all([first, second]);
+    vi.advanceTimersByTime(60000);
+    expect(s.deps.reply).toHaveBeenCalledTimes(1);
+  });
+  it('rests on an API error until the next turn, even with the feature off', async () => {
+    const s = setup();
+    s.state.config = undefined;
+    expect(s.svc.restedOnApiError('s1')).toBe(false);
+    await s.svc.onApiErrorStop('s1', err);
+    expect(s.svc.restedOnApiError('s1')).toBe(true);
+    s.svc.cancel('s1');
+    expect(s.svc.restedOnApiError('s1')).toBe(false);
+    await s.svc.onApiErrorStop('s1', err);
+    s.svc.forget('s1');
+    expect(s.svc.restedOnApiError('s1')).toBe(false);
+  });
+  it('stays rested while a resume is armed', async () => {
+    const s = setup();
+    await s.svc.onApiErrorStop('s1', err);
+    expect(s.svc.restedOnApiError('s1')).toBe(true);
+  });
+  it('does not send when the rule was edited during the wait', async () => {
+    const s = setup();
+    await s.svc.onApiErrorStop('s1', err);
+    s.state.config!.rules[0] = { ...s.state.config!.rules[0], match: 'something else entirely' };
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).not.toHaveBeenCalled();
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining('rule edited'));
+  });
+});
+
 describe('cap', () => {
   it('trips on the 4th, notifies once per window, and recovers after the window', async () => {
     const s = setup();

@@ -2177,7 +2177,8 @@ const autoCloseIdle = new AutoCloseIdleService({
   isFavorite: (sessionId) => {
     const s = ptys.getSession(sessionId);
     if (!s) return false;
-    return favoriteAgentKeys.has(s.claudeSessionId ?? sessionId);
+    // An agent that rests on an API error hasn't finished; spare it until its next turn.
+    return favoriteAgentKeys.has(s.claudeSessionId ?? sessionId) || apiErrorResume.restedOnApiError(sessionId);
   },
   now: () => Date.now(),
   // Expected close ⇒ exit code 0 (this was the app's decision, not a crash).

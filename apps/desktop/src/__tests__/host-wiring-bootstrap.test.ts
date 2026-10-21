@@ -662,24 +662,65 @@ describe('host bootstrap wiring', () => {
     h.ptys.sessions.set('af1', sessionFixture({ id: 'af1', projectId: project.id, profile: 'claude' }));
     h.ptys.sessions.set('af-exited', sessionFixture({ id: 'af-exited', projectId: project.id, profile: 'claude', status: 'exited' }));
     const onStop = vi.spyOn(ctx().apiErrorResume, 'onApiErrorStop').mockResolvedValue(undefined);
-    hook(project.id, 'af1', 'unblocked', stop);
-    expect(onStop).toHaveBeenCalledTimes(1);
-    expect(onStop).toHaveBeenCalledWith('af1', expect.objectContaining({ text: expect.stringContaining('Provider anthropic') }));
-    hook('other-project', 'af1', 'unblocked', stop);
-    hook(project.id, 'af-exited', 'unblocked', stop);
-    expect(onStop).toHaveBeenCalledTimes(1);
-    onStop.mockRestore();
-    hook(project.id, 'af1', 'unblocked');
-    h.mcpDeps.onStopHook(project.id, 'af1');
-    await settle();
+    const cancel = vi.spyOn(ctx().apiErrorResume, 'cancel');
+    const turnFinished = vi.spyOn(ctx().agentStatus, 'turnFinished');
+    const clearTools = vi.spyOn(ctx().agentStatus, 'clearToolsInFlight');
+    const schedulerDone = vi.spyOn(ctx().scheduler, 'onAgentFinished');
+    const goalsDone = vi.spyOn(ctx().goals, 'onAgentFinished');
+    try {
+      hook(project.id, 'af1', 'unblocked', stop);
+      expect(onStop).toHaveBeenCalledTimes(1);
+      expect(onStop).toHaveBeenCalledWith('af1', expect.objectContaining({ text: expect.stringContaining('Provider anthropic') }));
+      expect(turnFinished).toHaveBeenCalledWith('af1');
+      expect(clearTools).toHaveBeenCalledWith('af1');
+      // An errored turn is not a finished run: the scheduler and goals stay out of it.
+      expect(schedulerDone).not.toHaveBeenCalled();
+      expect(goalsDone).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      hook('other-project', 'af1', 'unblocked', stop);
+      hook(project.id, 'af-exited', 'unblocked', stop);
+      expect(onStop).toHaveBeenCalledTimes(1);
+      // A new turn (no body) cancels a pending resume; so does a lifecycle Stop.
+      hook(project.id, 'af1', 'unblocked');
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenLastCalledWith('af1');
+      h.mcpDeps.onStopHook(project.id, 'af1');
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenLastCalledWith('af1');
+      await settle();
+    } finally {
+      for (const spy of [onStop, cancel, turnFinished, clearTools, schedulerDone, goalsDone]) spy.mockRestore();
+    }
   });
 
   it('forgets resume state on pty exit and exposes the service to IPC', async () => {
-    h.ptys.sessions.set('af2', sessionFixture({ id: 'af2' }));
-    h.ptys.emit('exit', 'af2', 0);
-    await settle();
+    const forget = vi.spyOn(ctx().apiErrorResume, 'forget');
+    try {
+      h.ptys.sessions.set('af2', sessionFixture({ id: 'af2' }));
+      h.ptys.emit('exit', 'af2', 0);
+      await settle();
+      expect(forget).toHaveBeenCalledWith('af2');
+    } finally {
+      forget.mockRestore();
+    }
     expect(ctx().apiErrorResume.check).toBeTypeOf('function');
     expect(await ctx().apiErrorResume.check('nothing', [])).toEqual({ ruleId: null, skipped: [] });
+  });
+
+  it('spares an agent that rested on an API error from auto-close until its next turn', async () => {
+    h.ptys.sessions.set('af3', sessionFixture({ id: 'af3', projectId: project.id, profile: 'claude' }));
+    const config = store.getConfig();
+    const cfg = vi.spyOn(store, 'getConfig').mockReturnValue({ ...config, autoCloseIdleEnabled: true });
+    try {
+      const eligible = () => (ctx().autoCloseIdle as any).eligible('af3') as boolean;
+      expect(eligible()).toBe(true);
+      await ctx().apiErrorResume.onApiErrorStop('af3', { error: 'x', text: 'y' });
+      expect(eligible()).toBe(false);
+      ctx().apiErrorResume.cancel('af3');
+      expect(eligible()).toBe(true);
+    } finally {
+      cfg.mockRestore();
+    }
   });
 
   it('renders AskUserQuestion hook payloads only when enabled and well formed', async () => {

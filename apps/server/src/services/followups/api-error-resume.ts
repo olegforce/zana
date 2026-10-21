@@ -74,6 +74,9 @@ export interface ApiErrorResumeDeps {
 interface Pending {
   timer: NodeJS.Timeout;
   ruleId: string;
+  /** The rule as armed; an edit during the wait must not send for the old match. */
+  match: string;
+  matchMode: ApiErrorResumeRule['matchMode'];
   lastInputAt: number | undefined;
 }
 
@@ -84,6 +87,10 @@ const UNAVAILABLE_RETRY_MS = 1000;
 export class ApiErrorResumeService {
   private pending = new Map<string, Pending>();
   private sends = new Map<string, number[]>();
+  /** Bumped by every new stop, cancel and forget, so a stale async match can't arm. */
+  private epochs = new Map<string, number>();
+  /** Sessions whose turn ended on an API error and haven't started a new one. */
+  private rested = new Set<string>();
 
   constructor(private readonly deps: ApiErrorResumeDeps) {}
 
@@ -113,6 +120,8 @@ export class ApiErrorResumeService {
 
   async onApiErrorStop(sessionId: string, event: { error: string; text: string }): Promise<void> {
     const { deps } = this;
+    const epoch = this.bump(sessionId);
+    this.rested.add(sessionId);
     const config = deps.getConfig();
     if (!config?.enabled) return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: feature off`);
     const session = deps.getSession(sessionId);
@@ -122,6 +131,9 @@ export class ApiErrorResumeService {
     const matchText = buildApiErrorMatchText(event.error, event.text);
     const { rule, skipped } = await this.findRule(matchText, config.rules, { retry: true });
     this.notifySlow(session, config.rules, skipped);
+    if (this.epochs.get(sessionId) !== epoch) {
+      return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: a new turn started`);
+    }
     if (!rule) return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: no rule matched`);
 
     const now = deps.now();
@@ -141,9 +153,11 @@ export class ApiErrorResumeService {
       return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: cap reached`);
     }
 
-    this.cancel(sessionId);
+    this.clearPending(sessionId);
     const timer = deps.setTimer(() => this.fire(sessionId), rule.delaySeconds * 1000);
-    this.pending.set(sessionId, { timer, ruleId: rule.id, lastInputAt: session.lastInputAt });
+    this.pending.set(sessionId, {
+      timer, ruleId: rule.id, match: rule.match, matchMode: rule.matchMode, lastInputAt: session.lastInputAt
+    });
   }
 
   private notifySlow(session: ApiErrorResumeSession, rules: ApiErrorResumeRule[], skipped: SkippedRule[]): void {
@@ -173,6 +187,7 @@ export class ApiErrorResumeService {
     if (!config?.enabled) return deps.log(`${tag} skip: feature turned off`);
     const rule = config.rules.find(r => r.id === entry.ruleId);
     if (!rule || !rule.enabled) return deps.log(`${tag} skip: rule removed or disabled`);
+    if (rule.match !== entry.match || rule.matchMode !== entry.matchMode) return deps.log(`${tag} skip: rule edited`);
     const session = deps.getSession(sessionId);
     if (!session || session.status === 'exited') return deps.log(`${tag} skip: session gone`);
     const state = deps.getAgentState(sessionId);
@@ -186,16 +201,35 @@ export class ApiErrorResumeService {
     deps.log(`${tag} rule=${rule.id} attempt ${history.length}/${config.maxPerWindow}`);
   }
 
-  cancel(sessionId: string): void {
+  private bump(sessionId: string): number {
+    const next = (this.epochs.get(sessionId) ?? 0) + 1;
+    this.epochs.set(sessionId, next);
+    return next;
+  }
+
+  private clearPending(sessionId: string): void {
     const entry = this.pending.get(sessionId);
     if (!entry) return;
     this.deps.clearTimer(entry.timer);
     this.pending.delete(sessionId);
   }
 
+  /** A new turn, a Stop or an exit: drop the pending resume and any match still running. */
+  cancel(sessionId: string): void {
+    this.bump(sessionId);
+    this.rested.delete(sessionId);
+    this.clearPending(sessionId);
+  }
+
   forget(sessionId: string): void {
     this.cancel(sessionId);
     this.sends.delete(sessionId);
+    this.epochs.delete(sessionId);
+  }
+
+  /** True while the agent rests after an API error and no new turn has begun. */
+  restedOnApiError(sessionId: string): boolean {
+    return this.rested.has(sessionId);
   }
 
   /** Settings "Check an error": which rule would fire, without sending anything. */
