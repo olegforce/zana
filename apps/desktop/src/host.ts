@@ -58,7 +58,7 @@ import { jobCoordinatorPrompt } from './team-coordinator-prompt.js';
 import {
   createDesktopNativeRecovery, gateInvalidProvidedPlan, recoverSquadStateAtBoot, runSpawnLifecycle, slotRecoveryLaunch,
   sweepUnretainedSquadWorktrees, teamAdmissionRequirements, teamJobFailureResponse, withProposalLaunch, findProposalExecution, type ProposalLaunchDeps,
-  withRenewedSources, scopedSourceRenewal
+  withRenewedSources, scopedSourceRenewal, splitProposedGoalSources
 } from './team-launch-support.js';
 import { openExecutionStorage } from './execution-storage.js';
 import { createPlanCorrectionHandoff, createPlanCorrectionHost } from './plan-correction/host.js';
@@ -73,7 +73,7 @@ import { onOrchestratorIdle } from './coordinator-idle.js';
 import { finalSessionStats } from './session-stats-cache.js';
 import { applyPluginAgentCapabilities } from '@zana-ai/zcc-server/services/extensions/plugin-agent-sync';
 import { runtimeHostAvailable, setRuntimeHostSupervisor } from '@zana-ai/zcc-host-daemon/harness/execution-environment';
-import { IPC, type PluginViewTarget } from '@zana-ai/zcc-desktop-contract';
+import { IPC, type PluginViewTarget, type ThreadViewTarget } from '@zana-ai/zcc-desktop-contract';
 import { signUiSend } from '@zana-ai/zcc-server/http/ui-send-proof';
 import { MenubarThreadOpenResultSchema, MenubarThreadsListResultSchema } from '@zana-ai/zcc-contracts/runtime';
 import { createDesktopBrowserViewManager } from './desktop-browser-view.js';
@@ -119,6 +119,7 @@ import { verifyHarnesses } from '@zana-ai/zcc-host-daemon/harness/harness-verify
 import { IdleGatedInjector, suppressesInteractiveBlocked } from '@zana-ai/zcc-server/services/execution/idle-gated-injector';
 import { createExecutionArtifactStore } from '@zana-ai/zcc-server/services/execution/artifact-store';
 import { createExecutionSourceRegistry, ExecutionSourceError, type ExecutionSourcePathDescriptor } from '@zana-ai/zcc-server/services/execution/source-registry';
+import { resolveSourcePolicy, sourceRefusal, type SourcePolicy } from '@zana-ai/zcc-server/services/execution/source-policy';
 import { createExecutionHandoffStore } from '@zana-ai/zcc-server/services/execution/handoff-store';
 import { createResumeGrantStore } from '@zana-ai/zcc-server/services/execution/resume-grant-store';
 import { createResumeTokenStore } from '@zana-ai/zcc-server/services/execution/resume-token-store';
@@ -247,7 +248,15 @@ import {
   writePluginViewBounds
 } from './window/plugin-view-windows.js';
 import { createPluginViewHost } from './window/plugin-view-host.js';
-import { registerPluginViewIpc } from './ipc/windows.js';
+import {
+  cascadeThreadViewPosition,
+  readThreadViewBounds,
+  threadViewRendererParams,
+  writeThreadViewBounds
+} from './window/thread-view-windows.js';
+import { createThreadViewHost } from './window/thread-view-host.js';
+import { findUnscopedWindow, isUnscopedRegistration } from './window/main-window-registry.js';
+import { registerPluginViewIpc, registerThreadViewIpc } from './ipc/windows.js';
 import { showApprovalSheet } from './window/approval-sheet.js';
 import { createPluginApprovalHandler } from './ipc/plugin-approvals.js';
 import { listPluginAppsFromProductServer } from './ipc/plugin-apps-loopback.js';
@@ -884,14 +893,17 @@ function setActiveProjectSkillsWatcher(
  *
  * A plugin view window (`view`) shows one plugin project tab. It also carries
  * the tab's `projectId`, so it is scoped like a project window.
+ *
+ * A thread view window (`threadView`) shows one thread and its side panel. A
+ * thread may have no project, so it is never the unscoped main window either.
  */
-const windows = new Map<number, { win: BrowserWindow; projectId?: string; view?: PluginViewTarget }>();
+const windows = new Map<number, { win: BrowserWindow; projectId?: string; view?: PluginViewTarget; threadView?: ThreadViewTarget }>();
 const boundsControllers = new Map<number, ReturnType<typeof createBoundsStateController>>();
 const rendererReadiness = new RendererReadiness();
 
 function markRendererReady(win: BrowserWindow): void {
-  const registered = windows.get(win.id);
-  if (!registered || registered.win !== win || registered.projectId) return;
+  /* v8 ignore next -- registry wiring; isUnscopedRegistration is unit-tested */
+  if (!isUnscopedRegistration(windows.get(win.id), win)) return;
   rendererReadiness.markReady(win.id);
 }
 /**
@@ -905,10 +917,8 @@ function mainWindow(): BrowserWindow | null {
 }
 /** The live unscoped (full-shell) window, or null if only scoped ones exist. */
 function unscopedWindow(): BrowserWindow | null {
-  for (const { win, projectId } of windows.values()) {
-    if (!projectId && !win.isDestroyed()) return win;
-  }
-  return null;
+  /* v8 ignore next -- registry wiring; findUnscopedWindow is unit-tested */
+  return findUnscopedWindow(windows.values());
 }
 /** Any live window, scoped or not. */
 function anyWindow(): BrowserWindow | null {
@@ -3305,7 +3315,7 @@ function safeSend(channel: string, ...args: unknown[]) {
 function sendToFocused(channel: string, ...args: unknown[]) {
   const target = BrowserWindow.getFocusedWindow() ?? mainWindow();
   /* v8 ignore next -- menu routing runs in built Electron; routeMenu is unit-tested */
-  if (pluginViews.routeMenu(target, channel, args)) return;
+  if (pluginViews.routeMenu(target, channel, args) || threadViews.routeMenu(target, channel, args)) return;
   if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
   try {
     target.webContents.send(channel, ...args);
@@ -3381,10 +3391,10 @@ function openProjectWindow(projectId: string) {
     logMainError('openProjectWindow', `unknown projectId ${projectId}`);
     return;
   }
-  // A plugin view window carries the project id too, but it is not the project's window.
+  // Plugin and thread view windows carry the project id too, but they are not the project's window.
   /* v8 ignore next -- project windows open through built-Electron IPC (E2E) */
-  for (const { win, projectId: pid, view } of windows.values()) {
-    if (pid === projectId && !view && !win.isDestroyed()) {
+  for (const { win, projectId: pid, view, threadView } of windows.values()) {
+    if (pid === projectId && !view && !threadView && !win.isDestroyed()) {
       if (E2E_LAUNCH) return; // E2E: keep hidden, never steal focus
       if (win.isMinimized()) win.restore();
       win.show();
@@ -3404,6 +3414,29 @@ const pluginViews = createPluginViewHost({
   ensureMainWindowReady,
   mainWindow: unscopedWindow,
   showMainWindow,
+  broadcast: safeSend,
+  logError: logMainError,
+  keepHidden: E2E_LAUNCH
+});
+
+/* v8 ignore next -- wiring to Electron windows; createThreadViewHost is unit-tested and the windows are covered by built-Electron E2E */
+const threadViews = createThreadViewHost({
+  windows,
+  projectIds: () => store.listProjects().map((project) => project.id),
+  createWindow: (target) => createWindow(target.projectId, false, undefined, target),
+  sendToMainWindow: (channel, args) => {
+    void ensureMainWindowReady().then((ready) => {
+      const win = unscopedWindow();
+      if (!ready || !win || win.webContents.isDestroyed()) return;
+      try {
+        win.webContents.send(channel, ...args);
+      } catch (err) {
+        logMainError(`sendToMainWindow ${channel}`, err);
+        return;
+      }
+      showMainWindow();
+    });
+  },
   broadcast: safeSend,
   logError: logMainError,
   keepHidden: E2E_LAUNCH
@@ -4805,48 +4838,25 @@ export function jobWorkerPrompt(input: {
 
 /**
  * A Team goal can name source files directly. Main resolves any file the operator
- * names that resolves under a Rule-2 trust anchor — the registered project root OR
- * the user's HOME — then sends it through the same registry as picker-selected
- * sources. The location of a named plan/source NEVER constrains where execution
- * happens (that is always the project); it is only a read input to snapshot, so a
- * plan kept outside the project (e.g. a doc vault under HOME) resolves too. The
- * sensitive HOME roots (`.ssh`, `.aws`, `.zcc`) stay blocked and write confinement
- * is enforced separately at execution time, so no raw write access is granted.
+ * names that the shared source policy allows (under the project root, HOME or the
+ * clone root, never a credential store or Zana's own state) and sends it through the
+ * same registry as picker-selected sources. The location of a named plan/source NEVER
+ * constrains where execution happens (that is always the project); it is only a read
+ * input to snapshot, so a plan kept outside the project (e.g. a doc vault under HOME)
+ * resolves too. Write confinement is enforced separately at execution time.
  */
 export async function goalExecutionSourcePaths(
   goal: string,
   home: string,
   userHome: string = homedir(),
-  /** `includeHome: false` keeps the project as the only base (agent-written goals, D3). */
-  opts: { includeHome?: boolean } = {}
+  /** The clone root, Zana's data folders and other protected paths: the rest of the source policy's bases. */
+  opts: { cloneRoot?: string; dataDirs?: readonly string[]; protectedRoots?: readonly string[] } = {}
 ): Promise<ExecutionSourcePathDescriptor[]> {
   const paths = new Map<string, ExecutionSourcePathDescriptor>();
-  // Allowed READ bases follow Rule 2's trust anchors: the target project root and
-  // the user's HOME. Either may be unresolvable (a remote/nonexistent project
-  // root, or an exotic HOME); a named source under whichever base resolves is
-  // still discoverable. Only if NEITHER resolves do we skip discovery entirely.
-  const bases: string[] = [];
-  try {
-    bases.push(await realpath(home));
-  } catch {
-    // `home` is a remote/nonexistent local project root — drop that base but keep
-    // the HOME base so a locally-referenced plan is still discoverable.
-  }
-  let realUserHome: string | undefined;
-  try {
-    realUserHome = await realpath(userHome);
-    if (opts.includeHome !== false) bases.push(realUserHome);
-  } catch {
-    // No resolvable HOME base either.
-  }
-  if (bases.length === 0) return [];
-  const sensitiveRoots = realUserHome
-    ? [join(realUserHome, '.ssh'), join(realUserHome, '.aws'), join(realUserHome, '.zcc')]
-    : [];
-  const withinAnyBase = (real: string): boolean => bases.some((base) => {
-    const rel = relative(base, real);
-    return rel !== '' && !(rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel));
-  });
+  // Allowed READ bases follow Rule 2's trust anchors (the project root, HOME and the clone
+  // root); a base that doesn't resolve (a remote project root) is dropped. Secrets inside
+  // them stay refused. One policy with Squad proposals and the source registry.
+  const policy = await resolveSourcePolicy(realpath, { projectRoot: home, home: userHome, ...opts });
   const rawCandidates: string[] = [];
   // 1. Quoted paths (preserves spaces in "C:\Program Files\..." or '/path with space/...')
   for (const m of goal.matchAll(/["'`]((?:[A-Za-z]:[/\\]|\/)[^"'`]+)["'`]/g)) {
@@ -4863,8 +4873,12 @@ export async function goalExecutionSourcePaths(
     for (const candidate of candidates) {
       try {
         const real = await realpath(candidate);
-        if (!withinAnyBase(real)) continue;
-        if (sensitiveRoots.some((root) => real === root || real.startsWith(`${root}${sep}`))) continue;
+        // The link walk sees a link into a protected location, which the realpath alone does not.
+        if (await sourceRefusal(candidate, real, policy)) continue;
+        // realpath does not resolve hard links; the registry refuses a linked file at Launch, which would fail the whole launch.
+        const linked = await lstat(real);
+        // Launch attaches regular files only (a folder fails NOT_REGULAR_FILE) and refuses a hard-linked one.
+        if (!linked.isFile() || linked.nlink > 1) continue;
         const representations = new Set([candidate, real]);
         for (const path of [...representations]) {
           if (path.startsWith('/private/var/')) representations.add(path.slice('/private'.length));
@@ -5911,6 +5925,15 @@ const workerLivenessCache = new AgentLivenessCache((sessionId) => ptys.probeAgen
 
 
 // ---- Squad launch proposals (an agent prepares a Squad; the user reviews it in the Inbox) ----
+/**
+ * HOME, the clone root, Zana's data folder and the app's own data (Electron userData, with its
+ * cookies and source snapshots): with the project, the bases of the shared source policy.
+ */
+export function squadSourceBases(): { home: string; cloneRoot?: string; dataDirs: string[]; protectedRoots: string[] } {
+  const cloneRoot = store.getConfig().cloneRoot?.trim();
+  return { home: homedir(), ...(cloneRoot ? { cloneRoot } : {}), dataDirs: [electronZccDataDir()], protectedRoots: [app.getPath('userData')] };
+}
+
 export const squadProposalStore = createSquadProposalStore({
   filePath: join(app.getPath('userData'), 'squad-proposals.json')
 });
@@ -5990,12 +6013,13 @@ const squadProposalServiceDeps: SquadProposalServiceDeps = {
   expandTeamSlots,
   resolveSquadPlan: (planSource, texts) => resolveSquadPlan(planSource, texts),
   fs: { realpath, lstat, open: (path, flags) => openFile(path, flags) },
+  sourceBases: () => squadSourceBases(),
   inbox: { appendOnce: (input) => inboxStore.appendOnce(input) },
   actions: {
     bind: (entry, action) => inboxActionRegistry.bind(entry, action),
     markUnavailable: (kind, ref, message) => inboxActionRegistry.markUnavailable(kind, ref, message)
   },
-  issueSources: (windowId, projectId, paths, withinRoot) => executionSources.issue({ windowId: windowId as number, projectId, paths, withinRoot }),
+  issueSources: (windowId, projectId, paths, policy) => executionSources.issue({ windowId: windowId as number, projectId, paths, policy }),
   now: () => Date.now(),
   newId: () => randomUUID(),
   findLaunchedExecution: findExecutionForProposal,
@@ -6011,8 +6035,10 @@ const squadPlanCheckService = createSquadProposalService({
 
 export const squadProposalNotifier = createSquadProposalNotifier({
   getRecord: (executionId) => executionStore.get(executionId),
-  markReported: (executionId, attempt) => executionStore.markProposalReported(executionId, attempt),
-  listUnreported: () => executionStore.listUnreportedProposalExecutions(),
+  markReported: (executionId, attempt) => executionStore.markReported(executionId, attempt),
+  listUnreported: () => executionStore.listUnreportedExecutions(),
+  markBlockerReported: (executionId, blockerId) => executionStore.markBlockerReported(executionId, blockerId),
+  listUnreportedBlockers: () => executionStore.listUnreportedBlockers(),
   reply: (sessionId, text) => ptys.reply(sessionId, text),
   ptyLive: (id) => { const session = ptys.getSession(id); return !!session && session.status !== 'exited'; },
   ptyState: (id) => agentStatus.get(id),
@@ -6382,11 +6408,11 @@ export async function startTeamJobFromUi(
   if (sourceCapabilityIds.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Execution source capabilities require a trusted window' };
   }
-  // A proposed launch's goal is agent-written: only files inside the project may be attached
-  // from it (D3), so the HOME base is dropped. Without a proposal it applies exactly as before.
   const proposed = input.proposalId !== undefined;
-  const goalSourceDescriptors = await goalExecutionSourcePaths(originalGoal, project.path, undefined, { includeHome: !proposed });
-  if (goalSourceDescriptors.length && !sourceContext) {
+  // Goal paths follow the one source policy. A proposed launch narrows them below, once its stored proposal is known.
+  const sourceBases = squadSourceBases();
+  const discoveredGoalSources = await goalExecutionSourcePaths(originalGoal, project.path, sourceBases.home, sourceBases);
+  if (discoveredGoalSources.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Goal execution sources require a trusted window' };
   }
   // A proposed launch is bound to its stored proposal and must come from a trusted window.
@@ -6395,24 +6421,47 @@ export async function startTeamJobFromUi(
   }
   const proposalId = proposed ? (typeof input.proposalId === 'string' ? input.proposalId.trim() : '') : undefined;
   const renewal = scopedSourceRenewal(executionSources, sourceContext?.windowId, projectId);
-  return withRenewedSources(() => withProposalLaunch(proposalLaunchDeps, proposalId, projectId, async (proposal) => {
+  return withRenewedSources(() => withProposalLaunch(proposalLaunchDeps, proposalId, projectId, async (proposal, reviewedSourcePaths) => {
+    // A proposed launch attaches goal-named files outside the Project only when the reviewed card listed them.
+    let goalSourceDescriptors = discoveredGoalSources;
+    let redactedGoalSources = discoveredGoalSources;
+    if (proposal) {
+      const projectReal = await realpath(project.path).catch(() => undefined);
+      const split = splitProposedGoalSources(discoveredGoalSources, projectReal, reviewedSourcePaths);
+      if (split.refused) {
+        return {
+          ok: false, code: 'SOURCE_NOT_ALLOWED',
+          message: `The goal names ${split.refused.exactPath}, which is outside this project and was not listed in the proposal's sources, so the card did not show it. `
+            + 'The agent must list it in the proposal\'s `sources` (the user then sees it on the card before Launch), or remove it from the goal.'
+        } as TeamJobLaunchResponse;
+      }
+      goalSourceDescriptors = split.attach;
+      redactedGoalSources = split.known;
+    }
     // Mint identity before snapshotting: source content lands in a dedicated,
     // immutable content store and execution ledger carries only bounded metadata.
     const launchRequestId = `ui:${randomUUID()}`;
     const snapshot = await snapshotTeamJobSources({
       windowId: sourceContext?.windowId, projectId, launchRequestId, sourceCapabilityIds, goalSourceDescriptors,
       // Re-checked against the realpath issue() takes, so a symlink swapped in after discovery can't escape.
-      ...(proposal ? { withinRoot: project.path } : {})
+      policy: await resolveSourcePolicy(realpath, { projectRoot: project.path, ...sourceBases })
     });
     if (!snapshot.ok) return snapshot;
     const { sourceBundle } = snapshot;
     const built = await buildTeamJobStartRequest({
       teamId, projectId, projectName: project.name, launchRequestId, coordinationMode, slots, attended: !!sourceContext,
-      goal: originalGoal, title: originalJobTitle, summary: originalSummary, sourceBundle, goalSourceDescriptors
+      goal: originalGoal, title: originalJobTitle, summary: originalSummary, sourceBundle, goalSourceDescriptors: redactedGoalSources
     });
     if (!built.ok) return built.response;
+    // A proposed run reports back to the conversation that proposed it.
     const result = proposal
-      ? await squadExecutionService.start('interactive:local', projectId, built.request, { proposal })
+      ? await squadExecutionService.start('interactive:local', projectId, built.request, {
+        proposal,
+        reportTo: {
+          kind: proposal.proposerKind, id: proposal.proposerId, role: 'proposer',
+          ...(proposal.proposerTitle ? { title: proposal.proposerTitle } : {})
+        }
+      })
       : await squadExecutionService.start('interactive:local', projectId, built.request);
     if (!result.ok && sourceBundle) await executionSources.removeSnapshot(sourceBundle.contentRef);
     if (!result.ok) {
@@ -6439,14 +6488,13 @@ async function snapshotTeamJobSources(args: {
   launchRequestId: string;
   sourceCapabilityIds: string[];
   goalSourceDescriptors: ExecutionSourcePathDescriptor[];
-  withinRoot?: string;
+  policy: SourcePolicy;
 }): Promise<{ ok: true; sourceBundle?: TeamJobSourceBundle } | { ok: false; code: string; message: string }> {
   const { windowId, projectId } = args;
   try {
     const goalSourceCapabilities = args.goalSourceDescriptors.length
       ? await executionSources.issue({
-        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath),
-        ...(args.withinRoot ? { withinRoot: args.withinRoot } : {})
+        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath), policy: args.policy
       })
       : [];
     const capabilityIds = [...new Set([...args.sourceCapabilityIds, ...goalSourceCapabilities.map(({ id }) => id)])];
@@ -6635,7 +6683,7 @@ export const WINDOWS_TITLEBAR_OVERLAY_SYMBOL = '#a1a1aa';
  * out across.
  */
 /* v8 ignore next -- window construction runs only at the built-Electron boundary */
-function createWindow(projectId?: string, repairOnly = false, view?: PluginViewTarget) {
+function createWindow(projectId?: string, repairOnly = false, view?: PluginViewTarget, threadView?: ThreadViewTarget) {
   // Capture the window the user invoked from BEFORE creating the new one, so a
   // scoped window cascades off its actual opener (not whatever `mainWindow()`
   // would pick, and never off itself once it's in the map).
@@ -6644,34 +6692,49 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
   // windows open at the default size, cascaded so stacked ones don't perfectly
   // overlap — per-project bounds persistence is a deliberate later step.
   const config = store.getConfig();
-  const saved = projectId || repairOnly ? undefined : config.windowBounds;
+  // A thread view window may have no project, so it is checked on its own.
+  const scoped = !!projectId || repairOnly || !!threadView;
+  const saved = scoped ? undefined : config.windowBounds;
   const restored = restoreWindowState(
     saved,
-    projectId || repairOnly ? undefined : config.windowMaximized,
+    scoped ? undefined : config.windowMaximized,
     screen.getAllDisplays(),
     screen.getPrimaryDisplay()
   );
   // A plugin view window keeps its own geometry per tab and project.
   const viewKey = view ? pluginViewKey(view) : undefined;
+  // Thread view windows share one geometry: a new one opens where the last one was.
   const viewGeometry = viewKey
     ? pluginViewWindowGeometry(
         readPluginViewBounds(config.pluginViewWindowBounds, viewKey),
         screen.getAllDisplays(),
         screen.getPrimaryDisplay()
       )
-    : undefined;
+    : threadView
+      ? pluginViewWindowGeometry(
+          readThreadViewBounds(config.threadViewWindowBounds),
+          screen.getAllDisplays(),
+          screen.getPrimaryDisplay()
+        )
+      : undefined;
+  if (threadView && viewGeometry && viewGeometry.options.x !== undefined && viewGeometry.options.y !== undefined) {
+    const occupied = [...windows.values()]
+      .filter((entry) => entry.threadView && !entry.win.isDestroyed())
+      .map((entry) => entry.win.getBounds());
+    Object.assign(viewGeometry.options, cascadeThreadViewPosition({ x: viewGeometry.options.x, y: viewGeometry.options.y }, occupied));
+  }
 
   const win = new BrowserWindow({
     ...(viewGeometry
       ? viewGeometry.options
       : {
-          width: projectId || repairOnly ? 1400 : restored.bounds.width,
-          height: projectId || repairOnly ? 900 : restored.bounds.height,
-          x: projectId || repairOnly ? undefined : restored.bounds.x,
-          y: projectId || repairOnly ? undefined : restored.bounds.y,
-          minWidth: projectId || repairOnly ? 900 : restored.minWidth,
+          width: scoped ? 1400 : restored.bounds.width,
+          height: scoped ? 900 : restored.bounds.height,
+          x: scoped ? undefined : restored.bounds.x,
+          y: scoped ? undefined : restored.bounds.y,
+          minWidth: scoped ? 900 : restored.minWidth,
           /* v8 ignore next -- window geometry is covered by built-Electron E2E */
-          minHeight: projectId || repairOnly ? 600 : restored.minHeight
+          minHeight: scoped ? 600 : restored.minHeight
         }),
     title: 'Zana',
     icon: productIconImage(),
@@ -6716,8 +6779,9 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
     }
   });
 
-  windows.set(win.id, { win, projectId, view });
+  windows.set(win.id, { win, projectId, view, threadView });
   if (view) pluginViews.broadcast();
+  if (threadView) threadViews.broadcast();
   rendererReadiness.reset(win.id);
   /* v8 ignore next -- Electron navigation event is covered by boundary E2E; navigationStarted is unit-tested */
   win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
@@ -6769,11 +6833,12 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
     windows.delete(win.id);
     boundsControllers.delete(win.id);
     if (view) pluginViews.broadcast();
+    if (threadView) threadViews.broadcast();
   });
 
   // A scoped window opens slightly offset from its opener so a freshly-opened
   // project window isn't hidden exactly behind the window it was opened from.
-  if (projectId && !view && opener && opener !== win && !opener.isDestroyed()) {
+  if (projectId && !view && !threadView && opener && opener !== win && !opener.isDestroyed()) {
     const b = opener.getBounds();
     win.setBounds({ x: b.x + 36, y: b.y + 36, width: b.width, height: b.height });
   }
@@ -6798,9 +6863,18 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
 
   // Persist bounds on resize/move (debounced) so a relaunch restores them.
   // The unscoped main window owns the saved bounds; a plugin view window keeps
-  // its own entry in a capped record. Project windows open at the default size.
-  if ((!projectId && !repairOnly) || viewKey) {
-    const controller = viewKey
+  // its own entry in a capped record, and thread view windows share one entry.
+  // Project windows open at the default size.
+  if (!scoped || viewKey || threadView) {
+    const controller = threadView
+      ? createBoundsStateController({
+          win,
+          initialBounds: viewGeometry?.bounds,
+          initialMaximized: viewGeometry?.maximized,
+          write: (state) =>
+            store.setConfig({ threadViewWindowBounds: writeThreadViewBounds(store.getConfig().threadViewWindowBounds, state) })
+        })
+      : viewKey
       ? createBoundsStateController({
           win,
           initialBounds: viewGeometry?.bounds,
@@ -6851,8 +6925,14 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
 
   // The scoped project id rides in as a query param so the renderer can lock to
   // it before first paint (read in main.tsx). Unscoped windows get no param. A
-  // plugin view window also names its plugin and tab.
-  const params: Record<string, string> = view ? pluginViewRendererParams(view) : projectId ? { projectId } : {};
+  // plugin view window also names its plugin and tab, a thread view window its thread.
+  const params: Record<string, string> = view
+    ? pluginViewRendererParams(view)
+    : threadView
+      ? threadViewRendererParams(threadView)
+      : projectId
+        ? { projectId }
+        : {};
   const url = rendererUrl(params);
   if (url) {
     win.loadURL(url);
@@ -6871,7 +6951,7 @@ function createWindow(projectId?: string, repairOnly = false, view?: PluginViewT
     });
   }
 
-  if (!projectId && !repairOnly) {
+  if (!scoped) {
     // macOS can reapply native zoom state after BrowserWindow construction on a
     // process relaunch, overriding explicit constructor bounds. Reassert normal
     // state once native window restoration has finished.
@@ -7413,6 +7493,8 @@ function registerIpc() {
   }), () => ({ approved: false as const, reason: 'unavailable' as const }));
   /* v8 ignore next -- registered at built-Electron boot; registerPluginViewIpc is unit-tested */
   registerPluginViewIpc(safeHandle, pluginViews);
+  /* v8 ignore next -- registered at built-Electron boot; registerThreadViewIpc is unit-tested */
+  registerThreadViewIpc(safeHandle, threadViews);
   safeHandleFromWindow(IPC.sharedClient.list, () => sharedClient.instances(), err => { throw err; });
   safeHandleFromWindow(IPC.sharedClient.signIn, () => sharedClient.signIn(), err => { throw err; });
   safeHandleFromWindow(IPC.sharedClient.select, (_win, id: unknown) => sharedClient.select(id), err => { throw err; });
