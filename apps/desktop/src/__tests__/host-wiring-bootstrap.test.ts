@@ -679,7 +679,12 @@ describe('host bootstrap wiring', () => {
       expect(cancel).not.toHaveBeenCalled();
       hook('other-project', 'af1', 'unblocked', stop);
       hook(project.id, 'af-exited', 'unblocked', stop);
+      // A body that isn't a StopFailure maps to no interaction event: nothing happens.
+      hook(project.id, 'af1', 'unblocked', JSON.stringify({ hook_event_name: 'Stop' }));
       expect(onStop).toHaveBeenCalledTimes(1);
+      // Blocked on a person is not a new turn, so a pending resume stays armed.
+      hook(project.id, 'af1', 'blocked');
+      expect(cancel).not.toHaveBeenCalled();
       // A new turn (no body) cancels a pending resume; so does a lifecycle Stop.
       hook(project.id, 'af1', 'unblocked');
       expect(cancel).toHaveBeenCalledTimes(1);
@@ -718,6 +723,15 @@ describe('host bootstrap wiring', () => {
       expect(eligible()).toBe(false);
       ctx().apiErrorResume.cancel('af3');
       expect(eligible()).toBe(true);
+      // A favourite is spared on its own, keyed by its Claude session id.
+      h.ptys.sessions.set('af4', sessionFixture({ id: 'af4', projectId: project.id, profile: 'claude', claudeSessionId: 'cs-fav' }));
+      const favourites = ctx().favoriteAgentKeys;
+      ctx().favoriteAgentKeys = new Set(['cs-fav']);
+      try {
+        expect((ctx().autoCloseIdle as any).eligible('af4')).toBe(false);
+      } finally {
+        ctx().favoriteAgentKeys = favourites;
+      }
     } finally {
       cfg.mockRestore();
     }
