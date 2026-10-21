@@ -57,6 +57,20 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
   }
 });
 
+it('selects the Squad source retry spec for the picker, registry and composer seams', () => {
+  for (const path of [
+    'apps/desktop/src/ipc/execution-source-picker.ts',
+    'apps/desktop/src/ipc/execution-board.ts',
+    'apps/server/src/services/execution/source-registry.ts',
+    'apps/desktop/src/team-launch-support.ts',
+    'apps/app/src/components/TeamComposer.tsx',
+    'apps/app/src/components/team-composer-sources.ts'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/squad-source-retry.spec.ts');
+  }
+  expect(boundarySpecs(['docs/readme.md'])).not.toContain('e2e/squad-source-retry.spec.ts');
+});
+
 it('selects the scheduler specs for scheduler seams', () => {
   for (const path of ['apps/server/src/services/scheduler/scheduler.ts', 'apps/app/src/components/scheduler/ProblemsPanel.tsx', 'apps/app/src/views/scheduler/SchedulerView.tsx', 'packages/domain/src/schedule-health.ts']) {
     expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/scheduler-self-healing.spec.ts', 'e2e/scheduler-overview.spec.ts', 'e2e/scheduler-detail.spec.ts', 'e2e/scheduler-cron.spec.ts']));
@@ -215,12 +229,15 @@ it('combines complementary root and package coverage even when local ids differ'
 it('keeps the existing required CI check as an always-running gate over every job', () => {
   const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
   expect(workflow).toContain('name: Typecheck and test');
-  expect(workflow).toContain('needs: [unit, unit-packages, coverage, e2e]');
+  expect(workflow).toContain('needs: [unit, unit-packages, coverage, e2e, connect-postgres]');
   expect(workflow).toContain('if: always()');
   expect(workflow).toContain('test "$UNIT_RESULT" = success');
   expect(workflow).toContain('test "$PACKAGES_RESULT" = success');
   expect(workflow).toContain('test "$COVERAGE_RESULT" = success');
   expect(workflow).toContain('test "$BOUNDARY_RESULT" = success');
+  expect(workflow).toContain('test "$POSTGRES_RESULT" = success');
+  expect(workflow).toContain('ZCC_CONNECT_TEST_DATABASE_URL: postgres://');
+  expect(workflow).toContain('vitest run website/connect/postgres.test.ts website/connect/machines.postgres.test.ts');
   expect(workflow).toContain('fail-fast: false');
   expect(workflow).toContain('shard: [1, 2, 3, 4, 5]');
   expect(workflow).toContain('vitest run --shard=${{ matrix.shard }}/5 --coverage');
