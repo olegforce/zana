@@ -24,7 +24,7 @@ const newId = () => `r${Date.now().toString(36)}${(ruleSeq++).toString(36)}`;
 
 function ruleError(rule: ApiErrorResumeRule): string | null {
   const match = rule.match.trim();
-  if (match.length < D.minMatchChars) return 'At least 4 characters';
+  if (match.length < D.minMatchChars) return `At least ${D.minMatchChars} characters`;
   if (rule.matchMode === 'regex' && !isValidResumePattern(match)) return 'Not a valid regular expression';
   return null;
 }
@@ -46,35 +46,32 @@ export function ApiErrorResumeSection({
   const [result, setResult] = useState<CheckResult | null>(null);
   // Rows never saved yet live here, so a save elsewhere can't wipe a half-filled row.
   const [pending, setPending] = useState<ApiErrorResumeRule[]>([]);
-  // The last valid version of each stored rule: a rule mid-edit keeps it when other fields save.
-  const lastValid = useRef(new Map<string, ApiErrorResumeRule>());
+  // Edits to stored rules stay local until a valid commit, so `current.rules` is always
+  // what is stored and an unrelated save can never persist (or drop) a half-typed rule.
+  const [edits, setEdits] = useState<Record<string, ApiErrorResumeRule>>({});
   const checkSeq = useRef(0);
-  for (const r of current.rules) if (!ruleError(r)) lastValid.current.set(r.id, r);
-  const rows = [...current.rules, ...pending];
+  const rows = [...current.rules.map((r) => edits[r.id] ?? r), ...pending];
 
-  const sendable = (rules: ApiErrorResumeRule[]) =>
-    rules.flatMap((r) => (!ruleError(r) ? [r] : lastValid.current.get(r.id) ? [lastValid.current.get(r.id)!] : []));
   const draft = (patch: Partial<ApiErrorResumeConfig>) =>
     onConfigDraft({ ...config, apiErrorResume: { ...current, ...patch } });
-  // Always a whole object; a rule that is invalid right now keeps its last saved version.
-  const save = (patch: Partial<ApiErrorResumeConfig>) => {
-    const next = { ...current, ...patch };
-    return onUpdate({ apiErrorResume: { ...next, rules: sendable(next.rules) } });
-  };
+  // Always a whole object.
+  const save = (patch: Partial<ApiErrorResumeConfig>) => onUpdate({ apiErrorResume: { ...current, ...patch } });
   const apply = (id: string, patch: Partial<ApiErrorResumeRule>, commit: boolean) => {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     const updated = { ...row, ...patch };
+    const valid = commit && !ruleError(updated);
     if (pending.some((r) => r.id === id)) {
-      if (commit && !ruleError(updated)) {
+      if (valid) {
         setPending(pending.filter((r) => r.id !== id));
         void save({ rules: [...current.rules, updated] });
       } else setPending(pending.map((r) => (r.id === id ? updated : r)));
       return;
     }
-    const rules = current.rules.map((r) => (r.id === id ? updated : r));
-    draft({ rules });
-    if (commit && !ruleError(updated)) void save({ rules });
+    if (valid) {
+      setEdits(({ [id]: _done, ...rest }) => rest);
+      void save({ rules: current.rules.map((r) => (r.id === id ? updated : r)) });
+    } else setEdits({ ...edits, [id]: updated });
   };
   const addRule = (partial: Partial<ApiErrorResumeRule> = {}) => {
     const rule: ApiErrorResumeRule = {
@@ -86,14 +83,17 @@ export function ApiErrorResumeSection({
   };
   const removeRule = (id: string) => {
     if (pending.some((r) => r.id === id)) setPending(pending.filter((r) => r.id !== id));
-    else void save({ rules: current.rules.filter((r) => r.id !== id) });
+    else {
+      setEdits(({ [id]: _gone, ...rest }) => rest);
+      void save({ rules: current.rules.filter((r) => r.id !== id) });
+    }
   };
 
   const runCheck = async () => {
     const api = (window as unknown as { cc?: { apiErrorResume?: { check: (i: { text: string; rules: unknown }) => Promise<any> } } }).cc?.apiErrorResume;
     if (!api) return setResult({ kind: 'unavailable' });
     const seq = ++checkSeq.current;
-    const res = await api.check({ text: checkText, rules: sendable(current.rules) });
+    const res = await api.check({ text: checkText, rules: rows.filter((r) => !ruleError(r)) });
     if (seq !== checkSeq.current) return; // a newer Check is in flight
     const indexOf = (id: string) => rows.findIndex((r) => r.id === id) + 1;
     if (res.ruleId) {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
 import { ApiErrorResumeSection } from './ApiErrorResumeSection';
@@ -65,30 +66,50 @@ describe('ApiErrorResumeSection', () => {
     expect(screen.queryByLabelText('When the error matches (rule 1)')).toBeNull();
   });
 
-  it('keeps the saved version of a rule that is mid-edit when something else saves', () => {
-    const saved = rule({ id: 'a', matchMode: 'regex', match: 'claude-(a|b)' });
+  // Mirrors SettingsView: onConfigDraft feeds back into config, onUpdate stores it.
+  function Stateful({ initial, onUpdate }: { initial: AppConfig; onUpdate: (p: any) => void }) {
+    const [cfg, setCfg] = useState(initial);
+    return <ApiErrorResumeSection config={cfg} onConfigDraft={setCfg} onUpdate={(patch) => { onUpdate(patch); setCfg({ ...cfg, ...patch }); }} />;
+  }
+
+  it('never persists a half-typed edit of a saved rule when something else saves', () => {
+    const saved = rule({ id: 'a', matchMode: 'regex', match: 'Provider.*not found' });
     const other = rule({ id: 'b', match: 'second rule' });
-    const mid = { ...saved, match: 'claude-(' };
-    const { onUpdate } = setup(on([mid, other]));
-    // first render saw only the broken version: nothing valid to fall back on
+    const onUpdate = vi.fn();
+    render(<Stateful initial={on([saved, other])} onUpdate={onUpdate} />);
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    // a valid intermediate that would match everything, then an invalid one
+    fireEvent.change(input, { target: { value: 'Provider.*not found|' } });
+    fireEvent.change(input, { target: { value: 'Provider.*not found|(' } });
+    fireEvent.blur(input);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toBe('Not a valid regular expression');
     fireEvent.click(screen.getByLabelText('Remove rule 2'));
-    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toEqual([]);
-    cleanup();
-    const view = render(<ApiErrorResumeSection config={on([saved, other])} onUpdate={onUpdate} onConfigDraft={vi.fn()} />);
-    view.rerender(<ApiErrorResumeSection config={on([mid, other])} onUpdate={onUpdate} onConfigDraft={vi.fn()} />);
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toEqual([saved]);
+  });
+
+  it('keeps a saved rule when the section remounts with an edit in progress', () => {
+    const saved = rule({ id: 'a', match: 'first rule' });
+    const other = rule({ id: 'b', match: 'second rule' });
+    const onUpdate = vi.fn();
+    const first = render(<Stateful initial={on([saved, other])} onUpdate={onUpdate} />);
+    fireEvent.change(screen.getByLabelText('When the error matches (rule 1)'), { target: { value: 'x' } });
+    first.unmount();
+    render(<Stateful initial={on([saved, other])} onUpdate={onUpdate} />);
     fireEvent.click(screen.getByLabelText('Remove rule 2'));
-    const sent = onUpdate.mock.calls[1][0].apiErrorResume.rules;
-    expect(sent).toEqual([saved]);
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toEqual([saved]);
   });
 
   it('typing drafts and blur saves a valid rule', () => {
     const { onUpdate, onConfigDraft } = setup(on([rule()]));
     const input = screen.getByLabelText('When the error matches (rule 1)');
     fireEvent.change(input, { target: { value: 'rate limited' } });
-    expect(onConfigDraft.mock.calls[0][0].apiErrorResume.rules[0].match).toBe('rate limited');
+    expect((input as HTMLInputElement).value).toBe('rate limited');
+    expect(onConfigDraft).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('Send (rule 1)'), { target: { value: 'go on' } });
     fireEvent.blur(screen.getByLabelText('Send (rule 1)'));
-    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toHaveLength(1);
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toEqual([expect.objectContaining({ match: 'rate limited', message: 'go on' })]);
   });
 
   it('shows an alert and does not save an invalid regex or a short match', () => {
@@ -101,9 +122,8 @@ describe('ApiErrorResumeSection', () => {
   });
 
   it('toggling the regex box saves when valid', () => {
-    const { onUpdate, onConfigDraft } = setup(on([rule()]));
+    const { onUpdate } = setup(on([rule()]));
     fireEvent.click(screen.getByLabelText('Regex (rule 1)'));
-    expect(onConfigDraft.mock.calls[0][0].apiErrorResume.rules[0].matchMode).toBe('regex');
     expect(onUpdate.mock.calls[0][0].apiErrorResume.rules[0].matchMode).toBe('regex');
   });
 
@@ -117,7 +137,7 @@ describe('ApiErrorResumeSection', () => {
     const { onUpdate, onConfigDraft } = setup(on([rule()]));
     const delay = screen.getByLabelText('After (seconds) (rule 1)');
     fireEvent.change(delay, { target: { value: '30' } });
-    expect(onConfigDraft.mock.calls[0][0].apiErrorResume.rules[0].delaySeconds).toBe(30);
+    expect((delay as HTMLInputElement).value).toBe('30');
     fireEvent.change(delay, { target: { value: '' } });
     fireEvent.blur(delay, { target: { value: '9999' } });
     expect(onUpdate.mock.calls[0][0].apiErrorResume.rules[0].delaySeconds).toBe(600);

@@ -121,6 +121,7 @@ export class ApiErrorResumeService {
   async onApiErrorStop(sessionId: string, event: { error: string; text: string }): Promise<void> {
     const { deps } = this;
     const epoch = this.bump(sessionId);
+    this.clearPending(sessionId); // a newer stop supersedes an earlier resume, whatever it matches
     this.rested.add(sessionId);
     const config = deps.getConfig();
     if (!config?.enabled) return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: feature off`);

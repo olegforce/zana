@@ -226,6 +226,13 @@ describe('cancel while matching, rested state, edited rules', () => {
     vi.advanceTimersByTime(60000);
     expect(s.deps.reply).toHaveBeenCalledTimes(1);
   });
+  it('a newer stop that matches no rule disarms the earlier resume', async () => {
+    const s = setup();
+    await s.svc.onApiErrorStop('s1', err);
+    await s.svc.onApiErrorStop('s1', { error: 'other', text: 'sign-in required' });
+    vi.advanceTimersByTime(60000);
+    expect(s.deps.reply).not.toHaveBeenCalled();
+  });
   it('rests on an API error until the next turn, even with the feature off', async () => {
     const s = setup();
     s.state.config = undefined;
