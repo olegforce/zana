@@ -856,6 +856,91 @@ describe('host bootstrap wiring', () => {
     expect(await ctx().apiErrorResume.check('nothing', [])).toEqual({ ruleId: null, skipped: [] });
   });
 
+  describe('Squad worker API-error recovery routing', () => {
+    const workerCohort = { executionId: 'e-api', role: 'worker', slotId: 'sl-api', cohortId: 'c-api', teamId: 't', teamName: 'T' };
+    const stopBody = JSON.stringify({ hook_event_name: 'StopFailure', error: 'rate_limit', error_details: '429 slow down' });
+    const claimRecovery = (on: boolean) => {
+      const config = store.getConfig();
+      return vi.spyOn(store, 'getConfig').mockReturnValue({
+        ...config, executionClaimRecoveryObserveEnabled: on, executionClaimRecoveryEnforceEnabled: on
+      });
+    };
+
+    it('sends a worker StopFailure to the engine and a plain session to the resume rules', async () => {
+      h.ptys.sessions.set('api-w', sessionFixture({ id: 'api-w', projectId: project.id, profile: 'claude', cohort: workerCohort }));
+      h.ptys.sessions.set('api-p', sessionFixture({ id: 'api-p', projectId: project.id, profile: 'claude' }));
+      const cfg = claimRecovery(true);
+      const engine = vi.spyOn(ctx().workerApiErrorRecovery, 'onApiErrorStop').mockResolvedValue(undefined);
+      const resume = vi.spyOn(ctx().apiErrorResume, 'onApiErrorStop').mockResolvedValue(undefined);
+      const turnFinished = vi.spyOn(ctx().agentStatus, 'turnFinished');
+      try {
+        h.mcpDeps.onNotifyHook(project.id, 'api-w', 'unblocked', stopBody);
+        expect(engine).toHaveBeenCalledWith('api-w', { executionId: 'e-api', slotId: 'sl-api' },
+          expect.objectContaining({ error: 'rate_limit', retryable: true }));
+        expect(resume).not.toHaveBeenCalled();
+        expect(turnFinished).toHaveBeenCalledWith('api-w');
+        h.mcpDeps.onNotifyHook(project.id, 'api-p', 'unblocked', stopBody);
+        expect(resume).toHaveBeenCalledTimes(1);
+        expect(engine).toHaveBeenCalledTimes(1);
+        await settle();
+      } finally {
+        for (const spy of [cfg, engine, resume, turnFinished]) spy.mockRestore();
+      }
+    });
+
+    it('keeps a worker on the resume rules when claim recovery is disabled', async () => {
+      h.ptys.sessions.set('api-off', sessionFixture({ id: 'api-off', projectId: project.id, profile: 'claude', cohort: workerCohort }));
+      const cfg = claimRecovery(false);
+      const engine = vi.spyOn(ctx().workerApiErrorRecovery, 'onApiErrorStop').mockResolvedValue(undefined);
+      const resume = vi.spyOn(ctx().apiErrorResume, 'onApiErrorStop').mockResolvedValue(undefined);
+      try {
+        h.mcpDeps.onNotifyHook(project.id, 'api-off', 'unblocked', stopBody);
+        expect(resume).toHaveBeenCalledTimes(1);
+        expect(engine).not.toHaveBeenCalled();
+        await settle();
+      } finally {
+        for (const spy of [cfg, engine, resume]) spy.mockRestore();
+      }
+    });
+
+    it('reads the claim-recovery switches from the live config', async () => {
+      const cfg = claimRecovery(false);
+      try {
+        await expect(ctx().workerApiErrorRecovery.onApiErrorStop('api-cfg', { executionId: 'e-api', slotId: 'sl-api' }, { error: 'x', text: '' }))
+          .resolves.toBeUndefined();
+        expect(cfg).toHaveBeenCalled();
+      } finally {
+        cfg.mockRestore();
+      }
+    });
+
+    it('tells the engine a turn started, with the state the session was in before it', async () => {
+      h.ptys.sessions.set('api-turn', sessionFixture({ id: 'api-turn', projectId: project.id, profile: 'claude', cohort: workerCohort }));
+      const started = vi.spyOn(ctx().workerApiErrorRecovery, 'onTurnStarted');
+      const state = vi.spyOn(ctx().agentStatus, 'get').mockReturnValue('idle');
+      const turnStarted = vi.spyOn(ctx().agentStatus, 'turnStarted');
+      try {
+        h.mcpDeps.onNotifyHook(project.id, 'api-turn', 'unblocked');
+        expect(started).toHaveBeenCalledWith('api-turn', 'idle');
+        expect(started.mock.invocationCallOrder[0]).toBeLessThan(turnStarted.mock.invocationCallOrder[0]);
+      } finally {
+        for (const spy of [started, state, turnStarted]) spy.mockRestore();
+      }
+    });
+
+    it('forgets the session on exit', async () => {
+      const forget = vi.spyOn(ctx().workerApiErrorRecovery, 'forget');
+      try {
+        h.ptys.sessions.set('api-exit', sessionFixture({ id: 'api-exit' }));
+        h.ptys.emit('exit', 'api-exit', 0);
+        await settle();
+        expect(forget).toHaveBeenCalledWith('api-exit');
+      } finally {
+        forget.mockRestore();
+      }
+    });
+  });
+
   describe('Squad worker exit and in-place restart', () => {
     const workerCohort = { executionId: 'e-restart', role: 'worker', slotId: 'sl', cohortId: 'c-restart', teamId: 't', teamName: 'T' };
     const spies = () => {

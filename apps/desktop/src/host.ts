@@ -344,7 +344,8 @@ import { Overseer, type OverseerToolEvent } from '@zana-ai/zcc-server/services/f
 import { OverseerAuditRing } from '@zana-ai/zcc-server/services/followups/overseer-audit';
 import { ContentScreen, type ContentScreenEvent, buildWarningText } from './window/content-screen.js';
 import { HeartbeatService } from '@zana-ai/zcc-server/services/followups/heartbeat';
-import { createApiErrorResume, handleApiErrorStop } from './api-error-resume-wiring.js';
+import { createApiErrorResume } from './api-error-resume-wiring.js';
+import { createWorkerApiErrorRecovery, routeApiErrorStop, workerApiErrorRecoveryEnabled } from './worker-api-error-recovery-wiring.js';
 import { LocalExtensionWatcher } from '@zana-ai/zcc-server/services/extensions/local-extension-watcher';
 import { AutonomousRunSupervisor, AUTONOMOUS_DEFAULTS } from '@zana-ai/zcc-server/services/agents/autonomous-run-supervisor';
 import { AutoCloseIdleService } from '@zana-ai/zcc-server/services/followups/auto-close-idle';
@@ -6603,6 +6604,17 @@ const squadExecutionService = new SquadExecutionService({
   , now: Date.now
 });
 
+const workerApiErrorRecovery = createWorkerApiErrorRecovery({
+  getConfig: () => store.getConfig(),
+  executionService: squadExecutionService,
+  executionStore,
+  agentStatus,
+  ptys,
+  workerInjector,
+  restarter: squadWorkerRestarter,
+  override: e2eTimingOverrideMs
+});
+
 /**
  * Flow B/C file handoff: when a durable coordinator cannot reach the execution
  * MCP bridge (AI Suite sandbox), it writes its authored plan to a project-
@@ -7287,6 +7299,7 @@ function wireBridgeListeners() {
     // Same release for the OpenCode session-id resolver's cache (Rule 5).
     heartbeat.remove(sessionId);
     apiErrorResume.forget(sessionId);
+    workerApiErrorRecovery.forget(sessionId);
     // Drop a session that exits while working so a dead pty can't pin the Mac
     // awake; releases (after grace) if it was the last working agent.
     keepAwake.remove(sessionId);
@@ -7787,6 +7800,7 @@ function registerIpc() {
     get overseerAudit() { return overseerAudit; },
     get apiErrorResume() { return apiErrorResume; },
     get squadWorkerRestarter() { return squadWorkerRestarter; },
+    get workerApiErrorRecovery() { return workerApiErrorRecovery; },
     get packAndInstallLocal() { return packAndInstallLocal; },
     get pendingWhatsNew() { return pendingWhatsNew; },
     set pendingWhatsNew(value) { pendingWhatsNew = value; },
@@ -8652,7 +8666,9 @@ async function bootstrapNormal() {
         if (event?.kind === 'requested') agentStatus.inputRequested(sessionId, event.key);
         else if (event?.kind === 'resolved') agentStatus.inputResolved(sessionId, event.keys);
         else if (event?.kind === 'interrupted') agentStatus.turnFinished(sessionId);
-        else if (event?.kind === 'api-error-stop') handleApiErrorStop({ service: apiErrorResume, agentStatus, logMainError }, sessionId, event);
+        else if (event?.kind === 'api-error-stop') {
+          routeApiErrorStop({ service: apiErrorResume, recovery: workerApiErrorRecovery, enabled: () => workerApiErrorRecoveryEnabled(store.getConfig()), agentStatus, logMainError }, sessionId, session, event);
+        }
         return;
       }
       if (action === 'blocked') {
@@ -8672,6 +8688,7 @@ async function bootstrapNormal() {
         agentStatus.markBlocked(sessionId);
       } else {
         apiErrorResume.cancel(sessionId);
+        workerApiErrorRecovery.onTurnStarted(sessionId, agentStatus.get(sessionId));
         agentStatus.turnStarted(sessionId);
       }
       // Diagnostic: confirms the hook reached the main process. The emit to the
@@ -9758,6 +9775,7 @@ app.on('before-quit', (event) => {
   goals.stopWatching();
   goals.stopAll();
   followups.stopWatching();
+  workerApiErrorRecovery.dispose();
   squadWorkerRestarter.dispose();
   squadExecutionService.dispose();
   squadProposalNotifier.dispose();
