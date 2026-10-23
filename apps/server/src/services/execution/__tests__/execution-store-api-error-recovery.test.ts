@@ -222,6 +222,26 @@ describe('blockKickoffFailure with recovery evidence', () => {
     await expect(store.blockKickoffFailure(record.id, 'unit', fence)).rejects.toBeInstanceOf(WorkUnitRecoveryGuardError);
   }));
 
+  it('refuses to block a recovery that already resumed', async () => fixture(async (filePath) => {
+    const store = createExecutionStore({ filePath, id: () => 'execution', now: () => 1_000 });
+    const { record, unit, input } = await claimed(store);
+    const fence = { claimId: unit.claimId!, claimGeneration: unit.claimGeneration! };
+    await store.recordWorkerRecovery(record.id, input({ step: 'nudged' }));
+    await store.recordWorkerRecovery(record.id, input({ step: 'resumed' }));
+    await expect(store.blockKickoffFailure(record.id, 'unit', fence)).rejects.toBeInstanceOf(WorkUnitRecoveryGuardError);
+    expect((await store.get(record.id))!.workUnits![0].state).toBe('CLAIMED');
+  }));
+
+  it('names a restart that could not be done', async () => fixture(async (filePath) => {
+    const now = new Date(2026, 9, 23, 9, 5).getTime();
+    const store = createExecutionStore({ filePath, id: () => 'execution', now: () => now });
+    const { record, unit, input } = await claimed(store);
+    await store.recordWorkerRecovery(record.id, input({ step: 'nudged' }));
+    await store.recordWorkerRecovery(record.id, input({ step: 'restart-failed' }));
+    const next = await store.blockKickoffFailure(record.id, 'unit', { claimId: unit.claimId!, claimGeneration: unit.claimGeneration! });
+    expect(next.blockers![0].question).toContain('Zana nudged it at 09:05 and could not restart its session at 09:05.');
+  }));
+
   it('says the error is not temporary when nothing was retried', async () => fixture(async (filePath) => {
     const store = createExecutionStore({ filePath, id: () => 'execution', now: () => 1_000 });
     const { record, unit, input } = await claimed(store);

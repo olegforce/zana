@@ -108,7 +108,9 @@ test('a nudge resumes the engineer without reclaiming its claim', async ({ app }
     expect(view.blocker).toBeNull();
     expect(view.summaries.filter((summary) => summary.includes('Reclaimed'))).toEqual([]);
     expect(view.summaries.some((summary) => summary.includes('Nudged engineer'))).toBe(true);
-    expect(view.summaries.some((summary) => summary.includes('resumed'))).toBe(true);
+    const nudged = view.summaries.findIndex((summary) => summary.includes('Nudged engineer'));
+    const resumed = view.summaries.findIndex((summary) => summary.includes('resumed work unit'));
+    expect(resumed, 'the nudged turn is recorded as resumed, after the nudge').toBeGreaterThan(nudged);
     expect(view.claimGeneration).toBe(1);
     expect(nudges(ctx)).toHaveLength(1);
   } catch (error) {
@@ -146,7 +148,10 @@ test('a restart re-delivers the unit to the same session, back in the Squad work
     }, { timeout: 120_000, intervals: [200] }).toBe('COMPLETED');
     const view = await board(ctx.window, projectId, executionId);
     expect(view.blocker).toBeNull();
-    expect(view.summaries.some((summary) => summary.includes('Restarted engineer'))).toBe(true);
+    const restarted = view.summaries.findIndex((summary) => summary.includes('Restarted engineer'));
+    expect(restarted).toBeGreaterThanOrEqual(0);
+    // The restarted session's first turn must be counted, else the restart-turn timer would block a working unit.
+    expect(view.summaries.findIndex((summary) => summary.includes('resumed work unit'))).toBeGreaterThan(restarted);
     expect(nudges(ctx).length).toBeGreaterThanOrEqual(1);
 
     expect([...observed.keys()], 'the restart keeps the worker session id').toEqual([before]);

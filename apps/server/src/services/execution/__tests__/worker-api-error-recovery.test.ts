@@ -73,7 +73,7 @@ describe('WorkerApiErrorRecovery', () => {
     expect(records.at(-1)?.summary).toBe('Engineer slot-1 stopped on another temporary API error (rate_limit); Zana will restart it in 60 s');
     expect(records.at(-1)?.deadlineAt).toBe(Date.now() + T.restartDelayMs + T.restartTurnMs + 60000);
     await advance(T.restartDelayMs);
-    expect(calls.slice(-3)).toEqual(['restart', 'record:restarted', 'redeliver']);
+    expect(calls.slice(-3)).toEqual(['restart', 'redeliver', 'record:restarted']);
   });
 
   it('ignores a turn start whose prior state is working', async () => {
@@ -88,7 +88,7 @@ describe('WorkerApiErrorRecovery', () => {
     const { engine, calls, records } = setup();
     await engine.onApiErrorStop('s1', COHORT, TEMP);
     await advance(T.nudgeDelayMs + T.nudgeTurnMs);
-    expect(calls).toEqual(['record:waiting', 'nudge', 'record:nudged', 'restart', 'record:restarted', 'redeliver']);
+    expect(calls).toEqual(['record:waiting', 'nudge', 'record:nudged', 'restart', 'redeliver', 'record:restarted']);
     expect(records.at(-1)?.summary).toBe('Restarted engineer slot-1 after an API error and delivered work unit u1 again');
     engine.onTurnStarted('s1', 'idle');
     await advance(0);
@@ -112,7 +112,7 @@ describe('WorkerApiErrorRecovery', () => {
     await engine.onApiErrorStop('s1', COHORT, TEMP);
     await advance(T.nudgeDelayMs + T.nudgeTurnMs);
     await engine.onApiErrorStop('s1', COHORT, TEMP);
-    expect(calls.at(-1)).toBe('block');
+    expect(calls.slice(-2)).toEqual(['record:waiting', 'block']);
     await advance(T.restartTurnMs);
     expect(calls.filter((c) => c === 'block')).toHaveLength(1);
   });
@@ -170,12 +170,13 @@ describe('WorkerApiErrorRecovery', () => {
     expect(calls).toContain('nudge');
   });
 
-  it('does not nudge a busy worker', async () => {
+  it('records a working engineer as resumed instead of nudging it', async () => {
     const { engine, calls, state } = setup();
     await engine.onApiErrorStop('s1', COHORT, TEMP);
     state.agent = 'working';
     await advance(T.nudgeDelayMs + T.nudgeTurnMs + T.restartDelayMs);
-    expect(calls).toEqual(['record:waiting']);
+    // A visibly working engineer has recovered: it is recorded as resumed, never nudged, restarted or blocked.
+    expect(calls).toEqual(['record:waiting', 'record:resumed']);
   });
 
   it('resumes without a nudge when a turn started before the nudge time', async () => {
@@ -254,5 +255,105 @@ describe('WorkerApiErrorRecovery', () => {
     expect(log).toHaveBeenCalledTimes(2);
     expect(() => nudgeBoom.engine.onTurnStarted('s1', 'idle')).not.toThrow();
     expect(() => nudgeBoom.engine.forget('zzz')).not.toThrow();
+  });
+
+  it('restarts a worker that was not nudged (no live terminal) without waiting for the nudge turn', async () => {
+    const { engine, calls } = setup({ nudge: async () => { calls0.push('nudge'); return false; } });
+    const calls0: string[] = [];
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    await advance(1);
+    expect(calls0).toEqual(['nudge']);
+    expect(calls).toContain('restart');
+    expect(calls).not.toContain('record:nudged');
+  });
+
+  it('treats a rejected nudge like an unreachable terminal', async () => {
+    const log = vi.fn();
+    const { engine, calls } = setup({ nudge: async () => { throw new Error('pty gone'); }, log });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + 1);
+    expect(calls).toContain('restart');
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('nudge failed'), expect.any(Error));
+  });
+
+  it('blocks and says so when the redelivery is refused after a restart', async () => {
+    const { engine, calls, records } = setup({ redeliver: async () => false });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    expect(calls.slice(-3)).toEqual(['restart', 'record:restart-failed', 'block']);
+    expect(calls).not.toContain('record:restarted');
+    expect(records.at(-1)?.summary).toBe('Restarted engineer slot-1 but could not deliver work unit u1 again');
+  });
+
+  it('treats a rejected redelivery and a rejected restart as failures that ask the user', async () => {
+    const log = vi.fn();
+    const redeliver = setup({ redeliver: async () => { throw new Error('inject'); }, log });
+    await redeliver.engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    expect(redeliver.calls.slice(-2)).toEqual(['record:restart-failed', 'block']);
+    const restart = setup({ restart: async () => { throw new Error('spawn'); }, log });
+    await restart.engine.onApiErrorStop('s2', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    expect(restart.calls.slice(-2)).toEqual(['record:restart-failed', 'block']);
+    expect(restart.records.at(-1)?.summary).toBe('Could not restart engineer slot-1: spawn');
+  });
+
+  it('does not restart an engineer that started working before the restart rung', async () => {
+    const { engine, calls, state } = setup();
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    state.agent = 'working'; // the nudge turn began but its hook was missed
+    await advance(T.nudgeTurnMs);
+    expect(calls).not.toContain('restart');
+    expect(calls.at(-1)).toBe('record:resumed');
+  });
+
+  it('counts a turn that starts while the restart rung checks the fence as resumed, not a blocker', async () => {
+    const { engine, calls, state, deps } = setup();
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    expect(calls.at(-1)).toBe('record:restarted');
+    const find = deps.findClaim;
+    deps.findClaim = async (...args) => { engine.onTurnStarted('s1', 'idle'); return find(...args); };
+    await advance(T.restartTurnMs);
+    expect(calls).not.toContain('block');
+    expect(calls.at(-1)).toBe('record:resumed');
+    expect(state.claim).toBeDefined();
+  });
+
+  it('does not block a restarted engineer that is working when the restart-turn timer fires', async () => {
+    const { engine, calls, state } = setup();
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    state.agent = 'working';
+    await advance(T.restartTurnMs);
+    expect(calls).not.toContain('block');
+    expect(calls.at(-1)).toBe('record:resumed');
+  });
+
+  it('accepts the first turn of a restarted session even though its prior state is unknown', async () => {
+    const { engine, calls } = setup();
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    engine.onTurnStarted('s1', 'unknown'); // before a restart: ignored
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    engine.onTurnStarted('s1', 'unknown');
+    await advance(0);
+    expect(calls.at(-1)).toBe('record:resumed');
+  });
+
+  it('applies a turn that starts while the stop itself is being recorded', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { engine, calls } = setup({
+      record: async (_id, input) => { if (input.step === 'waiting') await gate; calls.push(`record:${input.step}`); }
+    });
+    const stop = engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(0);
+    engine.onTurnStarted('s1', 'idle');
+    release();
+    await stop;
+    await advance(T.nudgeDelayMs * 3);
+    expect(calls).toEqual(['record:waiting', 'record:resumed']);
   });
 });

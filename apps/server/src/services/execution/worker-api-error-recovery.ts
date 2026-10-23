@@ -13,6 +13,8 @@ export const WORKER_API_ERROR_RECOVERY_DEFAULTS = {
 /** Slack added to every recovery deadline so the lease sweep never reclaims a claim mid-ladder. */
 const DEADLINE_SLACK_MS = 60000;
 const RESTFUL_STATES = new Set(['idle', 'done', 'waiting']);
+/** The engineer is visibly doing something, so it has recovered; nudging, restarting or blocking it would be wrong. */
+const ACTIVE_STATES = new Set(['working', 'blocked']);
 
 export type WorkerRecoveryTimings = { nudgeDelayMs: number; nudgeTurnMs: number; restartDelayMs: number; restartTurnMs: number };
 type Fence = { claimId: string; claimGeneration: number };
@@ -43,7 +45,8 @@ interface Session extends Claim {
   busy: boolean;
   turnDuringTransition: boolean;
   restarting: boolean;
-  recorded: 'waiting' | 'nudged' | 'restarted';
+  /** The session was relaunched: its first turn may start from an unknown state (the old status was dropped at exit). */
+  afterRestart: boolean;
   timer?: unknown;
   epoch: number;
 }
@@ -64,7 +67,7 @@ export class WorkerApiErrorRecovery {
       const claim = await this.deps.findClaim(cohort.executionId, cohort.slotId);
       if (!claim) return;
       this.drop(sessionId);
-      const s: Session = { ...claim, executionId: cohort.executionId, slotId: cohort.slotId, busy: true, turnDuringTransition: false, restarting: false, recorded: 'waiting', epoch: 1 };
+      const s: Session = { ...claim, executionId: cohort.executionId, slotId: cohort.slotId, busy: true, turnDuringTransition: false, restarting: false, afterRestart: false, epoch: 1 };
       this.sessions.set(sessionId, s);
       const kind = event.error;
       const base = { errorKind: kind, errorText: event.text };
@@ -79,7 +82,10 @@ export class WorkerApiErrorRecovery {
         ? recovery.steps.map((entry) => entry.step) : [];
       const { nudgeDelayMs, nudgeTurnMs, restartDelayMs, restartTurnMs } = this.timings;
       if (steps.includes('restarted')) {
-        await this.block(sessionId, s);
+        if (await this.record(sessionId, s, {
+          ...base, step: 'waiting', severity: 'warning',
+          summary: `Engineer ${s.slotId} stopped on another API error (${kind}) after Zana restarted it`
+        })) await this.block(sessionId, s);
       } else if (steps.includes('nudged')) {
         const ok = await this.record(sessionId, s, {
           ...base, step: 'waiting', severity: 'warning', deadlineAt: this.deps.now() + restartDelayMs + restartTurnMs + DEADLINE_SLACK_MS,
@@ -94,7 +100,10 @@ export class WorkerApiErrorRecovery {
         });
         if (ok) this.arm(sessionId, s, nudgeDelayMs, () => this.nudgeStep(sessionId, s.epoch));
       }
-      if (this.sessions.get(sessionId) === s) s.busy = false;
+      if (this.sessions.get(sessionId) === s) {
+        s.busy = false;
+        if (s.turnDuringTransition) await this.resume(sessionId, s);
+      }
     } catch (error) {
       this.deps.log(`Worker API-error recovery failed for ${sessionId}`, error);
     }
@@ -103,7 +112,7 @@ export class WorkerApiErrorRecovery {
   onTurnStarted(sessionId: string, priorState: string): void {
     try {
       const s = this.sessions.get(sessionId);
-      if (!s || !RESTFUL_STATES.has(priorState)) return;
+      if (!s || !(RESTFUL_STATES.has(priorState) || (s.afterRestart && priorState === 'unknown'))) return;
       if (s.busy) { s.turnDuringTransition = true; return; }
       void this.resume(sessionId, s);
     } catch (error) {
@@ -182,45 +191,86 @@ export class WorkerApiErrorRecovery {
     return s && s.epoch === epoch ? s : undefined;
   }
 
-  private async nudgeStep(sessionId: string, epoch: number): Promise<void> {
+  /**
+   * Common entry of every timer rung: the session must still be this one, the claim fence must hold,
+   * and the engineer must not already have started a turn. A turn that began meanwhile (or a worker
+   * that is visibly working) counts as resumed. Returns the session only when the rung may act.
+   */
+  private async enter(sessionId: string, epoch: number): Promise<Session | undefined> {
     const s = this.live(sessionId, epoch);
-    if (!s) return;
+    if (!s) return undefined;
     s.busy = true;
-    if (!await this.sameFence(s)) { this.drop(sessionId); return; }
+    if (!await this.sameFence(s)) { this.drop(sessionId); return undefined; }
+    if (!this.live(sessionId, epoch)) return undefined;
+    const state = this.deps.getAgentState(sessionId);
+    if (s.turnDuringTransition || (state !== undefined && ACTIVE_STATES.has(state))) {
+      await this.resume(sessionId, s);
+      return undefined;
+    }
+    return s;
+  }
+
+  private async nudgeStep(sessionId: string, epoch: number): Promise<void> {
+    const s = await this.enter(sessionId, epoch);
+    if (!s) return;
     const state = this.deps.getAgentState(sessionId);
     if (state === undefined || !RESTFUL_STATES.has(state)) { this.drop(sessionId); return; }
-    await this.deps.nudge(sessionId, `The previous request failed with a temporary API error. Continue with your current assignment, work unit \`${s.workUnitId}\`.`);
+    let nudged: unknown = false;
+    try {
+      nudged = await this.deps.nudge(sessionId, `The previous request failed with a temporary API error. Continue with your current assignment, work unit \`${s.workUnitId}\`.`);
+    } catch (error) {
+      this.deps.log(`Worker API-error recovery nudge failed for ${sessionId}`, error);
+    }
     if (!this.live(sessionId, epoch)) return;
+    if (nudged === false) {
+      // The text never reached the engineer (no live terminal, or the call failed): go straight to the restart.
+      s.busy = false;
+      this.arm(sessionId, s, 0, () => this.restartStep(sessionId, s.epoch));
+      return;
+    }
     if (!await this.record(sessionId, s, { step: 'nudged', severity: 'info', summary: `Nudged engineer ${s.slotId} to continue work unit ${s.workUnitId} after an API error` })) return;
-    s.recorded = 'nudged';
     s.busy = false;
     if (s.turnDuringTransition) { await this.resume(sessionId, s); return; }
     this.arm(sessionId, s, this.timings.nudgeTurnMs, () => this.restartStep(sessionId, s.epoch));
   }
 
   private async restartStep(sessionId: string, epoch: number): Promise<void> {
-    const s = this.live(sessionId, epoch);
+    const s = await this.enter(sessionId, epoch);
     if (!s) return;
-    s.busy = true;
-    if (!await this.sameFence(s)) { this.drop(sessionId); return; }
     s.restarting = true;
     let result: RestartResult;
-    try { result = await this.deps.restart(sessionId); } finally { s.restarting = false; }
+    try {
+      result = await this.deps.restart(sessionId);
+    } catch (error) {
+      result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) };
+    } finally { s.restarting = false; }
     if (this.sessions.get(sessionId) !== s) return;
-    if (!result.ok) {
-      if (!await this.record(sessionId, s, { step: 'restart-failed', severity: 'warning', summary: `Could not restart engineer ${s.slotId}: ${result.message ?? result.reason}` })) return;
-      if (await this.sameFence(s)) await this.block(sessionId, s); else this.drop(sessionId);
+    if (!result.ok) { await this.restartFailed(sessionId, s, `Could not restart engineer ${s.slotId}: ${result.message ?? result.reason}`); return; }
+    s.afterRestart = true;
+    let delivered: unknown = false;
+    try {
+      delivered = await this.deps.redeliver(s.executionId, s.workUnitId, { claimId: s.claimId, claimGeneration: s.claimGeneration }, sessionId,
+        'Zana restarted your session after an API error. Continue with this assignment.');
+    } catch (error) {
+      this.deps.log(`Worker API-error recovery redelivery failed for ${sessionId}`, error);
+    }
+    if (this.sessions.get(sessionId) !== s) return;
+    if (delivered === false) {
+      await this.restartFailed(sessionId, s, `Restarted engineer ${s.slotId} but could not deliver work unit ${s.workUnitId} again`);
       return;
     }
     if (!await this.record(sessionId, s, { step: 'restarted', severity: 'info', summary: `Restarted engineer ${s.slotId} after an API error and delivered work unit ${s.workUnitId} again` })) return;
-    s.recorded = 'restarted';
-    await this.deps.redeliver(s.executionId, s.workUnitId, { claimId: s.claimId, claimGeneration: s.claimGeneration }, sessionId,
-      'Zana restarted your session after an API error. Continue with this assignment.');
-    if (this.sessions.get(sessionId) !== s) return;
     s.busy = false;
     if (s.turnDuringTransition) { await this.resume(sessionId, s); return; }
     this.arm(sessionId, s, this.timings.restartTurnMs, async () => {
-      if (await this.sameFence(s)) await this.block(sessionId, s); else this.drop(sessionId);
+      const live = await this.enter(sessionId, s.epoch);
+      if (live) await this.block(sessionId, live);
     });
+  }
+
+  /** The restart (or the redelivery after it) did not work: say so, then ask the user while the claim still stands. */
+  private async restartFailed(sessionId: string, s: Session, summary: string): Promise<void> {
+    if (!await this.record(sessionId, s, { step: 'restart-failed', severity: 'warning', summary })) return;
+    if (await this.sameFence(s)) await this.block(sessionId, s); else this.drop(sessionId);
   }
 }

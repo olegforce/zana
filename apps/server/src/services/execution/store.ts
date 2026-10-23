@@ -121,6 +121,11 @@ export interface RecordWorkerRecoveryInput {
   summary: string;
 }
 
+/** Steps at which a recovery is unfinished: a 'resumed' or 'exhausted' recovery must not be blocked as unrecovered. */
+function isWorkerRecoveryActiveStep(step: WorkerRecoveryStep): boolean {
+  return step === 'waiting' || step === 'nudged' || step === 'restarted' || step === 'restart-failed';
+}
+
 /** True while Zana is still recovering the unit's CURRENT claim (not a stale or finished attempt). */
 export function isWorkerRecoveryActive(unit: ExecutionWorkUnit): boolean {
   const recovery = unit.apiErrorRecovery;
@@ -2516,7 +2521,8 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       const recovery = unit.apiErrorRecovery;
       if (apiError) {
         if (unit.state !== 'CLAIMED' || unit.claimId !== apiError.claimId || unit.claimGeneration !== apiError.claimGeneration
-          || !recovery || recovery.claimId !== apiError.claimId || recovery.claimGeneration !== apiError.claimGeneration) {
+          || !recovery || recovery.claimId !== apiError.claimId || recovery.claimGeneration !== apiError.claimGeneration
+          || !isWorkerRecoveryActiveStep(recovery.step)) {
           throw new WorkUnitRecoveryGuardError('work unit has no API-error recovery for this claim');
         }
       } else if (!(unit.noProgressSlots ?? []).some((entry) => entry.executionAttempt === record.attempt)
@@ -2528,7 +2534,8 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       let question: string;
       if (apiError && recovery) {
         const tried = recovery.steps.flatMap((entry) => entry.step === 'nudged' ? [`nudged it at ${formatRecoveryClock(entry.at)}`]
-          : entry.step === 'restarted' ? [`restarted its session at ${formatRecoveryClock(entry.at)}`] : []);
+          : entry.step === 'restarted' ? [`restarted its session at ${formatRecoveryClock(entry.at)}`]
+          : entry.step === 'restart-failed' ? [`could not restart its session at ${formatRecoveryClock(entry.at)}`] : []);
         const what = tried.length ? tried.join(' and ') : 'did not retry it because this kind of error is not temporary';
         question = `Work unit \`${unit.id}\` (${unit.title}) stopped after an API error on ${slotId} and did not recover. Zana ${what}. Last error: ${lastError}. Check the worker terminal, then retry the unit or restart the run.`;
         recovery.step = 'exhausted';

@@ -49,13 +49,13 @@ function jobHeaderLines(projectId: string, execution: ExecutionProjection): stri
   return lines;
 }
 
-/** Work units + per-assignment claim/churn lines. */
 const RECOVERY_TEXT: Record<string, string> = {
   waiting: 'waiting to nudge',
   nudged: 'nudged, waiting for a new turn',
   restarted: 'restarted, waiting for a new turn'
 };
 
+/** Work units + per-assignment claim/churn lines. */
 function workUnitLines(work: ExecutionProjection['work']): string[] {
   const lines: string[] = [];
   lines.push(`Work units: ${work?.completed ?? 0}/${work?.total ?? 0} complete`);

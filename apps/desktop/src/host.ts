@@ -1157,9 +1157,8 @@ const squadWorkerRestarter = createSquadWorkerRestarter({
     ptys.closeExpected(id);
     await killLocalTmuxSession(id);
   },
-  onRelaunched: (session) => {
-    if (session.cohort) teamLaunchSessions.set(session.id, session.cohort.cohortId);
-  }
+  // The restarter refuses a session without a cohort, so a relaunched worker always has one.
+  onRelaunched: (session) => { teamLaunchSessions.set(session.id, session.cohort!.cohortId); }
 });
 
 async function withPreparedNativeSession<T extends { profile: LaunchProfileId; resumeSessionId?: string; extraArgs?: string[] }>(

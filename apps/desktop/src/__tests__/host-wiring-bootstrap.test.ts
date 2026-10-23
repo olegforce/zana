@@ -928,6 +928,10 @@ describe('host bootstrap wiring', () => {
       }
     });
 
+    it('refuses to restart a session the terminal layer does not know', async () => {
+      await expect(ctx().squadWorkerRestarter.restart('no-such-session')).resolves.toEqual({ ok: false, reason: 'not-found' });
+    });
+
     it('forgets the session on exit', async () => {
       const forget = vi.spyOn(ctx().workerApiErrorRecovery, 'forget');
       try {
