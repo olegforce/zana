@@ -70,7 +70,7 @@ describe('SoqlResultsGrid count results', () => {
     render(<SoqlResultsGrid records={[]} hasRun totalSize={1234} search="" />);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy count' })); });
     expect(copyText).toHaveBeenCalledWith('1234');
-    expect(screen.getByRole('button', { name: 'Copy count' }).textContent).toBe('Copied');
+    expect(screen.getByRole('button', { name: 'Count copied' }).textContent).toBe('Copied');
   });
   it('keeps Copy when the copy fails, and resets it when the count changes', async () => {
     vi.mocked(copyText).mockResolvedValueOnce(false);
@@ -78,8 +78,17 @@ describe('SoqlResultsGrid count results', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy count' })); });
     expect(screen.getByRole('button', { name: 'Copy count' }).textContent).toBe('Copy');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy count' })); });
-    expect(screen.getByRole('button', { name: 'Copy count' }).textContent).toBe('Copied');
+    expect(screen.getByRole('button', { name: 'Count copied' }).textContent).toBe('Copied');
     rerender(<SoqlResultsGrid records={[]} hasRun totalSize={8} search="" />);
+    expect(screen.getByRole('button', { name: 'Copy count' }).textContent).toBe('Copy');
+  });
+  it('ignores a copy that finishes after the count changed', async () => {
+    let finish!: (ok: boolean) => void;
+    vi.mocked(copyText).mockReturnValueOnce(new Promise<boolean>(done => { finish = done; }));
+    const { rerender } = render(<SoqlResultsGrid records={[]} hasRun totalSize={7} search="" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy count' }));
+    rerender(<SoqlResultsGrid records={[]} hasRun totalSize={8} search="" />);
+    await act(async () => finish(true));
     expect(screen.getByRole('button', { name: 'Copy count' }).textContent).toBe('Copy');
   });
   it('leaves results with records unchanged', () => {
