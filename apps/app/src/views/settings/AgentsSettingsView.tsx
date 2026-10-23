@@ -35,7 +35,7 @@ export function AgentsSettingsView({
 }: {
   config: AppConfig;
   onConfigDraft: (config: AppConfig) => void;
-  onUpdate: (patch: Partial<AppConfig>) => Promise<void>;
+  onUpdate: (patch: Partial<AppConfig>, opts?: { throwOnError?: boolean }) => Promise<void>;
 }) {
   // Auto mode defaults ON (absent ⇒ true). The Overseer only makes sense as the
   // fallback, so we soften its help text while auto mode is on.

@@ -5,6 +5,7 @@ import {
   API_ERROR_RESUME_SUGGESTIONS,
   apiErrorResumeRuleKey,
   isValidResumePattern,
+  normalizeApiErrorResume,
   type ApiErrorResumeConfig,
   type ApiErrorResumeRule
 } from '@zana-ai/zcc-domain/product';
@@ -21,8 +22,9 @@ type CheckResult =
   | { kind: 'none' }
   | { kind: 'skipped'; lines: string[] };
 
-/** Resolves true once stored; never rejects (a failure shows the save alert instead). */
-type Save = (patch: Partial<ApiErrorResumeConfig>) => Promise<boolean>;
+type Patch = Partial<ApiErrorResumeConfig> | ((base: ApiErrorResumeConfig) => Partial<ApiErrorResumeConfig>);
+/** Never rejects: a failure shows the save alert instead. */
+type Save = (patch: Patch) => Promise<void>;
 type Apply = (id: string, patch: Partial<ApiErrorResumeRule>, commit: boolean) => void;
 
 let ruleSeq = 0;
@@ -43,63 +45,72 @@ function ruleError(rule: ApiErrorResumeRule, rows: ApiErrorResumeRule[]): string
 const clamp = (n: number, min: number, max: number, fallback: number) =>
   Math.max(min, Math.min(max, Number.isNaN(n) ? fallback : n));
 
-/**
- * The rule rows: stored rules (with local edits) followed by drafts not yet
- * stored. A draft or edit is only dropped once its save succeeds, so a failed
- * save keeps what the user typed.
- */
-function useResumeRules(current: ApiErrorResumeConfig, save: Save) {
-  // Rows never saved yet live here, so a save elsewhere can't wipe a half-filled row.
-  const [pending, setPending] = useState<ApiErrorResumeRule[]>([]);
-  // Edits to stored rules stay local until a valid commit, so `current.rules` is always
-  // what is stored and an unrelated save can never persist (or drop) a half-typed rule.
-  const [edits, setEdits] = useState<Record<string, ApiErrorResumeRule>>({});
-  const stored = new Set(current.rules.map((r) => r.id));
-  const rows = [...current.rules.map((r) => edits[r.id] ?? r), ...pending.filter((r) => !stored.has(r.id))];
+/** True once the stored rule holds what the row shows (compared as the store normalises it). */
+function settled(row: ApiErrorResumeRule, stored: ApiErrorResumeRule): boolean {
+  const [a, b] = [row, stored].map((r) => normalizeApiErrorResume({ rules: [r] })?.rules[0]);
+  return !!a && !!b && a.match === b.match && a.matchMode === b.matchMode && a.message === b.message &&
+    a.delaySeconds === b.delaySeconds && a.enabled === b.enabled && a.caseSensitive === b.caseSensitive;
+}
 
-  // A draft leaves `pending` once the stored config has it.
+/**
+ * The rule rows: stored rules (with local edits) followed by new rows not yet
+ * stored. A local value is dropped only once the stored config holds it, so a
+ * failed save, or typing that continues while a save is in flight, is kept.
+ */
+function useResumeRules(current: ApiErrorResumeConfig, save: Save, latestRules: () => ApiErrorResumeRule[]) {
+  // Local values by rule id: half-typed edits of stored rules and rows never stored yet.
+  // `current.rules` stays what is stored, so an unrelated save never persists a half-typed rule.
+  const [local, setLocal] = useState<Record<string, ApiErrorResumeRule>>({});
+  // Ids of rows added here, in order, until the stored config has them.
+  const [added, setAdded] = useState<string[]>([]);
+  const stored = new Set(current.rules.map((r) => r.id));
+  const rows = [
+    ...current.rules.map((r) => local[r.id] ?? r),
+    ...added.filter((id) => !stored.has(id) && local[id]).map((id) => local[id])
+  ];
+
   useEffect(() => {
-    const ids = new Set(current.rules.map((r) => r.id));
-    setPending((prev) => (prev.some((r) => ids.has(r.id)) ? prev.filter((r) => !ids.has(r.id)) : prev));
+    const byId = new Map(current.rules.map((r) => [r.id, r]));
+    setAdded((prev) => (prev.some((id) => byId.has(id)) ? prev.filter((id) => !byId.has(id)) : prev));
+    setLocal((prev) => {
+      const done = Object.keys(prev).filter((id) => byId.has(id) && settled(prev[id], byId.get(id)!));
+      if (!done.length) return prev;
+      const next = { ...prev };
+      for (const id of done) delete next[id];
+      return next;
+    });
   }, [current.rules]);
 
-  const dropEdit = (id: string, only?: ApiErrorResumeRule) =>
-    setEdits((prev) => {
-      if (!(id in prev) || (only && prev[id] !== only)) return prev; // a newer edit stays
-      const { [id]: _done, ...rest } = prev;
-      return rest;
-    });
+  const commit = (rule: ApiErrorResumeRule) =>
+    save((base) => ({
+      rules: base.rules.some((r) => r.id === rule.id)
+        ? base.rules.map((r) => (r.id === rule.id ? rule : r))
+        : [...base.rules, rule]
+    }));
 
-  const apply: Apply = (id, patch, commit) => {
+  const apply: Apply = (id, patch, commitIfValid) => {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     const updated = { ...row, ...patch };
-    const valid = commit && !ruleError(updated, rows);
-    if (!stored.has(id)) {
-      setPending((prev) => prev.map((r) => (r.id === id ? updated : r)));
-      if (valid) void save({ rules: [...current.rules, updated] });
-      return;
-    }
-    setEdits((prev) => ({ ...prev, [id]: updated }));
-    if (valid) {
-      void save({ rules: current.rules.map((r) => (r.id === id ? updated : r)) }).then((ok) => {
-        if (ok) dropEdit(id, updated);
-      });
-    }
+    setLocal((prev) => ({ ...prev, [id]: updated }));
+    if (commitIfValid && !ruleError(updated, rows)) void commit(updated);
   };
   const addRule = (partial: Partial<ApiErrorResumeRule> = {}) => {
     const rule: ApiErrorResumeRule = {
       id: newId(), match: '', matchMode: 'contains', message: D.message,
       delaySeconds: D.delaySeconds, enabled: true, ...partial
     };
-    if (partial.match) void save({ rules: [...current.rules, rule] });
-    else setPending((prev) => [...prev, rule]);
+    setLocal((prev) => ({ ...prev, [rule.id]: rule }));
+    setAdded((prev) => [...prev, rule.id]);
+    if (partial.match) void commit(rule);
   };
   const removeRule = (id: string) => {
-    if (!stored.has(id)) return setPending((prev) => prev.filter((r) => r.id !== id));
-    void save({ rules: current.rules.filter((r) => r.id !== id) }).then((ok) => {
-      if (ok) dropEdit(id);
-    });
+    setLocal(({ [id]: _gone, ...rest }) => rest);
+    setAdded((prev) => prev.filter((r) => r !== id));
+    // Also when its first save is still in flight, or the rule would land after the remove.
+    if (stored.has(id) || latestRules().some((r) => r.id === id)) {
+      void save((base) => ({ rules: base.rules.filter((r) => r.id !== id) }));
+    }
   };
   return { rows, apply, addRule, removeRule };
 }
@@ -288,25 +299,32 @@ export function ApiErrorResumeSection({
   onConfigDraft
 }: {
   config: AppConfig;
-  onUpdate: (patch: Partial<AppConfig>) => Promise<void> | void;
+  onUpdate: (patch: Partial<AppConfig>, opts?: { throwOnError?: boolean }) => Promise<void> | void;
   onConfigDraft: (next: AppConfig) => void;
 }) {
   const current = config.apiErrorResume ?? EMPTY;
   const [saveFailed, setSaveFailed] = useState(false);
+  // While saves are in flight the next one builds on the newest sent config, not
+  // the stored one, so two quick changes (say, two suggestions) both land.
+  const inFlight = useRef<{ count: number; sent: ApiErrorResumeConfig }>({ count: 0, sent: current });
+  const base = () => (inFlight.current.count > 0 ? inFlight.current.sent : current);
   const draft = (patch: Partial<ApiErrorResumeConfig>) =>
     onConfigDraft({ ...config, apiErrorResume: { ...current, ...patch } });
   // Always a whole object.
   const save: Save = async (patch) => {
+    const from = base();
+    const next = { ...from, ...(typeof patch === 'function' ? patch(from) : patch) };
+    inFlight.current = { count: inFlight.current.count + 1, sent: next };
     try {
-      await onUpdate({ apiErrorResume: { ...current, ...patch } });
+      await onUpdate({ apiErrorResume: next }, { throwOnError: true });
       setSaveFailed(false);
-      return true;
     } catch {
       setSaveFailed(true);
-      return false;
+    } finally {
+      inFlight.current = { ...inFlight.current, count: inFlight.current.count - 1 };
     }
   };
-  const rules = useResumeRules(current, save);
+  const rules = useResumeRules(current, save, () => base().rules);
 
   return (
     <Section

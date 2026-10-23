@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '@zana-ai/zcc-domain/product';
@@ -9,6 +9,8 @@ const base = { version: 1, theme: 'system', shell: '/bin/zsh', claudeBinary: 'cl
 const rule = (o: object = {}) => ({ id: 'a', match: 'overloaded', matchMode: 'contains', message: 'continue', delaySeconds: 20, enabled: true, ...o });
 const on = (rules: object[] = [], extra: object = {}) =>
   ({ ...base, apiErrorResume: { enabled: true, rules, maxPerWindow: 3, windowMinutes: 15, ...extra } }) as AppConfig;
+const THROW = { throwOnError: true };
+const valueOf = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
 
 function setup(config: AppConfig) {
   const onUpdate = vi.fn().mockResolvedValue(undefined);
@@ -25,7 +27,7 @@ describe('ApiErrorResumeSection', () => {
   it('toggle sends a whole object', () => {
     const { onUpdate } = setup(base);
     fireEvent.click(screen.getByRole('switch', { name: 'Resume after matching API errors' }));
-    expect(onUpdate).toHaveBeenCalledWith({ apiErrorResume: { enabled: true, rules: [], maxPerWindow: 3, windowMinutes: 15 } });
+    expect(onUpdate).toHaveBeenCalledWith({ apiErrorResume: { enabled: true, rules: [], maxPerWindow: 3, windowMinutes: 15 } }, THROW);
     expect(screen.queryByText('Add rule')).toBeNull();
   });
 
@@ -56,21 +58,24 @@ describe('ApiErrorResumeSection', () => {
     expect(screen.queryByLabelText('When the error matches (rule 2)')).toBeNull();
   });
 
-  it('a blank draft row can be removed and survives a suggestion click', () => {
-    const { onUpdate } = setup(on());
-    fireEvent.click(screen.getByText('Add rule'));
-    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
-    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toHaveLength(1);
-    expect(screen.getByLabelText('When the error matches (rule 1)')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Remove rule 1'));
-    expect(screen.queryByLabelText('When the error matches (rule 1)')).toBeNull();
-  });
-
   // Mirrors SettingsView: onConfigDraft feeds back into config, onUpdate stores it.
   function Stateful({ initial, onUpdate }: { initial: AppConfig; onUpdate: (p: any) => void }) {
     const [cfg, setCfg] = useState(initial);
     return <ApiErrorResumeSection config={cfg} onConfigDraft={setCfg} onUpdate={(patch) => { onUpdate(patch); setCfg({ ...cfg, ...patch }); }} />;
   }
+
+  it('a blank draft row can be removed and survives a suggestion click', () => {
+    const onUpdate = vi.fn();
+    render(<Stateful initial={on()} onUpdate={onUpdate} />);
+    fireEvent.click(screen.getByText('Add rule'));
+    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
+    expect(onUpdate.mock.calls[0][0].apiErrorResume.rules).toHaveLength(1);
+    expect(valueOf('When the error matches (rule 1)')).toBe('Provider anthropic not found');
+    expect(valueOf('When the error matches (rule 2)')).toBe('');
+    fireEvent.click(screen.getByLabelText('Remove rule 2'));
+    expect(screen.queryByLabelText('When the error matches (rule 2)')).toBeNull();
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
 
   it('never persists a half-typed edit of a saved rule when something else saves', () => {
     const saved = rule({ id: 'a', matchMode: 'regex', match: 'Provider.*not found' });
@@ -153,11 +158,11 @@ describe('ApiErrorResumeSection', () => {
     fireEvent.change(per, { target: { value: '' } });
     fireEvent.change(mins, { target: { value: '' } });
     fireEvent.blur(per, { target: { value: '99' } });
-    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ maxPerWindow: 10 }) });
+    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ maxPerWindow: 10 }) }, THROW);
     fireEvent.blur(mins, { target: { value: '1' } });
-    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ windowMinutes: 5 }) });
+    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ windowMinutes: 5 }) }, THROW);
     fireEvent.blur(per, { target: { value: 'x' } });
-    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ maxPerWindow: 3 }) });
+    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ maxPerWindow: 3 }) }, THROW);
   });
 
   it('Check reports a match, no match and a skipped rule', async () => {
@@ -231,18 +236,79 @@ describe('ApiErrorResumeSection', () => {
     expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited');
   });
 
-  it('a newer edit typed while a save is in flight is not wiped when it lands', async () => {
-    let land!: () => void;
-    const onUpdate = vi.fn(() => new Promise<void>((r) => { land = r; }));
-    render(<ApiErrorResumeSection config={on([rule()])} onConfigDraft={vi.fn()} onUpdate={onUpdate} />);
+  // Saves land only when the test says so; the config then updates like SettingsView's.
+  function Deferred({ initial, swallow = false }: { initial: AppConfig; swallow?: boolean }) {
+    const [cfg, setCfg] = useState(initial);
+    return (
+      <ApiErrorResumeSection
+        config={cfg}
+        onConfigDraft={setCfg}
+        onUpdate={(patch) => new Promise<void>((resolve) => {
+          landing.push(() => { if (!swallow) setCfg((c) => ({ ...c, ...patch })); resolve(); });
+        })}
+      />
+    );
+  }
+  let landing: (() => void)[] = [];
+  const land = async () => { await act(async () => { landing.shift()!(); }); };
+  beforeEach(() => { landing = []; });
+
+  it('a newer edit typed while the save of a saved rule is in flight is not wiped when it lands', async () => {
+    render(<Deferred initial={on([rule()])} />);
     const input = screen.getByLabelText('When the error matches (rule 1)');
     fireEvent.change(input, { target: { value: 'rate limited' } });
     fireEvent.blur(input);
     fireEvent.change(input, { target: { value: 'rate limited again' } });
-    land();
-    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
-    await Promise.resolve();
-    expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited again');
+    await land();
+    expect(valueOf('When the error matches (rule 1)')).toBe('rate limited again');
+  });
+
+  it('a new row keeps typing done while its first save is in flight', async () => {
+    render(<Deferred initial={on()} />);
+    fireEvent.click(screen.getByText('Add rule'));
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    fireEvent.change(input, { target: { value: 'rate limited again' } });
+    await land();
+    expect(valueOf('When the error matches (rule 1)')).toBe('rate limited again');
+    expect(screen.queryByLabelText('When the error matches (rule 2)')).toBeNull();
+  });
+
+  it('removing a new row while its first save is in flight removes the stored rule too', async () => {
+    render(<Deferred initial={on()} />);
+    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
+    fireEvent.click(screen.getByLabelText('Remove rule 1'));
+    expect(screen.queryByLabelText('When the error matches (rule 1)')).toBeNull();
+    await land();
+    await land();
+    expect(screen.queryByLabelText('When the error matches (rule 1)')).toBeNull();
+    expect(screen.getByText('+ Provider anthropic not found')).toBeTruthy();
+  });
+
+  it('two quick suggestion clicks both land', async () => {
+    render(<Deferred initial={on()} />);
+    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
+    fireEvent.click(screen.getByText('+ Connection lost mid-response'));
+    await land();
+    await land();
+    expect(valueOf('When the error matches (rule 1)')).toBe('Provider anthropic not found');
+    expect(valueOf('When the error matches (rule 2)')).toBe('Connection lost mid-response');
+  });
+
+  it('keeps typed rules when the save resolves without storing them (a swallowed failure)', async () => {
+    render(<Deferred initial={on([rule()])} swallow />);
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    fireEvent.click(screen.getByText('Add rule'));
+    const added = screen.getByLabelText('When the error matches (rule 2)');
+    fireEvent.change(added, { target: { value: 'second error' } });
+    fireEvent.blur(added);
+    await land();
+    await land();
+    expect(valueOf('When the error matches (rule 1)')).toBe('rate limited');
+    expect(valueOf('When the error matches (rule 2)')).toBe('second error');
   });
 
   it('a failed toggle, cap or remove shows the save alert instead of an unhandled rejection', async () => {
@@ -303,9 +369,9 @@ describe('ApiErrorResumeSection', () => {
     fireEvent.click(screen.getByText('Check'));
     fireEvent.click(screen.getByText('Check'));
     await screen.findByText('No rule matches. Zana would leave the agent waiting for you.');
-    fail(new Error('late'));
-    await Promise.resolve();
+    await act(async () => { fail(new Error('late')); });
     expect(screen.queryByText(/couldn't check/)).toBeNull();
+    expect(screen.getByText('No rule matches. Zana would leave the agent waiting for you.')).toBeTruthy();
   });
 
   it('Check says it is desktop-only when the API is missing', async () => {
