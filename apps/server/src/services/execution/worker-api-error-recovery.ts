@@ -259,7 +259,11 @@ export class WorkerApiErrorRecovery {
       await this.restartFailed(sessionId, s, `Restarted engineer ${s.slotId} but could not deliver work unit ${s.workUnitId} again`);
       return;
     }
-    if (!await this.record(sessionId, s, { step: 'restarted', severity: 'info', summary: `Restarted engineer ${s.slotId} after an API error and delivered work unit ${s.workUnitId} again` })) return;
+    // A relaunch can take tens of seconds, so the lease deadline restarts from here.
+    if (!await this.record(sessionId, s, {
+      step: 'restarted', severity: 'info', deadlineAt: this.deps.now() + this.timings.restartTurnMs + DEADLINE_SLACK_MS,
+      summary: `Restarted engineer ${s.slotId} after an API error and delivered work unit ${s.workUnitId} again`
+    })) return;
     s.busy = false;
     if (s.turnDuringTransition) { await this.resume(sessionId, s); return; }
     this.arm(sessionId, s, this.timings.restartTurnMs, async () => {

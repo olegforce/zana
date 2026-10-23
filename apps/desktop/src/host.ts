@@ -1157,6 +1157,7 @@ const squadWorkerRestarter = createSquadWorkerRestarter({
     ptys.closeExpected(id);
     await killLocalTmuxSession(id);
   },
+  sessionGone: async (id) => !(await listLocalTmuxSessionIds()).includes(id),
   // The restarter refuses a session without a cohort, so a relaunched worker always has one.
   onRelaunched: (session) => { teamLaunchSessions.set(session.id, session.cohort!.cohortId); }
 });

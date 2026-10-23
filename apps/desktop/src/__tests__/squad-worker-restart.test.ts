@@ -132,6 +132,37 @@ describe('restart flow', () => {
     expect(restarter.isRestarting('w1')).toBe(false);
   });
 
+  it('waits for the tmux kill to finish before relaunching', async () => {
+    vi.useFakeTimers();
+    let finishKill!: () => void;
+    const deps = makeDeps({ closeSession: vi.fn(() => new Promise<void>((resolve) => { finishKill = resolve; })) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    await vi.advanceTimersByTimeAsync(0);
+    // The PTY (tmux client) exits before kill-session has returned.
+    restarter.onSessionExit('w1', vi.fn(async () => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.launchAuthorizedTerminal).not.toHaveBeenCalled();
+    finishKill();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual({ ok: true });
+    expect(deps.launchAuthorizedTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('never re-attaches to a session that is still running', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ sessionGone: vi.fn(async () => false) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    await vi.advanceTimersByTimeAsync(0);
+    const finalize = vi.fn(async () => {});
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toMatchObject({ ok: false, reason: 'relaunch-failed', message: 'the old session is still running' });
+    expect(deps.launchAuthorizedTerminal).not.toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
   it('finalizes the exit when the relaunch fails', async () => {
     vi.useFakeTimers();
     const deps = makeDeps({ launchAuthorizedTerminal: vi.fn(async () => ({ ok: false as const, code: 'DENIED', message: 'nope' })) as never });

@@ -2493,7 +2493,8 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       }
       record.stateVersion += 1;
       record.updatedAt = timestamp;
-      append(snapshot.state, record, record.state, input.severity, input.summary, timestamp,
+      // A summary can carry a restart error message; over MAX_STRING it would fail the whole persist.
+      append(snapshot.state, record, record.state, input.severity, input.summary.slice(0, MAX_STRING), timestamp,
         { kind: 'event', eventType: 'progress', slotId: input.slotId, ...(detail ? { detail } : {}) });
       persist(snapshot.state, snapshot.hash);
       return clone(record);
@@ -2537,7 +2538,8 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
           : entry.step === 'restarted' ? [`restarted its session at ${formatRecoveryClock(entry.at)}`]
           : entry.step === 'restart-failed' ? [`could not restart its session at ${formatRecoveryClock(entry.at)}`] : []);
         const what = tried.length ? tried.join(' and ') : 'did not retry it because this kind of error is not temporary';
-        question = `Work unit \`${unit.id}\` (${unit.title}) stopped after an API error on ${slotId} and did not recover. Zana ${what}. Last error: ${lastError}. Check the worker terminal, then retry the unit or restart the run.`;
+        // A long unit title must not push the question past MAX_STRING, which would fail the persist and leave the unit unblocked.
+        question = `Work unit \`${unit.id}\` (${unit.title}) stopped after an API error on ${slotId} and did not recover. Zana ${what}. Last error: ${lastError}. Check the worker terminal, then retry the unit or restart the run.`.slice(0, MAX_STRING);
         recovery.step = 'exhausted';
         recovery.updatedAt = timestamp;
         recovery.steps = [...recovery.steps, { step: 'exhausted' as const, at: timestamp }].slice(-MAX_RECOVERY_STEPS);
@@ -2546,6 +2548,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
           ? ` Earlier, Zana tried to recover ${recovery.slotId} after an API error: ${recovery.steps.map((entry) => entry.step).join(', ')}. Last error: ${lastError}.`
           : '';
         question = `Work unit ${unit.id}${unit.title ? ` (${unit.title})` : ''} made no progress on every eligible worker slot; its worker never started a turn.${earlier} Check the worker terminal, then retry the unit or restart the run.`;
+        if (earlier) question = question.slice(0, MAX_STRING);
       }
       unit.state = 'BLOCKED';
       unit.history.push({ action: 'blocked', slotId: unit.assignedSlotId, attempt: unit.attempt, at: timestamp, detail: apiError ? 'stopped after an API error' : 'kickoff delivery produced no worker turn' });

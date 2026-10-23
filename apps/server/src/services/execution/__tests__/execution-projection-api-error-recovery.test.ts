@@ -9,7 +9,7 @@ function record(unit: Partial<ExecutionWorkUnit>): ExecutionRecord {
     attempt: 1, state: 'RUNNING', stateVersion: 1, resolvedModels: [], createdAt: 1, updatedAt: 2,
     workUnits: [{
       id: 'unit', title: 'Unit', task: 'Work', dependencies: [], state: 'CLAIMED', assignedSlotId: 'slot-1', claimId: 'c1', claimGeneration: 1, attempt: 1, history: [],
-      apiErrorRecovery: { claimId: 'c1', claimGeneration: 1, slotId: 'slot-1', executionAttempt: 1, step: 'nudged', errorKind: 'overloaded', startedAt: 50, updatedAt: 60, steps: [{ step: 'nudged', at: 60 }] },
+      apiErrorRecovery: { claimId: 'c1', claimGeneration: 1, slotId: 'slot-1', executionAttempt: 1, step: 'nudged', errorKind: 'overloaded', startedAt: 50, updatedAt: 60, deadlineAt: Date.now() + 60_000, steps: [{ step: 'nudged', at: 60 }] },
       ...unit
     }]
   } as ExecutionRecord;
@@ -26,6 +26,17 @@ describe('work projection recovery', () => {
     done.workUnits![0].apiErrorRecovery!.step = 'exhausted';
     expect(assignment(done)).not.toHaveProperty('recovery');
     expect(assignment(record({ apiErrorRecovery: undefined }))).not.toHaveProperty('recovery');
+  });
+
+  it('stops showing recovery once its deadline passed, or when it never had one', () => {
+    const late = record({});
+    late.workUnits![0].apiErrorRecovery!.deadlineAt = Date.now() - 1;
+    expect(assignment(late)).not.toHaveProperty('recovery');
+    // A permanent error records no deadline: nothing is being retried, so nothing reads "Recovering".
+    const permanent = record({});
+    permanent.workUnits![0].apiErrorRecovery!.step = 'waiting';
+    delete permanent.workUnits![0].apiErrorRecovery!.deadlineAt;
+    expect(assignment(permanent)).not.toHaveProperty('recovery');
   });
 
   it('omits errorKind when none was recorded', () => {

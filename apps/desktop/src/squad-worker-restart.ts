@@ -50,6 +50,11 @@ export interface SquadWorkerRestartDeps {
   ): Promise<Result<TerminalSession>>;
   /** Expected close plus tmux kill, without dropping the restore capability. */
   closeSession(sessionId: string): Promise<unknown>;
+  /**
+   * True once nothing is left to re-attach to. The PTY exit is only the tmux CLIENT going away;
+   * a relaunch's `new-session -A` would otherwise attach the old, still-stuck agent.
+   */
+  sessionGone?(sessionId: string): Promise<boolean>;
   /** Runs after a successful relaunch, once the exit listener has already cleaned up. */
   onRelaunched(session: TerminalSession): void;
   exitTimeoutMs?: number;
@@ -139,6 +144,8 @@ interface PendingRestart {
   finalizeExit?: () => Promise<void>;
   exitTimer?: unknown;
   relaunchTimer?: unknown;
+  /** Settles once `closeSession` (expected close + tmux kill) has finished. */
+  closed?: Promise<unknown>;
   settle(result: SquadWorkerRestartResult): void;
 }
 
@@ -165,6 +172,11 @@ export function createSquadWorkerRestarter(deps: SquadWorkerRestartDeps) {
   async function runRelaunch(sessionId: string, entry: PendingRestart): Promise<void> {
     let message: string | undefined;
     try {
+      // The exit can arrive before the tmux kill has finished: wait for it, then make sure
+      // nothing is left that the relaunch would re-attach to.
+      await entry.closed;
+      if (pending.get(sessionId) !== entry) return;
+      if (deps.sessionGone && !await deps.sessionGone(sessionId)) throw new Error('the old session is still running');
       const result = await relaunchSquadWorker(deps, entry.session);
       if (result.ok) {
         pending.delete(sessionId);
@@ -205,7 +217,7 @@ export function createSquadWorkerRestarter(deps: SquadWorkerRestartDeps) {
           pending.delete(sessionId);
           entry.settle({ ok: false, reason: 'exit-timeout' });
         }, exitTimeoutMs);
-        Promise.resolve()
+        entry.closed = Promise.resolve()
           .then(() => deps.closeSession(sessionId))
           .catch((error) => {
             if (pending.get(sessionId) !== entry) return;

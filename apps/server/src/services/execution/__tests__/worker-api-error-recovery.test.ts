@@ -74,6 +74,8 @@ describe('WorkerApiErrorRecovery', () => {
     expect(records.at(-1)?.deadlineAt).toBe(Date.now() + T.restartDelayMs + T.restartTurnMs + 60000);
     await advance(T.restartDelayMs);
     expect(calls.slice(-3)).toEqual(['restart', 'redeliver', 'record:restarted']);
+    // The relaunch took time, so the lease deadline restarts from the restart itself.
+    expect(records.at(-1)).toMatchObject({ step: 'restarted', deadlineAt: Date.now() + T.restartTurnMs + 60000 });
   });
 
   it('ignores a turn start whose prior state is working', async () => {

@@ -60,4 +60,12 @@ describe('isRetryableApiError', () => {
     expect(run({ error: 'authentication_failed', error_details: GATEWAY_TEXT })).toMatchObject({ retryable: false });
     expect(run({})).toMatchObject({ error: 'unknown', retryable: true });
   });
+
+  it('reads the proxy pattern from the API error only, never from the model reply', () => {
+    const run = (b: object) => claudeInteractionHook(JSON.stringify({ hook_event_name: 'StopFailure', ...b }));
+    // A permanent invalid_request whose reply happens to quote the gateway text stays permanent.
+    expect(run({ error: 'invalid_request', error_details: 'prompt is too long', last_assistant_message: GATEWAY_TEXT }))
+      .toMatchObject({ retryable: false, text: expect.stringContaining('Provider anthropic not found') });
+    expect(run({ error: 'invalid_request', last_assistant_message: GATEWAY_TEXT })).toMatchObject({ retryable: false });
+  });
 });

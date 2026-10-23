@@ -19,7 +19,7 @@ function request() {
 
 type Store = ReturnType<typeof createExecutionStore>;
 
-async function running(store: Store, slotIds: string[]) {
+async function running(store: Store, slotIds: string[], title = 'Unit') {
   let record = (await store.claim(request())).record;
   record = await store.transition(record.id, record.stateVersion, 'STARTING', 'info', 'start');
   record = await store.transition(record.id, record.stateVersion, 'RUNNING', 'info', 'run');
@@ -29,7 +29,7 @@ async function running(store: Store, slotIds: string[]) {
       ...slotIds.map((slotId) => ({ slotId, personaId: 'worker', authorizationIdDigest: slotId }))
     ]
   }, 'authorization-digest');
-  return store.registerPlan(record.id, record.stateVersion, [{ id: 'unit', title: 'Unit', task: 'Work', dependencies: [], readOnly: true }]);
+  return store.registerPlan(record.id, record.stateVersion, [{ id: 'unit', title, task: 'Work', dependencies: [], readOnly: true }]);
 }
 
 async function claimAndReclaim(store: Store, executionId: string, slotId: string) {
@@ -73,8 +73,8 @@ describe('today (characterization)', () => {
   }));
 });
 
-async function claimed(store: Store, slotId = 'slot-1', slots = ['slot-1', 'slot-2']) {
-  let record = await running(store, slots);
+async function claimed(store: Store, slotId = 'slot-1', slots = ['slot-1', 'slot-2'], title = 'Unit') {
+  let record = await running(store, slots, title);
   record = await store.claimWork(record.id, record.stateVersion, { role: 'worker', slotId }, 'unit');
   const unit = record.workUnits![0];
   const input = (overrides: Partial<RecordWorkerRecoveryInput> = {}): RecordWorkerRecoveryInput => ({
@@ -240,6 +240,21 @@ describe('blockKickoffFailure with recovery evidence', () => {
     await store.recordWorkerRecovery(record.id, input({ step: 'restart-failed' }));
     const next = await store.blockKickoffFailure(record.id, 'unit', { claimId: unit.claimId!, claimGeneration: unit.claimGeneration! });
     expect(next.blockers![0].question).toContain('Zana nudged it at 09:05 and could not restart its session at 09:05.');
+  }));
+
+  it('keeps an over-long summary and question within the stored limits instead of failing the persist', async () => fixture(async (filePath) => {
+    const store = createExecutionStore({ filePath, id: () => 'execution', now: () => 1_000 });
+    const { record, unit, input } = await claimed(store, 'slot-1', ['slot-1', 'slot-2'], 'T'.repeat(2_000));
+    const longSummary = `Could not restart engineer slot-1: ${'x'.repeat(3_000)}`;
+    await store.recordWorkerRecovery(record.id, input({ summary: longSummary }));
+    const events = (await store.events('session-1', 'project-1', record.id)).events;
+    expect(events.at(-1)!.summary).toBe(longSummary.slice(0, 2_048));
+    const blocked = await store.blockKickoffFailure(record.id, 'unit', { claimId: unit.claimId!, claimGeneration: unit.claimGeneration! });
+    expect(blocked.workUnits![0].state).toBe('BLOCKED');
+    expect(blocked.blockers![0].question.length).toBe(2_048);
+    // Both survive a reload from the same file.
+    const reloaded = createExecutionStore({ filePath, id: () => 'other', now: () => 1_000 });
+    expect((await reloaded.get(record.id))?.blockers?.[0].question.length).toBe(2_048);
   }));
 
   it('says the error is not temporary when nothing was retried', async () => fixture(async (filePath) => {
