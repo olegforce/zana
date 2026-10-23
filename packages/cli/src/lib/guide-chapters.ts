@@ -91,10 +91,19 @@ zcc projects ls remains as an alias of project list.
     title: 'Machines',
     content: `  zcc machine list
   zcc machine show <id>
+  zcc machine connect --project <project-id> [--json]
+  zcc machine connect --ssh <alias> [--user <user>] [--json]
+  zcc machine repair <host-id> [--json]
   zcc machine join-code
   zcc machine rename <id> <name>
   zcc machine remove <id>
   zcc machine provider-cli status|install <id> [provider]
+
+Connect installs or reconnects over SSH from the primary computer. Install is an
+alias for connect. Repair preserves the registered machine identity and explicitly
+allows replacement of stale enrollment. Main validates the target and handles
+credentials. These commands return stages and redacted logs, and exit nonzero if
+the machine does not connect. Use machine show to verify the resulting status.
 `
   },
   {
@@ -194,10 +203,10 @@ Start with \`zcc browser instances --host <host-id> --json\`. For every tab/cont
 
 - \`tabs\`: list native tabs and their control state.
 - \`create [--url <http(s)-url>] [--reveal]\`: create a tab with a separate automation profile. Defaults: hidden, about:blank.
-- \`acquire <tab-ids...> --controller <label> [--ttl-ms <ms>] [--allow-personal]\`: acquire exclusive tab control. If the owning thread is already focused, open the side panel and select the first tab. Default expiry is five minutes, maximum thirty minutes. Personal tabs require the explicit handoff flag.
+- \`acquire <tab-ids...> --controller <label> [--ttl-ms <ms>] [--allow-personal]\`: acquire exclusive tab control. Open the side panel and select the first tab when the owning thread is focused, or the next time the user opens that thread. Default expiry is five minutes, maximum thirty minutes. Personal tabs require the explicit handoff flag.
 - \`connection <lease-id> --output <new-file>\`: write private connection JSON with mode 0600 on the CLI host. The loopback WebSocket endpoint is usable only on the browser host. Pass it privately to an integration worker; never expose it through a shared port or chat output.
 - \`release <lease-id>\`: revoke automation while keeping tabs open.
-- \`reveal <tab-id>\`: open the side panel and select the existing native tab only if its thread is already focused.
+- \`reveal <tab-id>\`: open the side panel and select the existing native tab. If its thread is not focused, this happens the next time the user opens that thread; reveal never switches threads.
 - \`capture <tab-id> --output <new-file>\`: save a bounded JPEG to the CLI host without focusing the tab.
 - \`close <tab-id>\`: explicitly close that native tab.
 - \`watch\`: print changed tab snapshots every two seconds until interrupted.

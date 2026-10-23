@@ -15,6 +15,7 @@ import { startStaticHost } from './static-host.js';
 import { createRuntimeDiagnostics, diagnosticRuntimeLabel } from './services/diagnostics/runtime-stalls.js';
 import { toBrowserProjectSummaries } from './browser-bootstrap.js';
 import { createProductHttpContext } from './http/product-context.js';
+import { consumePeerBootKey } from './services/peers/protected-key.js';
 import type { ProductHub } from './http/product-hub.js';
 import { DEFAULT_DEV_APP_PORT, serverPortFromEnv } from './http/ports.js';
 import { SERVER_RUNTIME_PROTOCOL_VERSION, type ServerRuntimeInbound } from '@zana-ai/zcc-contracts/runtime';
@@ -34,10 +35,12 @@ import { sendConversationTurn } from './services/threads/conversation-lifecycle.
 import { ThreadCreateError } from './http/thread-create.js';
 import { isThreadLiveInProject } from './services/agents/thread-liveness.js';
 import { getConversationThread } from '@zana-ai/zcc-db';
+import { activateSquadMemberConversation, completeSquadMemberDelivery, createSquadMemberConversation, deliverSquadMemberConversation, isSquadMemberThread, preflightSquadRuntime, resolveSquadMember, squadMemberStatus, stopSquadMemberConversation } from './services/threads/squad-member-runtime.js';
 import type { ZccDatabase } from '@zana-ai/zcc-db';
 import type { PluginService } from './plugins/plugin-service.js';
 import { decideMainOwnedToolPolicy } from './plugins/native-tool-policy.js';
 import { createMenubarThreadSource } from './services/threads/menubar-thread-source.js';
+import { holdThreadProviderStartup } from './services/threads/thread-provider-catalog.js';
 import {
   bundledPluginsRootFromDataDir,
   createAttachedProductPluginService,
@@ -57,6 +60,7 @@ const parentPort: ParentPortLike = utilityParentPort;
 const uiSendSecret = process.env.ZCC_PRODUCT_SERVER_CREDENTIAL;
 retainProductServerCredential(uiSendSecret);
 delete process.env.ZCC_PRODUCT_SERVER_CREDENTIAL;
+const peerKeyProvider = consumePeerBootKey();
 
 let close: (() => Promise<void>) | null = null;
 let version = '';
@@ -89,6 +93,7 @@ parentPort.on('message', ({ data }) => {
 
 async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void> {
   if (message.type === 'start' && message.rendererRoot && !close) {
+    let releaseProviderStartup: (() => void) | null = null;
     try {
       installRuntimeLog(message.dataDir, 'server', import.meta.url);
       diagnostics.start();
@@ -105,10 +110,12 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
       const product = createProductHttpContext({
         dataDir: message.dataDir,
         uiSendSecret,
+        peerKeyProvider,
         origins: { serverPort: preferredPort, devAppPort: DEFAULT_DEV_APP_PORT },
         onLibraryChanged: () => parentPort.postMessage({ type: 'library-changed', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION }),
         onProjectsChanged: () => parentPort.postMessage({ type: 'projects-changed', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION }),
-        projects: projects ?? undefined
+        projects: projects ?? undefined,
+        projectSettings: projectSettings ?? undefined
       });
       productHub = product.hub;
       productContext = product;
@@ -122,8 +129,9 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
         hub: product.hub,
         viewContext: product
       });
-      disposeMenubarThreadHints = product.hub.subscribe('threads:updated', () => {
-        if (menubarThreadHintTimer) clearTimeout(menubarThreadHintTimer);
+      const hintThreadsChanged = () => {
+        // Leading bounded coalescing: steady streaming must not starve lease progress.
+        if (menubarThreadHintTimer) return;
         menubarThreadHintTimer = setTimeout(() => {
           menubarThreadHintTimer = null;
           parentPort.postMessage({
@@ -131,11 +139,16 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
             protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION
           });
         }, 100);
-      });
+      };
+      const disposeStatusHints = product.hub.subscribe('threads:updated', hintThreadsChanged);
+      const disposeProgressHints = product.hub.subscribe('threads:event', hintThreadsChanged);
+      disposeMenubarThreadHints = () => { disposeStatusHints(); disposeProgressHints(); };
       plugins = createAttachedProductPluginService(product, {
         bundledRoot: bundledPluginsRootFromDataDir(message.dataDir, message.bundledPluginsRoot),
         hostAgentToolSource: createModernTeamLaunchConfigSource({
           getMcpBaseUrl: () => runtimeMcpConfig.get().mcpBaseUrl,
+          resolveMember: (threadId, projectId) => resolveSquadMember(product, threadId, projectId),
+          isMemberThread: (threadId) => isSquadMemberThread(product, threadId),
           getAppConfig: () => pushedRuntimeAppConfig(runtimeMcpConfig.get())
         }),
         onAgentCapabilitiesChanged: (contributors) => {
@@ -153,6 +166,8 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
           });
         }
       });
+      // The daemon can reconnect once the host listens, before plugins start.
+      releaseProviderStartup = holdThreadProviderStartup();
       const host = await startStaticHost({
         rootDir: message.rendererRoot,
         port: preferredPort,
@@ -195,8 +210,9 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
       runtimeMcpConfig.started();
       void startAttachedProductPluginService(product, plugins).catch((error) => {
         console.error('[plugins] background startup failed:', error instanceof Error ? error.message : error);
-      });
+      }).finally(releaseProviderStartup);
     } catch (error) {
+      releaseProviderStartup?.();
       diagnostics.stop();
       if (hostConnectionRenewal) {
         clearInterval(hostConnectionRenewal);
@@ -206,6 +222,8 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
       runtimeDatabase = null;
       await close?.();
       close = null;
+      productContext?.dispose();
+      peerKeyProvider.dispose();
       parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, message: error instanceof Error ? error.message : String(error) });
     }
   }
@@ -281,6 +299,42 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
         live = false;
       }
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: live });
+    }
+    if (message.operation === 'squad-runtime-preflight') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = await preflightSquadRuntime(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-create') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = await createSquadMemberConversation(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-activate') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = await activateSquadMemberConversation(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-deliver') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = await deliverSquadMemberConversation(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-delivery-complete') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = completeSquadMemberDelivery(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-status') {
+      if (!productContext) throw new Error('squad member runtime is unavailable');
+      const value = squadMemberStatus(productContext, message.request);
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
+    }
+    if (message.operation === 'squad-member-stop') {
+      const value = productContext
+        ? await stopSquadMemberConversation(productContext, message.request)
+        : false;
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value });
     }
     if (message.operation === 'thread-queue-turn') {
       // Never throws and always posts a result: the caller is a loopback
@@ -481,6 +535,10 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
       }
       parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await plugins.checkUpdates() });
     }
+    if (message.operation === 'plugins-update-all') {
+      if (!plugins) throw new Error('plugin host is unavailable');
+      parentPort.postMessage({ type: 'result', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, value: await plugins.applyAllUpdates() });
+    }
     if (message.operation === 'plugins-update') {
       if (!plugins) {
         parentPort.postMessage({ type: 'error', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION, id: message.id, message: 'plugin host is unavailable' });
@@ -592,6 +650,7 @@ async function handleRuntimeMessage(message: ServerRuntimeInbound): Promise<void
     diagnostics.stop();
     plugins?.stop();
     await close?.();
+    peerKeyProvider.dispose();
     runtimeDatabase?.close();
     parentPort.postMessage({ type: 'stopped', protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION });
     process.exit(0);

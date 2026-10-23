@@ -122,4 +122,33 @@ describe('plugin service responsiveness failures', () => {
     if (operation === 'disable') expect(service.get(row.id)).toMatchObject({ enabled: false, status: 'disabled' });
     else expect(service.get(row.id)).toBeUndefined();
   });
+
+  it('does not undo disable during first builtin auto-install', async () => {
+    const { dataDir } = fixture();
+    const bundled = root();
+    const builtin = join(bundled, 'custom-instructions');
+    mkdirSync(builtin);
+    writeFileSync(join(builtin, 'package.json'), JSON.stringify({ name: '@zcc-ext/custom-instructions', version: '0.1.0',
+      engines: { zcc: '>=1.0.0', zccPluginSdk: '>=0.1.0' },
+      zcc: { name: 'Instructions', description: 'Startup fixture', branding: { icon: 'Puzzle' }, server: './server.mjs' } }));
+    writeFileSync(join(builtin, 'server.mjs'), 'export default function () {}');
+    const deferred = Promise.withResolvers<void>();
+    state.scanGate = deferred.promise;
+    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    services.push(service);
+    const starting = service.start();
+    await vi.waitFor(() => expect(service.get('custom-instructions')?.toolPolicy).toBe('unknown'));
+    await vi.waitFor(() => expect(state.scanStarted).toHaveBeenCalled());
+    const disabled = vi.fn();
+    const disabling = service.disable('custom-instructions').then(disabled);
+    try {
+      // Disable invalidates the pending load immediately, then waits behind
+      // the installation's lifecycle lock before persisting the final state.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(disabled).not.toHaveBeenCalled();
+    } finally { deferred.resolve(); }
+    await Promise.all([starting, disabling]);
+    expect(service.get('custom-instructions')).toMatchObject({ enabled: false, status: 'disabled' });
+    expect(state.runtimes).toHaveLength(0);
+  });
 });

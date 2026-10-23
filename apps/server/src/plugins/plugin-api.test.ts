@@ -18,6 +18,21 @@ import {
   validatePluginRequestInput
 } from './plugin-api.js';
 
+it('strict disposal awaits host teardown, isolates plugin cleanup errors, and rejects stale settings writes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'plugin-quiesce-'));
+  const handle = createPluginApi('sample', dir); const order: string[] = [];
+  try {
+    handle.api.onDispose(() => { order.push('plugin'); throw Error('plugin cleanup'); });
+    handle.onQuiesce(async () => { await Promise.resolve(); order.push('host'); });
+    await handle.api.storage.kv.set('saved', 'value'); await handle.dispose({ strict: true });
+    expect(order).toEqual(['plugin', 'host']); await handle.dispose({ strict: true }); expect(order).toHaveLength(2);
+    await expect(handle.setSettings({ stale: 'write' })).rejects.toThrow('stale');
+  } finally { await handle.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  const failed = createPluginApi('failed', dir); failed.onQuiesce(() => { throw Error('writer failed'); });
+  await failed.dispose(); await expect(failed.dispose({ strict: true })).rejects.toThrow('could not be quiesced');
+  rmSync(dir, { recursive: true, force: true });
+});
+
 describe('plugin requestInput validation', () => {
   it('accepts a well-formed request and trims the title', () => {
     expect(validatePluginRequestInput({
@@ -322,6 +337,30 @@ describe('plugin CLI, HTTP, events, and sdk', () => {
       await bare.dispose();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards the project-default harness opt-in and rejects unknown harness modes', async () => {
+    const spawnThread = vi.fn(async () => ({ id: 'thr-default' }));
+    const handle = createPluginApi('demo', '/tmp', { spawnThread });
+    try {
+      await expect(handle.api.sdk.threads.spawn({ projectId: 'p', prompt: 'hi', harness: 'project-default' }))
+        .resolves.toEqual({ id: 'thr-default' });
+      expect(spawnThread).toHaveBeenLastCalledWith({ pluginId: 'demo', projectId: 'p', prompt: 'hi', harness: 'project-default' });
+      await handle.api.sdk.threads.spawn({ projectId: 'p', prompt: 'hi', providerId: ' codex ', harness: 'project-default' });
+      expect(spawnThread).toHaveBeenLastCalledWith({
+        pluginId: 'demo', projectId: 'p', prompt: 'hi', providerId: 'codex', harness: 'project-default'
+      });
+      await handle.api.sdk.threads.spawn({ projectId: 'p', prompt: 'hi', harness: null as never });
+      expect(spawnThread).toHaveBeenLastCalledWith({ pluginId: 'demo', projectId: 'p', prompt: 'hi' });
+      spawnThread.mockClear();
+      await expect(handle.api.sdk.threads.spawn({ projectId: 'p', prompt: 'hi', harness: 'first' as never }))
+        .rejects.toThrow("unknown harness mode: first; expected 'project-default'");
+      await expect(handle.api.sdk.threads.spawn({ projectId: 'p', prompt: 'hi', harness: 3 as never }))
+        .rejects.toThrow('unknown harness mode: number');
+      expect(spawnThread).not.toHaveBeenCalled();
+    } finally {
+      await handle.dispose();
     }
   });
 
@@ -1080,6 +1119,12 @@ describe('sdk.capabilities', () => {
       const cursorNativeTool = cursorResult.capabilities.find((c) => c.id === 'tool-before-native');
       expect(cursorNativeTool).toMatchObject({ available: false });
       expect(cursorNativeTool?.reason).toMatch(/acp-cursor/);
+      const squadThread = createConversationThread(db, { projectId: 'p1', hostId: 'h1', providerId: 'claude-code', originPluginId: 'host-modern-squad' });
+      const squadResult = await handle.api.sdk.capabilities.forThread({ threadId: squadThread.id });
+      for (const id of ['tool-before-native', 'tool-after-native']) {
+        expect(squadResult.capabilities.find(capability => capability.id === id))
+          .toMatchObject({ available: false, reason: 'Modern squad provider-native tool policy is not wired' });
+      }
 
       const executionResult = await handle.api.sdk.capabilities.forExecution({ executionId: 'exec-1' });
       expect(executionResult.capabilities.find((c) => c.id === 'tool-before-native')).toMatchObject({ available: false });

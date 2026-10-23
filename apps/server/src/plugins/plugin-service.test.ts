@@ -127,6 +127,20 @@ function writeLegacyExtension(dir: string, id: string): string {
 }
 
 describe('PluginService', () => {
+  it('preserves coding-agent display grouping for disabled installs without exposing manifest extras', async () => {
+    const dir = writePlugin(join(root(), 'custom-agent'), 'custom-agent', undefined, {
+      extra: { threadProvider: true, privateSetting: '/private/plugin/path' }
+    });
+    const service = createPluginService({ dataDir: root(), bundledRoot: root() });
+    await service.install(dir);
+    await service.disable('custom-agent');
+    const snapshot = service.snapshot()[0]!;
+    expect(toPluginAppSnapshot(snapshot)).toMatchObject({ enabled: false, collection: 'coding-agents' });
+    expect(toPluginAppSnapshot(snapshot)).not.toHaveProperty('extra');
+    expect(toPluginAppSnapshot({ ...snapshot, extra: { ptyHarness: true } })).toHaveProperty('collection', 'coding-agents');
+    expect(toPluginAppSnapshot({ ...snapshot, extra: { threadProvider: false, ptyHarness: 'true' } })).not.toHaveProperty('collection');
+    expect(toPluginAppSnapshot({ ...snapshot, extra: {} })).not.toHaveProperty('collection');
+  });
   it('adds and removes a panel on reload without reinstalling, preserving the backend', async () => {
     const dataDir = root();
     const pluginDir = writePlugin(join(root(), 'evolving'), 'evolving', undefined, { app: undefined });
@@ -147,6 +161,47 @@ describe('PluginService', () => {
     await service.reload('evolving');
     expect(service.snapshot()[0].appUrl).toBeNull();
     await expect(service.callRpc('evolving', 'ping', {})).resolves.toMatchObject({ ok: true });
+  });
+
+  it('surfaces the manifest peers capability on the renderer snapshot only when declared', async () => {
+    const dataDir = root();
+    const peerDir = writePlugin(join(root(), 'peerful'), 'peerful', undefined, { peers: true });
+    const plainDir = writePlugin(join(root(), 'plain'), 'plain');
+    const service = createPluginService({ dataDir, bundledRoot: root() });
+    await service.install(peerDir);
+    await service.install(plainDir);
+    const rows = service.snapshot();
+    expect(rows.find((row) => row.id === 'peerful')?.peers).toBe(true);
+    expect(rows.find((row) => row.id === 'plain')?.peers).toBe(false);
+    expect(toPluginAppSnapshot(rows.find((row) => row.id === 'peerful')!)).toMatchObject({ peers: true });
+    expect(toPluginAppSnapshot(rows.find((row) => row.id === 'plain')!)).not.toHaveProperty('peers');
+  });
+
+  it('falls back to peers=false when the installed manifest becomes unreadable', async () => {
+    const peerDir = writePlugin(join(root(), 'peerful-broken'), 'peerful-broken', undefined, { peers: true });
+    const service = createService({ dataDir: root(), bundledRoot: root() });
+    await service.install(peerDir);
+    expect(service.snapshot()[0].peers).toBe(true);
+    writeFileSync(join(peerDir, 'package.json'), '{ not json');
+    const row = service.snapshot()[0];
+    expect(row.peers).toBe(false);
+    expect(row.projectTab).toBeUndefined();
+    expect(toPluginAppSnapshot(row)).not.toHaveProperty('peers');
+  });
+
+  it('dispatches peer requests to the registered handler and rejects unknown plugins or methods', async () => {
+    const peerDir = writePlugin(join(root(), 'peer-echo'), 'peer-echo', `export default function plugin(zcc) {
+      zcc.sdk.peers.handle('echo', (request) => ({ got: request.body, from: request.peerId }));
+    }\n`, { peers: true });
+    const service = createService({ dataDir: root(), bundledRoot: root() });
+    await service.install(peerDir);
+    const request = {
+      peerId: 'app-b', body: { n: 1 }, scope: 'repo', grantEpoch: 1,
+      signal: new AbortController().signal, commitSync: async (commit: () => unknown) => commit()
+    } as never;
+    await expect(service.dispatchPeer('peer-echo', 'echo', request)).resolves.toEqual({ got: { n: 1 }, from: 'app-b' });
+    await expect(service.dispatchPeer('peer-echo', 'missing', request)).rejects.toThrow('unknown peer peer-echo missing');
+    await expect(service.dispatchPeer('no-such-plugin', 'echo', request)).rejects.toThrow('unknown peer no-such-plugin echo');
   });
 
   it('rebuilds a stale frontend on direct reload and keeps the generation on failure', async () => {
@@ -753,7 +808,7 @@ describe('PluginService', () => {
         });
       }\n`
     );
-    const service = createPluginService({ dataDir, bundledRoot: root() });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: root() });
     try {
       await service.install(pluginDir);
       expect(getThreadProvider('acp-opencode')?.displayName).toBe('OpenCode');
@@ -985,6 +1040,7 @@ describe('PluginService', () => {
           source: { git: { url: 'https://example.test/notes.git', ref: 'HEAD' } }
         }]
       }),
+      updateResolver: { gitRefs: async () => `${'b'.repeat(40)}\tHEAD\n`, gitManifest: async () => ({ id: 'notes', version: '1.0.0', engines: {} }) },
       cloneGit: async (_url, dest) => {
         generation += 1;
         writePlugin(
@@ -994,7 +1050,7 @@ describe('PluginService', () => {
             ? `export default function plugin(zcc) { zcc.rpc.method('version', () => 1); }\n`
             : `export default function plugin() { throw new Error('candidate-boom'); }\n`
         );
-        return { commit: `commit-${generation}` };
+        return { commit: (generation === 1 ? 'a' : 'b').repeat(40) };
       }
     });
     await service.addMarketplace('https://example.test/marketplace.json');
@@ -1003,7 +1059,9 @@ describe('PluginService', () => {
 
     await expect(service.applyUpdate('notes')).rejects.toThrow(/candidate-boom/);
 
-    expect(service.get('notes')).toEqual(active);
+    expect(service.get('notes')).toEqual({ ...active,
+      lastActivationFailure: { version: active.version, at: expect.any(Number), detail: 'candidate-boom' },
+      statusDetail: `Update to ${active.version} failed: candidate-boom` });
     expect(existsSync(active.rootDir)).toBe(true);
     await expect(service.callRpc('notes', 'version', {})).resolves.toBe(1);
   });
@@ -1227,6 +1285,7 @@ describe('PluginService', () => {
     );
     const seen: unknown[] = [];
     const service = createPluginService({
+      watchBuiltinPluginSources: true,
       dataDir,
       bundledRoot: root(),
       onAgentCapabilitiesChanged: (contribs) => {
@@ -1323,7 +1382,7 @@ describe('PluginService', () => {
   it('reads name and description from the live manifest, not a stale install snapshot', async () => {
     const dataDir = root();
     const pluginDir = writePlugin(join(root(), 'claude'), 'provider-claude-code');
-    const service = createPluginService({ dataDir, bundledRoot: root() });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: root() });
     await service.install(pluginDir);
     expect(service.snapshot()[0]?.description).toBe('provider-claude-code plugin');
 
@@ -1363,7 +1422,7 @@ describe('PluginService', () => {
       zcc.rpc.method('save', () => zcc.storage.kv.set('link', { owner: 'fixture-owner', inbox: false }));
       zcc.rpc.method('load', () => zcc.storage.kv.get('link'));
     }`);
-    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: bundled });
     await service.install(devDir);
     await service.callRpc('slack-bridge-2ff2', 'save', {});
     expect(await service.reconcileBuiltins()).toEqual([]);
@@ -1466,7 +1525,7 @@ describe('PluginService', () => {
     writePlugin(join(bundled, 'docs'), 'docs');
     writePlugin(join(bundled, 'salesforce'), 'salesforce');
     const legacyDir = writeLegacyExtension(join(root(), 'zcc-extension-salesforce'), 'salesforce');
-    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: bundled });
     await service.install(legacyDir);
     expect(service.get('salesforce')?.sourceKind).toBe('path');
     await expect(service.callRpc('salesforce', 'ping', {})).rejects.toThrow(/unknown rpc/);
@@ -1494,7 +1553,7 @@ describe('PluginService', () => {
     const devDir = writePlugin(join(root(), 'salesforce-dev'), 'salesforce', `export default function plugin(zcc) {
         zcc.rpc.method('ping', () => ({ ok: true, from: 'path-dev' }));
       }\n`);
-    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: bundled });
     await service.install(devDir);
     await service.reconcileBuiltins();
     expect(service.get('salesforce')?.sourceKind).toBe('path');
@@ -1511,7 +1570,7 @@ describe('PluginService', () => {
     writePlugin(join(bundled, 'docs'), 'docs');
     writePlugin(join(bundled, 'salesforce'), 'salesforce');
     const legacyDir = writeLegacyExtension(join(root(), 'legacy-sf'), 'salesforce');
-    const service = createPluginService({ dataDir, bundledRoot: bundled });
+    const service = createPluginService({ watchBuiltinPluginSources: true, dataDir, bundledRoot: bundled });
     await service.install(legacyDir);
     await service.disable('salesforce');
     await service.reconcileBuiltins();
@@ -1548,7 +1607,7 @@ describe('PluginService', () => {
     const again = await service.reconcileBuiltins();
     expect(again).toEqual([]);
     expect(service.get('docs')).toBeUndefined();
-    await service.install(join(bundled, 'docs'));
+    await service.install('builtin:docs');
     expect(service.get('docs')?.id).toBe('docs');
   });
 

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { IPC } from '@zana-ai/zcc-desktop-contract';
+import { parseRpcErrorEnvelope, rpcErrorFrom } from '@zana-ai/zcc-contracts/rpc-error';
 import type {
   CcApi,
   DesktopBrowserApi,
@@ -335,8 +336,6 @@ const api: CcApi = {
       ipcRenderer.invoke(IPC.executionBoard.recoverRetained, projectId, executionId, expectedStateVersion, mode),
     worktreeAction: (projectId, executionId, expectedStateVersion, action, instruction) =>
       ipcRenderer.invoke(IPC.executionBoard.worktreeAction, projectId, executionId, expectedStateVersion, action, instruction),
-    resumeRun: (projectId, executionId, expectedStateVersion, replay) =>
-      ipcRenderer.invoke(IPC.executionBoard.resumeRun, projectId, executionId, expectedStateVersion, replay === true),
     clearResumeToken: (projectId, executionId) => ipcRenderer.invoke(IPC.executionBoard.clearResumeToken, projectId, executionId),
     relaunchMonitor: (projectId, executionId) => ipcRenderer.invoke(IPC.executionBoard.relaunchMonitor, projectId, executionId)
   },
@@ -464,6 +463,7 @@ const api: CcApi = {
     list: async () => [],
     get: async () => ({ thread: {} }),
     send: async () => ({ ok: false }),
+    move: async () => { throw new Error('threads require the product server'); },
     stop: async () => ({ ok: false }),
     stopBackground: async () => ({ ok: false }),
     implementPlan: async () => ({ ok: false }),
@@ -777,6 +777,8 @@ const api: CcApi = {
     pick: (projectId) => ipcRenderer.invoke(IPC.executionSources.pick, projectId)
   },
   openers: {
+    fileLocation: (input) => ipcRenderer.invoke(IPC.openers.fileLocation, input),
+    revealFile: (input) => ipcRenderer.invoke(IPC.openers.revealFile, input),
     openIn: (target, path, options) => ipcRenderer.invoke(IPC.openers.openIn, target, path, options)
   },
   clipboard: {
@@ -1031,11 +1033,19 @@ const api: CcApi = {
   pluginApps: {
     list: () => ipcRenderer.invoke(IPC.pluginApps.list),
     setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.pluginApps.setEnabled, id, enabled),
-    callRpc: (pluginId, method, args) => ipcRenderer.invoke(IPC.pluginApps.callRpc, pluginId, method, args),
+    callRpc: async (pluginId, method, args) => {
+      const result = await ipcRenderer.invoke(IPC.pluginApps.callRpc, pluginId, method, args);
+      // Main resolves expected domain errors as an envelope (no main-process error log); surface
+      // them as a plain rejection with the bare message and optional `code`.
+      const expected = parseRpcErrorEnvelope(result);
+      if (expected) throw rpcErrorFrom(expected.message, expected.code);
+      return result;
+    },
     getSettings: (pluginId, options) => ipcRenderer.invoke(IPC.pluginApps.getSettings, pluginId, options),
     setSettings: (pluginId, values) => ipcRenderer.invoke(IPC.pluginApps.setSettings, pluginId, values),
     checkUpdates: () => ipcRenderer.invoke(IPC.pluginApps.checkUpdates),
     applyUpdate: (id) => ipcRenderer.invoke(IPC.pluginApps.applyUpdate, id),
+    applyAllUpdates: () => ipcRenderer.invoke(IPC.pluginApps.applyAllUpdates),
     remove: (id) => ipcRenderer.invoke(IPC.pluginApps.remove, id),
     reload: (id) => ipcRenderer.invoke(IPC.pluginApps.reload, id),
     onChanged: (cb) => {
@@ -1123,6 +1133,15 @@ const api: CcApi = {
   },
   commands: {
     list: (projectPath?: string) => ipcRenderer.invoke(IPC.commands.list, projectPath)
+  },
+  deepLinks: {
+    config: () => ipcRenderer.invoke(IPC.deepLinks.config),
+    open: (raw: string) => ipcRenderer.invoke(IPC.deepLinks.open, raw),
+    onLink: (cb) => {
+      const handler = (_e: unknown, delivery: Parameters<typeof cb>[0]) => cb(delivery);
+      ipcRenderer.on(IPC.deepLinks.onLink, handler);
+      return () => ipcRenderer.off(IPC.deepLinks.onLink, handler);
+    }
   },
   scheduler: {
     list: () => ipcRenderer.invoke(IPC.scheduler.list),

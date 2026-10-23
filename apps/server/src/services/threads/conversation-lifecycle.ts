@@ -74,7 +74,7 @@ import { startLiveTurnCommand } from './conversation-live-turn.js';
 import { LIVE_TURN_COMMAND_TIMEOUT_MS } from '../../http/host-hub.js';
 import { archiveConversationOnHost, unarchiveConversationOnHost } from './thread-host-commands.js';
 import { collectConversationArchiveDescendants } from './conversation-child-ops.js';
-import { bridgeLaunchForProvider, getThreadProvider } from './thread-provider-catalog.js';
+import { bridgeLaunchForProvider, getThreadProvider, waitForThreadProvider } from './thread-provider-catalog.js';
 import { readLastThreadExecution } from './thread-last-execution.js';
 import { validateProviderModelSelection } from './provider-model-validation.js';
 import { threadPermissionMode } from './thread-permission-mode.js';
@@ -507,14 +507,16 @@ async function recoverOrSettleTurnSubmit(
 
 export async function stopConversation(
   ctx: ProductHttpContext,
-  threadId: string
+  threadId: string,
+  options: { requireHostRelease?: boolean } = {}
 ): Promise<ConversationThreadRow> {
-  return withConversationSendCancellation(ctx.db, threadId, () => stopConversationInternal(ctx, threadId));
+  return withConversationSendCancellation(ctx.db, threadId, () => stopConversationInternal(ctx, threadId, options));
 }
 
 async function stopConversationInternal(
   ctx: ProductHttpContext,
-  threadId: string
+  threadId: string,
+  options: { requireHostRelease?: boolean } = {}
 ): Promise<ConversationThreadRow> {
   const thread = getConversationThread(ctx.db, threadId);
   if (!thread) {
@@ -535,8 +537,15 @@ async function stopConversationInternal(
         hostId: thread.hostId,
         command: { type: 'thread.stop', threadId: thread.id }
       });
-    } catch {
+    } catch (error) {
+      if (options.requireHostRelease && !isUnknownThreadHostError(error)) throw error;
       /* Release is best-effort: idle/error stop must not pretend a turn was interrupted. */
+    }
+    if (options.requireHostRelease) {
+      ctx.pendingInteractions.interruptPendingInteractionsForThreadIds({
+        threadIds: [thread.id], reason: 'thread-stopped'
+      });
+      settleDanglingBackgroundTasksForStoppedThread({ db: ctx.db, hub: ctx.hub }, { threadId });
     }
     return getConversationThread(ctx.db, thread.id) ?? thread;
   }
@@ -558,6 +567,7 @@ async function stopConversationInternal(
       command: { type: 'thread.stop', threadId: thread.id }
     });
   } catch (error) {
+    if (options.requireHostRelease && !isUnknownThreadHostError(error)) throw error;
     if (isHostRpcTimeout(error) && !startingWithoutTurn) {
       const stopping = {
         ...(getConversationThread(ctx.db, thread.id) ?? thread),
@@ -622,19 +632,21 @@ export async function resumeConversation(
   ctx: ProductHttpContext,
   threadId: string
 ): Promise<ConversationThreadRow> {
-  const thread = getConversationThread(ctx.db, threadId);
-  if (!thread) {
-    throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
-  }
-  const live = recoverConversationProviderThreadId(ctx.db, thread);
-  ensureConversationThreadIsWritable(live);
-  if (!live.environmentId || !live.providerThreadId) {
-    throw new ThreadCreateError(409, 'not_resumable', 'thread has no provider session to resume');
-  }
-  await resumeConversationOnHost(ctx, live);
-  const next = getConversationThread(ctx.db, live.id) ?? live;
-  ctx.hub.emit('threads:updated', conversationThreadView(ctx, next));
-  return next;
+  return withConversationSend(ctx.db, threadId, async lease => {
+    const thread = getConversationThread(ctx.db, threadId);
+    if (!thread) {
+      throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
+    }
+    const live = recoverConversationProviderThreadId(ctx.db, thread);
+    ensureConversationThreadIsWritable(live);
+    if (!live.environmentId || !live.providerThreadId) {
+      throw new ThreadCreateError(409, 'not_resumable', 'thread has no provider session to resume');
+    }
+    await resumeConversationOnHost(ctx, live, lease.assertCurrent);
+    const next = getConversationThread(ctx.db, live.id) ?? live;
+    ctx.hub.emit('threads:updated', conversationThreadView(ctx, next));
+    return next;
+  });
 }
 
 export async function archiveConversation(
@@ -926,6 +938,8 @@ export async function resumeOpenConversationSessionsAfterHostRestart(
   }
   let resumed = 0;
   for (const thread of open) {
+    // The daemon reconnects before plugins finish registering providers at launch.
+    await waitForThreadProvider(thread.providerId);
     const current = getConversationThread(ctx.db, thread.id);
     // A queued send or a user message may already have resumed it.
     if (!current || current.archivedAt || (current.status !== 'idle' && current.status !== 'error')) continue;

@@ -42,8 +42,6 @@ export const IPC = {
     recoverTimedOut: 'executionBoard:recoverTimedOut',
     recoverRetained: 'executionBoard:recoverRetained',
     worktreeAction: 'executionBoard:worktreeAction',
-    /** @deprecated Compatibility alias for retained fresh-plan recovery. */
-    resumeRun: 'executionBoard:resumeRun',
     clearResumeToken: 'executionBoard:clearResumeToken',
     relaunchMonitor: 'executionBoard:relaunchMonitor'
   },
@@ -270,6 +268,8 @@ export const IPC = {
     pick: 'executionSources:pick'
   },
   openers: {
+    fileLocation: 'openers:fileLocation',
+    revealFile: 'openers:revealFile',
     openIn: 'openers:openIn'
   },
   clipboard: {
@@ -398,6 +398,7 @@ export const IPC = {
     setSettings: 'pluginApps:setSettings',
     checkUpdates: 'pluginApps:checkUpdates',
     applyUpdate: 'pluginApps:applyUpdate',
+    applyAllUpdates: 'pluginApps:applyAllUpdates',
     remove: 'pluginApps:remove',
     reload: 'pluginApps:reload'
   },
@@ -531,6 +532,12 @@ export const IPC = {
   },
   commands: {
     list: 'commands:list'
+  },
+  /** Plugin deep links: `config`/`open` are renderer requests (main validates); `onLink` is a main push. */
+  deepLinks: {
+    config: 'deepLinks:config',
+    open: 'deepLinks:open',
+    onLink: 'deepLinks:onLink',
   },
   app: {
     performance: 'app:performance',

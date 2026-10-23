@@ -1,5 +1,6 @@
 import type { CliDiscoveryRequest, CliDiscoveryResult } from '@zana-ai/zcc-contracts/cli-discovery';
 import type { CliCallbackControl } from '@zana-ai/zcc-contracts/cli-callbacks';
+import { rpcErrorFrom } from '@zana-ai/zcc-contracts/rpc-error';
 import type { ProjectFeedRequest, ProjectFeedResult } from '@zana-ai/zcc-contracts/project-feed';
 import type { LibraryAgentRequest } from '@zana-ai/zcc-contracts/library-agent';
 import type { ToolCallResponse } from '@zana-ai/zcc-domain/thread-runtime';
@@ -10,7 +11,8 @@ import type { ProjectMetadataRequest, ProjectMetadataResult, ProjectCatalogReque
 import type { ProjectHistoryRequest, ProjectHistoryResult } from '@zana-ai/zcc-contracts/project-history';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { utilityProcess } from 'electron';
+import { utilityProcess, safeStorage } from 'electron';
+import { createProtectedPeerKeyProvider, PEER_BOOT_KEY_ENV, PEER_KEY_REASON_ENV, PeerKeyReasonError } from '@zana-ai/zcc-server/services/peers/protected-key';
 import { join } from 'node:path';
 import { startStaticHost, type StaticHost } from '@zana-ai/zcc-server/static-host';
 import { serverPortFromEnv } from '@zana-ai/zcc-server/http/ports';
@@ -27,7 +29,25 @@ import {
   MenubarThreadsListResultSchema,
   RuntimeOutboundSchema,
   SERVER_RUNTIME_PROTOCOL_VERSION,
+  SquadMemberControlRequestSchema,
+  SquadMemberDeliveryRequestSchema,
+  SquadMemberDeliveryResultSchema,
+  SquadMemberDeliveryCompletionSchema,
+  SquadMemberRuntimeRequestSchema,
+  SquadMemberStatusSchema,
+  SquadRuntimePreflightRequestSchema,
+  SquadRuntimePreflightResultSchema,
+  SquadRuntimeOperationSchema,
+  SQUAD_RUNTIME_OPERATION_PATH,
   type NativeToolPolicyRequest,
+  type SquadMemberDeliveryRequest,
+  type SquadMemberRuntimeRequest,
+  type SquadMemberControlRequest,
+  type SquadMemberDeliveryResult,
+  type SquadMemberDeliveryCompletion,
+  type SquadMemberStatus,
+  type SquadRuntimePreflightRequest,
+  type SquadRuntimePreflightResult,
   type ProjectMutationPatchSchema,
   type ProjectRecordSchema,
   type RuntimeOutbound
@@ -38,6 +58,7 @@ import type { TerminalRequestCommand } from '@zana-ai/zcc-contracts/terminal-exe
 import type { z } from 'zod';
 import { z as zod } from 'zod';
 import type { MenubarThreadAgent } from '@zana-ai/zcc-domain';
+import { NATIVE_TOOL_POLICY_PROOF_HEADER, signNativeToolPolicyRequest } from '@zana-ai/zcc-server/http/native-tool-policy-proof';
 
 export type RuntimeProject = z.infer<typeof ProjectRecordSchema>;
 export type RuntimeProjectPatch = z.infer<typeof ProjectMutationPatchSchema>;
@@ -67,6 +88,14 @@ export interface RuntimeSupervisor {
    * Never rejects for a dead/unknown thread; resolves `false`.
    */
   isThreadLive(threadId: string, projectId: string): Promise<boolean>;
+  createSquadMember(request: SquadMemberRuntimeRequest): Promise<{ threadId: string }>;
+  activateSquadMember(request: SquadMemberRuntimeRequest): Promise<{ threadId: string }>;
+  preflightSquadRuntime(request: SquadRuntimePreflightRequest): Promise<SquadRuntimePreflightResult>;
+  deliverSquadMember(request: SquadMemberDeliveryRequest): Promise<SquadMemberDeliveryResult>;
+  completeSquadMemberDelivery(request: SquadMemberDeliveryCompletion): Promise<SquadMemberDeliveryResult>;
+  getSquadMemberStatus(request: SquadMemberControlRequest): Promise<SquadMemberStatus>;
+  isSquadMemberLive(threadId: string, projectId: string, generation: number): Promise<boolean>;
+  stopSquadMember(threadId: string, projectId: string, generation: number): Promise<boolean>;
   /**
    * Queue a text turn into a live Modern thread. Never rejects for a dead
    * thread or a missing runtime; resolves `{ ok: false, reason }`.
@@ -119,6 +148,7 @@ export interface RuntimeSupervisor {
   searchPlugins(query: string): Promise<unknown>;
   outdatedPlugins(): Promise<unknown>;
   updatePlugin(id: string): Promise<unknown>;
+  updateAllPlugins(): Promise<import('@zana-ai/zcc-domain/product').PluginUpdateAllResult>;
   listMarketplaces(): Promise<unknown>;
   addMarketplace(url: string): Promise<unknown>;
   refreshMarketplace(url: string): Promise<unknown>;
@@ -149,6 +179,100 @@ export interface StartRuntimeSupervisorOptions {
   /** Env vars for the product-server utility only — never the host-daemon, never process.env. */
   extraEnv?: Record<string, string>;
   onUnexpectedExit?: (service: string) => void;
+}
+
+type SquadOperation = 'squad-runtime-preflight' | 'squad-member-create' | 'squad-member-activate' | 'squad-member-deliver' | 'squad-member-delivery-complete' | 'squad-member-status' | 'squad-member-stop';
+type SquadRequest = SquadRuntimePreflightRequest | SquadMemberRuntimeRequest | SquadMemberDeliveryRequest | SquadMemberControlRequest | SquadMemberDeliveryCompletion;
+
+/** Main-only adapter; every response must retain the requested binding/correlation. */
+export function createSquadMemberRuntimeAdapter(call: (operation: SquadOperation, request: SquadRequest) => Promise<unknown>) {
+  const status = async (input: SquadMemberControlRequest) => {
+    const request = SquadMemberControlRequestSchema.parse(input);
+    const value = SquadMemberStatusSchema.parse(await call('squad-member-status', request));
+    if (value.bindingId !== request.bindingId || value.projectId !== request.projectId || value.generation !== request.generation) {
+      throw new Error('invalid squad member status correlation');
+    }
+    return value;
+  };
+  return {
+    async preflightSquadRuntime(input: SquadRuntimePreflightRequest) {
+      const request = SquadRuntimePreflightRequestSchema.parse(input);
+      const value = SquadRuntimePreflightResultSchema.parse(await call('squad-runtime-preflight', request));
+      if (request.hostId && request.hostId !== value.hostId) throw new Error('invalid squad preflight host correlation');
+      return value;
+    },
+    async createSquadMember(input: SquadMemberRuntimeRequest) {
+      const request = SquadMemberRuntimeRequestSchema.parse(input);
+      const value = zod.object({ threadId: zod.string().uuid() }).strict().parse(await call('squad-member-create', request));
+      if (value.threadId !== request.bindingId) throw new Error('invalid squad member create correlation');
+      return value;
+    },
+    async activateSquadMember(input: SquadMemberRuntimeRequest) {
+      const request = SquadMemberRuntimeRequestSchema.parse(input);
+      const value = zod.object({ threadId: zod.string().uuid() }).strict().parse(await call('squad-member-activate', request));
+      if (value.threadId !== request.bindingId) throw new Error('invalid squad member activate correlation');
+      return value;
+    },
+    async deliverSquadMember(input: SquadMemberDeliveryRequest) {
+      const request = SquadMemberDeliveryRequestSchema.parse(input);
+      const value = SquadMemberDeliveryResultSchema.parse(await call('squad-member-deliver', request));
+      for (const field of ['bindingId', 'generation', 'projectId', 'assignmentId', 'idempotencyKey'] as const) {
+        if (value[field] !== request[field]) throw new Error('invalid squad member delivery correlation');
+      }
+      return value;
+    },
+    async completeSquadMemberDelivery(input: SquadMemberDeliveryCompletion) {
+      const request = SquadMemberDeliveryCompletionSchema.parse(input);
+      const value = SquadMemberDeliveryResultSchema.parse(await call('squad-member-delivery-complete', request));
+      for (const field of ['bindingId', 'generation', 'projectId', 'assignmentId', 'idempotencyKey'] as const) {
+        if (value[field] !== request[field]) throw new Error('invalid squad member completion correlation');
+      }
+      return value;
+    },
+    getSquadMemberStatus: status,
+    async isSquadMemberLive(threadId: string, projectId: string, generation: number) {
+      try { return (await status({ bindingId: threadId, projectId, generation })).live; }
+      catch { return false; }
+    },
+    async stopSquadMember(threadId: string, projectId: string, generation: number) {
+      const request = SquadMemberControlRequestSchema.parse({ bindingId: threadId, projectId, generation });
+      return zod.boolean().parse(await call('squad-member-stop', request));
+    }
+  };
+}
+
+/** Development main uses its existing boot credential, never renderer or daemon credentials. */
+export function createProductRouteSquadRuntime(options: { serverUrl(): string; credential(): string }) {
+  return createSquadMemberRuntimeAdapter(async (operation, request) => {
+    const url = new URL(SQUAD_RUNTIME_OPERATION_PATH, options.serverUrl());
+    if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) || url.username || url.password) {
+      throw new Error('squad runtime requires a loopback product server');
+    }
+    const credential = options.credential();
+    if (credential.length < 32) throw new Error('squad runtime requires the product server credential');
+    const body = JSON.stringify(SquadRuntimeOperationSchema.parse({ operation, request }));
+    const response = await fetch(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+      headers: { 'content-type': 'application/json', [NATIVE_TOOL_POLICY_PROOF_HEADER]: signNativeToolPolicyRequest(credential, body) }, body });
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('invalid squad runtime response');
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytes += next.value.byteLength;
+        if (bytes > 64 * 1024) throw new Error('squad runtime response exceeds limit');
+        chunks.push(next.value);
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    // A server without this route answers with an empty body; report the status, not a parse error.
+    let value: { value?: unknown; error?: unknown } | undefined;
+    try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { value?: unknown; error?: unknown }; }
+    catch { if (response.ok) throw new Error('invalid squad runtime response'); }
+    if (!response.ok) throw new Error(typeof value?.error === 'string' ? value.error : `squad runtime HTTP ${response.status}`);
+    return value?.value;
+  });
 }
 
 function persistentHostId(dataDir?: string): string {
@@ -230,6 +354,14 @@ export async function startRuntimeSupervisor(options: StartRuntimeSupervisorOpti
     // No packaged server-runtime child in this fallback; nothing to notify.
     setMcpBaseUrl: () => {},
     isThreadLive: async () => false,
+    createSquadMember: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    activateSquadMember: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    preflightSquadRuntime: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    deliverSquadMember: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    completeSquadMemberDelivery: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    getSquadMemberStatus: async () => { throw new Error('Modern squad runtime is unavailable'); },
+    isSquadMemberLive: async () => false,
+    stopSquadMember: async () => false,
     queueThreadTurn: async () => ({ ok: false, reason: 'runtime-unavailable' }),
     listMenubarThreads: async () => ({ agents: [], needsYou: 0, working: 0 }),
     openMenubarThread: async () => ({ ok: false, reason: 'thread service unavailable' }),
@@ -280,6 +412,7 @@ export async function startRuntimeSupervisor(options: StartRuntimeSupervisorOpti
     searchPlugins: async () => [],
     outdatedPlugins: async () => [],
     updatePlugin: async () => { throw new Error('plugin host is unavailable'); },
+    updateAllPlugins: async () => { throw new Error('plugin host is unavailable'); },
     listMarketplaces: async () => [],
     addMarketplace: async () => { throw new Error('plugin host is unavailable'); },
     refreshMarketplace: async () => { throw new Error('plugin host is unavailable'); },
@@ -321,6 +454,11 @@ interface UtilityRuntime {
   request(operation: 'library-document', request: LibraryDocumentRequest): Promise<unknown>;
   request(operation: 'product-event', channel: string, args: unknown[]): Promise<unknown>;
   request(operation: 'thread-live', threadId: string, projectId: string): Promise<unknown>;
+  request(operation: 'squad-member-create' | 'squad-member-activate', request: SquadMemberRuntimeRequest): Promise<unknown>;
+  request(operation: 'squad-member-deliver', request: SquadMemberDeliveryRequest): Promise<unknown>;
+  request(operation: 'squad-member-delivery-complete', request: SquadMemberDeliveryCompletion): Promise<unknown>;
+  request(operation: 'squad-runtime-preflight', request: SquadRuntimePreflightRequest): Promise<unknown>;
+  request(operation: 'squad-member-status' | 'squad-member-stop', request: SquadMemberControlRequest): Promise<unknown>;
   request(operation: 'thread-queue-turn', threadId: string, projectId: string, text: string): Promise<unknown>;
   request(operation: 'menubar-threads-list', limit: number): Promise<unknown>;
   request(operation: 'menubar-thread-open', threadId: string, projectId: string): Promise<unknown>;
@@ -344,6 +482,7 @@ interface UtilityRuntime {
   request(operation: 'plugins-search', query: string): Promise<unknown>;
   request(operation: 'plugins-outdated'): Promise<unknown>;
   request(operation: 'plugins-update', pluginId: string): Promise<unknown>;
+  request(operation: 'plugins-update-all'): Promise<unknown>;
   request(operation: 'plugins-call-rpc', pluginId: string, method: string, args?: unknown): Promise<unknown>;
   request(operation: 'plugins-settings-get', pluginId: string): Promise<unknown>;
   request(operation: 'plugins-settings-set', pluginId: string, values: Record<string, string | number | boolean | null>): Promise<unknown>;
@@ -360,7 +499,7 @@ interface UtilityRuntime {
 function processEnvRecord(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') env[key] = value;
+    if (typeof value === 'string' && key !== PEER_BOOT_KEY_ENV) env[key] = value;
   }
   return env;
 }
@@ -368,12 +507,15 @@ function processEnvRecord(): Record<string, string> {
 function startUtility(
   entry: string,
   startMessage: unknown,
-  extraEnv?: Record<string, string>
+  extraEnv?: Record<string, string>,
+  peerBootKey?: Uint8Array | null
 ): Promise<{ child: UtilityChild; url: string; hostId?: string; instanceId?: string }> {
   return new Promise((resolveReady, rejectReady) => {
+    const env = { ...processEnvRecord(), ...extraEnv };
+    delete env[PEER_BOOT_KEY_ENV];
     const child = utilityProcess.fork(entry, [], {
       serviceName: `zcc-${entry}`,
-      env: { ...processEnvRecord(), ...extraEnv }
+      env
     });
     let ready = false;
     let settled = false;
@@ -383,6 +525,7 @@ function startUtility(
     ) => {
       if (settled) return;
       settled = true;
+      peerBootKey?.fill(0);
       clearTimeout(timer);
       if (error) {
         child.kill();
@@ -414,7 +557,15 @@ function startUtility(
         finish(undefined, { child, url: data.url, hostId: data.hostId, instanceId: data.instanceId });
       }
     });
-    child.once('spawn', () => child.postMessage(startMessage));
+    child.once('spawn', () => {
+      if (settled) return;
+      try {
+        // Electron structured-clones bytes; unlike env, this payload is not exposed by process listings.
+        child.postMessage(peerBootKey ? { ...startMessage as object, peerBootKey } : startMessage);
+      } catch {
+        finish(new Error('runtime child boot delivery failed'));
+      } finally { peerBootKey?.fill(0); }
+    });
   });
 }
 
@@ -433,18 +584,40 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
   let renderer: { child: UtilityChild; url: string; hostId?: string; instanceId?: string };
   try {
     if (!host.hostId || !host.instanceId) throw new Error('host runtime did not return its identity');
-    renderer = await startUtility(join(runtimeDir, 'server-runtime.js'), {
-      type: 'start',
-      protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION,
-      rendererRoot: options.rendererRoot,
-      dataDir: options.dataDir ?? '',
-      hostUrl: host.url,
-      hostToken: options.token,
-      hostSigningKey: options.signingKey,
-      hostBinding: { hostId: host.hostId, instanceId: host.instanceId },
-      bundledPluginsRoot: defaultBundledRoot(),
-      version: options.version ?? ''
-    }, options.extraEnv);
+    // Never touch the real Keychain in isolated E2E, and never use its insecure substitutes.
+    let peerKeyReason = '';
+    const peerKey = options.dataDir && !process.env.ZCC_E2E_HOME
+      ? await createProtectedPeerKeyProvider(options.dataDir, {
+        isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+        encryptString: value => safeStorage.encryptString(value),
+        decryptString: value => safeStorage.decryptString(value),
+        ...(process.platform === 'linux' ? { getSelectedStorageBackend: () => safeStorage.getSelectedStorageBackend() } : {})
+      }).getKey().catch((error: unknown) => {
+        // Reason code only (no key material, paths or OS text); the server surfaces it to the Peers UI.
+        peerKeyReason = error instanceof PeerKeyReasonError ? error.reason : 'unknown';
+        console.warn(`[peers] protected peer key unavailable: ${peerKeyReason}; peer links and invitations are off`);
+        return null;
+      })
+      // Isolated E2E substitutes a fixture-provided key for the Keychain, via the same boot-key path.
+      : process.env.ZCC_E2E_HOME && /^[0-9a-f]{64}$/.test(process.env.ZCC_E2E_PEER_BOOT_KEY_HEX ?? '')
+         ? Buffer.from(process.env.ZCC_E2E_PEER_BOOT_KEY_HEX!, 'hex')
+         : null;
+    const peerEnv = { ...options.extraEnv,
+      [PEER_KEY_REASON_ENV]: peerKeyReason };
+    try {
+      renderer = await startUtility(join(runtimeDir, 'server-runtime.js'), {
+        type: 'start',
+        protocolVersion: SERVER_RUNTIME_PROTOCOL_VERSION,
+        rendererRoot: options.rendererRoot,
+        dataDir: options.dataDir ?? '',
+        hostUrl: host.url,
+        hostToken: options.token,
+        hostSigningKey: options.signingKey,
+        hostBinding: { hostId: host.hostId, instanceId: host.instanceId },
+        bundledPluginsRoot: defaultBundledRoot(),
+        version: options.version ?? ''
+      }, peerEnv, peerKey);
+    } finally { peerKey?.fill(0); }
   } catch (error) {
     host.child.kill();
     throw error;
@@ -561,6 +734,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     },
     isThreadLive: async (threadId, projectId) =>
       (await server.request('thread-live', threadId, projectId)) === true,
+    ...createSquadMemberRuntimeAdapter((operation, request) => server.request(operation as 'squad-member-status', request as SquadMemberControlRequest)),
     // Never rejects: a request timeout, a dead child or a stopped service resolve to ok:false.
     queueThreadTurn: async (threadId, projectId, text) => {
       try {
@@ -671,6 +845,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
     searchPlugins: (query) => server.request('plugins-search', query),
     outdatedPlugins: () => server.request('plugins-outdated'),
     updatePlugin: (id) => server.request('plugins-update', id),
+    updateAllPlugins: () => server.request('plugins-update-all') as Promise<import('@zana-ai/zcc-domain/product').PluginUpdateAllResult>,
     listMarketplaces: () => server.request('marketplace-list'),
     addMarketplace: (url) => server.request('marketplace-add', url),
     refreshMarketplace: (url) => server.request('marketplace-refresh', url),
@@ -711,6 +886,7 @@ async function startUtilityRuntime(options: StartRuntimeSupervisorOptions & { to
       productEvents.dispose();
       libraryListeners.clear();
       projectsListeners.clear();
+      menubarThreadListeners.clear();
       if (enrollRetry) {
         clearInterval(enrollRetry);
         enrollRetry = null;
@@ -740,7 +916,7 @@ export function createUtilityRuntime(runtime: { child: UtilityChild; url: string
     pending.delete(parsed.data.id);
     clearTimeout(request.timer);
     if (parsed.data.type === 'result') request.resolve(parsed.data.value);
-    else request.reject(new Error(parsed.data.message));
+    else request.reject(rpcErrorFrom(parsed.data.message, parsed.data.code));
   });
   runtime.child.once('exit', () => {
     stopped = true;
@@ -755,13 +931,13 @@ export function createUtilityRuntime(runtime: { child: UtilityChild; url: string
   return {
     ...runtime,
     request(
-      operation: 'cli-callback-grant' | 'cli-discovery' | 'library-agent' | 'library-document' | 'project-metadata' | 'project-catalogs' | 'project-history' | 'project-feed' | 'product-event' | 'app-version' | 'thread-live' | 'thread-queue-turn' | 'menubar-threads-list' | 'menubar-thread-open' | 'projects-list' | 'projects-add' | 'projects-update' | 'projects-reorder' | 'projects-touch' | 'projects-remove' | 'project-settings-get' | 'project-settings-set' | 'terminal-execute' | 'terminal-record' | 'terminal-events-since' | 'plugins-snapshot' | 'plugins-install' | 'plugins-enable' | 'plugins-disable' | 'plugins-remove' | 'plugins-reload' | 'plugins-logs' | 'plugins-search' | 'plugins-outdated' | 'plugins-update' | 'plugins-call-rpc' | 'plugins-settings-get' | 'plugins-settings-set' | 'plugins-cli-contributions' | 'plugins-cli-run' | 'plugins-tool-policy' | 'marketplace-list' | 'marketplace-add' | 'marketplace-refresh' | 'marketplace-remove',
-       ...args: [number] | [CliCallbackControl] | [CliDiscoveryRequest] | [LibraryAgentRequest] | [LibraryDocumentRequest] | [ProjectMetadataRequest] | [ProjectCatalogRequest] | [NativeToolPolicyRequest] | [string, unknown[]] | [TerminalRequestCommand] | [TerminalHostEvent] | [string] | [string[]] | [string, number?] | [string, RuntimeProjectPatch] | [string, RuntimeProjectSettings] | [string, string, unknown?] | [string, string, string] | [string, Record<string, string | number | boolean | null>] | [string, string[]] | [string, string[], { projectId?: string; threadId?: string; cwd?: string }?] | []
+      operation: 'cli-callback-grant' | 'cli-discovery' | 'library-agent' | 'library-document' | 'project-metadata' | 'project-catalogs' | 'project-history' | 'project-feed' | 'product-event' | 'app-version' | 'thread-live' | 'thread-queue-turn' | 'squad-runtime-preflight' | 'squad-member-create' | 'squad-member-activate' | 'squad-member-deliver' | 'squad-member-delivery-complete' | 'squad-member-status' | 'squad-member-stop' | 'menubar-threads-list' | 'menubar-thread-open' | 'projects-list' | 'projects-add' | 'projects-update' | 'projects-reorder' | 'projects-touch' | 'projects-remove' | 'projects-touch' | 'project-settings-get' | 'project-settings-set' | 'terminal-execute' | 'terminal-record' | 'terminal-events-since' | 'plugins-snapshot' | 'plugins-install' | 'plugins-enable' | 'plugins-disable' | 'plugins-remove' | 'plugins-reload' | 'plugins-logs' | 'plugins-search' | 'plugins-outdated' | 'plugins-update' | 'plugins-update-all' | 'plugins-call-rpc' | 'plugins-tool-policy' | 'plugins-settings-get' | 'plugins-settings-set' | 'plugins-cli-contributions' | 'plugins-cli-run' | 'marketplace-list' | 'marketplace-add' | 'marketplace-refresh' | 'marketplace-remove',
+        ...args: [number] | [CliCallbackControl] | [CliDiscoveryRequest] | [LibraryAgentRequest] | [LibraryDocumentRequest] | [ProjectMetadataRequest] | [ProjectCatalogRequest] | [NativeToolPolicyRequest] | [SquadMemberRuntimeRequest] | [SquadMemberDeliveryRequest] | [SquadMemberDeliveryCompletion] | [SquadMemberControlRequest] | [SquadRuntimePreflightRequest] | [string, unknown[]] | [TerminalRequestCommand] | [TerminalHostEvent] | [string] | [string[]] | [string, number?] | [string, RuntimeProjectPatch] | [string, RuntimeProjectSettings] | [string, string, unknown?] | [string, string, string] | [string, Record<string, string | number | boolean | null>] | [string, string[]] | [string, string[], { projectId?: string; threadId?: string; cwd?: string }?] | []
     ) {
       if (stopped || stopping) return Promise.reject(new Error('Background service stopped. Restart Zana to reconnect.'));
       const id = randomUUID();
       // Plugin CLI runs and RPCs may wrap slow external CLIs (e.g. `sf agent preview start`, up to 120s), so they get the long budget.
-      const timeoutMs = operation === 'plugins-cli-run' || operation === 'plugins-call-rpc' ? 300_000 : 20_000;
+      const timeoutMs = operation === 'plugins-cli-run' || operation === 'plugins-call-rpc' || operation === 'plugins-install' || operation === 'plugins-update' || operation === 'plugins-update-all' || operation === 'plugins-outdated' ? 300_000 : 20_000;
       return new Promise<unknown>((resolveResult, rejectResult) => {
         const timer = setTimeout(() => {
           pending.delete(id);
@@ -779,7 +955,12 @@ export function createUtilityRuntime(runtime: { child: UtilityChild; url: string
           ...(operation === 'library-agent' ? { request: args[0] as LibraryAgentRequest } : {}),
           ...(operation === 'library-document' ? { request: args[0] as LibraryDocumentRequest } : {}),
           ...(operation === 'plugins-tool-policy' ? { request: args[0] as NativeToolPolicyRequest } : {}),
-          ...(operation === 'thread-live' ? { threadId: args[0] as string, projectId: args[1] as string } : {}),
+           ...(operation === 'thread-live' ? { threadId: args[0] as string, projectId: args[1] as string } : {}),
+             ...((operation === 'squad-member-create' || operation === 'squad-member-activate') ? { request: args[0] as SquadMemberRuntimeRequest } : {}),
+            ...(operation === 'squad-member-deliver' ? { request: args[0] as SquadMemberDeliveryRequest } : {}),
+            ...(operation === 'squad-member-delivery-complete' ? { request: args[0] as SquadMemberDeliveryCompletion } : {}),
+           ...(operation === 'squad-runtime-preflight' ? { request: args[0] as SquadRuntimePreflightRequest } : {}),
+           ...((operation === 'squad-member-status' || operation === 'squad-member-stop') ? { request: args[0] as SquadMemberControlRequest } : {}),
           ...(operation === 'thread-queue-turn' ? { threadId: args[0] as string, projectId: args[1] as string, text: args[2] as string } : {}),
           ...(operation === 'menubar-threads-list' ? { limit: args[0] as number } : {}),
           ...(operation === 'menubar-thread-open' ? { threadId: args[0] as string, projectId: args[1] as string } : {}),

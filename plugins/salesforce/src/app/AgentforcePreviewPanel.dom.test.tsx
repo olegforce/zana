@@ -8,6 +8,7 @@ import { createRoot } from 'react-dom/client';
 import { AgentforcePreviewPanel } from './AgentforcePreviewPanel.js';
 
 const rpc = vi.fn(async (_pluginId: string, method: string, args?: Record<string, unknown>) => {
+  if (method === 'agentPreview.context') return { ok: true, fields: [] };
   if (method === 'agentFiles.list') {
     return { ok: true, files: [{ apiName: 'QC', path: 'force-app/bots/QC.agent', lines: 4 }] };
   }
@@ -56,9 +57,10 @@ const run = {
 };
 const trace = { runId: 'run-1', turn: 2, planId: 'p1', available: true, steps: [{ kind: 'action', label: 'FindOrder', source: { path: 'force-app/bots/QC.agent', line: 7 } }] };
 describe('AgentforcePreviewPanel', () => {
-  const nodes: Array<{ unmount: () => void }> = [];
+  const nodes: Array<{ unmount: () => void; root: ReturnType<typeof createRoot> }> = [];
 
   beforeEach(() => {
+    localStorage.clear();
     rpc.mockClear();
     rpc.mockImplementation(baseRpc);
     navigate.openThreadPanel.mockClear();
@@ -79,11 +81,12 @@ describe('AgentforcePreviewPanel', () => {
     delete (globalThis as { __ZCC_PLUGIN_RUNTIME__?: unknown }).__ZCC_PLUGIN_RUNTIME__;
   });
 
-  async function mount(params: unknown = { path: 'force-app/bots/QC.agent' }) {
+  async function mount(params: unknown = { path: 'force-app/bots/QC.agent' }, pinnedPath?: string) {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const root = createRoot(el);
     nodes.push({
+      root,
       unmount: () => {
         root.unmount();
         el.remove();
@@ -95,7 +98,8 @@ describe('AgentforcePreviewPanel', () => {
           pluginId: 'salesforce',
           threadId: 'thr-1',
           projectId: 'proj-1',
-          params
+          params,
+          ...(pinnedPath ? { pinnedPath } : {})
         })
       );
     });
@@ -105,6 +109,20 @@ describe('AgentforcePreviewPanel', () => {
     });
     return el;
   }
+
+  it('pins the preview to one agent: no picker, the shared thread target is ignored', async () => {
+    // A previously chosen agent for this thread (what another panel left behind).
+    localStorage.setItem('salesforce.agentforce-targets.v1', JSON.stringify([{ scope: JSON.stringify(['salesforce', 'proj-1', 'thr-1']), target: { path: 'force-app/bots/Other.agent' }, requests: {} }]));
+    const el = await mount({ path: 'force-app/bots/QC.agent' }, 'force-app/bots/QC.agent');
+    expect(el.querySelector('[aria-label="Agentforce preview file"]')).toBeNull();
+    expect(el.querySelector('[data-testid="salesforce-preview-pinned"]')?.textContent).toBe('QC.agent');
+    await act(async () => { (el.querySelector('[data-testid="salesforce-agentforce-preview-start"]') as HTMLButtonElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(rpc).toHaveBeenCalledWith('salesforce', 'agentLab.start', expect.objectContaining({ path: 'force-app/bots/QC.agent' }));
+    expect(rpc.mock.calls.some(c => c[1] === 'agentLab.start' && (c[2] as any)?.path === 'force-app/bots/Other.agent')).toBe(false);
+    // The shared target is left alone.
+    expect(JSON.parse(localStorage.getItem('salesforce.agentforce-targets.v1')!)[0].target.path).toBe('force-app/bots/Other.agent');
+  });
 
   it('starts simulate preview, sends an utterance, and ends the session', async () => {
     const el = await mount();
@@ -160,6 +178,49 @@ describe('AgentforcePreviewPanel', () => {
       await Promise.resolve();
     });
     expect(rpc).toHaveBeenCalledWith('salesforce', 'agentLab.end', expect.objectContaining({ id: 'sess-1' }));
+  });
+  it('uses Context and setup for local and published agent previews, preserving explicit false', async () => {
+    rpc.mockImplementation(async (pluginId, method, args) => method === 'agentPreview.context'
+      ? { ok: true, fields: [{ name: 'verified', label: 'Verified', type: 'Boolean' }] }
+      : baseRpc(pluginId, method, args));
+    const el = await mount();
+    const click = async (node: Element | null) => { expect(node).toBeTruthy(); await act(async () => (node as HTMLElement).click()); };
+    await click(el.querySelector('[data-testid="salesforce-agentforce-preview-start"]'));
+    expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(rpc.mock.calls.some(call => call[1] === 'agentLab.start')).toBe(false);
+    await click(el.querySelector('[role="dialog"] [aria-label="Set Verified"]'));
+    const button = (name: string) => [...el.querySelectorAll('button')].find(b => b.textContent === name)!;
+    await click(button('Start preview'));
+    const contextVariables = [{ name: 'verified', type: 'Boolean', value: false }];
+    expect(rpc.mock.calls.find(call => call[1] === 'agentLab.start')![2]).toMatchObject({ contextVariables });
+    await click([...el.querySelectorAll('[role="tab"]')].find(b => b.textContent?.startsWith('Context'))!);
+    await click(el.querySelector('[aria-label="Options for Verified"]'));
+    await click(el.querySelector('[aria-label="Set Verified to null"]'));
+    expect(el.textContent).toContain('keeps its original context');
+    await click(button('Review & restart')); await click(button('Cancel'));
+    expect(rpc.mock.calls.some(call => call[1] === 'agentLab.end')).toBe(false);
+    await click(button('Review & restart')); await click(button('Restart preview'));
+    expect(rpc.mock.calls.filter(call => call[1] === 'agentLab.start').at(-1)![2]).toMatchObject({ contextVariables: [{ name: 'verified', type: 'Boolean', value: null }] });
+    const published = await mount({ apiName: 'Published' });
+    const publishedButton = (name: string) => [...published.querySelectorAll('button')].find(b => b.textContent === name || b.getAttribute('aria-label') === name)!;
+    await click(publishedButton('Context 0'));
+    await click(publishedButton('+ Add variable'));
+    await act(async () => {
+      const input = published.querySelector('[aria-label="Variable name"]') as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'verified');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const select = published.querySelector('[aria-label="Variable type"]') as HTMLSelectElement;
+      select.value = 'Boolean'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await click(publishedButton('Add'));
+    await click(published.querySelector('[aria-label="Set verified"]'));
+    await act(async () => (published.querySelector('[data-testid="salesforce-agentforce-preview-start"]') as HTMLElement).click());
+    await act(async () => ([...published.querySelectorAll('button')].find(b => b.textContent === 'Start preview') as HTMLElement).click());
+    expect(rpc.mock.calls.find(call => call[1] === 'agentPreview.start')![2]).toMatchObject({ contextVariables });
+    await act(async () => nodes.pop()!.unmount());
+    const ended = rpc.mock.calls.filter(call => call[1] === 'agentPreview.end').at(-1)![2]!;
+    expect(ended).toMatchObject({ sessionId: 'sess-1', apiName: 'Published', orgAlias: 'dev' });
+    expect(ended).not.toHaveProperty('contextVariables');
   });
 
   it('starts live preview after switching mode', async () => {
@@ -224,12 +285,40 @@ describe('AgentforcePreviewPanel', () => {
     expect(picker.disabled).toBe(true);
   });
 
+  it('restores the picked agent after the tab unmounts, ahead of stale card params', async () => {
+    rpc.mockImplementation(async (id, method, args) => method === 'agentFiles.list' ? { ok: true, files: [
+      { apiName: 'QC', path: 'force-app/bots/QC.agent' }, { apiName: 'Orders', path: 'force-app/Orders.agent' }
+    ] } : baseRpc(id, method, args));
+    const first = await mount();
+    await act(async () => { first.querySelector<HTMLButtonElement>('[aria-label="Agentforce preview file"]')!.click(); });
+    await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(row => row.textContent?.includes('Orders'))!.click(); });
+    await act(async () => { nodes.pop()!.unmount(); });
+    const restored = await mount();
+    expect(restored.querySelector('[aria-label="Agentforce preview file"]')?.textContent).toContain('Orders');
+    await act(async () => { restored.querySelector<HTMLButtonElement>('[data-testid="salesforce-agentforce-preview-start"]')!.click(); });
+    expect(rpc).toHaveBeenCalledWith('salesforce', 'agentLab.start', expect.objectContaining({ path: 'force-app/Orders.agent' }));
+  });
+
+  it('follows a new card target while mounted and releases the old agent session', async () => {
+    const el = await mount({ apiName: 'Published' });
+    await act(async () => { el.querySelector<HTMLButtonElement>('[data-testid="salesforce-agentforce-preview-start"]')!.click(); });
+    await act(async () => { nodes.at(-1)!.root.render(createElement(AgentforcePreviewPanel, {
+      pluginId: 'salesforce', projectId: 'proj-1', threadId: 'thr-1', params: { path: 'force-app/bots/QC.agent' }
+    })); });
+    expect(rpc).toHaveBeenCalledWith('salesforce', 'agentPreview.end', expect.objectContaining({ sessionId: 'sess-1', apiName: 'Published', path: undefined }));
+    expect(el.querySelector('[aria-label="Agentforce preview file"]')?.textContent).toContain('QC');
+    expect(el.querySelector('[data-testid="salesforce-agentforce-preview-end"]')).toBeNull();
+    await act(async () => { el.querySelector<HTMLButtonElement>('[data-testid="salesforce-agentforce-preview-start"]')!.click(); });
+    expect(rpc).toHaveBeenCalledWith('salesforce', 'agentLab.start', expect.objectContaining({ path: 'force-app/bots/QC.agent' }));
+  });
+
   it('disables start without a target and reports file-list errors', async () => {
     rpc.mockImplementation(async (id, method, args) => method === 'agentFiles.list' ? { ok: true, files: [] } : baseRpc(id, method, args));
     const empty = await mount({});
     expect(empty.querySelector<HTMLButtonElement>('[data-testid="salesforce-agentforce-preview-start"]')!.disabled).toBe(true);
     rpc.mockImplementation(async (id, method, args) => {
-      if (method === 'agentFiles.list') throw new Error('Files unavailable');
+      if (method === 'agentPreview.context') return { ok: true, fields: [] };
+  if (method === 'agentFiles.list') throw new Error('Files unavailable');
       return baseRpc(id, method, args);
     });
     const failed = await mount();
@@ -246,7 +335,8 @@ describe('AgentforcePreviewPanel', () => {
 
   it('surfaces start failures and labels a file by apiName', async () => {
     rpc.mockImplementation(async (_pluginId: string, method: string) => {
-      if (method === 'agentFiles.list') {
+      if (method === 'agentPreview.context') return { ok: true, fields: [] };
+  if (method === 'agentFiles.list') {
         return { ok: true, files: [{ apiName: 'QC', path: 'force-app/bots/QC.agent', lines: 4 }] };
       }
       if (method === 'agentPreview.start') {
@@ -267,7 +357,8 @@ describe('AgentforcePreviewPanel', () => {
 
   it('shows a preview error when start returns ok:false', async () => {
     rpc.mockImplementation(async (_pluginId: string, method: string) => {
-      if (method === 'agentFiles.list') {
+      if (method === 'agentPreview.context') return { ok: true, fields: [] };
+  if (method === 'agentFiles.list') {
         return { ok: true, files: [{ apiName: 'QC', path: 'force-app/bots/QC.agent', lines: 4 }] };
       }
       if (method === 'agentLab.start') {
@@ -325,7 +416,7 @@ describe('AgentforcePreviewPanel', () => {
     expect(rpc).toHaveBeenCalledWith('salesforce', 'agentLab.trace', { projectId: 'proj-1', id: 'run-1', planId: 'p1', turn: 2, path: 'force-app/bots/QC.agent' });
     const step = [...el.querySelectorAll<HTMLButtonElement>('button.sf-trace-row')].find(b => b.textContent?.includes('FindOrder'))!;
     await act(async () => { step.click(); });
-    expect(navigate.openThreadPanel).toHaveBeenCalledWith({ actionId: 'playground', title: 'Playground', params: { path: 'force-app/bots/QC.agent', line: '7' }, threadId: 'thr-1' });
+    expect(navigate.openThreadPanel).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'agent', title: 'QC', params: expect.objectContaining({ path: 'force-app/bots/QC.agent', view: 'file', line: '7' }), threadId: 'thr-1' }));
     // With the Studio in its own window, the step opens there instead.
     const base = rpc.getMockImplementation()!;
     rpc.mockImplementation(async (id: string, method: string, args?: Record<string, unknown>) =>
@@ -333,9 +424,9 @@ describe('AgentforcePreviewPanel', () => {
         : method === 'control.command' ? { ok: true, commandId: 'c' }
           : method === 'control.result' ? { ok: true, state: 'completed' } : base(id, method, args));
     navigate.openThreadPanel.mockClear();
+    navigate.openThreadPanel.mockReturnValueOnce(false);
     await act(async () => { step.click(); });
     expect(rpc).toHaveBeenCalledWith('salesforce', 'control.command', expect.objectContaining({ viewId: 'studio', input: { view: 'agentforce', path: 'force-app/bots/QC.agent', line: 7 } }));
-    expect(navigate.openThreadPanel).not.toHaveBeenCalled();
     rpc.mockImplementation(base);
     await act(async () => { el.querySelector<HTMLButtonElement>('[aria-label="Turn 1"]')!.click(); });
     await act(async () => { await Promise.resolve(); });

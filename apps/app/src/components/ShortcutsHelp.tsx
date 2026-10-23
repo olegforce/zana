@@ -37,6 +37,16 @@ const SECTIONS: Section[] = [
     ]
   },
   {
+    title: 'Inbox',
+    rows: [
+      { keys: ['j', 'k'], label: 'Next / previous message' },
+      { keys: ['R'], label: 'Reply to the open message' },
+      { keys: ['⌘', '↵'], label: 'Send the reply' },
+      { keys: ['Esc'], label: 'Leave the reply box and keep reading' },
+      { keys: ['Delete'], label: 'Delete the open message' }
+    ]
+  },
+  {
     title: 'Tabs',
     rows: [
       { keys: ['⌘', 'T'], label: 'New tab (uses project’s default profile)' },
@@ -48,6 +58,13 @@ const SECTIONS: Section[] = [
       { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },
       { keys: ['⌘', ']'], label: 'Next tab' },
       { keys: ['⌘', '['], label: 'Previous tab' }
+    ]
+  },
+  {
+    title: 'Thread',
+    rows: [
+      { keys: ['⌘', 'F'], label: 'Search in the open thread (remappable in Settings → Shortcuts)' },
+      { keys: ['Esc'], label: 'Close thread search' }
     ]
   },
   {

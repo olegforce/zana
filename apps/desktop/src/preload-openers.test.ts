@@ -13,4 +13,19 @@ it('forwards the opener target, path and project root to main', async () => {
   electron.invoke.mockResolvedValue({ ok: true });
   await expect(api.openers.openIn('code', '/work/src/a.ts', { projectRoot: '/work' })).resolves.toEqual({ ok: true });
   expect(electron.invoke).toHaveBeenCalledExactlyOnceWith(IPC.openers.openIn, 'code', '/work/src/a.ts', { projectRoot: '/work' });
+  electron.invoke.mockClear();
+  const input = { path: 'dist/app.dmg', threadId: 't1', projectId: 'p1', source: 'workspace' };
+  await api.openers.fileLocation(input);
+  await api.openers.revealFile(input);
+  expect(electron.invoke.mock.calls).toEqual([[IPC.openers.fileLocation, input], [IPC.openers.revealFile, input]]);
+});
+
+it('forwards bulk plugin updates to main and returns the result', async () => {
+  await import('./preload.js');
+  const api = electron.expose.mock.calls.find(([name]) => name === 'cc')![1];
+  const result = { ok: true, value: { updated: ['plugin-1'], failed: [] } };
+  electron.invoke.mockClear();
+  electron.invoke.mockResolvedValueOnce(result);
+  await expect(api.pluginApps.applyAllUpdates()).resolves.toEqual(result);
+  expect(electron.invoke).toHaveBeenCalledExactlyOnceWith(IPC.pluginApps.applyAllUpdates);
 });

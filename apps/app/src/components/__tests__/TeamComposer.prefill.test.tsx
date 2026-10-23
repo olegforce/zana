@@ -14,6 +14,7 @@ const uploadToRemote = vi.fn();
 const pushToast = vi.fn();
 const loadProjects = vi.fn(async () => undefined);
 const fieldOpts = vi.fn();
+const voiceState = vi.hoisted(() => ({ state: 'idle' as 'idle' | 'recording' | 'transcribing' }));
 
 vi.mock('../../lib/product-client.js', () => ({
   product: {
@@ -77,7 +78,7 @@ vi.mock('../composer/use-composer-prompt-field.js', () => ({
 
 vi.mock('../thread/voice/useVoiceInput.js', () => ({
   useVoiceInput: () => ({
-    state: 'idle',
+    state: voiceState.state,
     stream: null,
     stop: vi.fn(),
     cancel: vi.fn(),
@@ -155,6 +156,7 @@ const prefill: SquadLaunchPrefill = {
 describe('TeamComposer prefill', () => {
   afterEach(() => {
     cleanup();
+    voiceState.state = 'idle';
     startJob.mockReset();
     fieldOpts.mockClear();
   });
@@ -171,6 +173,12 @@ describe('TeamComposer prefill', () => {
     await waitFor(() => expect(screen.getByTestId('project-picker-stub').getAttribute('data-value')).toBe('p2'));
     // Sources survive the project resolving to the prefill's project.
     expect(screen.getByText('design.md')).toBeTruthy();
+  });
+
+  it('swaps the toolbar for the voice recording bar while voice input is recording', () => {
+    voiceState.state = 'recording';
+    render(<TeamComposer prefill={prefill} />);
+    expect(screen.getByTestId('thread-voice-bar')).toBeTruthy();
   });
 
   it('clears pre-filled sources when the project resolves elsewhere', async () => {
@@ -215,6 +223,18 @@ describe('TeamComposer prefill', () => {
       summary: 'Why it matters',
       sourceCapabilityIds: ['c1', 'c2']
     });
+  });
+
+  it('shows the full path of a source outside the project, marked as such', () => {
+    render(<TeamComposer prefill={{ ...prefill, sources: [
+      { id: 'c1', name: 'design.md', byteSize: 10, expiresAt: Date.now() + 60_000, path: '~/vault/design.md', outsideProject: true },
+      { id: 'c2', name: 'plan.md', byteSize: 20, expiresAt: Date.now() + 60_000 }
+    ] }} />);
+    const chips = screen.getByLabelText('Attached sources');
+    expect(chips.textContent).toContain('~/vault/design.mdoutside the Project');
+    expect(chips.textContent).toContain('plan.md');
+    expect(chips.querySelectorAll('.launch-attachment-outside')).toHaveLength(1);
+    expect(chips.querySelector('li[title="~/vault/design.md"]')).not.toBeNull();
   });
 
   it('removing a chip removes its id from the launch', async () => {

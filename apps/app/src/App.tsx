@@ -40,6 +40,7 @@ import { SearchPanel } from './components/SearchPanel.js';
 import { ShortcutsHelp } from './components/ShortcutsHelp.js';
 import { AgentTerminalModal } from './components/AgentTerminalModal.js';
 import { ThreadModal } from './components/ThreadModal.js';
+import { SessionMoveDialog } from './components/SessionMoveDialog.js';
 import { FavoriteAgentsDrawer } from './components/FavoriteAgentsDrawer.js';
 import { NotificationsDrawer } from './components/NotificationsDrawer.js';
 import { HostInstallDrawer } from './components/HostInstallDrawer.js';
@@ -60,6 +61,7 @@ import { ModuleBackgroundHost } from './modules/ModuleBackgroundHost.js';
 import { useMergedModules } from './modules/index.js';
 import { initExtensionModules, reconcileExtensionModules } from './modules/loader.js';
 import { initPluginApps, reconcilePluginApps } from './plugins/plugin-app-loader.js';
+import { installDeepLinkBridge } from './plugins/plugin-deep-links.js';
 import { listNavPanels } from './plugins/plugin-slots.js';
 import {
   CORE_NAV_IDS,
@@ -568,6 +570,9 @@ function AppShell() {
     const offModelCatalogChanged = product.threads.onModelCatalogChanged(({ hostId, providerId }) => {
       refreshThreadProviderModelsFromPush(hostId, providerId);
     });
+    // Plugin deep links: main pushes validated (pluginId, route, payload); subscribe
+    // before the readiness ack below so a cold-start link is never sent to nobody.
+    const offDeepLinks = installDeepLinkBridge();
     // Main may be waiting to deliver a cold-start menu-bar Thread open. Ack only
     // after this listener exists and its ProductHub WebSocket can receive it.
     void waitForProductWsOpen()
@@ -614,6 +619,7 @@ function AppShell() {
       offOpenScheduler();
       offOpenAgents();
       offFocusInboxEntry();
+      offDeepLinks();
       offInboxSync();
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -882,6 +888,7 @@ function AppShell() {
       <ShortcutsHelpHost />
       <AgentModalHost />
       <ThreadModalHost />
+      <SessionMoveDialog />
       <FavoriteAgentsDrawer />
       <NotificationsDrawer />
       <HostInstallDrawer />

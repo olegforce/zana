@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getThreadProvider, registerThreadProvider } from './thread-provider-catalog.js';
+import {
+  getThreadProvider,
+  registerThreadProvider,
+  THREAD_PROVIDER_STARTUP_WAIT_MS,
+  trackThreadProviderStartup
+} from './thread-provider-catalog.js';
 import { PluginHostArtifactRegistry } from '../../plugins/plugin-host-artifact-registry.js';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
@@ -2002,6 +2007,30 @@ describe('conversation lifecycle', () => {
     expect(pauseDeferredThreadMessagesForThread).toHaveBeenCalledWith(context.db, thread.id);
   });
 
+  it.each(['idle', 'active'] as const)('requires host release before relocating a %s session', async status => {
+    vi.mocked(getConversationThread).mockReturnValue({ ...thread, status });
+    const failure = new Error('Host release failed');
+    const callHostOnlineRpc = vi.fn().mockRejectedValue(failure);
+    await expect(stopConversation(ctx(callHostOnlineRpc), thread.id, { requireHostRelease: true })).rejects.toBe(failure);
+  });
+
+  it('accepts a runtime that is already absent when requiring host release', async () => {
+    const callHostOnlineRpc = vi.fn().mockRejectedValue(Object.assign(new Error('Already released'), { code: 'unknown_thread' }));
+    const context = ctx(callHostOnlineRpc);
+    await expect(stopConversation(context, thread.id, { requireHostRelease: true })).resolves.toMatchObject({ id: thread.id });
+    expect(settleDanglingBackgroundTasksForStoppedThread).toHaveBeenCalledWith({ db: context.db, hub: context.hub }, { threadId: thread.id });
+    expect(context.pendingInteractions.interruptPendingInteractionsForThreadIds).toHaveBeenCalledWith({ threadIds: [thread.id], reason: 'thread-stopped' });
+  });
+
+  it('blocks explicit resume during stop or move', async () => {
+    const { withConversationSendCancellation } = await import('./conversation-send-guard.js');
+    const context = ctx(vi.fn());
+    await withConversationSendCancellation(context.db, thread.id, async () => {
+      await expect(resumeConversation(context, thread.id)).rejects.toMatchObject({ code: 'stopping' });
+    });
+    expect(context.hostHub.callHostOnlineRpc).not.toHaveBeenCalled();
+  });
+
   it('returns while a live turn.submit RPC is still running', async () => {
     vi.mocked(applyConversationThreadLifecycleEvent).mockClear();
     const callHostOnlineRpc = vi.fn(() => new Promise(() => {}));
@@ -2338,6 +2367,27 @@ describe('resuming open sessions after a host restart', () => {
     expect(clearConversationSessionsOpenForHost).toHaveBeenCalledTimes(2);
     expect(listOpenSessionConversationThreadsForHost).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('waits for a provider that is still registering after launch before resuming', async () => {
+    vi.mocked(listOpenSessionConversationThreadsForHost).mockReturnValue([idle]);
+    const declaration = getThreadProvider(idle.providerId)!;
+    for (const handle of providerHandles.splice(0)) handle.unregister();
+    trackThreadProviderStartup(new Promise(() => {}));
+    try {
+      const rpc = vi.fn(async () => ({ threadId: idle.id, resumed: true }));
+      vi.useFakeTimers();
+      const pass = resumeOpenConversationSessionsAfterHostRestart(ctx(rpc, { threadSessionReleaseMinutes: 0 }), 'host-1');
+      await vi.advanceTimersByTimeAsync(THREAD_PROVIDER_STARTUP_WAIT_MS - 1);
+      expect(rpc).not.toHaveBeenCalled();
+      vi.useRealTimers();
+      providerHandles.push(registerThreadProvider('test', declaration));
+      await expect(pass).resolves.toBe(1);
+      expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'thread.resume', threadId: idle.id }) }));
+    } finally {
+      vi.useRealTimers();
+      trackThreadProviderStartup(Promise.resolve());
+    }
   });
 
   it('logs and resumes nothing when the open sessions cannot be read', async () => {

@@ -2,6 +2,7 @@ import type { ThreadHistoryQuery, ThreadHistoryPage, ConversationTranscript } fr
 import type { DesktopBrowserApi } from './browser.js';
 import type { SquadLaunchPrefill, SquadProposalErrorCode } from '@zana-ai/zcc-domain/squad-proposal';
 import type { MarketplaceCatalogRow } from '@zana-ai/zcc-domain';
+import type { CloseFollowupFailure } from '@zana-ai/zcc-domain/product';
 import type { OwnNotificationLevel, ThreadNotificationState } from '@zana-ai/zcc-domain';
 import type {
   ProviderCliInstallActionKind,
@@ -224,6 +225,15 @@ export interface ThreadViewTarget {
 export interface CcApi {
   /** Isolated in-app browser overlay. Present only in the desktop preload. */
   browser: DesktopBrowserApi;
+  /** Plugin deep links. Present only in the desktop preload. */
+  deepLinks?: {
+    /** This build's link base (`<scheme>://`) and the schemes the in-app paste path accepts. */
+    config(): Promise<import('./deep-link.js').DeepLinkConfig>;
+    /** Ask main to validate a pasted link and route it. Main re-parses; the renderer is untrusted. */
+    open(raw: string): Promise<import('./deep-link.js').DeepLinkOpenResult>;
+    /** A validated link main wants routed to a plugin. */
+    onLink(cb: (delivery: import('./deep-link.js').DeepLinkDelivery) => void): () => void;
+  };
   startup: {
     state(): Promise<{ mode: 'ready' } | { mode: 'repair-required'; reason: 'harness-routing-migration' }>;
     retry(): Promise<{ mode: 'ready' } | { mode: 'repair-required'; reason: 'harness-routing-migration' }>;
@@ -263,8 +273,6 @@ export interface CcApi {
     recoverTimedOut(projectId: string, executionId: string, expectedStateVersion: number, clientRequestId: string): Promise<Result<ExecutionBoardProjection>>;
     recoverRetainedSquad(projectId: string, executionId: string, expectedStateVersion: number, mode: 'exact-native' | 'fresh-plan'): Promise<Result<ExecutionBoardProjection>>;
     worktreeAction(projectId: string, executionId: string, expectedStateVersion: number, action: 'leave' | 'instruct' | 'delete' | 'force-delete', instruction?: string): Promise<Result<true>>;
-    /** @deprecated Compatibility alias for `recoverRetainedSquad(..., 'fresh-plan')`. */
-    resumeRun(projectId: string, executionId: string, expectedStateVersion: number, replay?: boolean): Promise<Result<ExecutionBoardProjection>>;
     clearResumeToken(projectId: string, executionId: string): Promise<Result<true>>;
     relaunchMonitor(projectId: string, executionId: string): Promise<Result<{ sessionId: string }>>;
   };
@@ -583,6 +591,7 @@ export interface CcApi {
         acpMode?: string;
       }
     ): Promise<{ ok: boolean }>;
+    move(threadId: string, input: { projectId: string; expectedProjectId: string; stop?: boolean }): Promise<{ thread: Awaited<ReturnType<CcApi['threads']['list']>>[number] }>;
     stop(threadId: string): Promise<{ ok: boolean }>;
     /** Stops the given background task items, or all of them when omitted. */
     stopBackground(threadId: string, itemIds?: string[]): Promise<{ ok: boolean; stopped?: string[]; requested?: string[]; fallbackError?: string }>;
@@ -663,9 +672,11 @@ export interface CcApi {
     }>>;
     /** Move a side-panel conversation into the Agents list. */
     openAsThread(threadId: string): Promise<{ thread: Record<string, unknown> }>;
-    conversationOutline(threadId: string): Promise<{
+    /** With `query`, `matches` counts find-in-thread matches per message (oldest first). */
+    conversationOutline(threadId: string, query?: string): Promise<{
       items: Array<{ id: string; role: 'user' | 'assistant'; preview: string; attachmentSummary: unknown }>;
       maxSeq: number;
+      matches?: Array<{ id: string; seq: number; count: number }>;
     }>;
     timelineTurnSummaryDetails(
       threadId: string,
@@ -771,7 +782,13 @@ export interface CcApi {
       cancel(threadId: string, interactionId: string): Promise<PendingInteraction>;
     };
     archive(threadId: string): Promise<{ ok: boolean }>;
-    closeFollowup(threadId: string): Promise<{ ok: boolean; summarized: number; followedUp: number }>;
+    closeFollowup(threadId: string): Promise<{
+      ok: boolean;
+      summarized: number;
+      followedUp: number;
+      /** Why a step produced nothing; absent from older main. */
+      failures?: CloseFollowupFailure[];
+    }>;
     fork(threadId: string, options?: { sourceSeqEnd?: number }): Promise<Result<{
       id: string;
       projectId: string;
@@ -1075,7 +1092,12 @@ export interface CcApi {
     closeFollowup(
       projectId: string,
       sessionIds: string[]
-    ): Promise<{ summarized: number; followedUp: number }>;
+    ): Promise<{
+      summarized: number;
+      followedUp: number;
+      /** Why a step produced nothing; absent from older main. */
+      failures?: CloseFollowupFailure[];
+    }>;
   };
   config: {
     get(): Promise<AppConfig>;
@@ -1185,6 +1207,9 @@ export interface CcApi {
     pick(projectId: string): Promise<Result<ExecutionSourceCapabilityView[]>>;
   };
   openers: {
+    /** Resolve/reveal an existing local preview file. Main owns scope and realpath checks. */
+    fileLocation(input: { path: string; projectId?: string; threadId?: string; source: 'workspace' | 'thread-storage' }): Promise<{ ok: boolean; path?: string; message?: string }>;
+    revealFile(input: Parameters<CcApi['openers']['fileLocation']>[0]): Promise<OpenResult>;
     /**
      * `projectRoot` (editor targets only) opens the file at `path` inside that
      * project's editor window. Main honours it only for a registered project
@@ -1661,6 +1686,7 @@ export interface CcApi {
       marketplace: string;
     }>>;
     applyUpdate(id: string): Promise<Result<true>>;
+    applyAllUpdates(): Promise<Result<import('@zana-ai/zcc-domain/product').PluginUpdateAllResult>>;
     remove(id: string): Promise<Result<true>>;
     reload(id: string): Promise<Result<true>>;
   };

@@ -100,7 +100,6 @@ export interface IpcCtx {
   ptys: any;
   quickPrompts: any;
   readLiveSessionStats: any;
-  rebuildProviders: any;
   registerExtensionProject: any;
   reportTeamTask: any;
   resolveTheme: any;
@@ -130,6 +129,7 @@ export interface IpcCtx {
   stopAutonomousRun: any;
   suggestionsStore: any;
   teams: any;
+  teamLifecycle: any;
   templates: any;
   terminateSession: any;
   tray: any;

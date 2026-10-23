@@ -9,7 +9,7 @@ describe('uiCommandReadsOrg', () => {
     expect(uiCommandReadsOrg('view.open', undefined)).toBe(true);
     expect(uiCommandReadsOrg('panel.open', { tool: 'agents' })).toBe(true);
     expect(uiCommandReadsOrg('panel.open', { tool: 'org-preview' })).toBe(true);
-    expect(uiCommandReadsOrg('panel.open', { tool: 'release' })).toBe(true);
+    expect(uiCommandReadsOrg('panel.open', { tool: 'release' })).toBe(false); // Release is no longer a Studio tool
   });
   it('treats preview.start/send as org reads for every engine', () => {
     for (const command of ['preview.start', 'preview.send']) {
@@ -19,6 +19,8 @@ describe('uiCommandReadsOrg', () => {
       expect(uiCommandReadsOrg(command, { engine: 'rehearse' })).toBe(true);
     }
     for (const command of ['editor.proposeEdit', 'trace.focus', 'graph.focus', 'layout.set']) expect(uiCommandReadsOrg(command, {})).toBe(false);
+    // The Org tests tab lists the org's definitions as soon as it opens.
+    expect(uiCommandReadsOrg('orgTests.open', {})).toBe(true);
   });
   it('leaves local-only commands alone', () => {
     expect(uiCommandReadsOrg('view.open', { view: 'agentforce' })).toBe(false);

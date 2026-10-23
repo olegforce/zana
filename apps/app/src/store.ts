@@ -47,7 +47,7 @@ import { DEFAULT_TERMINAL_THEME, type TerminalThemeId } from '@zana-ai/zcc-domai
 import { seedPromptArgs } from '@zana-ai/zcc-domain/launch-provider';
 import type { UsageSummary } from '@zana-ai/zcc-domain/telemetry-events';
 import { resolveRestartProfile } from './lib/sessionRestore.js';
-import { closeFollowupProgressMessage, runCloseIdleAgents } from './lib/close-idle-agents.js';
+import { closeFollowupProgressMessage, closedToastMessage, runCloseIdleAgents } from './lib/close-idle-agents.js';
 
 import { getScopedProjectId, isScopedWindow } from './lib/windowScope.js';
 import { isThreadViewSurface } from './lib/threadViewSurface.js';
@@ -213,6 +213,7 @@ export interface Toast {
   id: string;
   message: string;
   kind?: 'info' | 'error';
+  action?: { label: string; onClick: () => void };
 }
 
 /**
@@ -699,7 +700,7 @@ interface UiState {
   pushToast: (
     message: string,
     kind?: 'info' | 'error',
-    opts?: { persist?: boolean }
+    opts?: { persist?: boolean; action?: Toast['action'] }
   ) => string;
   dismissToast: (id: string) => void;
   markUnread: (sessionId: string) => void;
@@ -1266,11 +1267,11 @@ export const useUi = create<UiState>((set, get) => ({
   clearRevealFollowUp: () => set({ revealFollowUpId: null }),
   pushToast: (message, kind = 'info', opts) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
+    set((s) => ({ toasts: [...s.toasts, { id, message, kind, ...(opts?.action ? { action: opts.action } : {}) }] }));
     if (!opts?.persist) {
       setTimeout(() => {
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-      }, 4000);
+      }, opts?.action ? 12000 : 4000);
     }
     return id;
   },
@@ -3448,17 +3449,10 @@ export const useData = create<DataState>((set, get) => ({
         pushErrorToast: (err) => {
           pushErrorToast(errorMessage(err, 'Failed to summarize agents'));
         },
-        pushClosedToast: (closed, summarized, followedUp) => {
-          const bits = [`Closed ${closed} agent${closed === 1 ? '' : 's'}`];
-          if (summarized > 0) bits.push(`${summarized} summarized to inbox`);
-          if (followedUp > 0) {
-            bits.push(`${followedUp} follow-up${followedUp === 1 ? '' : 's'} filed`);
-          } else if (summarized > 0) {
-            bits.push('no unfinished work found');
-          } else {
-            bits.push('no readable transcript found');
-          }
-          useUi.getState().pushToast(`${bits.join(' · ')}.`, summarized > 0 ? 'info' : 'error');
+        pushClosedToast: (closed, summarized, followedUp, failures) => {
+          useUi
+            .getState()
+            .pushToast(closedToastMessage(closed, summarized, followedUp, failures), summarized > 0 ? 'info' : 'error');
         },
         pushProgressToast: (count) =>
           useUi.getState().pushToast(closeFollowupProgressMessage(count), 'info', { persist: true }),

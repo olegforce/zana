@@ -2296,6 +2296,12 @@ body.resizing-col {
   user-select: none;
 }
 
+/* Embedded frames (plugin editors, previews) would swallow the drag's mouse events. */
+body.resizing-col iframe,
+body.resizing-col webview {
+  pointer-events: none !important;
+}
+
 .list-header {
   padding: 12px 14px;
   display: flex;
@@ -9218,7 +9224,7 @@ body.resizing-col .ext-hub-resizer::before {
 .ext-browse-grid,
 .ext-browse-more-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
   gap: 10px;
 }
 .ext-browse-card {
@@ -14323,6 +14329,7 @@ body.resizing-col .explorer-resizer::after {
 .execution-details-close { flex: none; }
 .execution-details-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .execution-details-primary-actions { margin: 12px 0 16px; }
+.execution-details-recovery-reason { margin: 0; align-self: center; color: var(--text-muted); font-size: 12px; }
 .execution-worktree { margin: 16px 0; }
 .execution-worktree textarea { margin-top: 10px; }
 .execution-worktree .execution-details-actions { margin-top: 10px; }
@@ -14999,6 +15006,51 @@ body.resizing-col .explorer-resizer::after {
 .fleet-kind-chip.fleet-kind-schedule {
   color: var(--accent-blue, #4d8dff);
   background: color-mix(in srgb, var(--accent-blue, #4d8dff) 16%, transparent);
+}
+
+/* Modern-transport squad members (ACP threads) read apart from CLI squads by a
+   dotted edge in the Thread pill's blue. Bordered surfaces switch their border
+   to dotted (keeping any cohort accent color); borderless rows get an inset
+   dotted outline so layout never shifts. CLI squads are untouched. */
+.agent-card.is-modern,
+.agent-card.has-cohort.is-modern,
+.skills-row.team-row.is-modern {
+  border-style: dotted;
+  border-color: color-mix(in srgb, var(--accent-blue, #4d8dff) 55%, transparent);
+}
+.agent-card.cohort-orch.is-modern {
+  border-left-color: var(--accent-blue, #4d8dff);
+}
+.agents-row.is-modern,
+.project-terminal-row.is-modern,
+.agent-tray-row.is-modern,
+.teams-agent-item.is-modern,
+.agent-squad-worker.is-modern,
+.agents-worker-row.is-modern,
+.agent-monitor-row.is-modern {
+  outline: 1px dotted color-mix(in srgb, var(--accent-blue, #4d8dff) 55%, transparent);
+  outline-offset: -1px;
+  border-radius: 5px;
+}
+.agents-row.is-modern {
+  border-left-style: dotted;
+}
+.teams-agent-item.is-modern {
+  padding: 4px 6px;
+}
+
+/* Squad picker option row: name + transport pill. */
+.squad-picklist-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.squad-picklist-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-card.is-schedule-off {
@@ -16312,6 +16364,67 @@ body.resizing-col .explorer-resizer::after {
   background: transparent;
   font-size: 12px;
   color: #e6edf3;
+}
+
+/* Fenced code block + its copy button. The button is absolutely positioned on
+   this wrapper (not inside the scrolling <pre>), so it neither shifts layout
+   nor scrolls away on wide blocks. Hidden until hover/focus on pointer
+   devices; always shown on touch, which has no hover. Not `.inbox-md-code`:
+   that class styles the mermaid source fallback. */
+.inbox-md-codeblock {
+  position: relative;
+}
+
+.inbox-md-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(240, 246, 252, 0.15);
+  border-radius: 6px;
+  /* Same dark surface as the block, so code under the button stays legible
+     around it in both themes. */
+  background: rgba(22, 27, 34, 0.92);
+  color: #c9d1d9;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.inbox-md-codeblock:hover .inbox-md-code-copy,
+.inbox-md-code-copy:focus-visible,
+.inbox-md-code-copy[data-state='copied'],
+.inbox-md-code-copy[data-state='failed'] {
+  opacity: 1;
+}
+
+.inbox-md-code-copy:hover {
+  background: #30363d;
+  color: #f0f6fc;
+}
+
+.inbox-md-code-copy:focus-visible {
+  outline: 2px solid var(--accent-blue, #4c8dff);
+  outline-offset: 1px;
+}
+
+.inbox-md-code-copy[data-state='copied'] {
+  color: #3fb950;
+}
+
+.inbox-md-code-copy[data-state='failed'] {
+  color: #f85149;
+}
+
+@media (hover: none) {
+  .inbox-md-code-copy {
+    opacity: 1;
+  }
 }
 
 /* Rendered mermaid diagrams. Centered, with the SVG scaled to fit the
@@ -25612,6 +25725,11 @@ button.launch-persona {
   font-size: 12px;
 }
 
+.launch-attachment-outside {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .launch-attachment-pill button {
   display: inline-flex;
   align-items: center;
@@ -31976,10 +32094,14 @@ body.resizing-col .library-split-resizer::after {
   height: 100%;
 }
 
-/* Plugin catalogue is a centered reading surface. */
+/* Plugin collections use the available width; detail pages keep a reading cap. */
 .extensions-panel .ext-hub-shell,
 .extensions-panel .ext-installed,
-.extensions-panel .ext-market,
+.extensions-panel .ext-market {
+  width: 100%;
+  max-width: none;
+}
+
 .extensions-panel .ext-browse-detail-page,
 .extensions-panel .ext-catalog-detail {
   width: 100%;
@@ -35467,6 +35589,19 @@ body.split-frame-guard webview {
   pointer-events: auto;
 }
 
+.thread-detail-search-count {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.thread-detail-search-count.is-empty {
+  color: var(--danger, var(--text-muted));
+}
+
 .thread-detail-title-row {
   display: flex;
   align-items: baseline;
@@ -36569,6 +36704,23 @@ body.split-frame-guard webview {
 @keyframes thread-search-flash {
   from { background: color-mix(in srgb, var(--accent, #4c8dff) 28%, transparent); }
   to { background: transparent; }
+}
+
+/* Find-in-thread: every match, and the current one (CSS Custom Highlight API). */
+::highlight(thread-search-match) {
+  background-color: color-mix(in srgb, var(--accent-gold, #d4a017) 35%, transparent);
+}
+
+::highlight(thread-search-current) {
+  background-color: var(--accent-gold, #d4a017);
+  color: #000;
+}
+
+/* When the current match is not in rendered text, its row is marked instead. */
+.thread-timeline-search-current {
+  border-radius: 6px;
+  outline: 2px solid var(--accent-gold, #d4a017);
+  outline-offset: 2px;
 }
 
 .thread-scroll-bottom {
@@ -38569,6 +38721,19 @@ body.split-frame-guard webview {
   gap: 4px;
   border-left: 1px solid var(--border);
   background: var(--bg-panel);
+}
+
+/* Phone/tablet: the rail floats over the page so plugin content keeps the full
+   screen width (a 36px column is a tenth of a phone). The launchers stay reachable. */
+.plugin-panel-host-layout.is-compact > .plugin-panel-host-launchers {
+  position: absolute;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
 }
 
 .panel-agent-tab {
@@ -40713,8 +40878,9 @@ body.split-frame-guard webview {
   color: inherit;
   font: inherit;
   cursor: grab;
-  /* Fixed-width card (width set inline). Clip so nothing spills past the
-     rounded edge if a child row is wider than the content box. */
+  /* Width and height are set inline from squadFlowLayout's nodeHeight(); every
+     line below has a fixed height so that estimate is exact. Clip so nothing
+     spills past the rounded edge. */
   overflow: hidden;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   transition: border-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
@@ -40736,6 +40902,12 @@ body.split-frame-guard webview {
 .squad-flow-node:focus-visible {
   outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
+}
+/* Modern squad member nodes read dotted, like Modern cards elsewhere. Declared
+   before the orchestrator/state modifiers so their edge colors still win. */
+.squad-flow-node--modern {
+  border-style: dotted;
+  border-color: color-mix(in srgb, var(--accent-blue, #4d8dff) 55%, transparent);
 }
 .squad-flow-node--orch {
   border-color: color-mix(in srgb, var(--accent-gold) 55%, var(--border-strong));
@@ -40792,6 +40964,11 @@ body.split-frame-guard webview {
 
 .squad-flow-live {
   align-self: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -40819,6 +40996,11 @@ body.split-frame-guard webview {
    from the blue live badge and from the gold orchestrator tag. No motion. */
 .squad-flow-claimed {
   align-self: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -40829,10 +41011,39 @@ body.split-frame-guard webview {
   border-radius: 5px;
 }
 
+.squad-flow-node-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.squad-flow-node-icon {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.squad-flow-node-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+}
+.squad-flow-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.squad-flow-node-chevron {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
 .squad-flow-node-top {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 20px;
   /* Allow children to shrink below their content width so the label can
      ellipsis instead of pushing the orchestrator tag out of the card. */
   min-width: 0;
@@ -40861,6 +41072,11 @@ body.split-frame-guard webview {
   border-radius: 5px;
 }
 .squad-flow-node-role {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-dim);
 }
@@ -40868,12 +41084,23 @@ body.split-frame-guard webview {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  height: 20px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
   font-size: 11.5px;
+}
+/* The verb never shrinks: chips to its right give up width first (role and
+   sub-agent count before live/claimed), each ellipsizing with full text in title. */
+.squad-flow-state-text {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .squad-flow-node-blocker {
   display: block;
-  margin-top: 3px;
+  height: 16px;
+  line-height: 16px;
   color: var(--danger);
   font-size: 10.5px;
   white-space: nowrap;
@@ -40882,7 +41109,8 @@ body.split-frame-guard webview {
 }
 .squad-flow-node-coord {
   display: block;
-  margin-top: 3px;
+  height: 16px;
+  line-height: 16px;
   color: var(--text-muted);
   font-size: 10.5px;
   white-space: nowrap;
@@ -40902,8 +41130,13 @@ body.split-frame-guard webview {
   color: var(--success);
 }
 .squad-flow-subagents {
-  display: inline-flex;
-  align-items: center;
+  /* block, not inline-flex: text-overflow only ellipsizes a block's own text. */
+  display: block;
+  flex: 0 2 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10.5px;
   color: var(--text-muted);
   background: var(--bg-hover);
@@ -40925,8 +41158,10 @@ body.split-frame-guard webview {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 16px;
   font-size: 11px;
   min-width: 0;
+  overflow: hidden;
 }
 .squad-flow-child-type {
   flex: 0 0 auto;
@@ -40940,12 +41175,15 @@ body.split-frame-guard webview {
   border-radius: 4px;
 }
 .squad-flow-child-desc {
+  min-width: 0;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .squad-flow-child-more {
+  height: 16px;
+  line-height: 16px;
   font-size: 10.5px;
   color: var(--text-dim);
   padding-left: 15px;

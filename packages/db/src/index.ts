@@ -42,6 +42,12 @@ export {
 export {
   getHost,
   listHosts,
+  listAllHosts,
+  listExecutionHosts,
+  listPluginLinkHosts,
+  addHostLinkUse,
+  removeHostLinkUse,
+  HOST_LINK_USES_MAX,
   getPrimaryHost,
   upsertHost,
   markHostSeen,
@@ -53,7 +59,10 @@ export {
   markHostProtocolRejected,
   destroyHost,
   type HostRow,
-  type HostPermissionMode
+  type HostPermissionMode,
+  type HostPurpose,
+  type HostPurposeKind,
+  type HostLinkUse
 } from './data/hosts.js';
 export {
   getActiveSessionForHost,
@@ -110,6 +119,7 @@ export {
   applyConversationThreadLifecycleEventOnRow,
   updateConversationThreadParent,
   updateConversationThreadTitle,
+  conversationThreadTitleIsPlaceholder,
   setConversationProviderThreadId,
   archiveConversationThread,
   unarchiveConversationThread,
@@ -120,9 +130,11 @@ export {
   type ConversationThreadRow,
   type ConversationThreadListQuery,
   type ConversationThreadStatus,
+  type ConversationThreadTitleSource,
   type ApplyConversationThreadLifecycleEventOutcome,
   type ApplyConversationThreadLifecycleEventArgs
 } from './data/conversation-threads.js';
+export { relocateConversationThread } from './data/conversation-threads.js';
 export {
   appendThreadEvent,
   listThreadEvents,

@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react';
+import { MoreHorizontal } from 'lucide-react';
 import { ThreadProcessBadge } from '../ThreadProcessBadge.js';
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 import { profileIcon } from '../../lib/profileIcon.js';
@@ -16,6 +17,8 @@ import {
 } from '../fleet-item.js';
 import type { ThreadListItem } from '../../thread-store.js';
 import { AgentRowDetail } from './AgentRowDetail.js';
+import { isModernSquadThread } from '../../lib/squad-transport.js';
+import { sessionRailTitle } from '../../lib/sessionRailTitle.js';
 
 export function ProjectAgentRailRow({
   session,
@@ -39,7 +42,7 @@ export function ProjectAgentRailRow({
   onOpen: () => void;
   onContextMenu: (e: MouseEvent) => void;
 }) {
-  const title = session.cohort?.executionJobTitle?.trim() || session.title;
+  const title = sessionRailTitle(session);
   const { onPointerDown, openInSplit, consumeClick } = usePaneContentSplitDrag({
     content: { kind: 'agent-session', projectId: routeProjectId, sessionId: session.id },
     title
@@ -108,6 +111,7 @@ export function ProjectThreadRailRow({
 }) {
   const title = threadTitle(thread);
   const status = threadRailStatus(thread);
+  const modernSquad = isModernSquadThread(thread);
   const { onPointerDown, openInSplit, consumeClick } = useThreadRowSplitDrag({
     projectId: routeProjectId,
     threadId: thread.id,
@@ -122,8 +126,9 @@ export function ProjectThreadRailRow({
     <div role="listitem" className="project-thread-row-wrap">
       <button
         type="button"
-        className={`project-terminal-row is-thread${active ? ' active' : ''}`}
+        className={`project-terminal-row is-thread${active ? ' active' : ''}${modernSquad ? ' is-modern' : ''}`}
         data-kind="thread"
+        data-squad-transport={modernSquad ? 'MODERN' : undefined}
         data-testid="project-thread-row"
         onPointerDown={(e) => {
           e.stopPropagation();
@@ -165,6 +170,10 @@ export function ProjectThreadRailRow({
         ) : null}
       </button>
       <ThreadArchiveQuickAction thread={thread} />
+      <button type="button" className="project-terminal-more" aria-label={`Actions for ${title}`}
+        onPointerDown={event => event.stopPropagation()} onClick={onContextMenu}>
+        <MoreHorizontal size={13} aria-hidden="true" />
+      </button>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { normalizePortableAttachments } from '../services/projects/portable-atta
 import { withoutSecretValues } from '../plugins/plugin-settings-redaction.js';
 import { handlePreviewsApi } from './previews-api.js';
 import { libraryDocumentOperation } from '../services/library/library-documents.js';
+import { classifyExpectedRpcError } from '@zana-ai/zcc-contracts/rpc-error';
 import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
 import { recoverFailedTerminalStart } from './terminal-start-recovery.js';
 import { registerProductTerminal } from './terminal-retention.js';
@@ -10,6 +11,9 @@ import { readProjectImage, ProjectFsError } from './project-fs-via-host.js';
 import { projectGit } from './project-git.js';
 import { usesConnect } from '../services/hosts/connect-enrollment.js';
 import { handleSharedProductApi } from './shared-product-api.js';
+import { handleScopedLinkApi } from '../services/peers/scoped-link-api.js';
+import { handlePeerControlApi } from '../services/peers/peer-control-api.js';
+import { handlePeerInstallerApi } from '../services/peers/peer-installer-api.js';
 import { projectSources } from '@zana-ai/zcc-domain/project';
 import { projectConfigCompatibility } from '@zana-ai/zcc-domain/harness-config-compatibility';
 import { getPrimaryHost, countConversationThreadsForQuit } from '@zana-ai/zcc-db';
@@ -23,6 +27,7 @@ import { productServerHasDesktopCredential } from './cli-agent-ops.js';
 import { setProductConfig } from './product-config.js';
 import { assertPlanRevision, planImplementationMode, planImplementationPrompt } from '../services/threads/conversation-plan-implementation.js';
 import { readPluginHttpBody, PluginHttpBodyTooLarge } from './plugin-http-body.js';
+import { handlePeerApi } from './peer-api.js';
 import { conversationHistoryAsync } from '../services/threads/conversation-history.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, sep, posix } from 'node:path';
@@ -75,6 +80,8 @@ import {
   type ThreadSendMode
 } from '../services/threads/conversation-lifecycle.js';
 import { compactConversation } from '../services/threads/conversation-compact.js';
+import { moveConversationToProject } from '../services/threads/conversation-move.js';
+import { moveThreadRequestSchema } from '@zana-ai/zcc-server-contract';
 import { stopConversationBackgroundTasks } from '../services/threads/conversation-background-stop.js';
 import { closeConversationWithFollowup } from '../services/threads/thread-close-followup.js';
 import { conversationPromptHistory, pagedConversationPromptHistory } from '../services/threads/conversation-prompt-history.js';
@@ -146,15 +153,17 @@ import { provisionProjectEnvironment } from '../services/threads/spawn-environme
 import { isZccManagedWorkspacePath } from '../services/threads/worktree-paths.js';
 import { VALID_PROFILES } from '@zana-ai/zcc-domain/launch-provider';
 import { jsonValueSchema, pendingInteractionResolutionSchema, reasoningLevelSchema, validatePluginMetadata, type ReasoningLevel } from '@zana-ai/zcc-domain/thread-runtime';
-import { systemInstallCliSkillsRequestSchema, threadOpenRequestSchema, editMessageRequestSchema, hostFileWriteRequestSchema, hostMkdirRequestSchema, hostMovePathRequestSchema, hostRemovePathRequestSchema, hostFileReadRequestSchema, hostFileListRequestSchema, hostPathListRequestSchema, threadPluginMetadataQuerySchema, updateThreadPluginMetadataRequestSchema, stopBackgroundTasksRequestSchema } from '@zana-ai/zcc-server-contract';
+import { systemInstallCliSkillsRequestSchema, threadOpenRequestSchema, editMessageRequestSchema, hostFileWriteRequestSchema, hostMkdirRequestSchema, hostMovePathRequestSchema, hostRemovePathRequestSchema, hostFileReadRequestSchema, hostFileListRequestSchema, hostPathListRequestSchema, threadPluginMetadataQuerySchema, updateThreadPluginMetadataRequestSchema, stopBackgroundTasksRequestSchema, threadConversationOutlineQuerySchema, THREAD_CONVERSATION_SEARCH_QUERY_MAX } from '@zana-ai/zcc-server-contract';
 import { normalizeRepoUrl } from '../services/projects/git-clone.js';
 import { harnessAgentDescriptors, harnessDescriptors, harnessEffectiveDefault, harnessVerify, harnessVerifyBundle } from './harness-via-rpc.js';
 import { mergeHealthIntoExtraInstalled, probeInstalledProviderHealth } from '../services/threads/provider-health-probe.js';
 import { isSafeRelPath, listLibraryDocs, listQuickPrompts, readLibraryDoc } from './library-via-host.js';
 import { listProjectDir, listProjectPaths, readProjectFile, parseProjectFileScope } from './project-fs-via-host.js';
 import { listHostFiles, listHostPaths, mkdirHostPath, moveHostPath, readHostFile, removeHostPath, writeHostFile } from './files-via-host.js';
-import { getConversationThread, getEnvironment, getHost, getConversationThreadEventAfter, listConversationThreadEventsWindow, ConversationHistoryReadLimitError, listConversationThreadsByProject, listHosts, listVisibleConversationThreads, nextConversationEventSequence, pinConversationThread, reorderPinnedConversationThread, unpinConversationThread, updateConversationThreadTitle } from '@zana-ai/zcc-db';
+import { getConversationThread, getEnvironment, getHost, getConversationThreadEventAfter, listConversationThreadEventsWindow, ConversationHistoryReadLimitError, listConversationThreadsByProject, listExecutionHosts, listVisibleConversationThreads, nextConversationEventSequence, pinConversationThread, reorderPinnedConversationThread, unpinConversationThread, updateConversationThreadTitle } from '@zana-ai/zcc-db';
 import { handleHostsApi } from './hosts-api.js';
+import { handlePeerConnectionsApi } from './peer-connections-api.js';
+import { handlePeerUsesApi } from './peer-uses-api.js';
 import { handleDesktopBrowsersApi } from './desktop-browsers-api.js';
 import { handleCliAgentsApi } from './cli-agents-api.js';
 import { isThreadLiveInProject } from '../services/agents/thread-liveness.js';
@@ -274,6 +283,12 @@ async function handlePluginAppRpc(
   try {
     sendJson(response, 200, { value: await ctx.plugins.callRpc(id, body.method, body.args) });
   } catch (error) {
+    // Expected domain errors map to their own 4xx and carry `code`; the rest keep the legacy mapping.
+    const expected = classifyExpectedRpcError(error);
+    if (expected) {
+      sendJson(response, expected.status, { error: expected.message, code: expected.code });
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     sendJson(response, pluginAppErrorStatus(message), { error: message });
   }
@@ -388,7 +403,7 @@ async function resolveExecutionOptionsScope(args: {
       project,
       remoteToolProxy: false,
       remoteDefaultPath: ctx.config.getConfig().remoteDefaultPath,
-      hosts: listHosts(ctx.db).map(toRemoteStartPathHost),
+      hosts: listExecutionHosts(ctx.db).map(toRemoteStartPathHost),
       probeHostHome: async () => {
         const listing = await ctx.hostHub.callHostOnlineRpc<{ directory: string }>({
           hostId,
@@ -465,6 +480,7 @@ export async function handleProductHttp(
   response: ServerResponse,
   ctx: ProductHttpContext
 ): Promise<boolean> {
+  if (await handlePeerControlApi(request, response, ctx)) return true;
   const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (!requestUrl.pathname.startsWith('/api/')) return false;
 
@@ -510,6 +526,9 @@ export async function handleProductHttp(
 
   try {
     if (await handlePreviewsApi(request, response, ctx, path, method)) return true;
+    if (await handleScopedLinkApi(request, response, ctx, path, method)) return true;
+    if (await handlePeerInstallerApi(request, response, ctx, path, method)) return true;
+    if (await handlePeerApi(request, response, ctx, path, method)) return true;
     if (path === '/api/v1/file-preview/video' && (method === 'GET' || method === 'HEAD')) {
       try {
         await sendVideoPreview(request, response, ctx, requestUrl.searchParams);
@@ -532,6 +551,14 @@ export async function handleProductHttp(
     }
     if (path === '/api/v1/health' && (method === 'GET' || method === 'HEAD')) {
       sendJson(response, 200, { ok: true });
+      return true;
+    }
+
+    if (await handlePeerConnectionsApi(request, response, ctx, path, method)) {
+      return true;
+    }
+
+    if (await handlePeerUsesApi(request, response, ctx, path, method)) {
       return true;
     }
 
@@ -1520,8 +1547,18 @@ export async function handleProductHttp(
 
     const threadOutline = routeParams(path, '/api/v1/threads/:id/conversation-outline');
     if (threadOutline && method === 'GET') {
+      const parsed = threadConversationOutlineQuerySchema.safeParse({
+        q: requestUrl.searchParams.get('q') ?? undefined
+      });
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: 'invalid-input',
+          message: `q must be at most ${THREAD_CONVERSATION_SEARCH_QUERY_MAX} characters`
+        });
+        return true;
+      }
       try {
-        sendJson(response, 200, conversationOutline(ctx, threadOutline.id));
+        sendJson(response, 200, conversationOutline(ctx, threadOutline.id, parsed.data.q));
       } catch (error) {
         if (error instanceof ThreadCreateError) {
           sendJson(response, error.status, { error: error.code, message: error.message });
@@ -1730,6 +1767,22 @@ export async function handleProductHttp(
     const threadInput = routeParams(path, '/api/v1/threads/:id/input');
     if (threadInput && method === 'POST') {
       sendJson(response, 410, { error: 'gone', message: 'PTY input is not a Thread API; use POST /threads/:id/send' });
+      return true;
+    }
+
+    const threadMove = routeParams(path, '/api/v1/threads/:id/move');
+    if (threadMove && method === 'POST') {
+      const parsed = moveThreadRequestSchema.safeParse(await readJsonBody(request));
+      if (!parsed.success) {
+        sendJson(response, 400, { error: 'invalid-request', message: 'A destination and expected source project are required.' });
+        return true;
+      }
+      try {
+        const moved = await moveConversationToProject(ctx, threadMove.id, parsed.data);
+        sendJson(response, 200, { thread: conversationThreadView(ctx, moved) });
+      } catch (error) {
+        sendHostFailure(response, error);
+      }
       return true;
     }
 
@@ -3017,6 +3070,12 @@ export async function handleProductHttp(
         return true;
       }
       sendJson(response, 200, { updates: await ctx.plugins.checkUpdates() });
+      return true;
+    }
+
+    if (path === '/api/v1/plugin-apps/update-all' && method === 'POST') {
+      if (!ctx.plugins) { sendJson(response, 503, { error: 'plugin host is unavailable' }); return true; }
+      sendJson(response, 200, { ok: true, value: await ctx.plugins.applyAllUpdates() });
       return true;
     }
 

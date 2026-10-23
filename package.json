@@ -1,7 +1,7 @@
 {
   "name": "zana-command-center",
   "productName": "Zana",
-  "version": "2.3.6",
+  "version": "2.4.0",
   "private": true,
   "description": "Zana Command Center — multi-project terminal hub for Claude Code sessions",
   "author": "grebmann",
@@ -20,6 +20,9 @@
     "predev": "node scripts/prepare-dev.mjs",
     "dev": "node scripts/dev-local.mjs",
     "dev:prod": "node scripts/dev-local.mjs --packaged",
+    "dev:open-link": "node scripts/dev-open-link.mjs",
+    "dev:register-link": "node scripts/dev-register-link.mjs",
+    "dev:unregister-link": "node scripts/dev-register-link.mjs --unregister",
     "dev:web": "ZCC_SKIP_DESKTOP=1 node scripts/dev-local.mjs",
     "start": "node scripts/start-packaged.mjs",
     "seed:extensions": "node scripts/seed-extensions.mjs",
@@ -70,7 +73,7 @@
     "mobile:test": "vitest run packages/mobile-bridge/test apps/mobile/src apps/server/src/mobile apps/app/src/lib/native-shell.test.ts apps/app/src/components/MobileShellChrome.test.tsx apps/app/src/components/composer/ThreadComposerToolbar.test.tsx apps/app/src/components/thread/ThreadTimeline.scroll.test.tsx apps/app/src/components/thread/timeline/thread-message-sent.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "better-sqlite3": "^12.11.1",
     "croner": "^10.0.1",
     "electron-updater": "^6.8.9",

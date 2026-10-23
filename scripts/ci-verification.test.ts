@@ -41,9 +41,18 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
     'apps/server/src/services/execution/store.ts',
     'apps/server/src/services/execution/projection.ts',
     'apps/desktop/src/squad-worktree-runtime.ts',
-    'apps/desktop/src/squad-session-lifecycle.ts'
+    'apps/desktop/src/squad-session-lifecycle.ts',
+    'apps/server/src/services/execution/execution-mcp-tool.ts',
+    'apps/desktop/src/squad-proposals/notifier.ts'
   ]) {
+    expect(boundarySpecs([path])).toEqual(expect.arrayContaining([
+      'e2e/squad-proposal-flow.spec.ts', 'e2e/squad-direct-report.spec.ts', 'e2e/job-team-launch-ui.spec.ts'
+    ]));
+  }
+  // The shared source policy selects the proposal and launch specs, not the owner report-back one.
+  for (const path of ['apps/server/src/services/execution/source-policy.ts', 'apps/server/src/services/execution/source-registry.ts']) {
     expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/squad-proposal-flow.spec.ts', 'e2e/job-team-launch-ui.spec.ts']));
+    expect(boundarySpecs([path])).not.toContain('e2e/squad-direct-report.spec.ts');
   }
   for (const path of [
     'apps/host-daemon/src/harness/claude/hooks.ts',
@@ -65,6 +74,30 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
   ]) {
     expect(boundarySpecs([path])).not.toContain('e2e/squad-proposal-flow.spec.ts');
   }
+});
+
+it('selects the close-with-follow-up spec for the close summary seams', () => {
+  for (const path of [
+    'apps/server/src/services/followups/close-summary.ts',
+    'apps/app/src/lib/close-idle-agents.ts',
+    'packages/llm/src/claude-cli-provider.ts',
+    'apps/desktop/src/main-claude-binary.ts'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/close-with-follow-up-needs-you.spec.ts');
+  }
+  expect(boundarySpecs(['apps/server/src/services/followups/other-service.ts'])).not.toContain('e2e/close-with-follow-up-needs-you.spec.ts');
+});
+
+it('selects squad-direct-report for the owner report-back seams', () => {
+  for (const path of [
+    'apps/server/src/services/execution/service.ts',
+    'apps/server/src/services/mcp/mcp-server.ts',
+    'apps/desktop/src/squad-proposals/notifier.ts',
+    'apps/desktop/src/squad-proposals/report.ts'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/squad-direct-report.spec.ts');
+  }
+  expect(boundarySpecs(['apps/server/src/services/execution/service-helpers.ts'])).not.toContain('e2e/squad-direct-report.spec.ts');
 });
 
 it('selects the Squad source retry spec for the picker, registry and composer seams', () => {
@@ -184,6 +217,16 @@ it('runs the private production app suite only for affected paths and fails miss
   expect(runVerification(['--coverage', 'coverage.json'], {}, io)).toBe(0);
 });
 
+it('forwards a CI shard to the production app suite and rejects a malformed one', () => {
+  const io = { execute: vi.fn().mockReturnValue('+++ b/apps/app/src/App.tsx\n@@ -1 +1 @@'), read: vi.fn(), log: vi.fn(), error: vi.fn() };
+  expect(runVerification([], { CI_E2E_SHARD: '2/3' }, io)).toBe(0);
+  expect(io.execute.mock.calls[1][1]).toEqual(expect.arrayContaining(['e2e/smoke.spec.ts', '--shard=2/3', '--pass-with-no-tests']));
+  io.execute.mockClear();
+  expect(runVerification([], { CI_E2E_SHARD: '0/3' }, io)).toBe(1);
+  expect(io.error).toHaveBeenCalledWith('Invalid CI_E2E_SHARD: 0/3');
+  expect(io.execute).toHaveBeenCalledOnce();
+});
+
 it('allows type-only files while rejecting uncovered runtime TypeScript', () => {
   const root = mkdtempSync(join(tmpdir(), 'zcc-ci-coverage-'));
   const folder = join(root, 'packages/demo/src'); mkdirSync(folder, { recursive: true });
@@ -271,7 +314,7 @@ it('includes the Squad proposal flow in the job-team E2E runner', async () => {
   try {
     await import('./run-jobteam-e2e.mjs');
     expect(main).toHaveBeenCalledOnce();
-    expect(main.mock.calls[0]![0]).toEqual(expect.arrayContaining(['--build', 'e2e/squad-proposal-flow.spec.ts']));
+    expect(main.mock.calls[0]![0]).toEqual(expect.arrayContaining(['--build', 'e2e/squad-proposal-flow.spec.ts', 'e2e/squad-direct-report.spec.ts']));
   } finally {
     process.exitCode = previousExitCode;
     vi.doUnmock('./run-electron-e2e.mjs');

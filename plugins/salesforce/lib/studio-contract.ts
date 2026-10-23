@@ -29,6 +29,7 @@ export interface TraceStep {
 }
 export interface TurnTrace { runId: string; turn: number; planId?: string; available: boolean; reason?: string; steps: TraceStep[] }
 export interface ScenarioCase {
+  contextVariables?: import('./preview-context.js').PreviewContextVariable[];
   id: string; name: string; utterances: string[]; expect: { topic?: string; actions?: string[]; contains?: string[]; criteria?: string };
   /** Set when the case was pinned from a Preview conversation. */
   pinned?: { runId: string; at: number };
@@ -42,21 +43,41 @@ export interface SuiteEval {
   /** Cases with more than one utterance; the spec runs their opening turn. */
   multiTurn: string[];
 }
-export interface ScenarioSuite { id: string; path: string; cases: ScenarioCase[]; lastResults?: Record<string, { outcome: CaseOutcome; runId: string; at: number }>; lastEval?: SuiteEval }
-/** One reference an agent makes (`apex://X`, `flow://Y`, a Lightning Type), as listed on its explorer node. */
-export interface ExplorerUse { kind: 'apex' | 'flow' | 'prompt' | 'lightning-type'; apiName: string }
-/** `usedBy` lists at most 20 agent paths per reference; `uses` (agent nodes only, scanned agents only) is the uncapped inverse. */
-export interface ExplorerNode { kind: 'agent' | 'apex' | 'flow' | 'prompt' | 'lightning-type' | 'scenario' | 'org-agent'; path?: string; apiName: string; usedBy?: string[]; uses?: ExplorerUse[]; badge?: { dirty?: boolean; problems?: number; status?: 'pass' | 'fail' } }
+/** What a Simulate run of one case saw. `traced` is false when no runtime trace was available, so topic/action checks could not run. */
+export interface CaseObserved { topics: string[]; actions: string[]; traced: boolean }
+/** A saved Simulate result. `notes`, `observed` and `reply` are the run's evidence, kept small so a Fail always says why. */
+export interface CaseResult { outcome: CaseOutcome; runId: string; at: number; notes?: string[]; observed?: CaseObserved; reply?: string; /** The AI judge's verdict on `criteria`, when it ran. */ judge?: CaseOutcome }
+/** Ephemeral progress, scoped to the project and suite; never persisted as a test result. */
+export interface SuiteProgress {
+  id: string; mode: 'simulate' | 'proposal' | 'org-eval'; startedAt: number;
+  caseIds: string[]; completed: number; currentCaseId?: string;
+  stage: 'starting' | 'conversation' | 'trace' | 'judging' | 'saving' | 'org-eval';
+  turn?: number; totalTurns?: number; results: Record<string, CaseResult>;
+}
+export interface ScenarioSuite { id: string; path: string; cases: ScenarioCase[]; lastResults?: Record<string, CaseResult>; lastEval?: SuiteEval; progress?: SuiteProgress }
+/** One reference an agent makes (`apex://X`, `flow://Y`, a Lightning Type, or an LWC one of its types renders with), as listed on its explorer node. */
+export interface ExplorerUse { kind: 'apex' | 'flow' | 'prompt' | 'lightning-type' | 'lwc'; apiName: string }
+/**
+ * `usedBy` lists at most 20 agent paths per reference; `uses` (agent nodes only, scanned agents only) is the uncapped inverse.
+ * `via` (LWC nodes only) names the Lightning Types whose renderer or editor uses the component.
+ */
+export interface ExplorerNode { kind: 'agent' | 'apex' | 'flow' | 'prompt' | 'lightning-type' | 'lwc' | 'scenario' | 'org-agent'; path?: string; apiName: string; usedBy?: string[]; via?: string[]; uses?: ExplorerUse[]; badge?: { dirty?: boolean; problems?: number; status?: 'pass' | 'fail' } }
 export interface LightningTypeProperty { name: string; type?: string; title?: string; description?: string; required: boolean }
 /** One Lightning Type as `studio.lightningType` returns it: a project bundle, a standard platform type, or a missing reference. */
 export interface LightningTypeView {
   ref: string; standard: boolean; status: 'ready' | 'standard' | 'missing'; path?: string; title?: string; description?: string; message?: string;
   properties: LightningTypeProperty[]; files: Array<{ path: string; content: string; truncated?: boolean }>;
+  /** The LWCs the bundle's channel renderer.json / editor.json override with; `path` is set when the component is in this project. */
+  components: LightningTypeComponent[];
 }
+/** `ref` is the `definition` as written (`c/offerCard`); `target` is the overridden property, `$` for the whole type. */
+export interface LightningTypeComponent { ref: string; namespace: string; name: string; role: 'renderer' | 'editor'; channel: string; target: string; path?: string }
+/** One LWC bundle as `studio.lwc` returns it: its source files, or why it is not in the project. */
+export interface LwcBundleView { ref: string; name: string; status: 'ready' | 'missing'; path?: string; message?: string; files: Array<{ path: string; content: string; truncated?: boolean }> }
 
 export const STUDIO_RPC = {
   askAgent: 'studio.askAgent', draftAgent: 'studio.draftAgent', threads: 'studio.threads', unlink: 'studio.unlinkThread',
-  viewPublish: 'studio.view.publish', viewGet: 'studio.view.get', explorer: 'studio.explorer', lightningType: 'studio.lightningType',
+  viewPublish: 'studio.view.publish', viewGet: 'studio.view.get', explorer: 'studio.explorer', lightningType: 'studio.lightningType', lwc: 'studio.lwc',
   comments: 'studio.comments.list', commentAdd: 'studio.comments.add', commentResolve: 'studio.comments.resolve',
   commentUpdate: 'studio.comments.update', commentDelete: 'studio.comments.delete',
   trace: 'agentLab.trace', suites: 'studio.suites.list', suiteSave: 'studio.suites.save', suiteRun: 'studio.suites.run',
@@ -65,7 +86,7 @@ export const STUDIO_RPC = {
   outcome: 'control.outcome',
 } as const;
 export const UI_WAKE_CHANNEL = 'sf.ui.wake'; // payload {viewId} only - never command data
-export const STUDIO_CHANGED_CHANNEL = 'sf.studio.changed'; // {projectId, path?, kind:'threads'|'comments'|'suites'|'loop'}
+export const STUDIO_CHANGED_CHANNEL = 'sf.studio.changed'; // {projectId, path?, kind:'threads'|'comments'|'suites'|'suite-progress'|'loop'}
 export const CONTEXT_CHANGED_CHANNEL = 'context.changed'; // {projectId, changeId, origin?} - origin names the window that made the change
 
 /** The `origin` a window tags its context RPCs with, or null when absent or malformed. */

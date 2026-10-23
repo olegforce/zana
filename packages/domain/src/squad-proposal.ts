@@ -9,6 +9,25 @@ import type { Persona } from './product.js';
 /** How the Squad's plan is produced: the orchestrator infers it, or the goal/sources provide it. */
 export type SquadPlanning = 'infer' | 'provided';
 
+/** Whether an agent-started Squad run needs the user's Launch first (`review`) or may start straight away (`direct`). */
+export type LaunchApproval = 'review' | 'direct';
+
+export function isLaunchApproval(value: unknown): value is LaunchApproval {
+  return value === 'review' || value === 'direct';
+}
+
+/**
+ * The launch-approval policy for a Squad run. `review` is a floor: if either the
+ * Squad or its Project asks for review, the run needs review. A Squad cannot lift
+ * its Project's review requirement, because Squad files under the project's
+ * `.zcc/teams` are writable by agents working in that checkout.
+ */
+export function resolveLaunchApproval(
+  { squad, project }: { squad?: { launchApproval?: LaunchApproval } | null; project?: { launchApproval?: LaunchApproval } | null }
+): LaunchApproval {
+  return squad?.launchApproval === 'review' || project?.launchApproval === 'review' ? 'review' : 'direct';
+}
+
 export const SQUAD_PROPOSAL_LIMITS = {
   goalChars: 2048,
   titleChars: 256,
@@ -25,7 +44,7 @@ export const SQUAD_PROPOSAL_LIMITS = {
 
 export type SquadProposalErrorCode =
   | 'DISABLED' | 'NOT_LIVE' | 'INVALID' | 'TEAM_NOT_FOUND'
-  | 'NO_ORCHESTRATOR' | 'HOST_UNSUPPORTED' | 'SOURCE_OUTSIDE_PROJECT' | 'SOURCE_NOT_FILE'
+  | 'NO_ORCHESTRATOR' | 'HOST_UNSUPPORTED' | 'SOURCE_NOT_ALLOWED' | 'SOURCE_NOT_FILE'
   | 'SOURCE_TOO_LARGE' | 'TOO_MANY_SOURCES' | 'INVALID_PLAN' | 'ORCHESTRATOR_CANNOT_PLAN'
   | 'PROPOSER_IN_SQUAD' | 'TOO_MANY_PROPOSALS' | 'NOT_FOUND' | 'EXPIRED' | 'NOT_PENDING'
   | 'SOURCE_UNREADABLE';
@@ -48,8 +67,11 @@ export interface SquadProposer {
 export interface SquadProposalSource {
   /** Realpath of the source file. */
   path: string;
+  /** Path inside the project, or the `~`-abbreviated absolute path of a file outside it. */
   relPath: string;
   bytes: number;
+  /** The file is outside the project (under HOME or the clone root); absent for files inside it. */
+  outsideProject?: boolean;
 }
 
 export interface SquadPlanStep {
@@ -95,7 +117,8 @@ export const squadProposalRecordSchema = z.object({
   sources: z.array(z.object({
     path: z.string().min(1),
     relPath: z.string().min(1),
-    bytes: z.number().int().nonnegative()
+    bytes: z.number().int().nonnegative(),
+    outsideProject: z.boolean().optional()
   })),
   title: z.string().optional(),
   summary: z.string().optional(),
@@ -121,9 +144,29 @@ export interface SquadProposalResult {
   team: { id: string; name: string; workers: number; orchestrator: string };
   planning: SquadPlanning;
   plan: { steps: Array<{ id: string; title: string }> } | null;
-  sources: Array<{ path: string; bytes: number }>;
+  sources: Array<{ path: string; bytes: number; outsideProject?: boolean }>;
   expiresAt: number;
 }
+
+/** What a Squad started straight away by an agent (no Inbox card) looks like to that agent. */
+export interface SquadLaunchNowResult {
+  executionId: string;
+  state: string;
+  /** True when an identical recent launch from the same conversation was returned instead of starting another. */
+  deduped?: true;
+  team: SquadProposalResult['team'];
+  planning: SquadPlanning;
+  plan: SquadProposalResult['plan'];
+  sources: SquadProposalResult['sources'];
+}
+
+/** Refusals a Squad start without review adds to the proposal ones. */
+export type SquadLaunchNowErrorCode =
+  | SquadProposalErrorCode | 'LAUNCH_REVIEW_REQUIRED' | 'LAUNCH_APPROVAL_UNAVAILABLE'
+  | 'LAUNCH_IN_PROGRESS' | 'TOO_MANY_LAUNCHES';
+
+export const LAUNCH_REVIEW_REQUIRED_MESSAGE =
+  "This Squad requires review before launch. Use squad_launch with mode 'review' so the user can Launch it from the Inbox.";
 
 export type SquadPlanCheckResult =
   | { ok: true; steps: SquadPlanStep[] }
@@ -138,7 +181,8 @@ export interface SquadLaunchPrefill {
   goal: string;
   title?: string;
   summary?: string;
-  sources: Array<{ id: string; name: string; byteSize: number; expiresAt: number }>;
+  /** `path` and `outsideProject` are set for a file outside the project, so the composer can show where it is. */
+  sources: Array<{ id: string; name: string; byteSize: number; expiresAt: number; path?: string; outsideProject?: boolean }>;
   proposerTitle?: string;
   planStepCount?: number;
 }

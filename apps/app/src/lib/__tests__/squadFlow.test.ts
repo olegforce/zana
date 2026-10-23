@@ -139,6 +139,37 @@ describe('buildSquadFlow — node membership', () => {
     expect(buildSquadFlow(inputs({ threadParticipants: [participant], launchFilter: SOLO_LAUNCH_ID }))!.nodes)
       .toEqual([expect.objectContaining({ sessionId: 'thread:modern' })]);
   });
+
+  it('groups cohort-stamped Modern squad members into their squad like CLI members', () => {
+    const cohort = (role: 'orchestrator' | 'worker', slotId: string, slotLabel: string) => ({
+      cohortId: 'e-m', executionId: 'e-m', teamId: 'modern', teamName: 'Modern squad',
+      executionJobTitle: 'Modern job', role, slotId, slotLabel
+    });
+    const execution = {
+      executionId: 'e-m', projectId: 'p1', teamId: 'modern', jobTitle: 'Modern job', state: 'RUNNING', attempt: 1, createdAt: 1, updatedAt: 2,
+      work: { total: 1, completed: 0, counts: {}, rosterSlotIds: ['writer'], assignments: [
+        { workUnitId: 'u1', title: 'Write', dependencies: [], slotId: 'writer', state: 'CLAIMED' }
+      ] }
+    } as unknown as ExecutionBoardProjection;
+    const threadParticipants = [
+      { id: 't-lead', label: 'Lead thread', state: 'working' as const, createdAt: 1, cohort: cohort('orchestrator', 'orchestrator', 'Orchestrator') },
+      { id: 't-work', label: 'Writer thread', state: 'idle' as const, createdAt: 2, cohort: cohort('worker', 'writer', 'Writer') },
+      { id: 't-old', label: 'Old thread', state: 'done' as const, createdAt: 2, cohort: cohort('worker', 'reviewer', 'Reviewer'), exited: true },
+      { id: 't-solo', label: 'Solo', state: 'idle' as const, createdAt: 3 }
+    ];
+    const g = buildSquadFlow(inputs({ threadParticipants, executions: [execution], launchFilter: 'e-m' }))!;
+    const nodes = nodeMap(g);
+    // A live member covers its CLAIMED slot, so no detached node is synthesized.
+    expect([...nodes.keys()].sort()).toEqual(['thread:t-lead', 'thread:t-old', 'thread:t-work']);
+    expect(nodes.get('thread:t-lead')).toMatchObject({
+      label: 'Orchestrator', role: 'orchestrator', isOrchestrator: true, state: 'working',
+      inspectionTarget: { type: 'thread', id: 't-lead' }, job: { executionId: 'e-m' }
+    });
+    expect(nodes.get('thread:t-work')).toMatchObject({ label: 'Writer', isOrchestrator: false, exited: false, job: { executionId: 'e-m' } });
+    expect(nodes.get('thread:t-old')).toMatchObject({ label: 'Reviewer', exited: true });
+    expect(g).toMatchObject({ teamName: 'Modern squad', executionId: 'e-m', executionJobTitle: 'Modern job' });
+    expect(buildSquadFlow(inputs({ threadParticipants, launchFilter: SOLO_LAUNCH_ID }))!.nodes.map((n) => n.sessionId)).toEqual(['thread:t-solo']);
+  });
 });
 
 // ---- identity & fused fields ------------------------------------------------
@@ -358,7 +389,7 @@ describe('buildSquadFlow — handoff edges', () => {
       agents: [
         agent({ sessionId: 'a', handle: 'a', registeredAt: 200 }),
         agent({ sessionId: 'b', handle: 'b', registeredAt: 300 }),
-        agent({ sessionId: 'c', handle: 'c', registeredAt: 100 })
+        agent({ sessionId: 'c', handle: 'c', registeredAt: 100, teamLaunchId: 'launch-1' })
       ],
       sessions: [
         session({ id: 'a', cohort: { cohortId: 'launch-1', role: 'worker', executionId: execution.executionId, slotId: 'slot-a' } }),
@@ -571,13 +602,13 @@ describe('buildSquadFlow — detached CLAIMED workers', () => {
 // ---- orchestrator detection -------------------------------------------------
 
 describe('buildSquadFlow — orchestrator', () => {
-  it('marks the highest out-degree node as orchestrator', () => {
+  it('marks the highest out-degree team node as orchestrator', () => {
     const g = buildSquadFlow(
       inputs({
         agents: [
-          agent({ sessionId: 'a', handle: 'a' }),
-          agent({ sessionId: 'b', handle: 'b' }),
-          agent({ sessionId: 'c', handle: 'c' })
+          agent({ sessionId: 'a', handle: 'a', teamLaunchId: 'L1' }),
+          agent({ sessionId: 'b', handle: 'b', teamLaunchId: 'L1' }),
+          agent({ sessionId: 'c', handle: 'c', teamLaunchId: 'L1' })
         ],
         messages: [
           message({ id: 'm1', fromSessionId: 'a', toSessionId: 'b' }),
@@ -591,12 +622,12 @@ describe('buildSquadFlow — orchestrator', () => {
     expect(m.get('c')!.isOrchestrator).toBe(false);
   });
 
-  it('breaks ties (no handoffs yet) by earliest registeredAt', () => {
+  it('breaks team ties (no handoffs yet) by earliest registeredAt', () => {
     const g = buildSquadFlow(
       inputs({
         agents: [
-          agent({ sessionId: 'late', handle: 'late', registeredAt: 200 }),
-          agent({ sessionId: 'early', handle: 'early', registeredAt: 100 })
+          agent({ sessionId: 'late', handle: 'late', registeredAt: 200, teamLaunchId: 'L1' }),
+          agent({ sessionId: 'early', handle: 'early', registeredAt: 100, teamLaunchId: 'L1' })
         ]
       })
     );
@@ -605,16 +636,139 @@ describe('buildSquadFlow — orchestrator', () => {
     expect(m.get('late')!.isOrchestrator).toBe(false);
   });
 
-  it('marks exactly one orchestrator', () => {
+  it('marks exactly one orchestrator in a team', () => {
     const g = buildSquadFlow(
       inputs({
         agents: [
-          agent({ sessionId: 'a', handle: 'a', registeredAt: 1 }),
-          agent({ sessionId: 'b', handle: 'b', registeredAt: 2 })
+          agent({ sessionId: 'a', handle: 'a', registeredAt: 1, teamLaunchId: 'L1' }),
+          agent({ sessionId: 'b', handle: 'b', registeredAt: 2, teamLaunchId: 'L1' })
         ]
       })
     );
     expect(g!.nodes.filter((n) => n.isOrchestrator)).toHaveLength(1);
+  });
+
+  it('never elects an orchestrator in the SOLO bucket, even with handoffs', () => {
+    const g = buildSquadFlow(
+      inputs({
+        agents: [
+          agent({ sessionId: 'a', handle: 'a' }),
+          agent({ sessionId: 'b', handle: 'b' }),
+          agent({ sessionId: 'c', handle: 'c' })
+        ],
+        messages: [
+          message({ id: 'm1', fromSessionId: 'a', toSessionId: 'b' }),
+          message({ id: 'm2', fromSessionId: 'a', toSessionId: 'c' })
+        ],
+        launchFilter: SOLO_LAUNCH_ID
+      })
+    );
+    expect(g!.nodes.filter((n) => n.isOrchestrator)).toHaveLength(0);
+    expect(g!.edges).toHaveLength(2);
+  });
+
+  it('never elects an orchestrator in the SOLO bucket on a registeredAt tie-break', () => {
+    const g = buildSquadFlow(
+      inputs({
+        agents: [
+          agent({ sessionId: 'late', handle: 'late', registeredAt: 200 }),
+          agent({ sessionId: 'early', handle: 'early', registeredAt: 100 })
+        ],
+        launchFilter: SOLO_LAUNCH_ID
+      })
+    );
+    expect(g!.nodes.filter((n) => n.isOrchestrator)).toHaveLength(0);
+  });
+
+  it('elects a team node, never a solo node, in the merged graph', () => {
+    const g = buildSquadFlow(
+      inputs({
+        agents: [
+          agent({ sessionId: 'l1a', handle: 'l1a', teamLaunchId: 'L1', registeredAt: 200 }),
+          agent({ sessionId: 'l1b', handle: 'l1b', teamLaunchId: 'L1', registeredAt: 300 }),
+          agent({ sessionId: 'solo', handle: 'solo', registeredAt: 1 })
+        ],
+        messages: [
+          message({ id: 'm1', fromSessionId: 'solo', toSessionId: 'l1a' }),
+          message({ id: 'm2', fromSessionId: 'solo', toSessionId: 'l1b' }),
+          message({ id: 'm3', fromSessionId: 'l1a', toSessionId: 'l1b' })
+        ]
+      })
+    );
+    const m = nodeMap(g!);
+    expect(m.get('solo')!.isOrchestrator).toBe(false);
+    expect(m.get('l1a')!.isOrchestrator).toBe(true);
+    expect(g!.nodes.filter((n) => n.isOrchestrator)).toHaveLength(1);
+  });
+
+  it('elects no orchestrator in a merged graph of only solo agents', () => {
+    const g = buildSquadFlow(
+      inputs({
+        agents: [agent({ sessionId: 'a', handle: 'a' }), agent({ sessionId: 'b', handle: 'b' })],
+        sessions: [session({ id: 'unreg', title: 'ad-hoc' })],
+        messages: [message({ id: 'm1', fromSessionId: 'a', toSessionId: 'b' })]
+      })
+    );
+    expect(g!.nodes.filter((n) => n.isOrchestrator)).toHaveLength(0);
+  });
+
+  it('keeps an unregistered cohort session eligible in its team filter', () => {
+    const g = buildSquadFlow(
+      inputs({
+        sessions: [
+          session({ id: 'w1', cohort: { cohortId: 'run-1', role: 'worker' } }),
+          session({ id: 'w2', cohort: { cohortId: 'run-1', role: 'worker' } })
+        ],
+        messages: [message({ id: 'm1', fromSessionId: 'w2', toSessionId: 'w1' })],
+        launchFilter: 'run-1'
+      })
+    );
+    const m = nodeMap(g!);
+    expect(m.get('w2')!.isOrchestrator).toBe(true);
+    expect(m.get('w1')!.isOrchestrator).toBe(false);
+  });
+
+  it('pins an explicit cohort orchestrator role on a team node', () => {
+    const g = buildSquadFlow(
+      inputs({
+        sessions: [
+          session({ id: 'lead', cohort: { cohortId: 'run-1', role: 'orchestrator' } }),
+          session({ id: 'w', cohort: { cohortId: 'run-1', role: 'worker' } })
+        ],
+        messages: [message({ id: 'm1', fromSessionId: 'w', toSessionId: 'lead' })],
+        launchFilter: 'run-1'
+      })
+    );
+    const m = nodeMap(g!);
+    expect(m.get('lead')!.isOrchestrator).toBe(true);
+    expect(m.get('w')!.isOrchestrator).toBe(false);
+  });
+
+  it('pins an explicit registry orchestrator role on an agent with a teamLaunchId', () => {
+    const g = buildSquadFlow(
+      inputs({
+        agents: [
+          agent({ sessionId: 'lead', handle: 'lead', role: 'orchestrator', teamLaunchId: 'L1', registeredAt: 900 }),
+          agent({ sessionId: 'w', handle: 'w', teamLaunchId: 'L1', registeredAt: 1 })
+        ],
+        messages: [message({ id: 'm1', fromSessionId: 'w', toSessionId: 'lead' })]
+      })
+    );
+    const m = nodeMap(g!);
+    expect(m.get('lead')!.isOrchestrator).toBe(true);
+    expect(m.get('w')!.isOrchestrator).toBe(false);
+  });
+
+  it('does not pin a registry orchestrator role on a solo agent (SOLO and merged)', () => {
+    const agents = [
+      agent({ sessionId: 'self-lead', handle: 'self-lead', role: 'orchestrator' }),
+      agent({ sessionId: 'other', handle: 'other' })
+    ];
+    for (const launchFilter of [SOLO_LAUNCH_ID, undefined]) {
+      const n = nodeMap(buildSquadFlow(inputs({ agents, launchFilter }))!).get('self-lead')!;
+      expect(n.isOrchestrator).toBe(false);
+      expect(n.role).toBe('orchestrator');
+    }
   });
 });
 
@@ -727,6 +881,12 @@ describe('buildSquadFlow — launchFilter (one squad within a project)', () => {
     // The cross-squad message (l1a→l2a) is dropped: l1a isn't an L2 member.
     expect(g!.edges).toHaveLength(1);
     expect(g!.edges[0]).toMatchObject({ fromSessionId: 'l2a', toSessionId: 'l2b' });
+  });
+
+  it('marks only the SOLO-filtered graph as isSolo', () => {
+    expect(buildSquadFlow(inputs({ agents: twoSquads, launchFilter: SOLO_LAUNCH_ID }))!.isSolo).toBe(true);
+    expect(buildSquadFlow(inputs({ agents: twoSquads, launchFilter: 'L1' }))!.isSolo).toBeUndefined();
+    expect(buildSquadFlow(inputs({ agents: twoSquads }))!.isSolo).toBeUndefined();
   });
 
   it('rolls up the summary within the selected squad only', () => {

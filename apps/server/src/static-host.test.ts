@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -250,6 +250,27 @@ describe('startStaticHost', () => {
     product.db.close();
   });
 
+  it('routes main squad runtime operations to the signed handler, not the static 405', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-static-host-'));
+    writeFileSync(join(root, 'index.html'), '<main>zana</main>');
+    const { createProductHttpContext } = await import('./http/product-context.js');
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-static-product-'));
+    const product = createProductHttpContext({ dataDir, origins: { serverPort: 0 } });
+    host = await startStaticHost({ rootDir: root, product });
+    const url = `${host.url}internal/main/squad-runtime`;
+    const post = (headers: Record<string, string> = {}) => fetch(url, {
+      method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}'
+    }).then(async (response) => ({ status: response.status, body: await response.json() }));
+
+    await expect(fetch(url).then((response) => response.status)).resolves.toBe(405);
+    await expect(post({ origin: host.url.replace(/\/$/, '') })).resolves.toEqual({
+      status: 403, body: { error: 'squad runtime requires trusted local main' }
+    });
+    await expect(post()).resolves.toEqual({ status: 403, body: { error: 'squad runtime request is not signed by main' } });
+    product.hostHub.close();
+    product.db.close();
+  });
+
   it('exposes an allowlist-only pairing port for SSH tunnels and closes it on shutdown', async () => {
     const root = mkdtempSync(join(tmpdir(), 'zcc-static-host-'));
     writeFileSync(join(root, 'index.html'), '<main>zana</main>');
@@ -292,8 +313,7 @@ describe('startStaticHost', () => {
     product.db.close();
   });
 
-  const hasIpv6Loopback = Object.values(networkInterfaces()).flat().some((entry) => entry?.address === '::1');
-  it.skipIf(!hasIpv6Loopback)('stringifies non-Error forwarder failures and binds the forwarder to ::1 for an IPv6 host', async () => {
+  it('stringifies non-Error forwarder failures and binds the forwarder to the IPv4 product loopback', async () => {
     vi.mocked(startPairingForwarder).mockRejectedValueOnce('plain failure');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const root = mkdtempSync(join(tmpdir(), 'zcc-static-host-'));
@@ -301,11 +321,25 @@ describe('startStaticHost', () => {
     const { createProductHttpContext } = await import('./http/product-context.js');
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-static-product-'));
     const product = createProductHttpContext({ dataDir, origins: { serverPort: 0 } });
-    host = await startStaticHost({ rootDir: root, product, host: '::1' });
+    host = await startStaticHost({ rootDir: root, product });
 
-    expect(vi.mocked(startPairingForwarder).mock.calls.at(-1)?.[1]).toEqual({ productHost: '::1' });
+    expect(vi.mocked(startPairingForwarder).mock.calls.at(-1)?.[1]).toEqual({ productHost: '127.0.0.1' });
     expect(warn).toHaveBeenCalledWith('[zcc] pairing forwarder failed to start: plain failure');
     warn.mockRestore();
+    product.hostHub.close();
+    product.db.close();
+  });
+
+  it('refuses an IPv6 product host before binding: the local peer app is IPv4-loopback only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zcc-static-host-'));
+    writeFileSync(join(root, 'index.html'), '<main>zana</main>');
+    const { createProductHttpContext } = await import('./http/product-context.js');
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-static-product-'));
+    const product = createProductHttpContext({ dataDir, origins: { serverPort: 0 } });
+    const calls = vi.mocked(startPairingForwarder).mock.calls.length;
+    await expect(startStaticHost({ rootDir: root, product, host: '::1' })).rejects.toThrow('local peer app requires an IPv4 loopback host');
+    expect(vi.mocked(startPairingForwarder).mock.calls.length).toBe(calls);
+    product.dispose();
     product.hostHub.close();
     product.db.close();
   });

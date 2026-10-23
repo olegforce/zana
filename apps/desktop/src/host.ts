@@ -51,14 +51,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isTrustedRendererUrl, productServerUrl, rendererUrl, setProductionRendererOrigin } from './window/renderer-url.js';
 import { refreshRemoteStartPathHosts, stampedProjectRemote } from './remote-workspace.js';
 import { resolveIconPath } from './resolve-icon-path.js';
-import { startRuntimeSupervisor, type RuntimeSupervisor } from './runtime/runtime-supervisor.js';
+import { createProductRouteSquadRuntime, startRuntimeSupervisor, type RuntimeSupervisor } from './runtime/runtime-supervisor.js';
 import { createRuntimeRecovery } from './runtime/runtime-recovery.js';
 import { createTeamProductOps } from './team-product-ops.js';
 import { jobCoordinatorPrompt } from './team-coordinator-prompt.js';
 import {
   createDesktopNativeRecovery, gateInvalidProvidedPlan, recoverSquadStateAtBoot, runSpawnLifecycle, slotRecoveryLaunch,
   sweepUnretainedSquadWorktrees, teamAdmissionRequirements, teamJobFailureResponse, withProposalLaunch, findProposalExecution, type ProposalLaunchDeps,
-  withRenewedSources, scopedSourceRenewal
+  withRenewedSources, scopedSourceRenewal, splitProposedGoalSources
 } from './team-launch-support.js';
 import { openExecutionStorage } from './execution-storage.js';
 import { createPlanCorrectionHandoff, createPlanCorrectionHost } from './plan-correction/host.js';
@@ -73,9 +73,10 @@ import { onOrchestratorIdle } from './coordinator-idle.js';
 import { finalSessionStats } from './session-stats-cache.js';
 import { applyPluginAgentCapabilities } from '@zana-ai/zcc-server/services/extensions/plugin-agent-sync';
 import { runtimeHostAvailable, setRuntimeHostSupervisor } from '@zana-ai/zcc-host-daemon/harness/execution-environment';
-import { IPC, type PluginViewTarget, type ThreadViewTarget } from '@zana-ai/zcc-desktop-contract';
+import { IPC, resolveDeepLinkChannel, type PluginViewTarget, type ThreadViewTarget } from '@zana-ai/zcc-desktop-contract';
+import { createDeepLinkHost, registerDeepLinkIpc, registerDeepLinkScheme, wantsSingleInstanceLock } from './deep-link-host.js';
 import { signUiSend } from '@zana-ai/zcc-server/http/ui-send-proof';
-import { MenubarThreadOpenResultSchema, MenubarThreadsListResultSchema } from '@zana-ai/zcc-contracts/runtime';
+import { MenubarThreadOpenResultSchema, MenubarThreadsListResultSchema, type SquadMemberStatus } from '@zana-ai/zcc-contracts/runtime';
 import { createDesktopBrowserViewManager } from './desktop-browser-view.js';
 import { registerDesktopBrowserIpc } from './desktop-browser-main-ipc.js';
 import {
@@ -91,8 +92,10 @@ import { setDesktopBrowserBroker } from '@zana-ai/zcc-server/services/threads/de
 import { registerIpcFamilies } from './ipc/register.js';
 import type { IpcCtx } from './ipc/ctx.js';
 import { sanitizeExtraArgs } from '@zana-ai/zcc-domain/launch-sanitize';
-import { titleFromObjective, MANAGED_WORKTREE_DIR_NAME, PERSONAL_WORKSPACE_DIR_NAME, type MenubarThreadAgent } from '@zana-ai/zcc-domain';
-import { providerCapabilities, isClaudeProfile, isCodexProfile, isOpenCodeProfile, seedPromptArgs } from '@zana-ai/zcc-domain/launch-provider';
+import { teamRunNamerInput } from './team-run-title.js';
+import { MANAGED_WORKTREE_DIR_NAME, PERSONAL_WORKSPACE_DIR_NAME, type MenubarThreadAgent } from '@zana-ai/zcc-domain';
+import { providerCapabilities, harnessFamilyOf, isClaudeProfile, isCodexProfile, isOpenCodeProfile, seedPromptArgs } from '@zana-ai/zcc-domain/launch-provider';
+import { canonicalThreadProviderId } from '@zana-ai/zcc-server/services/threads/thread-provider-catalog';
 import { EXTENSION_PROJECT_CATEGORY, store, scratchWorkspaceRoot, worktreeRoot, worktreeTargetDir } from '@zana-ai/zcc-server/services/projects/store';
 import { electronZccDataDir } from '@zana-ai/zcc-server/electron-data-dir';
 import { PtyManager } from '@zana-ai/zcc-host-daemon/pty';
@@ -103,12 +106,13 @@ import { LaunchAuthorizationService } from '@zana-ai/zcc-server/services/launch/
 import { createLaunchCoordinator, LaunchSpawnError } from '@zana-ai/zcc-server/services/launch/coordinator';
 import { createLaunchLedgerStore } from '@zana-ai/zcc-server/services/launch/ledger-store';
 import { collectTeamAdmissionInventory, evaluateTeamAdmission, finalizeLaunchPreflight, preflightLaunch } from '@zana-ai/zcc-server/services/launch/preflight';
-import { resolveSquadPlan } from './team-trigger-semantics.js';
+import { planNormalizationNote, resolveSquadPlan } from './team-trigger-semantics.js';
+import { createSquadSourceSnapshotter, launchSquad, type SquadLaunchDeps, type SquadSourceProvider } from './squad-launch-core.js';
 import { launchDigest } from '@zana-ai/zcc-server/services/launch/digest';
 import { preflightTerminalExecution } from '@zana-ai/zcc-server/services/launch/execution-routing';
 import { launchExecutionScope, usesCliRemoteToolProxy } from './cli-remote-tool-proxy.js';
 import { createRestoreCapabilityStore, type RestoreCapability } from '@zana-ai/zcc-server/services/launch/restore-capability-store';
-import { createTeamLifecycleIntegration, createTeamLifecycleStore } from '@zana-ai/zcc-server/services/launch/team-lifecycle-store';
+import { createTeamLifecycleIntegration, createTeamLifecycleStore, type TeamLifecycleRecord, type TeamModernWorkerObservation } from '@zana-ai/zcc-server/services/launch/team-lifecycle-store';
 import { createRemoteReapLedger, remoteReapOrphans, type RemoteReapEntry } from '@zana-ai/zcc-server/services/launch/remote-reap-ledger';
 import { createExecutionStore, WORK_CLAIM_LEASE_MS, type ExecutionRecord, type SquadWorktreeRecord } from '@zana-ai/zcc-server/services/execution/store';
 import { executionBoardProjection, projectExecutionProjection } from '@zana-ai/zcc-server/services/execution/projection';
@@ -119,6 +123,7 @@ import { verifyHarnesses } from '@zana-ai/zcc-host-daemon/harness/harness-verify
 import { IdleGatedInjector, suppressesInteractiveBlocked } from '@zana-ai/zcc-server/services/execution/idle-gated-injector';
 import { createExecutionArtifactStore } from '@zana-ai/zcc-server/services/execution/artifact-store';
 import { createExecutionSourceRegistry, ExecutionSourceError, type ExecutionSourcePathDescriptor } from '@zana-ai/zcc-server/services/execution/source-registry';
+import { resolveSourcePolicy, sourceRefusal, type SourcePolicy } from '@zana-ai/zcc-server/services/execution/source-policy';
 import { createExecutionHandoffStore } from '@zana-ai/zcc-server/services/execution/handoff-store';
 import { createResumeGrantStore } from '@zana-ai/zcc-server/services/execution/resume-grant-store';
 import { createResumeTokenStore } from '@zana-ai/zcc-server/services/execution/resume-token-store';
@@ -257,6 +262,7 @@ import { createThreadViewHost } from './window/thread-view-host.js';
 import { findUnscopedWindow, isUnscopedRegistration } from './window/main-window-registry.js';
 import { registerPluginViewIpc, registerThreadViewIpc } from './ipc/windows.js';
 import { showApprovalSheet } from './window/approval-sheet.js';
+import { startPeerUsePrompts } from './ipc/peer-use-prompts.js';
 import { createPluginApprovalHandler } from './ipc/plugin-approvals.js';
 import { listPluginAppsFromProductServer } from './ipc/plugin-apps-loopback.js';
 import { createLoopbackPluginCommands } from './control/plugin-commands-loopback.js';
@@ -290,10 +296,11 @@ import { listCommands } from '@zana-ai/zcc-server/services/skills/commands';
 import { ScheduleGroupsStore } from '@zana-ai/zcc-server/services/scheduler/schedule-groups-store';
 import { watch as fsWatch, mkdirSync, type FSWatcher } from 'node:fs';
 import { lstat, open as openFile, realpath, rm } from 'node:fs/promises';
-import { personaCanWriteFiles, type SquadProposalInput } from '@zana-ai/zcc-domain/squad-proposal';
+import { personaCanWriteFiles, resolveLaunchApproval, type SquadProposalInput } from '@zana-ai/zcc-domain/squad-proposal';
 import { createSquadProposalStore } from './squad-proposals/store.js';
 import { createSquadProposalService, SQUAD_LAUNCH_PROPOSAL_ACTION, type SquadProposalServiceDeps } from './squad-proposals/service.js';
 import { createSquadProposalNotifier } from './squad-proposals/notifier.js';
+import { goalMentionPaths } from './squad-proposals/sources.js';
 import { parseSshConfig } from '@zana-ai/zcc-server/services/projects/ssh-config';
 import {
   SshHostProviderRegistry,
@@ -321,6 +328,7 @@ import { createDoctor, hasMissingDeps, type Doctor } from '@zana-ai/zcc-server/s
 import { TemplateStore } from '@zana-ai/zcc-server/services/library/template-store';
 import { QuickPromptStore } from '@zana-ai/zcc-server/services/library/quick-prompt-store';
 import { resolveRulesGuidance } from '@zana-ai/zcc-server/services/projects/rules-file';
+import { mainClaudeBinaryGetter } from './main-claude-binary.js';
 import { PromptRegistry, LlmService, ClaudeCliProvider, OpenAiProvider, GeminiProvider, resolveNamedTitle, runTabNamerOnce, redactTranscript, type LlmProvider } from '@zana-ai/zcc-llm';
 import { VoiceService } from './native/voice/voice-service.js';
 import { OpenAiVoiceProvider } from './native/voice/openai-provider.js';
@@ -561,6 +569,11 @@ function e2eTimingOverrideMs(name: string): number | undefined {
 // claimDock + the dock-icon guard).
 if (E2E_LAUNCH && process.platform === 'darwin') {
   app.setActivationPolicy('accessory');
+}
+
+export function logMainInfo(context: string, message: string) {
+  testTap.recordLog('info', context, message);
+  console.info(`[main] ${context}: ${message}`);
 }
 
 export function logMainError(context: string, err: unknown) {
@@ -1178,6 +1191,10 @@ const teamLifecycleIntegration = createTeamLifecycleIntegration({
     return !!session && session.status !== 'exited';
   },
   closeSession: (sessionId) => terminateSession(sessionId),
+  isLiveModernThread: (threadId, projectId, generation) =>
+    squadRuntime().isSquadMemberLive(threadId, projectId, generation),
+  closeModernThread: (threadId, projectId, generation) =>
+    squadRuntime().stopSquadMember(threadId, projectId, generation),
   releaseCapacity: (authorizationId) => launchAuthorization.complete(authorizationId),
   restoreCapacity: (capacity, activeAuthorizationIds) => {
     launchPrincipals.set(capacity.principal.id, capacity.principal);
@@ -1434,21 +1451,22 @@ const quickPrompts = new QuickPromptStore();
 // LLM micro-call layer: an editable prompt registry + a provider-agnostic
 // dispatcher. v1 registers only the claude-cli provider (a headless
 // `claude --print` that reuses the user's Claude Code login). The claude binary
-// is read from config at boot and refreshed on config:set so a binary change
-// takes effect without a restart.
+// is resolved from config on every run, so a binary change takes effect without a restart.
 const promptRegistry = new PromptRegistry({
   homeDir: () => app.getPath('home'),
   revealPath: (path) => shell.openPath(path)
 });
 const llmService = new LlmService(new Map<LlmProviderId, LlmProvider>());
 /** Single provider-registration path. Rebuilds the LLM providers from config.
- *  `claude-cli` is built from `config.claudeBinary`. The HTTP providers
+ *  `claude-cli` resolves its binary from `store.getConfig()` on every run
+ *  (config.json is re-read, so a change from any writer applies without a
+ *  restart). The HTTP providers
  *  (`openai`/`gemini`) are registered unconditionally with a LAZY key getter —
  *  they read the encrypted key from safeStorage at call time and resolve to an
  *  honest `ok:false` "no API key configured" when absent, so a key added/removed
  *  later takes effect without a re-register. */
-function rebuildProviders(config: AppConfig): void {
-  llmService.setProvider(new ClaudeCliProvider(config.claudeBinary));
+function rebuildProviders(): void {
+  llmService.setProvider(new ClaudeCliProvider(mainClaudeBinaryGetter(store, join(electronZccDataDir(), 'config.json'))));
   llmService.setProvider(new OpenAiProvider(() => getOpenAiKey()));
   llmService.setProvider(new GeminiProvider(() => getGeminiKey()));
 }
@@ -1508,6 +1526,18 @@ function isTrueSshRemoteSession(session: TerminalSession): boolean {
  */
 function sessionHasUnreliableStatusChannel(session: TerminalSession): boolean {
   if (!isTrueSshRemoteSession(session)) return false;
+  const mode = providerFor(session.profile as LaunchProfileId).adapter.status?.mode;
+  return mode === 'output-activity' || mode === 'screen-scan';
+}
+
+/**
+ * Harnesses whose status comes from output-activity / screen-scan heuristics (Codex, Cursor, Pi,
+ * OpenCode) have no OSC glyph and rest in `waiting`, so `waiting` is a deliverable rest state for
+ * them. Headless cohort workers rest deliverable too (see {@link suppressesInteractiveBlocked}).
+ */
+export function sessionRestsInWaiting(session: TerminalSession | null | undefined): boolean {
+  if (!session) return false;
+  if (suppressesInteractiveBlocked(session)) return true;
   const mode = providerFor(session.profile as LaunchProfileId).adapter.status?.mode;
   return mode === 'output-activity' || mode === 'screen-scan';
 }
@@ -2096,11 +2126,11 @@ function fireTabNamer(sessionId: string, text: string): void {
   });
 }
 
-async function nameTeamExecution(launchId: string, objective: string, explicitTitle?: string): Promise<string> {
-  const fallback = titleFromObjective(objective) || 'Team run';
+async function nameTeamExecution(launchId: string, objective: string, explicitTitle?: string, sourceTexts?: readonly (string | undefined)[]): Promise<string> {
+  const { prompt, fallbackTitle: fallback } = teamRunNamerInput(objective, sourceTexts);
   const title = await resolveNamedTitle({
     id: launchId,
-    prompt: objective,
+    prompt,
     namedIds: llmNamedSessions,
     enabled: store.getConfig().autoRenameTabs !== false,
     explicitTitle,
@@ -2217,18 +2247,25 @@ const mailDrain = new AgentMailDrainService({
     agentMessageLog.pull(sessionId).map((m) => ({ id: m.id, fromHandle: m.fromHandle })),
   reply: (sessionId, text) => ptys.reply(sessionId, text)
 });
-const executionDeliveryDrain = new ExecutionDeliveryDrainService({
+  const executionDeliveryDrain = new ExecutionDeliveryDrainService({
   pending: async (sessionId) => {
     const session = ptys.getSession(sessionId);
     const cohort = session?.cohort;
-    if (!session || !cohort || (cohort.role !== 'worker' && cohort.role !== 'orchestrator') || !cohort.executionId) return [];
-    const record = await executionStore.getInProject(session.projectId, cohort.executionId);
+    const modern = !session ? (await teamLifecycle.list()).flatMap(record => record.state === 'active' ? record.workers : [])
+      .find(worker => worker.transport === 'MODERN' && worker.threadId === sessionId && worker.bindingState === 'BOUND') : undefined;
+    const projectId = session?.projectId ?? modern?.projectId;
+    const executionId = cohort?.executionId ?? modern?.modernContext?.executionId;
+    const slotId = cohort?.slotId ?? modern?.slotId;
+    if (!projectId || !executionId || !slotId) return [];
+    const record = await executionStore.getInProject(projectId, executionId);
     return (record?.deliveries ?? [])
-      .filter((delivery) => delivery.slotId === cohort.slotId && delivery.state === 'PENDING')
-      .map((delivery) => ({ id: delivery.id, executionId: record!.id, attempt: delivery.attempt }));
+      .filter((delivery) => delivery.slotId === slotId && delivery.state === 'PENDING')
+      .map((delivery) => ({ id: delivery.id, executionId: record!.id, attempt: delivery.attempt, manualRetryCount: delivery.manualRetryCount }));
   },
-  isRestful: (sessionId) => isRestfulAgentState(agentStatus.get(sessionId)),
-  reply: (sessionId, text) => ptys.reply(sessionId, text)
+  isRestful: (sessionId) => modernMemberStatus.has(sessionId)
+    ? modernMemberStatus.get(sessionId)?.status === 'idle' : isRestfulAgentState(agentStatus.get(sessionId)),
+  reply: replyToSquadMember,
+  isReplyIdempotent: sessionId => !ptys.getSession(sessionId)
 });
 /**
  * Keep-awake: hold a `prevent-app-suspension` power-save block while any agent
@@ -2326,6 +2363,7 @@ const closeSummary = new CloseSummaryService({
       })
       .then((e) => ({ id: e.id })),
   projectLabel: (projectId) => store.listProjects().find((p) => p.id === projectId)?.name,
+  log: logMainError,
   // Used only by summarizeAndClose (the CLI `term close-summary` path). Same
   // close primitive the control plane / IPC use; returns false on an unknown id.
   closeTerminal: (sessionId) => {
@@ -3079,6 +3117,77 @@ function ensureProductServerCredential(): string {
 // In development the launcher supplies this to multiple processes. Remove it
 // before any main-owned agent/utility can be spawned, not on the first UI click.
 ensureProductServerCredential();
+const productRouteSquadRuntime = createProductRouteSquadRuntime({
+  serverUrl: productServerUrl, credential: ensureProductServerCredential
+});
+function squadRuntime() {
+  return runtimeSupervisor ?? productRouteSquadRuntime;
+}
+const modernMemberStatus = new Map<string, SquadMemberStatus>();
+/** Threads whose status failure was already logged; cleared on the next success so a flapping runtime logs once per outage. */
+const modernStatusFailureLogged = new Set<string>();
+let modernReconcilePending: Promise<void> | undefined;
+let modernReconcileCursor = 0;
+
+/** Only exact runtime binding evidence releases capacity. Missing runtime stays uncertain. */
+async function reconcileModernMembers(records?: readonly TeamLifecycleRecord[]): Promise<void> {
+  if (!records && modernReconcilePending) return modernReconcilePending;
+  const run = async () => {
+    const candidates = (records ?? await teamLifecycle.list()).flatMap(record => record.workers
+      .filter(worker => worker.transport === 'MODERN' && worker.threadId && worker.generation && !worker.capacityReleased)
+      .map(worker => ({ record, worker })));
+    const page = records ? candidates : candidates.slice(modernReconcileCursor, modernReconcileCursor + 100);
+    if (!records) modernReconcileCursor = modernReconcileCursor + 100 >= candidates.length ? 0 : modernReconcileCursor + 100;
+    for (let offset = 0; offset < page.length; offset += 100) {
+      const observations: TeamModernWorkerObservation[] = [];
+      for (const { record, worker } of page.slice(offset, offset + 100)) {
+        const reference = { recordId: record.id, slotId: worker.slotId, generation: worker.generation!, threadId: worker.threadId! };
+        try {
+          const status = await squadRuntime().getSquadMemberStatus({ bindingId: reference.threadId,
+            generation: reference.generation, projectId: worker.projectId });
+          const previous = modernMemberStatus.get(reference.threadId);
+          modernMemberStatus.set(reference.threadId, status);
+          modernStatusFailureLogged.delete(reference.threadId);
+           // Prepared threads are not proof that main authorized a first turn.
+           if (status.status === 'stopped' || status.live || worker.bindingState !== 'CREATING') {
+             observations.push({ ...reference, state: status.status === 'stopped' ? 'terminal' : status.live ? 'bound' : 'unknown' });
+           }
+          if (status.live) {
+            executionDeliveryDrain.observe(worker.sessionId, status.status === 'idle' ? 'idle' : 'working');
+            if (status.eventSequence > (previous?.eventSequence ?? 0) && status.status === 'active' && worker.modernContext?.executionId) {
+              await squadExecutionService.renewWorkerLease(worker.modernContext.executionId, worker.slotId);
+            }
+          } else executionDeliveryDrain.remove(worker.sessionId);
+          if (status.status === 'stopped') { modernMemberStatus.delete(reference.threadId); modernStatusFailureLogged.delete(reference.threadId); }
+        } catch (error) {
+          if (!modernStatusFailureLogged.has(reference.threadId)) {
+            modernStatusFailureLogged.add(reference.threadId);
+            logMainError(`modern squad member status ${reference.threadId}`, error);
+          }
+          modernMemberStatus.delete(reference.threadId);
+          observations.push({ ...reference, state: 'unknown' });
+        }
+      }
+      await teamLifecycleIntegration.reconcileModernWorkers(observations);
+    }
+  };
+  if (records) return run();
+  modernReconcilePending = run().finally(() => { modernReconcilePending = undefined; });
+  return modernReconcilePending;
+}
+
+async function replyToSquadMember(sessionId: string, text: string, correlation?: { assignmentId: string; idempotencyKey: string }): Promise<boolean> {
+  const session = ptys.getSession(sessionId);
+  if (session) return ptys.reply(sessionId, text);
+  const binding = (await teamLifecycle.list()).flatMap(record => record.state === 'active' ? record.workers : [])
+    .find(worker => worker.transport === 'MODERN' && worker.threadId === sessionId && worker.bindingState === 'BOUND'
+      && worker.process === 'running' && !worker.capacityReleased);
+  if (!binding?.threadId || !binding.generation) return false;
+  const id = correlation?.assignmentId ?? randomUUID();
+  const receipt = await squadRuntime().deliverSquadMember({ bindingId: binding.threadId, generation: binding.generation,
+    projectId: binding.projectId, assignmentId: id, idempotencyKey: correlation?.idempotencyKey ?? id, message: text });
+  return receipt.state !== 'rejected';
+}
 // Main's /hook/nativetool handler (OBL-004), wired into the MCP server in
 // bootstrapNormal. Identity comes from the live PTY record; the decision comes
 // over the supervised runtime channel. electron-vite dev never starts one (the
@@ -3220,6 +3329,9 @@ async function ensureRendererStaticHost(): Promise<void> {
     safeSend(IPC.projectSettings.onChanged, projectId);
   });
   runtimeSupervisor.onLibraryChanged(() => { void libraryNotifications.invalidate(); });
+  runtimeSupervisor.onMenubarThreadsChanged(() => {
+    void reconcileModernMembers().catch(error => logMainError('squad modern progress', error));
+  });
   runtimeSupervisor.onProjectsChanged(() => {
     void projectsNotifications.invalidate();
     void libraryNotifications.invalidate();
@@ -3457,6 +3569,8 @@ const threadViews = createThreadViewHost({
 let loudSinceFocus = 0;
 /** Disposer for the once-registered `inboxStore.onAppended` loud-tier subscription; released in before-quit (Rule 3). */
 let offLoudInboxAppended: (() => void) | null = null;
+/** Stops the once-started core stream of plugin-use approvals owed by this computer's owner; released in before-quit (Rule 3). */
+let stopPeerUsePrompts: (() => void) | null = null;
 
 function clearLoudBadge() {
   loudSinceFocus = 0;
@@ -4838,48 +4952,25 @@ export function jobWorkerPrompt(input: {
 
 /**
  * A Team goal can name source files directly. Main resolves any file the operator
- * names that resolves under a Rule-2 trust anchor — the registered project root OR
- * the user's HOME — then sends it through the same registry as picker-selected
- * sources. The location of a named plan/source NEVER constrains where execution
- * happens (that is always the project); it is only a read input to snapshot, so a
- * plan kept outside the project (e.g. a doc vault under HOME) resolves too. The
- * sensitive HOME roots (`.ssh`, `.aws`, `.zcc`) stay blocked and write confinement
- * is enforced separately at execution time, so no raw write access is granted.
+ * names that the shared source policy allows (under the project root, HOME or the
+ * clone root, never a credential store or Zana's own state) and sends it through the
+ * same registry as picker-selected sources. The location of a named plan/source NEVER
+ * constrains where execution happens (that is always the project); it is only a read
+ * input to snapshot, so a plan kept outside the project (e.g. a doc vault under HOME)
+ * resolves too. Write confinement is enforced separately at execution time.
  */
 export async function goalExecutionSourcePaths(
   goal: string,
   home: string,
   userHome: string = homedir(),
-  /** `includeHome: false` keeps the project as the only base (agent-written goals, D3). */
-  opts: { includeHome?: boolean } = {}
+  /** The clone root, Zana's data folders and other protected paths: the rest of the source policy's bases. */
+  opts: { cloneRoot?: string; dataDirs?: readonly string[]; protectedRoots?: readonly string[] } = {}
 ): Promise<ExecutionSourcePathDescriptor[]> {
   const paths = new Map<string, ExecutionSourcePathDescriptor>();
-  // Allowed READ bases follow Rule 2's trust anchors: the target project root and
-  // the user's HOME. Either may be unresolvable (a remote/nonexistent project
-  // root, or an exotic HOME); a named source under whichever base resolves is
-  // still discoverable. Only if NEITHER resolves do we skip discovery entirely.
-  const bases: string[] = [];
-  try {
-    bases.push(await realpath(home));
-  } catch {
-    // `home` is a remote/nonexistent local project root — drop that base but keep
-    // the HOME base so a locally-referenced plan is still discoverable.
-  }
-  let realUserHome: string | undefined;
-  try {
-    realUserHome = await realpath(userHome);
-    if (opts.includeHome !== false) bases.push(realUserHome);
-  } catch {
-    // No resolvable HOME base either.
-  }
-  if (bases.length === 0) return [];
-  const sensitiveRoots = realUserHome
-    ? [join(realUserHome, '.ssh'), join(realUserHome, '.aws'), join(realUserHome, '.zcc')]
-    : [];
-  const withinAnyBase = (real: string): boolean => bases.some((base) => {
-    const rel = relative(base, real);
-    return rel !== '' && !(rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel));
-  });
+  // Allowed READ bases follow Rule 2's trust anchors (the project root, HOME and the clone
+  // root); a base that doesn't resolve (a remote project root) is dropped. Secrets inside
+  // them stay refused. One policy with Squad proposals and the source registry.
+  const policy = await resolveSourcePolicy(realpath, { projectRoot: home, home: userHome, ...opts });
   const rawCandidates: string[] = [];
   // 1. Quoted paths (preserves spaces in "C:\Program Files\..." or '/path with space/...')
   for (const m of goal.matchAll(/["'`]((?:[A-Za-z]:[/\\]|\/)[^"'`]+)["'`]/g)) {
@@ -4889,6 +4980,9 @@ export async function goalExecutionSourcePaths(
   for (const m of goal.matchAll(/(?:^|[\s(])((?:[A-Za-z]:[/\\]|\/)[^\s`'"),;:]+)/g)) {
     if (m[1]) rawCandidates.push(m[1]);
   }
+  // 3. `@path` mentions, as the composer writes a dropped, picked or typeahead file:
+  // project-relative inside the project, absolute outside it. Same policy checks below.
+  rawCandidates.push(...goalMentionPaths(goal, home));
   for (const match of rawCandidates) {
     const raw = match.trim().replace(/^[`'"(]+|[`'"),;:]+$/g, '');
     const candidates = [raw];
@@ -4896,8 +4990,12 @@ export async function goalExecutionSourcePaths(
     for (const candidate of candidates) {
       try {
         const real = await realpath(candidate);
-        if (!withinAnyBase(real)) continue;
-        if (sensitiveRoots.some((root) => real === root || real.startsWith(`${root}${sep}`))) continue;
+        // The link walk sees a link into a protected location, which the realpath alone does not.
+        if (await sourceRefusal(candidate, real, policy)) continue;
+        // realpath does not resolve hard links; the registry refuses a linked file at Launch, which would fail the whole launch.
+        const linked = await lstat(real);
+        // Launch attaches regular files only (a folder fails NOT_REGULAR_FILE) and refuses a hard-linked one.
+        if (!linked.isFile() || linked.nlink > 1) continue;
         const representations = new Set([candidate, real]);
         for (const path of [...representations]) {
           if (path.startsWith('/private/var/')) representations.add(path.slice('/private'.length));
@@ -4916,14 +5014,6 @@ export async function goalExecutionSourcePaths(
     }
   }
   return [...paths.values()];
-}
-
-function redactCapturedExecutionSourcePaths(text: string | undefined, descriptors: readonly ExecutionSourcePathDescriptor[]): string | undefined {
-  if (text === undefined) return undefined;
-  const paths = descriptors.flatMap(({ representations }) => representations)
-    .filter((path, index, all) => all.indexOf(path) === index)
-    .sort((left, right) => right.length - left.length);
-  return paths.reduce((sanitized, path) => sanitized.split(path).join(`[captured execution source: ${basename(path)}]`), text);
 }
 
 /**
@@ -4998,7 +5088,7 @@ async function resolveTeamModelSnapshots(
   const config = store.getConfig();
   const projectSettings = await getAuthoritativeProjectSettings(projectId);
   const personaSnapshot = personas.list();
-  const verified = await verifyHarnesses(config);
+   const verified = await verifyHarnesses(config);
   const observedAt = Date.now();
   return Promise.all(slots.map(async (slot, index) => {
     const persona = personaSnapshot.find((candidate) => candidate.id === slot.personaId);
@@ -5007,7 +5097,7 @@ async function resolveTeamModelSnapshots(
     const sharedProvider = providerFor(profile);
     const input = { config, persona, projectSettings, profile, extraArgs: [], scope: launchExecutionScope(project, {}, config) };
     // Slots resolve concurrently: each gets its own live-inventory view.
-    const provider = await liveScopedProviderFor(sharedProvider, { cwd: project.path, config });
+    const provider = team.transport === 'MODERN' ? sharedProvider : await liveScopedProviderFor(sharedProvider, { cwd: project.path, config });
     const model = resolveModelTarget(provider, input);
     const role = resolveRoleTarget(provider, input);
     const roleOwnedModel = !!role.targetId && provider.nativeRolePinsModel;
@@ -5019,7 +5109,7 @@ async function resolveTeamModelSnapshots(
       // Execution MCP supplies opaque ordered tasks; index disambiguates duplicate personas.
       slotId: slots[index].slotId,
       personaId: slot.personaId,
-      provider: provider.adapter.descriptor.id,
+      provider: team.transport === 'MODERN' ? canonicalThreadProviderId(harnessFamilyOf(profile) ?? profile) : provider.adapter.descriptor.id,
       ...(roleOwnedModel || !model.targetId ? {} : { model: model.targetId }),
       ...(model.level ? { level: model.level } : {}),
       ...(target?.level ? { level: target.level } : {}),
@@ -5448,6 +5538,9 @@ export async function launchTeam(
     });
   const taskBindingFailure = (personaId: string): string | undefined => {
     if (!structured) return undefined;
+    // ACP member creation supplies the first turn through the trusted runtime.
+    // PTY adapter spawn-binding capability does not apply to this transport.
+    if (team.transport === 'MODERN') return undefined;
     const provider = providerFor(profileFor(personaId));
     const scope = project.remote ? 'remote' : 'local';
     return adapterBindsInitialTask(provider, scope)
@@ -5558,6 +5651,41 @@ export async function launchTeam(
   if (expectedSlots.length > runLimit) {
     return { ok: false, code: 'RESOURCE_LIMIT', message: `team launch requests ${expectedSlots.length} slots but limit is ${runLimit}` };
   }
+  const modernSlots = new Map<string, { providerId: string; model?: string; permissionMode?: 'accept-edits' | 'auto' | 'full'; systemPrompt?: string }>();
+  let modernHostId: string | undefined;
+  if (team.transport === 'MODERN') {
+    try {
+      if (project.remote) throw new Error('Modern squad runtime requires a local project');
+      if (structured?.slots.some(slot => slot.nativeRecovery)) throw new Error('Modern squads cannot adopt CLI native recovery');
+      const projectSettings = await getAuthoritativeProjectSettings(targetProjectId);
+      for (const slot of expectedSlots) {
+        const persona = personaSnapshot.find(candidate => candidate.id === slot.personaId);
+        if (!persona) throw new Error(`unknown persona: ${slot.personaId}`);
+        const profile = profileFor(slot.personaId);
+        const provider = providerFor(profile);
+        const input = { config: currentConfig, projectSettings, persona, profile, extraArgs: [], scope: 'local' as const };
+        if (resolveRoleTarget(provider, input).targetId) throw new Error('Modern squad native role selection is not supported');
+        if (persona.allowedTools?.length || persona.deniedTools?.length || persona.addDirs?.length || persona.mcpServers?.length
+          || persona.codexSandbox || persona.codexApproval) throw new Error('Modern squad persona tool or sandbox overrides are not supported');
+        const execution = resolveExecutionState(provider, input);
+        if (execution.state === 'plan' || persona.permissionMode === 'plan') throw new Error('Modern squad plan-only execution is not supported');
+        const unrestricted = provider.adapter.descriptor.profiles.find(candidate => candidate.id === profile)?.posture === 'unrestricted';
+        const permissionMode = unrestricted || persona.permissionMode === 'bypassPermissions' ? 'full' as const
+          : autonomous || execution.state === 'autonomous' ? 'auto' as const
+            : execution.state === 'accept-edits' || persona.permissionMode === 'acceptEdits' ? 'accept-edits' as const : undefined;
+        modernSlots.set(slot.slotId, { providerId: canonicalThreadProviderId(harnessFamilyOf(profile) ?? profile),
+          model: resolveModelTarget(provider, input).targetId, permissionMode, systemPrompt: persona.appendSystemPrompt });
+      }
+      const preflight = await squadRuntime().preflightSquadRuntime({ projectId: targetProjectId,
+        ...(project.hostId ? { hostId: project.hostId } : {}), providerIds: [...new Set([...modernSlots.values()].map(slot => slot.providerId))],
+        selections: [...modernSlots.values()].map(({ providerId, model, permissionMode }) => ({ providerId, model, permissionMode })) });
+      if (!preflight.ready || preflight.providers.some(provider => !provider.available)) throw new Error(preflight.reason ?? 'Modern squad runtime is unavailable');
+      modernHostId = preflight.hostId;
+    } catch (error) {
+      revokeRequestAuthorizations();
+      return { ok: false, code: 'UNSUPPORTED', message: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const runPrincipal = bindLaunchPrincipal(teamPrincipalRef, {
     id: teamPrincipalRef.id, allowedProjectIds: [targetProjectId], maxConcurrent: concurrentLimit, maxLaunchesPerRun: runLimit
   }, team.id) as Extract<LaunchPrincipal, { kind: 'team' }>;
@@ -5583,7 +5711,7 @@ export async function launchTeam(
     expectedSlot: { slotId: string; personaId: string; label?: string; role: 'worker' | 'orchestrator' },
     request: CreateTerminalRequest,
     tabNamerPrompt: string | null
-  ): Promise<Result<TerminalSession>> => {
+  ): Promise<Result<{ id: string }>> => {
     const { slotId, personaId } = expectedSlot;
     let authorizationId = structured?.slots.find((slot) => slot.slotId === slotId)?.authorizationId;
     if (!structured?.requirePreauthorization) {
@@ -5621,6 +5749,77 @@ export async function launchTeam(
     if (!releaseColdStart) {
       if (authorizationId) launchAuthorization.revoke(authorizationId);
       return { ok: false, code: 'CANCEL_PENDING', message: 'team launch canceled before cold start' };
+    }
+    if (team.transport === 'MODERN') {
+      let reservation: Awaited<ReturnType<typeof teamLifecycle.reserveModernWorker>>;
+      try {
+        const selected = modernSlots.get(slotId)!;
+        const authorization = authorizationId ? launchAuthorization.get(authorizationId) : undefined;
+        if (!authorization) return { ok: false, code: 'DENIED', message: 'unknown authorization' };
+        const currentProject = store.listProjects().find(candidate => candidate.id === targetProjectId);
+        if (!currentProject || projectIdentityDigest(currentProject) !== authorization.binding.projectIdentityDigest
+          || launchDigest({ team: teams.list().find(candidate => candidate.id === team.id), personas: personas.list() }) !== authorization.binding.storeRevision) {
+          throw new Error('Modern launch context changed after authorization');
+        }
+        if (launchDeadlineAt !== undefined && launchDeadlineAt <= Date.now()) throw new Error('team launch deadline elapsed before create');
+        const effective = resolveEffectiveLaunch(request, currentProject);
+        if (request.worktreeInfo && !effective.worktree) throw new Error('Modern squad worktree confinement failed');
+        const revalidated = revalidateEffectiveLaunch(effective, currentProject);
+        if (!revalidated.ok) throw new Error(revalidated.reason);
+        const consumed = launchAuthorization.consumePreissued(authorization.id, {
+          principal: teamPrincipalRef, projectId: targetProjectId, binding: authorization.binding
+        });
+        if (!consumed.ok) return { ok: false, code: 'DENIED', message: consumed.reason };
+        const sessionId = randomUUID();
+        const record = await teamLifecycle.addWorker(claim.record.id, {
+          sessionId, authorizationId: authorization.id, cohortId, slotId, personaId, projectId: targetProjectId,
+          transport: 'MODERN', process: 'authorized', attention: 'active', task: 'unknown', delivery: 'bound-at-spawn',
+          bindingState: 'RESERVED', generation: 0,
+          modernContext: { teamId: team.id, cohortId, role: expectedSlot.role, projectId: targetProjectId,
+            hostId: modernHostId!, providerId: selected.providerId, worktreePath: effective.cwd,
+            ...(structured?.executionId ? { executionId: structured.executionId } : {}),
+            personaSnapshot: { id: personaId, profile: profileFor(personaId), model: selected.model,
+              permissionMode: selected.permissionMode, systemPrompt: selected.systemPrompt } }
+        });
+        teamLifecycleIntegration.track(record);
+        reservation = await teamLifecycle.reserveModernWorker(record.id, slotId);
+        if (!reservation?.mayCreate) return { ok: false, code: 'CANCEL_PENDING', message: 'Modern squad reservation cannot create' };
+        const runtimeRequest = { bindingId: reservation.threadId, generation: reservation.generation,
+          projectId: targetProjectId, teamId: team.id, cohortId, hostId: modernHostId!, providerId: selected.providerId,
+          role: expectedSlot.role, worktreePath: effective.cwd, executionId: structured?.executionId,
+          model: selected.model, permissionMode: selected.permissionMode,
+          prompt: [selected.systemPrompt, !durableCoordination ? personaSnapshot.find(persona => persona.id === personaId)?.initialPrompt : undefined,
+             request.prompt ?? 'Await squad instructions.'].filter(Boolean).join('\n\n'), title: (request.title ?? personaName(personaId)).slice(0, 120) };
+        const created = await squadRuntime().createSquadMember(runtimeRequest);
+        if (!await teamLifecycle.acknowledgeModernWorker(record.id, slotId, reservation.generation, created.threadId)) {
+          await squadRuntime().stopSquadMember(reservation.threadId, targetProjectId, reservation.generation);
+          const fenced = await teamLifecycle.get(record.id);
+          if (fenced) await reconcileModernMembers([fenced]);
+          return { ok: false, code: 'CANCEL_PENDING', message: 'Modern squad launch canceled during create' };
+        }
+        const bound = await teamLifecycle.get(record.id);
+        if (bound) teamLifecycleIntegration.track(bound);
+        // A cancel can land between acknowledge and activate. Main's lifecycle record is the
+        // authority: only an active run whose slot is still BOUND to this exact generation and
+        // thread may receive its first turn. Otherwise stop the prepared thread and let exact
+        // runtime evidence (reconcile) release capacity — never release it here.
+        const boundWorker = bound?.workers.find(worker => worker.slotId === slotId);
+        if (bound?.state !== 'active' || boundWorker?.bindingState !== 'BOUND' || boundWorker.process !== 'running'
+          || boundWorker.generation !== reservation.generation || boundWorker.threadId !== created.threadId
+          || boundWorker.capacityReleased) {
+          await squadRuntime().stopSquadMember(reservation.threadId, targetProjectId, reservation.generation);
+          const fenced = await teamLifecycle.get(record.id);
+          if (fenced) await reconcileModernMembers([fenced]);
+          return { ok: false, code: 'CANCEL_PENDING', message: 'Modern squad launch canceled before activation' };
+        }
+        launchAuthorizationBySession.set(created.threadId, authorization.id);
+        await squadRuntime().activateSquadMember(runtimeRequest);
+        return { ok: true, value: { id: created.threadId } };
+      } catch (error) {
+        if (reservation) await teamLifecycle.markModernWorkerUncertain(claim.record.id, slotId, reservation.generation, reservation.threadId);
+        else if (authorizationId) launchAuthorization.complete(authorizationId);
+        return { ok: false, code: reservation ? 'UNCERTAIN' : 'DENIED', message: error instanceof Error ? error.message : String(error) };
+      } finally { releaseColdStart(); }
     }
     const result = await launchAuthorizedTerminal(
       request,
@@ -5880,7 +6079,12 @@ export async function cancelTeamLaunch(
   if (!callerPrincipalId.trim() || !launchRequestId.trim()) {
     return { ok: false, code: 'INVALID', message: 'callerPrincipalId and launchRequestId are required' };
   }
-  const canceled = await teamLifecycleIntegration.cancelTeamLaunch(callerPrincipalId, launchRequestId);
+  let canceled = await teamLifecycleIntegration.cancelTeamLaunch(callerPrincipalId, launchRequestId);
+  const record = await teamLifecycle.findRequest(callerPrincipalId, launchRequestId);
+  if (record?.workers.some(worker => worker.transport === 'MODERN' && !worker.capacityReleased)) {
+    await reconcileModernMembers([record]);
+    canceled = await teamLifecycleIntegration.cancelTeamLaunch(callerPrincipalId, launchRequestId);
+  }
   return canceled.ok
     ? { ok: true, value: {
         canceledSessionIds: canceled.canceledSessionIds,
@@ -5944,6 +6148,15 @@ const workerLivenessCache = new AgentLivenessCache((sessionId) => ptys.probeAgen
 
 
 // ---- Squad launch proposals (an agent prepares a Squad; the user reviews it in the Inbox) ----
+/**
+ * HOME, the clone root, Zana's data folder and the app's own data (Electron userData, with its
+ * cookies and source snapshots): with the project, the bases of the shared source policy.
+ */
+export function squadSourceBases(): { home: string; cloneRoot?: string; dataDirs: string[]; protectedRoots: string[] } {
+  const cloneRoot = store.getConfig().cloneRoot?.trim();
+  return { home: homedir(), ...(cloneRoot ? { cloneRoot } : {}), dataDirs: [electronZccDataDir()], protectedRoots: [app.getPath('userData')] };
+}
+
 export const squadProposalStore = createSquadProposalStore({
   filePath: join(app.getPath('userData'), 'squad-proposals.json')
 });
@@ -5981,6 +6194,14 @@ export async function lookupProposer(sessionId: string, projectId: string) {
     return { kind: 'thread' as const, id: sessionId, ...(title ? { title } : {}), squadMember: false, origin: { threadId: sessionId } };
   }
   return null;
+}
+
+/** Review wins when the Squad (including a shadowed project copy) or its Project asks for it. */
+export async function resolveTeamLaunchApproval(teamId: string, projectId: string) {
+  return resolveLaunchApproval({
+    squad: teams.launchReviewRequired(teamId) ? { launchApproval: 'review' } : teams.list().find((team) => team.id === teamId),
+    project: await getAuthoritativeProjectSettings(projectId)
+  });
 }
 
 export function findExecutionForProposal(projectId: string, proposalId: string): Promise<string | undefined> {
@@ -6023,16 +6244,31 @@ const squadProposalServiceDeps: SquadProposalServiceDeps = {
   expandTeamSlots,
   resolveSquadPlan: (planSource, texts) => resolveSquadPlan(planSource, texts),
   fs: { realpath, lstat, open: (path, flags) => openFile(path, flags) },
+  sourceBases: () => squadSourceBases(),
   inbox: { appendOnce: (input) => inboxStore.appendOnce(input) },
   actions: {
     bind: (entry, action) => inboxActionRegistry.bind(entry, action),
     markUnavailable: (kind, ref, message) => inboxActionRegistry.markUnavailable(kind, ref, message)
   },
-  issueSources: (windowId, projectId, paths, withinRoot) => executionSources.issue({ windowId: windowId as number, projectId, paths, withinRoot }),
+  issueSources: (windowId, projectId, paths, policy) => executionSources.issue({ windowId: windowId as number, projectId, paths, policy }),
   now: () => Date.now(),
   newId: () => randomUUID(),
   findLaunchedExecution: findExecutionForProposal,
-  logError: (context, error) => logMainError(context, error)
+  logError: (context, error) => logMainError(context, error),
+  launchNow: {
+    launchApproval: resolveTeamLaunchApproval,
+    // Counts every owned non-terminal run, however it was started, not only runs started through squad_launch.
+    activeOwnedRuns: (sessionId, projectId) => executionStore.countActiveOwned(sessionId, projectId),
+    executionState: async (executionId) => (await executionStore.get(executionId))?.state,
+    launch: async ({ team, project, goal, coordinationMode, title, summary, sourcePaths }, ctx) => {
+      const sourceBases = squadSourceBases();
+      return launchSquad(squadNowLaunchDeps, {
+        teamId: team.id, project, slots: expandTeamSlots(team), goal, coordinationMode, title, summary,
+        sourceCapabilityIds: [], sourcePaths,
+        goalSources: await goalExecutionSourcePaths(goal, project.path, sourceBases.home, sourceBases)
+      }, ctx);
+    }
+  }
 };
 export const squadProposalService = createSquadProposalService(squadProposalServiceDeps);
 // squad_plan_check's route carries no session id: the MCP tool has already
@@ -6044,13 +6280,16 @@ const squadPlanCheckService = createSquadProposalService({
 
 export const squadProposalNotifier = createSquadProposalNotifier({
   getRecord: (executionId) => executionStore.get(executionId),
-  markReported: (executionId, attempt) => executionStore.markProposalReported(executionId, attempt),
-  listUnreported: () => executionStore.listUnreportedProposalExecutions(),
+  markReported: (executionId, attempt) => executionStore.markReported(executionId, attempt),
+  listUnreported: () => executionStore.listUnreportedExecutions(),
+  markBlockerReported: (executionId, blockerId) => executionStore.markBlockerReported(executionId, blockerId),
+  listUnreportedBlockers: () => executionStore.listUnreportedBlockers(),
   reply: (sessionId, text) => ptys.reply(sessionId, text),
   ptyLive: (id) => { const session = ptys.getSession(id); return !!session && session.status !== 'exited'; },
   ptyState: (id) => agentStatus.get(id),
-  lastInputAt: (id) => ptys.getSession(id)?.lastInputAt,
-  deliverableWhenWaiting: (id) => suppressesInteractiveBlocked(ptys.getSession(id)),
+  lastInputAt: (id) => ptys.getSession(id)?.lastKeyInputAt,
+  draftPending: (id) => ptys.getSession(id)?.draftPending === true,
+  deliverableWhenWaiting: (id) => sessionRestsInWaiting(ptys.getSession(id)),
   threadLive: isConversationThreadLive,
   queueThreadTurn: queueThreadTurnForProposal,
   // appendOnce: a replayed report must not re-surface the result entry as a new occurrence.
@@ -6105,6 +6344,7 @@ export function squadProposalMcpDeps() {
   if (!teamExecutionEnabled()) return {};
   return {
     proposeSquad: (route: { projectId: string; sessionId: string }, input: SquadProposalInput) => squadProposalService.propose(route, input),
+    launchSquadNow: (route: { projectId: string; sessionId: string }, input: SquadProposalInput) => squadProposalService.launchSquadNow(route, input),
     checkSquadPlan: (route: { projectId: string }, input: { path?: string; text?: string }) => squadPlanCheckService.checkPlan({ ...route, sessionId: '' }, input)
   };
 }
@@ -6126,8 +6366,30 @@ const squadExecutionService = new SquadExecutionService({
   revokeTeamAuthorizations: (authorizationIds) => {
     for (const id of authorizationIds) launchAuthorization.revoke(id);
   },
-  replyToSession: (sessionId, text) => ptys.reply(sessionId, text),
-  deliverToWorker: (sessionId, text) => workerInjector.deliver(sessionId, text),
+   replyToSession: replyToSquadMember,
+    deliverToWorker: (sessionId, text) => ptys.getSession(sessionId)
+      ? workerInjector.deliver(sessionId, text) : replyToSquadMember(sessionId, text),
+   deliverAssignment: async (sessionId, text, correlation) => {
+     const execution = await executionStore.get(correlation.executionId);
+     if (!execution) return { state: 'rejected' };
+     const member = await teamLifecycle.findModernWorkerBinding(sessionId, execution.projectId);
+     if (!member) {
+       // No ACP -> PTY fallback. Only an actual CLI session uses the legacy injector.
+       return { state: ptys.getSession(sessionId) && workerInjector.deliver(sessionId, text) ? 'accepted' : 'rejected' };
+     }
+     if (member.worker.modernContext?.executionId !== correlation.executionId) return { state: 'rejected' };
+     return squadRuntime().deliverSquadMember({ bindingId: sessionId, generation: member.generation,
+       projectId: execution.projectId, assignmentId: correlation.assignmentId, idempotencyKey: correlation.idempotencyKey, message: text });
+   },
+   onWorkSettled: async correlation => {
+     const execution = await executionStore.get(correlation.executionId);
+     if (!execution) return;
+     const member = await teamLifecycle.findModernWorkerBinding(correlation.workerSessionId, execution.projectId);
+     if (!member || member.worker.modernContext?.executionId !== execution.id) return;
+     const receipt = await squadRuntime().completeSquadMemberDelivery({ bindingId: correlation.workerSessionId, generation: member.generation,
+       projectId: execution.projectId, assignmentId: correlation.assignmentId, idempotencyKey: correlation.idempotencyKey });
+     if (receipt.state !== 'completed') throw new Error('Modern assignment completion receipt rejected');
+   },
   resumeGrants: executionResumeGrants,
   hasLivePredecessor: (projectId, ownerPrincipalIds) => {
     const owners = new Set(ownerPrincipalIds);
@@ -6185,8 +6447,10 @@ const squadExecutionService = new SquadExecutionService({
   , claimRecoveryObserveEnabled: () => store.getConfig().executionClaimRecoveryObserveEnabled === true
   , claimRecoveryEnforceEnabled: () => store.getConfig().executionClaimRecoveryEnforceEnabled === true
   , planStartupGraceMs: () => store.getConfig().executionPlanStartupGraceMs ?? 0
-  , getAgentState: (sessionId) => agentStatus.get(sessionId)
-  , getWorkerLiveness: (sessionId) => workerLivenessCache.get(sessionId)
+   , getAgentState: (sessionId) => modernMemberStatus.has(sessionId)
+     ? modernMemberStatus.get(sessionId)?.status === 'idle' ? 'idle' : 'working' : agentStatus.get(sessionId)
+   , getWorkerLiveness: (sessionId) => modernMemberStatus.has(sessionId)
+     ? modernMemberStatus.get(sessionId)?.live ? 'alive' : 'unknown' : workerLivenessCache.get(sessionId)
   // Reap a proven-dead worker's surviving outer shell/tmux wrapper. closeExpected
   // marks a clean exit, is idempotent (no-op if already gone), and for a
   // tmux-backed remote runs killRemoteTmux — the ONLY thing that kills the
@@ -6242,6 +6506,16 @@ const squadExecutionService = new SquadExecutionService({
         });
       },
       modelHealth: async (models) => {
+        if (models.length === 0) return [];
+        // ACP validates selected models against its own catalog before provider start.
+        // CLI model inventories cannot attest ACP model IDs.
+        if (team?.transport === 'MODERN') {
+          const checked = await squadRuntime().preflightSquadRuntime({ projectId,
+            ...(project?.hostId ? { hostId: project.hostId } : {}),
+            providerIds: [...new Set(models.map(model => canonicalThreadProviderId(model.provider)))],
+            selections: models.map(({ id, provider }) => ({ providerId: canonicalThreadProviderId(provider), model: id })) });
+          return models.map(({ id, provider }) => ({ id, provider, status: checked.ready ? 'available' as const : 'unavailable' as const }));
+        }
         const requiredProviderIds = new Set(models.map((model) => model.provider));
         const liveByProvider = new Map(await Promise.all([...providers]
           .filter(([id]) => requiredProviderIds.has(id))
@@ -6317,7 +6591,8 @@ teamPlanHandoff = new TeamPlanHandoff({
   },
   nudge: (sessionId, text) => ptys.reply(sessionId, text),
   cleanup: (projectRoot, executionId) => cleanupHandoffFiles(projectRoot, executionId),
-  logError: (message, error) => logMainError(message, error)
+  logError: (message, error) => logMainError(message, error),
+  logInfo: logMainInfo
 });
 const squadSessionExit = {
   executionStore,
@@ -6415,11 +6690,11 @@ export async function startTeamJobFromUi(
   if (sourceCapabilityIds.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Execution source capabilities require a trusted window' };
   }
-  // A proposed launch's goal is agent-written: only files inside the project may be attached
-  // from it (D3), so the HOME base is dropped. Without a proposal it applies exactly as before.
   const proposed = input.proposalId !== undefined;
-  const goalSourceDescriptors = await goalExecutionSourcePaths(originalGoal, project.path, undefined, { includeHome: !proposed });
-  if (goalSourceDescriptors.length && !sourceContext) {
+  // Goal paths follow the one source policy. A proposed launch narrows them below, once its stored proposal is known.
+  const sourceBases = squadSourceBases();
+  const discoveredGoalSources = await goalExecutionSourcePaths(originalGoal, project.path, sourceBases.home, sourceBases);
+  if (discoveredGoalSources.length && !sourceContext) {
     return { ok: false, code: 'INVALID_CAPABILITY', message: 'Goal execution sources require a trusted window' };
   }
   // A proposed launch is bound to its stored proposal and must come from a trusted window.
@@ -6428,32 +6703,24 @@ export async function startTeamJobFromUi(
   }
   const proposalId = proposed ? (typeof input.proposalId === 'string' ? input.proposalId.trim() : '') : undefined;
   const renewal = scopedSourceRenewal(executionSources, sourceContext?.windowId, projectId);
-  return withRenewedSources(() => withProposalLaunch(proposalLaunchDeps, proposalId, projectId, async (proposal) => {
-    // Mint identity before snapshotting: source content lands in a dedicated,
-    // immutable content store and execution ledger carries only bounded metadata.
-    const launchRequestId = `ui:${randomUUID()}`;
-    const snapshot = await snapshotTeamJobSources({
-      windowId: sourceContext?.windowId, projectId, launchRequestId, sourceCapabilityIds, goalSourceDescriptors,
-      // Re-checked against the realpath issue() takes, so a symlink swapped in after discovery can't escape.
-      ...(proposal ? { withinRoot: project.path } : {})
-    });
-    if (!snapshot.ok) return snapshot;
-    const { sourceBundle } = snapshot;
-    const built = await buildTeamJobStartRequest({
-      teamId, projectId, projectName: project.name, launchRequestId, coordinationMode, slots, attended: !!sourceContext,
-      goal: originalGoal, title: originalJobTitle, summary: originalSummary, sourceBundle, goalSourceDescriptors
-    });
-    if (!built.ok) return built.response;
-    const result = proposal
-      ? await squadExecutionService.start('interactive:local', projectId, built.request, { proposal })
-      : await squadExecutionService.start('interactive:local', projectId, built.request);
-    if (!result.ok && sourceBundle) await executionSources.removeSnapshot(sourceBundle.contentRef);
-    if (!result.ok) {
-      planCorrectionLaunchBinding.forgetLaunch(launchRequestId);
-      return teamJobFailureResponse(result);
-    }
-    return { ok: true, value: { executionId: result.value.id, state: result.value.state } };
-  }), sourceCapabilityIds, renewal.reissue, logMainError, renewal.discardRetired);
+  const sources: SquadSourceProvider | undefined = sourceContext ? { kind: 'window', windowId: sourceContext.windowId } : undefined;
+  return withRenewedSources(() => withProposalLaunch(proposalLaunchDeps, proposalId, projectId, (proposal, reviewedSourcePaths) => launchSquad(squadLaunchDeps, {
+    teamId, project, slots, goal: originalGoal, coordinationMode, title: originalJobTitle, summary: originalSummary,
+    sourceCapabilityIds, goalSources: discoveredGoalSources, reviewedSourcePaths
+  }, {
+    sources,
+    // A proposed run reports back to the conversation that proposed it.
+    owner: proposal
+      ? {
+        principalId: 'interactive:local',
+        proposal,
+        reportTo: {
+          kind: proposal.proposerKind, id: proposal.proposerId, role: 'proposer',
+          ...(proposal.proposerTitle ? { title: proposal.proposerTitle } : {})
+        }
+      }
+      : { principalId: 'interactive:local' }
+  })), sourceCapabilityIds, renewal.reissue, logMainError, renewal.discardRetired);
 }
 
 const proposalLaunchDeps: ProposalLaunchDeps<NonNullable<ExecutionRecord['proposal']>> = {
@@ -6463,110 +6730,21 @@ const proposalLaunchDeps: ProposalLaunchDeps<NonNullable<ExecutionRecord['propos
   logError: (context, error) => logMainError(context, error)
 };
 
-type TeamJobSourceBundle = Awaited<ReturnType<typeof executionSources.resolve>>;
-
-/** Issue capabilities for the goal-named paths, then snapshot every source of a Team job launch. */
-async function snapshotTeamJobSources(args: {
-  windowId: number | undefined;
-  projectId: string;
-  launchRequestId: string;
-  sourceCapabilityIds: string[];
-  goalSourceDescriptors: ExecutionSourcePathDescriptor[];
-  withinRoot?: string;
-}): Promise<{ ok: true; sourceBundle?: TeamJobSourceBundle } | { ok: false; code: string; message: string }> {
-  const { windowId, projectId } = args;
-  try {
-    const goalSourceCapabilities = args.goalSourceDescriptors.length
-      ? await executionSources.issue({
-        windowId: windowId!, projectId, paths: args.goalSourceDescriptors.map(({ exactPath }) => exactPath),
-        ...(args.withinRoot ? { withinRoot: args.withinRoot } : {})
-      })
-      : [];
-    const capabilityIds = [...new Set([...args.sourceCapabilityIds, ...goalSourceCapabilities.map(({ id }) => id)])];
-    if (!capabilityIds.length) return { ok: true };
-    const sourceBundle = await executionSources.resolve({
-      windowId: windowId!, projectId, capabilityIds, snapshotKey: args.launchRequestId.replace(/[^a-zA-Z0-9:_-]/g, '_')
-    });
-    return { ok: true, sourceBundle };
-  } catch (error) {
-    return error instanceof ExecutionSourceError
-      ? { ok: false, code: error.code, message: error.message }
-      : { ok: false, code: 'SOURCE_SNAPSHOT_FAILED', message: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
- * Redact captured source paths, resolve the plan and build the Squad start request. An
- * invalid provided plan parks for correction (attended) or is refused (unattended).
- */
-async function buildTeamJobStartRequest(args: {
-  teamId: string;
-  projectId: string;
-  projectName: string;
-  launchRequestId: string;
-  coordinationMode: 'structured' | 'freeform';
-  slots: ReturnType<typeof expandTeamSlots>;
-  attended: boolean;
-  goal: string;
-  title?: string;
-  summary?: string;
-  sourceBundle?: TeamJobSourceBundle;
-  goalSourceDescriptors: ExecutionSourcePathDescriptor[];
-}): Promise<{ ok: true; request: ExecutionRequestV1 } | { ok: false; response: TeamJobLaunchResponse }> {
-  const { sourceBundle, launchRequestId } = args;
-  const capturedPathDescriptors = [...(sourceBundle?.pathDescriptors ?? []), ...args.goalSourceDescriptors];
-  const sanitizedGoal = (redactCapturedExecutionSourcePaths(args.goal, capturedPathDescriptors) ?? args.goal).slice(0, 4_000);
-  const sanitizedExplicitTitle = redactCapturedExecutionSourcePaths(args.title, capturedPathDescriptors)?.slice(0, 256) || undefined;
-  const sanitizedSummary = redactCapturedExecutionSourcePaths(args.summary, capturedPathDescriptors)?.slice(0, 4_000) || undefined;
-  const sourceMetadata = sourceBundle?.sources.map(({ extractedText: _content, ...metadata }) => metadata);
-  // One resolver for interactive and triggered launches: "Plan provided in goal"
-  // (structured) must yield a complete durable DAG or park for plan correction;
-  // "Infer plan from goal" (freeform) leaves planning to the coordinator.
-  const resolvedPlan = resolveSquadPlan(
-    args.coordinationMode === 'structured' ? 'provided' : 'infer',
-    [...(sourceBundle?.sources ?? []).map((source) => source.extractedText), args.goal]
-  );
-  const plannedWorkUnits = resolvedPlan.workUnits;
-  const providedPlanError = resolvedPlan.planError;
-  const planRefusal = await gateInvalidProvidedPlan(
-    { inboxStore, planCorrectionLaunchBinding },
-    { planError: providedPlanError, unattended: !args.attended, projectId: args.projectId, projectName: args.projectName, launchRequestId }
-  );
-  if (planRefusal) return { ok: false, response: planRefusal };
-  const sanitizedJobTitle = await nameTeamExecution(launchRequestId, sanitizedGoal, sanitizedExplicitTitle);
-  const sharedTask = [
-    `Shared job goal: ${sanitizedGoal}`,
-    sanitizedSummary ? `Context: ${sanitizedSummary}` : '',
-    providedPlanError ? PlanCorrectionService.correctionPrompt(providedPlanError) : '',
-    'Work toward this goal. Coordinate through the Team orchestrator when one is present.'
-  ].filter(Boolean).join('\n\n');
-  const initialTask = args.slots.map((slot) => ({
-    initialTask: slot.role === 'orchestrator'
-      ? `${sharedTask}\n\nCoordinate workers, delegate role-specific work, and explicitly report execution completion with a summary when goal is met.`
-      : `${sharedTask}\n\nCheck orchestrator instructions and report progress or blockers to it.`
-  }));
-  return {
-    ok: true,
-    request: {
-      version: 1,
-      teamId: args.teamId,
-      launchRequestId,
-      coordinationMode: args.coordinationMode,
-      origin: 'explicit',
-      jobTitle: sanitizedJobTitle,
-      objective: sanitizedGoal,
-      summary: sanitizedSummary,
-      slots: initialTask,
-      ...(plannedWorkUnits ? { workUnits: plannedWorkUnits } : {}),
-      ...(sourceBundle && sourceMetadata ? { sourceBundle: { contentRef: sourceBundle.contentRef, sources: sourceMetadata } } : {}),
-      policy: {
-        ...(store.getConfig().autonomousTimeoutMs === 0
-          ? {}
-          : { deadlineMs: store.getConfig().autonomousTimeoutMs ?? AUTONOMOUS_DEFAULTS.timeoutMs })
-      }
-    }
-  };
-}
+const squadLaunchDeps: SquadLaunchDeps = {
+  snapshotSources: createSquadSourceSnapshotter(executionSources),
+  removeSnapshot: (contentRef) => executionSources.removeSnapshot(contentRef),
+  realpath: (path) => realpath(path),
+  sourceBases: () => squadSourceBases(),
+  newLaunchRequestId: () => `ui:${randomUUID()}`,
+  inboxStore,
+  planCorrectionLaunchBinding,
+  nameTeamExecution: (launchId, objective, explicitTitle, sourceTexts) => nameTeamExecution(launchId, objective, explicitTitle, sourceTexts),
+  autonomousTimeoutMs: () => store.getConfig().autonomousTimeoutMs,
+  squadExecutionService,
+  log: (message, error) => logMainError(message, error)
+};
+// Agent-started runs get their own launch id prefix, distinct from UI launches.
+const squadNowLaunchDeps: SquadLaunchDeps = { ...squadLaunchDeps, newLaunchRequestId: () => `agent:${randomUUID()}` };
 
 /**
  * Launch a team as an autonomous run (the body of the `teams:launchAutonomous`
@@ -7470,6 +7648,16 @@ export async function sendQueuedMessageNow(win: BrowserWindow, threadId: unknown
 
 function registerIpc() {
   safeHandleFromWindow(IPC.uiSend, sendQueuedMessageNow, err => { throw err; });
+  // A plugin asking to use a connection: core pushes the owed approval, main draws and signs the sheet (once, at init).
+  /* v8 ignore next -- started at built-Electron boot; startPeerUsePrompts is unit-tested */
+  stopPeerUsePrompts ??= startPeerUsePrompts({
+    secret: ensureProductServerCredential,
+    serverUrl: () => productServerUrl(),
+    listApps: () => runtimeSupervisor ? runtimeSupervisor.listPluginApps() : listPluginAppsFromProductServer(),
+    showSheet: (parent, view) => showApprovalSheet(parent, view, (options) => new BrowserWindow(options)),
+    pickParent: () => BrowserWindow.getFocusedWindow() ?? mainWindow(),
+    log: (message, error) => logMainError(message, error ?? 'peer use')
+  }).stop;
   // Plugin buttons with no thread (release actions) get a sheet main draws and signs.
   /* v8 ignore next -- registered at built-Electron boot; createPluginApprovalHandler is unit-tested */
   safeHandleFromWindow(IPC.pluginApprovals.request, createPluginApprovalHandler({
@@ -7479,6 +7667,7 @@ function registerIpc() {
   }), () => ({ approved: false as const, reason: 'unavailable' as const }));
   /* v8 ignore next -- registered at built-Electron boot; registerPluginViewIpc is unit-tested */
   registerPluginViewIpc(safeHandle, pluginViews);
+  registerDeepLinkIpc(safeHandleFromWindow, deepLinks);
   /* v8 ignore next -- registered at built-Electron boot; registerThreadViewIpc is unit-tested */
   registerThreadViewIpc(safeHandle, threadViews);
   safeHandleFromWindow(IPC.sharedClient.list, () => sharedClient.instances(), err => { throw err; });
@@ -7582,7 +7771,6 @@ function registerIpc() {
     get ptys() { return ptys; },
     get quickPrompts() { return quickPrompts; },
     get readLiveSessionStats() { return readLiveSessionStats; },
-    get rebuildProviders() { return rebuildProviders; },
     get registerExtensionProject() { return registerExtensionProject; },
     get reportTeamTask() { return reportTeamTask; },
     get resolveTheme() { return resolveTheme; },
@@ -7612,6 +7800,7 @@ function registerIpc() {
     get stopAutonomousRun() { return stopAutonomousRun; },
     get suggestionsStore() { return suggestionsStore; },
     get teams() { return teams; },
+    get teamLifecycle() { return teamLifecycle; },
     get templates() { return templates; },
     get terminateSession() { return terminateSession; },
     get tray() { return tray; },
@@ -7789,14 +7978,55 @@ function buildAppMenu() {
 // hazards (control-socket steal, rival scheduler, racing writes to the shared
 // JSON) apply to the dev session. The shipped (packaged) build KEEPS the gate,
 // so end users still get the single-owner guarantee.
-if (!app.isPackaged) {
+//
+// Deep links: a dev run that pins its own userData under ZCC_DATA_DIR (`pnpm dev`)
+// also takes the lock, so `pnpm dev:open-link` forwards its argv to the running
+// dev app instead of starting a second one. Locks are per-userData, so an
+// installed app and isolated E2E runs never see each other. See deep-link-host.ts.
+const deepLinkChannel = resolveDeepLinkChannel({ isPackaged: app.isPackaged, env: process.env });
+const deepLinks = createDeepLinkHost({
+  channel: deepLinkChannel,
+  logError: logMainError,
+  deliver: async (delivery) => {
+    if (!await ensureMainWindowReady()) throw new Error('main window did not become ready');
+    showMainWindow();
+    const win = unscopedWindow();
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) throw new Error('main window is unavailable');
+    win.webContents.send(IPC.deepLinks.onLink, delivery);
+  }
+});
+const deepLinkRegistration = registerDeepLinkScheme({
+  channel: deepLinkChannel,
+  isPackaged: app.isPackaged,
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+  appEntry: process.argv[1] ? resolve(process.argv[1]) : undefined,
+  setAsDefaultProtocolClient: (scheme, execPath, args) => app.setAsDefaultProtocolClient(scheme, execPath, args),
+  log: (message) => console.warn(`[zcc] ${message}`)
+});
+if (deepLinkRegistration === 'failed') logMainError('deepLink.register', `could not register ${deepLinkChannel.scheme}://`);
+// Subscribed once at module init, never in createWindow(). macOS delivers
+// `open-url` (possibly before ready); Windows/Linux deliver argv to the first
+// process (cold start) or to `second-instance` (lock holder).
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  deepLinks.submitOsLink(url);
+});
+deepLinks.submitArgv(process.argv.slice(1));
+if (!wantsSingleInstanceLock({ isPackaged: app.isPackaged, env: process.env })) {
+  app.on('second-instance', (_event, argv) => {
+    deepLinks.submitArgv(argv);
+    showMainWindow();
+  });
   app.whenReady().then(bootstrap);
 } else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     // A duplicate launch (Dock, Finder, `open -a`) just surfaces the existing
-    // window instead of spawning a rival process.
+    // window instead of spawning a rival process. A link in its argv is routed.
+    deepLinks.submitArgv(argv);
     showMainWindow();
   });
   app.whenReady().then(bootstrap);
@@ -7922,7 +8152,7 @@ async function bootstrapNormal() {
   // data dir was guaranteed present. Re-bind it now that the store can resolve
   // its config so a custom `claudeBinary` takes effect this session (not just
   // after the next config:set / restart).
-  rebuildProviders(store.getConfig());
+  rebuildProviders();
   // Repair PATH before any pty/opener/scheduler spawn. A GUI launch
   // (Finder/Dock) inherits a minimal PATH that omits ~/.local/bin,
   // /opt/homebrew/bin, etc. — so a bare `claude` spawn would ENOENT and
@@ -8841,14 +9071,22 @@ async function bootstrapNormal() {
     reportTeamTask: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled()) ? reportTeamTask : undefined,
     executionService: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled()) ? squadExecutionService : undefined,
     executionHandoffs: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled()) ? executionHandoffs : undefined,
-    resolveExecutionCohortBinding: (sessionId, projectId) => {
+    resolveExecutionLaunchApproval: resolveTeamLaunchApproval,
+    resolveExecutionCohortBinding: async (sessionId, projectId, fence) => {
       const session = ptys.getSession(sessionId);
       const cohort = session?.cohort;
-      return session && session.status !== 'exited' && session.projectId === projectId
+      const ptyBinding = session && session.status !== 'exited' && session.projectId === projectId
         && cohort?.executionId && cohort.slotId && (cohort.role === 'worker' || cohort.role === 'orchestrator')
         ? { executionId: cohort.executionId, projectId, slotId: cohort.slotId, role: cohort.role,
             principalId: session.id, authorizationId: launchAuthorizationBySession.get(session.id) }
         : undefined;
+      if (ptyBinding) return ptyBinding;
+      const modern = await teamLifecycleIntegration.resolveModernBinding(sessionId, projectId);
+      if (modern && fence && (fence.bindingId !== sessionId || fence.generation !== modern.generation)) return undefined;
+      return modern ? {
+        executionId: modern.executionId, projectId, slotId: modern.slotId, role: modern.role,
+        principalId: sessionId, authorizationId: modern.authorizationId, memberFence: { bindingId: sessionId, generation: modern.generation }
+      } : undefined;
     },
     validateExecutionRecoveryBinding: async (sessionId, binding) => {
       if (binding.slotId !== 'orchestrator:recovery') return true;
@@ -8890,9 +9128,17 @@ async function bootstrapNormal() {
     validateTeamRouteIdentity: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled())
       ? (sessionId, projectId) => {
           const session = ptys.getSession(sessionId);
-          return !!session && session.status !== 'exited' && session.projectId === projectId;
-        }
-      : undefined,
+          if (session && session.status !== 'exited' && session.projectId === projectId) return true;
+           return false;
+         }
+       : undefined,
+    validateExecutionRouteIdentity: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled())
+      ? async (sessionId, projectId) => {
+          const session = ptys.getSession(sessionId);
+          if (session && session.status !== 'exited' && session.projectId === projectId) return true;
+          const member = await teamLifecycleIntegration.resolveModernBinding(sessionId, projectId);
+          return !!member && await squadRuntime().isSquadMemberLive(sessionId, projectId, member.generation);
+        } : undefined,
     // Owner-session identity for launch_team AND execution.start / snapshot /
     // resume_binding. Accepts a live pty session (same check as above) OR —
     // for the Modern/ACP loopback forwarder, which has no pty — a live
@@ -8900,7 +9146,8 @@ async function bootstrapNormal() {
     // thread store. Cohort / worker execution verbs stay pty-only via
     // validateTeamRouteIdentity.
     validateLaunchRouteIdentity: (store.getConfig().teamLaunchEnabled || teamExecutionEnabled())
-      ? async (sessionId, projectId) => {
+       ? async (sessionId, projectId) => {
+           if (await teamLifecycle.findModernWorkerBinding(sessionId, projectId)) return false;
           const session = ptys.getSession(sessionId);
           if (session && session.status !== 'exited' && session.projectId === projectId) return true;
           // Modern/ACP loopback owner has no pty — probe conversation-thread
@@ -9027,12 +9274,6 @@ async function bootstrapNormal() {
       }
     })
     .catch((err) => logMainError('startMcpServer', err));
-  // Start the Zana Mobile gateway if the user has enabled phone access. A start
-  // failure (e.g. port already held by another process) is recorded on the manager
-  // and surfaced through `mobile:status`; it must never abort boot.
-  if (store.getConfig().mobileGatewayEnabled === true) {
-    mobileGateway.start().catch((err) => logMainError('mobileGateway.start', err));
-  }
   // Bind the PTY/agent-status → renderer bridge ONCE for the process lifetime,
   // before the first window. Must not live in createWindow() (re-entrant on
   // macOS reactivate) or every reopen would double-send PTY output.
@@ -9066,7 +9307,18 @@ async function bootstrapNormal() {
     normalBootstrapStarted = false;
     throw error;
   }
+  // Start the Zana Mobile gateway if the user has enabled phone access. It must
+  // start only after ensureRendererStaticHost() has called
+  // setProductionRendererOrigin(): the gateway resolves its loopback upstream
+  // (productServerUrl) at start, and before that it falls back to :8780, which
+  // makes peer/phone connections close with 1011 after an app restart. A start
+  // failure (e.g. port already held by another process) is recorded on the manager
+  // and surfaced through `mobile:status`; it must never abort boot.
+  if (store.getConfig().mobileGatewayEnabled === true) {
+    mobileGateway.start().catch((err) => logMainError('mobileGateway.start', err));
+  }
   if (!unscopedWindow()) createWindow();
+  deepLinks.arm();
   void sharedClient.restore().catch(error => logMainError('sharedClient.restore', error));
   // Reconcile only this instance's recorded tmux sessions, never another app's
   // cc-* sessions on the shared default socket. Kill owned sessions from a
@@ -9113,7 +9365,8 @@ async function bootstrapNormal() {
       } catch (err) {
         logMainError('remoteReap.bootOrphanReap', err);
       }
-      await teamLifecycleIntegration.reconcileStartup([...recovered]);
+       await teamLifecycleIntegration.reconcileStartup([...recovered]);
+       await reconcileModernMembers();
       await squadExecutionService.reconcileActive();
       await sweepUnretainedSquadWorktrees({ executionStore, projects: store, sweepManagedWorktrees, logError: logMainError });
       /* v8 ignore next -- boot callback runs in built Electron; helper is unit-tested */
@@ -9122,7 +9375,7 @@ async function bootstrapNormal() {
       await squadExecutionService.drainPendingCoordinatorWakes();
       flushStaleWorkerInjections();
       executionClaimReconcileTimer ??= setInterval(() => {
-        void squadExecutionService.reconcileActive().catch((err) => logMainError('execution.reconcileActive', err));
+        void reconcileModernMembers().then(() => squadExecutionService.reconcileActive()).catch((err) => logMainError('execution.reconcileActive', err));
         void squadExecutionService.redispatchStalled().catch((err) => logMainError('execution.redispatchStalled', err));
         // Deliver a queued coordinator wake BEFORE escalating its blocker: a remote
         // coordinator never emits a raw idle edge, so this poll is the only path that
@@ -9397,6 +9650,7 @@ async function bootstrapNormal() {
           search: (query) => runtimeSupervisor!.searchPlugins(query),
           outdated: () => runtimeSupervisor!.outdatedPlugins(),
           update: (id) => runtimeSupervisor!.updatePlugin(id),
+          updateAll: () => runtimeSupervisor!.updateAllPlugins(),
           listMarketplaces: () => runtimeSupervisor!.listMarketplaces(),
           addMarketplace: (url) => runtimeSupervisor!.addMarketplace(url),
           refreshMarketplace: (url) => runtimeSupervisor!.refreshMarketplace(url),
@@ -9537,6 +9791,8 @@ app.on('before-quit', (event) => {
   // Release the loud-tier inbox subscription (Rule 3).
   offLoudInboxAppended?.();
   offLoudInboxAppended = null;
+  stopPeerUsePrompts?.();
+  stopPeerUsePrompts = null;
   // Local tmux owns persistent inner processes. Let process teardown close our
   // client naturally; explicitly killing it emits a false terminal exit that
   // marks Team lifecycle state dead before next launch can reattach.

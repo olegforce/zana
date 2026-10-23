@@ -36,7 +36,12 @@ export function boundarySpecs(paths) {
     if (/desktop-browser/.test(path)) add('desktop-browser-broker');
     if (/mobile-relay|mobile\/|mobile-/.test(path)) add('mobile-shell', 'mobile-relay-upload');
     if (/services\/scheduler\/|components\/scheduler\/|views\/scheduler\/|schedule-health/.test(path)) add('scheduler-self-healing', 'scheduler-overview', 'scheduler-detail', 'scheduler-cron');
-    if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
+    if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection|source-policy|source-registry)/.test(path)) add('squad-proposal-flow', 'job-team-launch-ui');
+    if (/squad-proposal|squad-worktree-runtime|squad-session-lifecycle|SquadEditor|team-store|TeamComposer|register-teams-mcp-tool|InboxDetail|(?:^|\/)AgentLauncher\.tsx|ExecutionJobDetails|modern-team-launch-tools|ipc\/execution-board|services\/execution\/(store|projection|execution-mcp-tool)/.test(path)) add('squad-proposal-flow', 'squad-direct-report', 'job-team-launch-ui');
+    // Owner report-back: the service, the MCP server that carries execution.start, and the notifier/report text.
+    if (/services\/execution\/service\.ts|services\/mcp\/mcp-server|squad-proposals\/(notifier|report)/.test(path)) add('squad-direct-report');
+    // Close with follow-up crosses the main/renderer seam: the summary, its failure reasons and the toast (#352).
+    if (/followups\/close-summary|lib\/close-idle-agents|claude-cli-provider|main-claude-binary/.test(path)) add('close-with-follow-up-needs-you');
     if (/execution-source-picker|ipc\/execution-board|services\/execution\/source-registry|team-launch-support|TeamComposer|team-composer-sources/.test(path)) add('squad-source-retry');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }
@@ -161,7 +166,12 @@ export function runVerification(args, env, io = { execute: execFileSync, read: r
     io.log('Changed production statements and branches meet the 80% coverage floor.');
   } else {
     const specs = boundarySpecs([...changes.keys()]);
-    if (specs.length) io.execute('pnpm', ['test:e2e', '--', ...specs], { stdio: 'inherit' });
+    // Broad branches select more serial cases than one runner finishes; CI splits them by spec file.
+    const shard = env.CI_E2E_SHARD;
+    if (shard !== undefined && !/^[1-9]\d*\/[1-9]\d*$/.test(shard)) { io.error(`Invalid CI_E2E_SHARD: ${shard}`); return 1; }
+    // A shard can draw no spec file when few specs are affected; the other shards still run them.
+    const sharding = shard ? [`--shard=${shard}`, '--pass-with-no-tests'] : [];
+    if (specs.length) io.execute('pnpm', ['test:e2e', '--', ...specs, ...sharding], { stdio: 'inherit' });
     else io.log('No Electron production boundary changed.');
   }
   return 0;

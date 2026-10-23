@@ -40,8 +40,15 @@ const h = vi.hoisted(() => {
     lifecycleStore: undefined as any,
     lifecycleIntegration: undefined as any,
     lifecycleOverride: {} as Record<string, (...a: any[]) => any>,
+    runtimeOverride: {} as Record<string, (...a: any[]) => any>,
     controlPlaneDeps: undefined as any,
-    browserManager: undefined as any
+    browserManager: undefined as any,
+    mobileStart: vi.fn(),
+    lastWin: undefined as any,
+    sent: [] as unknown[][],
+    winDestroyed: false,
+    contentsDestroyed: (() => false) as () => boolean,
+    runtimeStart: undefined as any
   };
 });
 
@@ -66,7 +73,13 @@ vi.mock('electron', () => {
     constructor() {
       const fallback = { get: (target: Record<string, unknown>, key: string | symbol) =>
         key in target ? target[key as string] : loose() };
-      return new Proxy({ id: 1, webContents: new Proxy({ id: 2 }, fallback) }, fallback);
+      const win = new Proxy({
+        id: 1,
+        isDestroyed: () => h.winDestroyed,
+        webContents: new Proxy({ id: 2, isDestroyed: () => h.contentsDestroyed(), send: (...a: unknown[]) => { h.sent.push(a); } }, fallback)
+      }, fallback);
+      h.lastWin = win;
+      return win;
     }
   }
   const display = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
@@ -187,8 +200,20 @@ vi.mock('../desktop-browser-view.js', async () => {
     return h.browserManager;
   } };
 });
-vi.mock('../runtime/runtime-supervisor.js', () => ({
-  startRuntimeSupervisor: async () => { throw new Error('no runtime in unit test'); }
+vi.mock('../runtime/runtime-supervisor.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../runtime/runtime-supervisor.js')>();
+  return {
+    ...actual,
+    // Dev product-route runtime, with per-test method overrides for Modern member probes.
+    createProductRouteSquadRuntime: (...args: Parameters<typeof actual.createProductRouteSquadRuntime>) => {
+      const real = actual.createProductRouteSquadRuntime(...args);
+      return new Proxy(real, { get: (t, k) => (typeof k === 'string' && h.runtimeOverride[k]) || (t as any)[k] });
+    },
+    startRuntimeSupervisor: async () => { if (h.runtimeStart) return h.runtimeStart; throw new Error('no runtime in unit test'); }
+  };
+});
+vi.mock('@zana-ai/zcc-server/mobile/manager', () => ({
+  MobileGatewayManager: class { start() { h.mobileStart(); return Promise.reject(new Error('port held')); } close() { return Promise.resolve(); } status() { return {}; } }
 }));
 vi.mock('../updater.js', () => ({ createUpdater: () => ({ start() {}, stop() {}, checkForUpdates: async () => {} }) }));
 vi.mock('../startup-dependency-doctor.js', () => ({ runStartupDependencyDoctor: async () => ({}) }));
@@ -204,6 +229,7 @@ for (const [klass, key] of [[GoalManager, 'goalDeps'], [FollowUpManager, 'follow
   (klass.prototype as any).setDeps = function (deps: unknown) { (h as any)[key] = deps; return original.call(this, deps); };
 }
 const host = await import('../host.js');
+const { IPC } = await import('@zana-ai/zcc-desktop-contract');
 const { store } = await import('@zana-ai/zcc-server/services/projects/store');
 const registry = await import('@zana-ai/zcc-host-daemon/harness/registry');
 const { mkdirSync, symlinkSync } = await import('node:fs');
@@ -235,12 +261,16 @@ describe('host bootstrap wiring', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubEnv('ELECTRON_RENDERER_URL', 'http://127.0.0.1:5173');
+    const realGetConfig = store.getConfig.bind(store);
+    const configSpy = vi.spyOn(store, 'getConfig').mockImplementation(() => ({ ...realGetConfig(), mobileGatewayEnabled: true }));
     try {
       h.ready!();
       await vi.waitFor(() => expect(h.controlPlaneDeps, JSON.stringify(vi.mocked(console.error).mock.calls)).toBeDefined(), { timeout: 20000 });
       expect(h.controlPlaneDeps.pluginCommands.cliContributions).toBeTypeOf('function');
       expect(h.controlPlaneDeps.pluginCommands.runCliCommand).toBeTypeOf('function');
-    } finally { vi.unstubAllEnvs(); }
+    } finally { vi.unstubAllEnvs(); configSpy.mockRestore(); }
+    expect(h.mobileStart).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(vi.mocked(console.error).mock.calls.some(call => String(call[0]).includes('mobileGateway.start'))).toBe(true));
     expect(h.ipcCtx.createInteractiveTerminal).toBe(host.createInteractiveTerminal);
     expect(h.ipcCtx.launchAuthorizedTerminal).toBeTypeOf('function');
     expect(h.goalDeps.runEvaluator).toBeTypeOf('function');
@@ -604,6 +634,83 @@ describe('host bootstrap wiring', () => {
     h.lifecycleOverride = {};
   });
 
+  it('checks Modern team models against the ACP runtime and snapshots canonical providers', async () => {
+    const c = ctx();
+    const o = h.squadOpts;
+    vi.spyOn(c.teams, 'list').mockReturnValue([{ id: 'tm', transport: 'MODERN', slots: [{ personaId: 'ma' }, { personaId: 'mb' }], orchestratorPersonaId: 'mo' }]);
+    vi.spyOn(c.personas, 'list').mockReturnValue([
+      { id: 'ma', name: 'A', baseProfile: 'claude', model: 'sonnet' },
+      { id: 'mb', name: 'B', baseProfile: 'opencode', model: 'prov/model-b' },
+      { id: 'mo', name: 'O', baseProfile: 'claude' }
+    ]);
+    const preflight = vi.fn(async () => ({ ready: true, providers: [] }));
+    h.runtimeOverride.preflightSquadRuntime = preflight;
+    try {
+      const request = { teamId: 'tm', workUnits: [], slots: [{ initialTask: 'a' }, { initialTask: 'b' }], coordinationMode: 'durable' };
+      const ready = await o.admissionInput(project.id, request);
+      expect(preflight).toHaveBeenCalled();
+      const [checked] = preflight.mock.calls.at(-1)! as unknown as [{ projectId: string; providerIds: string[]; selections: unknown[] }];
+      expect(checked.projectId).toBe(project.id);
+      // ACP ids, never CLI harness families: CLI inventories cannot attest ACP model ids.
+      expect(checked.providerIds).toContain('claude-code');
+      expect(checked.providerIds).not.toContain('claude');
+      expect(JSON.stringify(ready)).toContain('available');
+      preflight.mockResolvedValue({ ready: false, providers: [] });
+      expect(JSON.stringify(await o.admissionInput(project.id, request))).toContain('unavailable');
+
+      const snapshots = await o.resolveTeamModelSnapshots(project.id, { teamId: 'tm', slots: [{ initialTask: 'a' }, { initialTask: 'b' }, { initialTask: 'o' }] });
+      expect(snapshots.map((snapshot: { provider: string }) => snapshot.provider)).toEqual(['claude-code', 'acp-opencode', 'claude-code']);
+    } finally {
+      vi.mocked(c.teams.list).mockRestore();
+      vi.mocked(c.personas.list).mockRestore();
+      h.runtimeOverride = {};
+    }
+  });
+
+  it('fences Modern execution bindings and route identities to the exact live member generation', async () => {
+    const deps = h.mcpDeps;
+    const modern = { executionId: 'e-modern', slotId: '0:w1:0', role: 'worker', authorizationId: 'auth-modern', generation: 3 };
+    h.lifecycleOverride.resolveModernBinding = async (sessionId: string, projectId: string) =>
+      sessionId === 'modern-1' && projectId === 'p1' ? modern : undefined;
+    const live = vi.fn(async () => true);
+    h.runtimeOverride.isSquadMemberLive = live;
+    const findBinding = vi.spyOn(h.lifecycleStore, 'findModernWorkerBinding');
+    try {
+      const expected = { executionId: 'e-modern', projectId: 'p1', slotId: '0:w1:0', role: 'worker', principalId: 'modern-1',
+        authorizationId: 'auth-modern', memberFence: { bindingId: 'modern-1', generation: 3 } };
+      expect(await deps.resolveExecutionCohortBinding('modern-1', 'p1')).toEqual(expected);
+      expect(await deps.resolveExecutionCohortBinding('modern-1', 'p1', { bindingId: 'modern-1', generation: 3 })).toEqual(expected);
+      // A stale generation or another member's fence never resolves the binding.
+      expect(await deps.resolveExecutionCohortBinding('modern-1', 'p1', { bindingId: 'modern-1', generation: 2 })).toBeUndefined();
+      expect(await deps.resolveExecutionCohortBinding('modern-1', 'p1', { bindingId: 'modern-2', generation: 3 })).toBeUndefined();
+      expect(await deps.resolveExecutionCohortBinding('modern-1', 'p2')).toBeUndefined();
+      expect(await deps.resolveExecutionCohortBinding('nobody', 'p1')).toBeUndefined();
+
+      // An exited PTY in the same project falls through to the Modern lookup instead of authorizing.
+      h.ptys.sessions.set('pty-exited', sessionFixture({ id: 'pty-exited', status: 'exited',
+        cohort: { executionId: 'e-pty', slotId: 's', role: 'worker' } }));
+      expect(await deps.resolveExecutionCohortBinding('pty-exited', 'p1')).toBeUndefined();
+      expect(await deps.validateExecutionRouteIdentity('pty-exited', 'p1')).toBe(false);
+
+      expect(await deps.validateExecutionRouteIdentity('modern-1', 'p1')).toBe(true);
+      expect(live).toHaveBeenCalledWith('modern-1', 'p1', 3);
+      live.mockResolvedValueOnce(false);
+      expect(await deps.validateExecutionRouteIdentity('modern-1', 'p1')).toBe(false);
+      live.mockClear();
+      expect(await deps.validateExecutionRouteIdentity('nobody', 'p1')).toBe(false);
+      expect(live).not.toHaveBeenCalled();
+
+      // A Modern member is never a launch owner, even if it otherwise looks live.
+      findBinding.mockResolvedValueOnce({ generation: 3 } as never);
+      expect(await deps.validateLaunchRouteIdentity('modern-1', 'p1')).toBe(false);
+    } finally {
+      h.ptys.sessions.delete('pty-exited');
+      findBinding.mockRestore();
+      h.lifecycleOverride = {};
+      h.runtimeOverride = {};
+    }
+  });
+
   it('reports team task outcomes for known and unknown workers', async () => {
     expect(await host.reportTeamTask('worker-1', 'lr-1', 'slot-1', 'complete')).toMatchObject({ ok: false, code: 'NOT_FOUND' });
     vi.spyOn(h.lifecycleStore, 'list').mockResolvedValue([{ id: 'rec', launchRequestId: 'lr-1', workers: [{ sessionId: 'worker-1', slotId: 'slot-1' }] }]);
@@ -802,6 +909,51 @@ describe('host bootstrap wiring', () => {
     await vi.waitFor(() => expect(logError).toHaveBeenCalledWith('execution.flushBlockerNotices', expect.objectContaining({ message: 'offline' })));
   });
 
+  it('routes OS deep links and second-instance argv to the deep link host', async () => {
+    const preventDefault = vi.fn();
+    const [openUrl] = h.appHandlers.get('open-url')!;
+    openUrl({ preventDefault }, 'zana-dev://plugin/design-docs/peer/join?d=abc');
+    openUrl({ preventDefault }, 'https://not-a-deep-link.example/');
+    expect(preventDefault).toHaveBeenCalledTimes(2);
+    const second = h.appHandlers.get('second-instance')!;
+    expect(second.length).toBeGreaterThan(0);
+    for (const handler of second) {
+      handler({}, ['app', 'zana-dev://plugin/design-docs/peer/join?d=def']);
+      handler({}, ['app', '--no-link']);
+    }
+    await settle();
+  });
+
+  it('delivers an armed deep link to the ready main window and logs delivery failures', async () => {
+    const errors = vi.mocked(console.error);
+    const link = 'zana-dev://plugin/design-docs/peer/join?d=ready';
+    const [openUrl] = h.appHandlers.get('open-url')!;
+    const deliveries = () => h.sent.filter(([channel, d]) => channel === IPC.deepLinks.onLink && (d as any).payload === 'ready');
+
+    // Ready window: link is sent to the renderer.
+    ctx().markRendererReady(h.lastWin);
+    h.sent.length = 0;
+    openUrl({ preventDefault: vi.fn() }, link);
+    await vi.waitFor(() => expect(deliveries()).toHaveLength(1));
+    expect(deliveries()[0][1]).toMatchObject({ pluginId: 'design-docs', route: 'peer/join' });
+
+    // Window dies between readiness and send.
+    const alive = h.contentsDestroyed;
+    h.contentsDestroyed = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    errors.mockClear();
+    openUrl({ preventDefault: vi.fn() }, link);
+    await vi.waitFor(() => expect(errors.mock.calls.some(c => String(c[0]).includes('deepLink.deliver'))).toBe(true));
+    expect(deliveries()).toHaveLength(1);
+
+    // Window never becomes ready.
+    h.contentsDestroyed = () => true;
+    errors.mockClear();
+    openUrl({ preventDefault: vi.fn() }, link);
+    await vi.waitFor(() => expect(errors.mock.calls.some(c => String(c[0]).includes('deepLink.deliver'))).toBe(true));
+    expect(deliveries()).toHaveLength(1);
+    h.contentsDestroyed = alive;
+  });
+
   it('quits without confirmation when configured and releases services and timers', async () => {
     const config = store.getConfig();
     vi.spyOn(store, 'getConfig').mockReturnValue({ ...config, confirmQuitOnLiveSessions: false });
@@ -810,4 +962,35 @@ describe('host bootstrap wiring', () => {
     await settle();
     expect(() => beforeQuit({ preventDefault: vi.fn() })).not.toThrow();
   });
+
+  it('connects bulk plugin updates to the production supervisor', async () => {
+    const value = { updated: ['fixture'], failed: [] };
+    const updateAllPlugins = vi.fn(async () => value);
+    const noop = () => () => {};
+    h.runtimeStart = new Proxy({
+      rendererUrl: 'http://127.0.0.1:1/', hostUrl: 'http://127.0.0.1:1', hostId: 'host-test',
+      updateAllPlugins, listProjects: async () => [], close: async () => {},
+      publishProductEvent: async () => {}
+    }, { get: (target, key) => key === 'then' ? undefined : key in target ? target[key as keyof typeof target] : noop });
+    vi.resetModules();
+    h.appHandlers.clear();
+    h.controlPlaneDeps = undefined;
+    const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+    delete process.env.ELECTRON_RENDERER_URL;
+    try {
+      await import('../host.js');
+      h.ready!();
+      await vi.waitFor(() => expect(h.controlPlaneDeps?.pluginHost, JSON.stringify(vi.mocked(console.error).mock.calls)).toBeDefined(), { timeout: 20000 });
+      await expect(h.controlPlaneDeps.pluginHost.updateAll()).resolves.toEqual(value);
+      expect(updateAllPlugins).toHaveBeenCalledOnce();
+      updateAllPlugins.mockRejectedValueOnce(new Error('plugin host stopped'));
+      await expect(h.controlPlaneDeps.pluginHost.updateAll()).rejects.toThrow('plugin host stopped');
+    } finally {
+      h.appHandlers.get('before-quit')?.[0]?.({ preventDefault: vi.fn() });
+      await settle();
+      h.runtimeStart = undefined;
+      if (rendererUrl === undefined) delete process.env.ELECTRON_RENDERER_URL;
+      else process.env.ELECTRON_RENDERER_URL = rendererUrl;
+    }
+  }, 30000);
 });

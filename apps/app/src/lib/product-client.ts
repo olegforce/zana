@@ -7,6 +7,7 @@ import { sharedExtensions } from './shared-extensions.js';
 import type { SystemVoiceStatusResponse } from '@zana-ai/zcc-server-contract';
 import type { CcApi } from '@zana-ai/zcc-desktop-contract';
 import type { Host } from '@zana-ai/zcc-domain/thread-runtime';
+import type { CreatePeerConnectionResponse, PausePeerLinkResponse, PeerConnection, PeerConnectionListResponse, PeerLeftover, PeerLeftoverListResponse, PeerLinkActivityResponse, PeerLinkListResponse, PeerRemoteLoginCheckResponse, RemovePeerLinkResponse, RemovePeerLinkResult, RepairPeerLinkResponse } from '@zana-ai/zcc-server-contract';
 import type {
   AgentMessage,
   AgentRecord,
@@ -857,8 +858,9 @@ function httpProduct(): Pick<
       },
       openAsThread: async (threadId) =>
         apiJson(`/threads/${encodeURIComponent(threadId)}/open-as-thread`, { method: 'POST', body: '{}' }),
-      conversationOutline: async (threadId) =>
-        apiJson(`/threads/${encodeURIComponent(threadId)}/conversation-outline`),
+      conversationOutline: async (threadId, query) =>
+        apiJson(`/threads/${encodeURIComponent(threadId)}/conversation-outline${
+          query === undefined ? '' : `?q=${encodeURIComponent(query)}`}`),
       timelineTurnSummaryDetails: async (threadId, query) => {
         const params = new URLSearchParams();
         params.set('turnId', query.turnId);
@@ -962,6 +964,9 @@ function httpProduct(): Pick<
         });
         return body;
       },
+      move: (threadId, input) => apiJson(`/threads/${encodeURIComponent(threadId)}/move`, {
+        method: 'POST', body: JSON.stringify(input)
+      }),
       closeFollowup: async (threadId) => {
         const body = await apiJson<{ ok: boolean; summarized: number; followedUp: number }>(
           `/threads/${encodeURIComponent(threadId)}/close-followup`,
@@ -1149,6 +1154,11 @@ function httpProduct(): Pick<
             message: error instanceof Error ? error.message : String(error)
           };
         }
+      },
+      applyAllUpdates: async () => {
+        try {
+          return await apiJson<import('@zana-ai/zcc-domain/product').Result<import('@zana-ai/zcc-domain/product').PluginUpdateAllResult>>('/plugin-apps/update-all', { method: 'POST', body: '{}' });
+        } catch (error) { return { ok: false as const, code: 'WRITE_FAILED', message: error instanceof Error ? error.message : String(error) }; }
       },
       checkUpdates: async () => {
         const body = await apiJson<{ updates?: Array<{
@@ -1351,6 +1361,56 @@ function stubFamily(family: string): unknown {
  * tab uses loopback `/api/v1` + `/ws` and never receives a `window.cc` stand-in.
  */
 let terminalAdapter: CcApi['terminals'] | undefined;
+
+export type { PeerLeftover, PeerLeftoverListResponse };
+
+/**
+ * Core Peers hub: plugin links and the uses that justify them. Owner gestures only;
+ * the server re-validates every request, so this client carries no authority.
+ */
+export const peerLinks = {
+  list: async (): Promise<PeerLinkListResponse> => apiJson<PeerLinkListResponse>('/peer-links'),
+  removeUse: async (hostId: string, pluginId: string, scope?: string): Promise<RemovePeerLinkResponse> =>
+    apiJson<RemovePeerLinkResponse>(
+      `/peer-links/${encodeURIComponent(hostId)}/uses/${encodeURIComponent(pluginId)}${scope === undefined ? '' : `?scope=${encodeURIComponent(scope)}`}`,
+      { method: 'DELETE' }
+    ),
+  /** `force` is Remove anyway: a plugin whose removing handler failed no longer holds the removal back. */
+  removeLink: async (hostId: string, options?: { force?: boolean }): Promise<RemovePeerLinkResult> =>
+    apiJson<RemovePeerLinkResult>(`/peer-links/${encodeURIComponent(hostId)}${options?.force ? '?force=1' : ''}`, { method: 'DELETE' }),
+  activity: async (hostId: string): Promise<PeerLinkActivityResponse> =>
+    apiJson<PeerLinkActivityResponse>(`/peer-links/${encodeURIComponent(hostId)}/activity`),
+  disconnect: async (hostId: string): Promise<PausePeerLinkResponse> =>
+    apiJson<PausePeerLinkResponse>(`/peer-links/${encodeURIComponent(hostId)}/disconnect`, { method: 'POST' }),
+  reconnect: async (hostId: string): Promise<PausePeerLinkResponse> =>
+    apiJson<PausePeerLinkResponse>(`/peer-links/${encodeURIComponent(hostId)}/reconnect`, { method: 'POST' }),
+  repair: async (hostId: string): Promise<RepairPeerLinkResponse> =>
+    apiJson<RepairPeerLinkResponse>(`/peer-links/${encodeURIComponent(hostId)}/repair`, { method: 'POST' }),
+  leftovers: async (): Promise<PeerLeftoverListResponse> => apiJson<PeerLeftoverListResponse>('/peer-links/leftover'),
+  forgetLeftover: async (computerId: string): Promise<{ ok: true }> =>
+    apiJson<{ ok: true }>(`/peer-links/leftover/${encodeURIComponent(computerId)}/forget`, { method: 'POST' })
+};
+
+/**
+ * Core-owned Add / Join / Approve. The server owns every decision (it validates ids, checks the typed code and
+ * mints the approval proof), so this client carries no authority either.
+ */
+export const peerConnections = {
+  list: async (): Promise<PeerConnectionListResponse> => apiJson<PeerConnectionListResponse>('/peer-connections'),
+  checkRemoteLogin: async (): Promise<PeerRemoteLoginCheckResponse> =>
+    apiJson<PeerRemoteLoginCheckResponse>('/peer-connections/remote-login', { method: 'POST' }),
+  create: async (): Promise<CreatePeerConnectionResponse> =>
+    apiJson<CreatePeerConnectionResponse>('/peer-connections', { method: 'POST' }),
+  join: async (token: string, code: string): Promise<PeerConnection> =>
+    apiJson<PeerConnection>('/peer-connections/join', { method: 'POST', body: JSON.stringify({ token, code }) }),
+  approve: async (invitationId: string, code: string): Promise<PeerConnection> =>
+    apiJson<PeerConnection>(`/peer-connections/${encodeURIComponent(invitationId)}/approve`, { method: 'POST', body: JSON.stringify({ code }) }),
+  deny: async (invitationId: string): Promise<PeerConnection> =>
+    apiJson<PeerConnection>(`/peer-connections/${encodeURIComponent(invitationId)}/deny`, { method: 'POST' }),
+  cancel: async (invitationId: string): Promise<PeerConnection> =>
+    apiJson<PeerConnection>(`/peer-connections/${encodeURIComponent(invitationId)}`, { method: 'DELETE' })
+};
+
 export const product: CcApi = new Proxy({} as CcApi, {
   get(_target, family: string | symbol) {
     const name = String(family);
