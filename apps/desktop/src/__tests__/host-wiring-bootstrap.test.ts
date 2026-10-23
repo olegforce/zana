@@ -800,6 +800,26 @@ describe('host bootstrap wiring', () => {
     await hook(project.id, 'ov', JSON.stringify({ tool_name: 'Bash', tool_input: 'string-input' }));
   });
 
+  it('maps native approval and interrupt bodies to agent-status transitions', async () => {
+    const hook = h.mcpDeps.onNotifyHook;
+    h.ptys.sessions.set('cx1', sessionFixture({ id: 'cx1', projectId: project.id, profile: 'codex' }));
+    const requested = vi.spyOn(ctx().agentStatus, 'inputRequested');
+    const resolved = vi.spyOn(ctx().agentStatus, 'inputResolved');
+    const finished = vi.spyOn(ctx().agentStatus, 'turnFinished');
+    try {
+      const approval = { turn_id: 't1', tool_name: 'Bash', tool_input: { command: 'ls' } };
+      hook(project.id, 'cx1', 'blocked', JSON.stringify({ hook_event_name: 'PermissionRequest', ...approval }));
+      expect(requested).toHaveBeenCalledWith('cx1', expect.stringMatching(/^approval:t1:Bash:/));
+      hook(project.id, 'cx1', 'unblocked', JSON.stringify({ hook_event_name: 'PostToolUse', tool_use_id: 'u1', ...approval }));
+      expect(resolved).toHaveBeenCalledWith('cx1', [expect.stringMatching(/^approval:t1:Bash:/)]);
+      hook(project.id, 'cx1', 'unblocked', JSON.stringify({ hook_event_name: 'Interrupt' }));
+      expect(finished).toHaveBeenCalledWith('cx1');
+      await settle();
+    } finally {
+      for (const spy of [requested, resolved, finished]) spy.mockRestore();
+    }
+  });
+
   it('turns a StopFailure notify body into an API-error stop and cancels on new turns', async () => {
     const hook = h.mcpDeps.onNotifyHook;
     const stop = JSON.stringify({ hook_event_name: 'StopFailure', error: 'unknown', error_details: 'Provider anthropic not found' });
