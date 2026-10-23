@@ -954,9 +954,10 @@ async function apiErrorWorker() {
   let failedOnce = false;
   let nudged = false;
   async function turn(unitId) {
+    // Claude fires UserPromptSubmit at submit time, while the tab still shows its resting title.
+    hooks.run('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt: 'work' });
     setWorking();
     await sleep(400); // dwell past the 250 ms status debounce so 'working' is committed
-    hooks.run('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt: 'work' });
     return unitId;
   }
   async function finishUnit(unitId) {
