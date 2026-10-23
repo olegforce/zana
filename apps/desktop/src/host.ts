@@ -128,6 +128,8 @@ import { createExecutionHandoffStore } from '@zana-ai/zcc-server/services/execut
 import { createResumeGrantStore } from '@zana-ai/zcc-server/services/execution/resume-grant-store';
 import { createResumeTokenStore } from '@zana-ai/zcc-server/services/execution/resume-token-store';
 import { createInboxActionRegistry } from './inbox-actions/registry.js';
+import { createSquadWorkerRestarter } from './squad-worker-restart.js';
+import { lifecycleClaimOps } from './terminal-restore-launch.js';
 import { squadWorktreeHasActiveFollowUp, withSquadWorktreeLifecycleLock, type SquadWorktreeTerminalOutcome } from './squad-worktree-lifecycle.js';
 import { relaunchExecutionMonitor } from '@zana-ai/zcc-server/services/execution/relaunch-monitor';
 import { preflightWorkflowProfile } from '@zana-ai/zcc-server/services/agents/squad-bundle';
@@ -1139,6 +1141,25 @@ function restorePrincipal(capability: { id: string; request: CreateTerminalReque
     ? { kind: 'team', id: `restore:${capability.id}` }
     : { kind: 'automation', id: `restore:${capability.id}` };
 }
+
+const squadWorkerRestarter = createSquadWorkerRestarter({
+  getSession: (id) => ptys.getSession(id) ?? undefined,
+  getProject: (projectId) => store.listProjects().find((project) => project.id === projectId),
+  getExecution: (projectId, executionId) => executionStore.getInProject(projectId, executionId),
+  teamLaunchEnabled: () => store.getConfig().teamLaunchEnabled === true,
+  restoreCapabilities,
+  followUp: lifecycleClaimOps((capability) => squadFollowUpClaims.restoreClaim(capability)),
+  restorePrincipal,
+  isTeamWorkerRestore,
+  launchAuthorizedTerminal,
+  closeSession: async (id) => {
+    ptys.closeExpected(id);
+    await killLocalTmuxSession(id);
+  },
+  onRelaunched: (session) => {
+    if (session.cohort) teamLaunchSessions.set(session.id, session.cohort.cohortId);
+  }
+});
 
 async function withPreparedNativeSession<T extends { profile: LaunchProfileId; resumeSessionId?: string; extraArgs?: string[] }>(
   req: T,
@@ -7197,7 +7218,7 @@ function wireBridgeListeners() {
     void squadFollowUpClaims.releaseOnExit(sessionId);
     // Capture final counters before lifecycle reconciliation can make execution
     // terminal. Then forward exit detail so FAILED settlement includes provider cause.
-    void (async () => {
+    squadWorkerRestarter.onSessionExit(sessionId, async () => {
       if (exitedSession?.cohort?.executionId) {
         await squadExecutionService.observeSessionUsage(exitedSession.cohort.executionId, sessionId, 'terminal').catch((error) =>
           logMainError(`execution usage terminal ${sessionId}`, error)
@@ -7221,7 +7242,7 @@ function wireBridgeListeners() {
           logMainError(`execution coordinator exit ${sessionId}`, error)
         );
       }
-    })();
+    });
     if (exitedSession) {
       const cachedEntry = liveSessionStats.get(sessionId);
       const finalRead = readLiveSessionStats(exitedSession, { fresh: true });
@@ -7765,6 +7786,7 @@ function registerIpc() {
     get openProjectWindow() { return openProjectWindow; },
     get overseerAudit() { return overseerAudit; },
     get apiErrorResume() { return apiErrorResume; },
+    get squadWorkerRestarter() { return squadWorkerRestarter; },
     get packAndInstallLocal() { return packAndInstallLocal; },
     get pendingWhatsNew() { return pendingWhatsNew; },
     set pendingWhatsNew(value) { pendingWhatsNew = value; },
@@ -9736,6 +9758,7 @@ app.on('before-quit', (event) => {
   goals.stopWatching();
   goals.stopAll();
   followups.stopWatching();
+  squadWorkerRestarter.dispose();
   squadExecutionService.dispose();
   squadProposalNotifier.dispose();
   executionStorage.close();
