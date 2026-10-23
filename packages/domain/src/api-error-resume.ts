@@ -84,6 +84,15 @@ export function isValidResumePattern(pattern: string): boolean {
   }
 }
 
+/**
+ * Two rules with the same key are duplicates; the normaliser keeps only the
+ * first. `contains` compares case-insensitively, `regex` exactly.
+ */
+export function apiErrorResumeRuleKey(rule: Pick<ApiErrorResumeRule, 'match' | 'matchMode'>): string {
+  const match = rule.match.trim();
+  return `${rule.matchMode}\u0000${rule.matchMode === 'contains' ? match.toLowerCase() : match}`;
+}
+
 function shortHash(text: string): string {
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
@@ -104,7 +113,7 @@ export function normalizeApiErrorResume(raw: unknown): ApiErrorResumeConfig | un
     if (match.length < D.minMatchChars || match.length > D.maxMatchChars) continue;
     const matchMode: ApiErrorResumeMatchMode = r.matchMode === 'regex' ? 'regex' : 'contains';
     if (matchMode === 'regex' && !isValidResumePattern(match)) continue;
-    const dedupeKey = `${matchMode}\u0000${matchMode === 'contains' ? match.toLowerCase() : match}`;
+    const dedupeKey = apiErrorResumeRuleKey({ match, matchMode });
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     let id = typeof r.id === 'string' && RULE_ID.test(r.id) && !ids.has(r.id) ? r.id : `r${index}-${shortHash(match)}`;

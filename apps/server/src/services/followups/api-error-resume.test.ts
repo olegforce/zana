@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ApiErrorResumeConfig, ApiErrorResumeRule } from '@zana-ai/zcc-domain/product';
 import {
   ApiErrorResumeService,
-  createRegexMatcher,
+  openRegexSession,
   type ApiErrorResumeDeps,
   type RegexMatchResult
 } from './api-error-resume.js';
@@ -20,6 +20,9 @@ function setup(over: { config?: Partial<ApiErrorResumeConfig>; regex?: RegexMatc
     replyOk: true,
     regex: [...(over.regex ?? [])]
   };
+  const matchRegex = vi.fn(async (_text: string, _pattern: string, _flags: string): Promise<RegexMatchResult> =>
+    state.regex.shift() ?? 'no-match');
+  const disposeRegex = vi.fn();
   const deps = {
     getConfig: () => state.config,
     getSession: () => state.session,
@@ -27,13 +30,13 @@ function setup(over: { config?: Partial<ApiErrorResumeConfig>; regex?: RegexMatc
     reply: vi.fn(() => state.replyOk),
     markNeedsYou: vi.fn(),
     pushInbox: vi.fn(),
-    matchRegex: vi.fn(async () => state.regex.shift() ?? 'no-match'),
+    openRegex: vi.fn(() => ({ match: matchRegex, dispose: disposeRegex })),
     now: () => Date.now(),
     setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
     clearTimer: (h: NodeJS.Timeout) => clearTimeout(h),
     log: vi.fn()
   } satisfies ApiErrorResumeDeps;
-  return { state, deps, svc: new ApiErrorResumeService(deps) };
+  return { state, deps, matchRegex, disposeRegex, svc: new ApiErrorResumeService(deps) };
 }
 const err = { error: 'Provider ANTHROPIC not found', text: '' };
 
@@ -53,12 +56,12 @@ describe('matching', () => {
     const r = rule({ matchMode: 'regex', match: 'foo.*bar' });
     const a = setup({ config: { rules: [r] }, regex: ['match'] });
     expect(await a.svc.findRule('x', [r], { retry: false })).toEqual({ rule: r, skipped: [] });
-    expect(a.deps.matchRegex).toHaveBeenCalledWith('x', 'foo.*bar', 'i');
+    expect(a.matchRegex).toHaveBeenCalledWith('x', 'foo.*bar', 'i');
     const b = setup({ regex: ['no-match'] });
     expect((await b.svc.findRule('x', [r], { retry: false })).rule).toBeUndefined();
     const cs = rule({ matchMode: 'regex', match: 'Foo.*', caseSensitive: true });
     await b.svc.findRule('x', [cs], { retry: false });
-    expect(b.deps.matchRegex).toHaveBeenLastCalledWith('x', 'Foo.*', '');
+    expect(b.matchRegex).toHaveBeenLastCalledWith('x', 'Foo.*', '');
   });
   it('timeout skips the rule, tries the next, and notifies once per day', async () => {
     const slow = rule({ id: 'slow', matchMode: 'regex', match: '(a+)+$' });
@@ -85,14 +88,27 @@ describe('matching', () => {
     const p = a.svc.findRule('t', [r], { retry: true });
     await vi.advanceTimersByTimeAsync(3000);
     expect(await p).toEqual({ skipped: [{ ruleId: 'x', reason: 'unavailable' }] });
-    expect(a.deps.matchRegex).toHaveBeenCalledTimes(4);
+    expect(a.matchRegex).toHaveBeenCalledTimes(4);
     const b = setup({ regex: ['unavailable'] });
     expect(await b.svc.findRule('t', [r], { retry: false })).toEqual({ skipped: [{ ruleId: 'x', reason: 'unavailable' }] });
-    expect(b.deps.matchRegex).toHaveBeenCalledTimes(1);
+    expect(b.matchRegex).toHaveBeenCalledTimes(1);
     const c = setup({ regex: ['unavailable', 'match'] });
     const q = c.svc.findRule('t', [r], { retry: true });
     await vi.advanceTimersByTimeAsync(1000);
     expect((await q).rule).toBe(r);
+  });
+  it('opens one regex session per check, reuses it for every rule and retry, and disposes it', async () => {
+    const r1 = rule({ id: 'a', matchMode: 'regex', match: 'aaaa' });
+    const r2 = rule({ id: 'b', matchMode: 'regex', match: 'bbbb' });
+    const s = setup({ regex: ['no-match', 'unavailable', 'match'] });
+    const p = s.svc.findRule('t', [r1, r2], { retry: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await p).rule).toBe(r2);
+    expect(s.deps.openRegex).toHaveBeenCalledTimes(1);
+    expect(s.matchRegex).toHaveBeenCalledTimes(3);
+    expect(s.disposeRegex).toHaveBeenCalledTimes(1);
+    await s.svc.check('nothing', [rule()]);
+    expect(s.disposeRegex).toHaveBeenCalledTimes(2);
   });
   it('the first matching rule wins and disabled rules are ignored', async () => {
     const a = rule({ id: 'a', match: 'not found', message: 'one' });
@@ -190,7 +206,7 @@ describe('cancel while matching, rested state, edited rules', () => {
     const slow = rule({ matchMode: 'regex', match: 'foo.*bar' });
     const s = setup({ config: { rules: [slow] } });
     const waiting: ((r: RegexMatchResult) => void)[] = [];
-    s.deps.matchRegex.mockImplementation(() => new Promise<RegexMatchResult>((r) => { waiting.push(r); }));
+    s.matchRegex.mockImplementation(() => new Promise<RegexMatchResult>((r) => { waiting.push(r); }));
     return { s, release: (r: RegexMatchResult) => waiting.splice(0).forEach((w) => w(r)) };
   };
   it('a cancel during the match stops the stale error from arming', async () => {
@@ -258,6 +274,22 @@ describe('cancel while matching, rested state, edited rules', () => {
     expect(s.deps.reply).not.toHaveBeenCalled();
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining('rule edited'));
   });
+  it('does not send when a regex rule turned case-sensitive during the wait', async () => {
+    const r = rule({ matchMode: 'regex', match: 'provider .* not found' });
+    const s = setup({ config: { rules: [r] }, regex: ['match'] });
+    await s.svc.onApiErrorStop('s1', err);
+    s.state.config!.rules[0] = { ...r, caseSensitive: true };
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).not.toHaveBeenCalled();
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining('rule edited'));
+  });
+  it('still sends when only the message changed during the wait', async () => {
+    const s = setup();
+    await s.svc.onApiErrorStop('s1', err);
+    s.state.config!.rules[0] = { ...s.state.config!.rules[0], message: 'go on' };
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).toHaveBeenCalledWith('s1', 'go on');
+  });
 });
 
 describe('cap', () => {
@@ -272,7 +304,7 @@ describe('cap', () => {
     expect(s.deps.markNeedsYou).toHaveBeenCalledWith('s1');
     expect(s.deps.pushInbox).toHaveBeenCalledTimes(1);
     const input = s.deps.pushInbox.mock.calls[0][0] as { comments: string; dedupeKey: string };
-    expect(input.comments).toBe('Stopped resuming “Agent”: “Provider anthropic not found” matched 3 times in 15 minutes. Type in the agent to carry on.');
+    expect(input.comments).toBe('Stopped resuming “Agent”: Zana already resumed it 3 times in the last 15 minutes. Type in the agent to carry on.');
     expect(input.dedupeKey).toMatch(/^api-error-resume:cap:s1:\d+$/);
     vi.advanceTimersByTime(60000);
     expect(s.deps.reply).toHaveBeenCalledTimes(3);
@@ -281,13 +313,52 @@ describe('cap', () => {
     vi.advanceTimersByTime(20000);
     expect(s.deps.reply).toHaveBeenCalledTimes(4);
   });
-  it('survives a throwing pushInbox', async () => {
+  it('counts resumes per agent, whichever rule fired, and says "time" for one', async () => {
+    const other = rule({ id: 'r2', match: 'Connection lost mid-response', delaySeconds: 30 });
+    const s = setup({ config: { maxPerWindow: 1, rules: [rule(), other] } });
+    await s.svc.onApiErrorStop('s1', err);
+    vi.advanceTimersByTime(20000);
+    await s.svc.onApiErrorStop('s1', { error: 'Connection lost mid-response', text: '' });
+    const input = s.deps.pushInbox.mock.calls[0][0] as { comments: string };
+    expect(input.comments).toBe('Stopped resuming “Agent”: Zana already resumed it 1 time in the last 15 minutes. Type in the agent to carry on.');
+  });
+  it('re-checks the cap when the timer fires, so a lowered cap applies to a pending resume', async () => {
+    const s = setup({ config: { maxPerWindow: 2 } });
+    await s.svc.onApiErrorStop('s1', err);
+    vi.advanceTimersByTime(20000);
+    await s.svc.onApiErrorStop('s1', err); // 1 of 2 sent, so this one arms
+    s.state.config!.maxPerWindow = 1;
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).toHaveBeenCalledTimes(1);
+    expect(s.deps.markNeedsYou).toHaveBeenCalledWith('s1');
+    expect(s.deps.log).toHaveBeenCalledWith('[api-error-resume] session=s1 skip: cap reached');
+  });
+  it('re-checks the window too: a longer window keeps older sends in the count', async () => {
+    const s = setup({ config: { maxPerWindow: 1, windowMinutes: 5 } });
+    await s.svc.onApiErrorStop('s1', err);
+    vi.advanceTimersByTime(20000);
+    vi.advanceTimersByTime(5 * 60000); // the first send falls out of the 5-minute window
+    await s.svc.onApiErrorStop('s1', err);
+    s.state.config!.windowMinutes = 60;
+    vi.advanceTimersByTime(20000);
+    expect(s.deps.reply).toHaveBeenCalledTimes(1);
+    expect(s.deps.markNeedsYou).toHaveBeenCalledWith('s1');
+  });
+  it('survives a throwing pushInbox and logs why', async () => {
     const s = setup({ config: { maxPerWindow: 1 } });
     s.deps.pushInbox.mockImplementation(() => { throw new Error('x'); });
     await s.svc.onApiErrorStop('s1', err);
     vi.advanceTimersByTime(20000);
     await expect(s.svc.onApiErrorStop('s1', err)).resolves.toBeUndefined();
     expect(s.deps.markNeedsYou).toHaveBeenCalled();
+    expect(s.deps.log).toHaveBeenCalledWith('[api-error-resume] pushInbox failed: x');
+  });
+  it('logs a non-Error throw from the slow-rule notice', async () => {
+    const slow = rule({ id: 'slow', matchMode: 'regex', match: '(a+)+$' });
+    const s = setup({ config: { rules: [slow] }, regex: ['timeout'] });
+    s.deps.pushInbox.mockImplementation(() => { throw 'plain'; });
+    await s.svc.onApiErrorStop('s1', err);
+    expect(s.deps.log).toHaveBeenCalledWith('[api-error-resume] pushInbox failed: plain');
   });
 });
 
@@ -301,30 +372,61 @@ describe('check', () => {
   });
 });
 
-describe('createRegexMatcher', () => {
+describe('openRegexSession', () => {
   const scanner = (scan: () => Promise<unknown[]>) => {
     const dispose = vi.fn();
-    return { dispose, make: (() => ({ scan, dispose })) as never };
+    const make = vi.fn(() => ({ scan, dispose }));
+    return { dispose, make, factory: make as never };
   };
-  it('null scanner is unavailable', async () => {
-    expect(await createRegexMatcher((() => null) as never)('a', 'a', 'i')).toBe('unavailable');
+  it('null scanner is unavailable, and a later match tries again', async () => {
+    const make = vi.fn(() => null);
+    const session = openRegexSession(make as never);
+    expect(await session.match('a', 'a', 'i')).toBe('unavailable');
+    expect(await session.match('a', 'a', 'i')).toBe('unavailable');
+    expect(make).toHaveBeenCalledTimes(2);
+    session.dispose();
   });
   it.each([
-    ['hits', async () => [{ line: 1 }], 'match'],
-    ['no hits', async () => [], 'no-match'],
-    ['time limit', async () => { throw new Error('Search expression exceeded its time limit'); }, 'timeout'],
-    ['invalid', async () => { throw new Error('Invalid search expression'); }, 'invalid'],
-    ['other error', async () => { throw new Error('boom'); }, 'unavailable'],
-    ['non-error throw', async () => { throw 'boom'; }, 'unavailable']
-  ])('%s', async (_n, scan, expected) => {
+    ['hits', async () => [{ line: 1 }], 'match', 0],
+    ['no hits', async () => [], 'no-match', 0],
+    ['invalid', async () => { throw new Error('Invalid search expression'); }, 'invalid', 0],
+    ['time limit', async () => { throw new Error('Search expression exceeded its time limit'); }, 'timeout', 1],
+    ['other error', async () => { throw new Error('boom'); }, 'unavailable', 1],
+    ['non-error throw', async () => { throw 'boom'; }, 'unavailable', 1]
+  ])('%s', async (_n, scan, expected, disposedByFailure) => {
     const sc = scanner(scan as never);
-    expect(await createRegexMatcher(sc.make)('a', 'a', 'i')).toBe(expected);
+    const session = openRegexSession(sc.factory);
+    expect(await session.match('a', 'a', 'i')).toBe(expected);
+    expect(sc.dispose).toHaveBeenCalledTimes(disposedByFailure);
+    session.dispose(); // a failed worker is already gone, so it is not disposed twice
     expect(sc.dispose).toHaveBeenCalledTimes(1);
   });
-  it('the real worker times out a catastrophic pattern', async () => {
+  it('reuses one worker across patterns and starts a fresh one after a failure', async () => {
+    const results: Array<() => Promise<unknown[]>> = [
+      async () => [],
+      async () => { throw new Error('Invalid search expression'); },
+      async () => { throw new Error('Search expression exceeded its time limit'); },
+      async () => [{ line: 1 }]
+    ];
+    const sc = scanner(() => results.shift()!());
+    const session = openRegexSession(sc.factory);
+    expect(await session.match('a', 'x', 'i')).toBe('no-match');
+    expect(await session.match('a', '(', 'i')).toBe('invalid');
+    expect(sc.make).toHaveBeenCalledTimes(1);
+    expect(await session.match('a', '(a+)+$', '')).toBe('timeout');
+    expect(await session.match('a', 'a', 'i')).toBe('match');
+    expect(sc.make).toHaveBeenCalledTimes(2);
+    session.dispose();
+    session.dispose();
+    expect(sc.dispose).toHaveBeenCalledTimes(2);
+  });
+  it('the real worker times out a catastrophic pattern, and the session still matches afterwards', async () => {
     vi.useRealTimers();
+    const session = openRegexSession();
     const started = Date.now();
-    expect(await createRegexMatcher()('a'.repeat(40) + '!', '(a+)+$', '')).toBe('timeout');
+    expect(await session.match('a'.repeat(40) + '!', '(a+)+$', '')).toBe('timeout');
     expect(Date.now() - started).toBeLessThan(2000);
+    expect(await session.match('Provider anthropic not found', 'provider .* not', 'i')).toBe('match');
+    session.dispose();
   });
 });

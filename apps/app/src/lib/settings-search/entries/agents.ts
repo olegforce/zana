@@ -5,6 +5,7 @@ import {
   normalizeNotificationDefaults
 } from '@zana-ai/zcc-domain';
 import {
+  API_ERROR_RESUME_DEFAULTS,
   AUTO_CLOSE_IDLE_DEFAULTS,
   HEARTBEAT_DEFAULTS,
   SESSION_MEMORY_DEFAULTS,
@@ -439,7 +440,10 @@ export const entries: readonly SettingsSearchEntry[] = [
     keywords: ['limit', 'cap', 'window', 'needs you'],
     kind: 'setting',
     dependsOn: 'agents.api-error-resume',
-    value: (s) => `${s.config.apiErrorResume?.maxPerWindow ?? 3} in ${s.config.apiErrorResume?.windowMinutes ?? 15} min`,
+    value: (s) => {
+      const r = s.config.apiErrorResume;
+      return `${r?.maxPerWindow ?? API_ERROR_RESUME_DEFAULTS.maxPerWindow} in ${r?.windowMinutes ?? API_ERROR_RESUME_DEFAULTS.windowMinutes} min`;
+    },
   },
   {
     id: 'agents.api-error-resume-check',

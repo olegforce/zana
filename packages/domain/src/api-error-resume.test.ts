@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   API_ERROR_RESUME_DEFAULTS as D,
+  apiErrorResumeRuleKey,
   API_ERROR_RESUME_SUGGESTIONS,
   buildApiErrorMatchText,
   isValidResumePattern,
@@ -29,6 +30,16 @@ describe('isValidResumePattern', () => {
   it('accepts valid and rejects invalid patterns', () => {
     expect(isValidResumePattern('foo.*bar')).toBe(true);
     expect(isValidResumePattern('(unclosed')).toBe(false);
+  });
+});
+
+describe('apiErrorResumeRuleKey', () => {
+  it('ignores case and outer spaces for contains, and only outer spaces for regex', () => {
+    const k = apiErrorResumeRuleKey;
+    expect(k({ match: ' Rate Limited ', matchMode: 'contains' })).toBe(k({ match: 'rate limited', matchMode: 'contains' }));
+    expect(k({ match: 'Rate.*', matchMode: 'regex' })).not.toBe(k({ match: 'rate.*', matchMode: 'regex' }));
+    expect(k({ match: ' rate.* ', matchMode: 'regex' })).toBe(k({ match: 'rate.*', matchMode: 'regex' }));
+    expect(k({ match: 'rate.*', matchMode: 'regex' })).not.toBe(k({ match: 'rate.*', matchMode: 'contains' }));
   });
 });
 

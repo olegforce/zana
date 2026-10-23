@@ -198,6 +198,116 @@ describe('ApiErrorResumeSection', () => {
     expect(screen.queryByText(/Matches rule/)).toBeNull();
   });
 
+  it('keeps a new rule and shows an alert when its save fails, then saves it on retry', async () => {
+    const { onUpdate } = setup(on());
+    onUpdate.mockRejectedValueOnce(new Error('disk full'));
+    fireEvent.click(screen.getByText('Add rule'));
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    expect((await screen.findByRole('alert')).textContent).toBe("Couldn't save the last change. What you typed is still here, so try again.");
+    expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited');
+    fireEvent.blur(screen.getByLabelText('When the error matches (rule 1)'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an edit of a saved rule when its save fails, and drops it once stored', async () => {
+    const onUpdate = vi.fn();
+    onUpdate.mockRejectedValueOnce(new Error('nope'));
+    function Store({ initial }: { initial: AppConfig }) {
+      const [cfg, setCfg] = useState(initial);
+      return <ApiErrorResumeSection config={cfg} onConfigDraft={setCfg} onUpdate={async (patch) => { await onUpdate(patch); setCfg({ ...cfg, ...patch }); }} />;
+    }
+    render(<Store initial={on([rule()])} />);
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    await screen.findByRole('alert');
+    expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited');
+    fireEvent.blur(screen.getByLabelText('When the error matches (rule 1)'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(onUpdate).toHaveBeenLastCalledWith({ apiErrorResume: expect.objectContaining({ rules: [expect.objectContaining({ match: 'rate limited' })] }) });
+    expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited');
+  });
+
+  it('a newer edit typed while a save is in flight is not wiped when it lands', async () => {
+    let land!: () => void;
+    const onUpdate = vi.fn(() => new Promise<void>((r) => { land = r; }));
+    render(<ApiErrorResumeSection config={on([rule()])} onConfigDraft={vi.fn()} onUpdate={onUpdate} />);
+    const input = screen.getByLabelText('When the error matches (rule 1)');
+    fireEvent.change(input, { target: { value: 'rate limited' } });
+    fireEvent.blur(input);
+    fireEvent.change(input, { target: { value: 'rate limited again' } });
+    land();
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect((screen.getByLabelText('When the error matches (rule 1)') as HTMLInputElement).value).toBe('rate limited again');
+  });
+
+  it('a failed toggle, cap or remove shows the save alert instead of an unhandled rejection', async () => {
+    const { onUpdate } = setup(on([rule()]));
+    onUpdate.mockRejectedValue(new Error('nope'));
+    fireEvent.click(screen.getByLabelText('Remove rule 1'));
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText('When the error matches (rule 1)')).toBeTruthy();
+    fireEvent.blur(screen.getByLabelText('Messages before stopping'), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('switch', { name: 'Resume after matching API errors' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  it('flags a match the store would drop: too long, or the same as another row', () => {
+    const { onUpdate } = setup(on([rule(), rule({ id: 'b', match: 'second rule' }), rule({ id: 'c', matchMode: 'regex', match: 'Over.*' })]));
+    const second = screen.getByLabelText('When the error matches (rule 2)');
+    fireEvent.change(second, { target: { value: '  OVERLOADED ' } });
+    fireEvent.blur(second);
+    expect(screen.getAllByRole('alert').map((a) => a.textContent)).toEqual(['Same as rule 2', 'Same as rule 1']);
+    fireEvent.change(second, { target: { value: 'x'.repeat(301) } });
+    fireEvent.blur(second);
+    expect(screen.getAllByRole('alert').map((a) => a.textContent)).toEqual(['At most 300 characters']);
+    // the same text as a regex is a different rule
+    fireEvent.change(second, { target: { value: 'Over.*' } });
+    fireEvent.click(screen.getByLabelText('Regex (rule 2)'));
+    expect(screen.getAllByRole('alert').map((a) => a.textContent)).toEqual(['Same as rule 3', 'Same as rule 2']);
+    expect(onUpdate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Regex (rule 2)'));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps the message length and stops adding rules at the limit', () => {
+    const many = Array.from({ length: 20 }, (_, i) => rule({ id: `r${i}`, match: `error number ${i}` }));
+    setup(on(many));
+    expect(screen.getByLabelText('Send (rule 1)').getAttribute('maxlength')).toBe('200');
+    expect((screen.getByText('Add rule') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText('+ Provider anthropic not found') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('You can have up to 20 rules.')).toBeTruthy();
+  });
+
+  it('Check shows a failure, not the previous answer, when the request rejects', async () => {
+    setup(on([rule()]));
+    check.mockResolvedValueOnce({ ruleId: 'a', message: 'continue', delaySeconds: 20, skipped: [] });
+    fireEvent.click(screen.getByText('Check'));
+    await screen.findByText(/Matches rule 1/);
+    check.mockRejectedValueOnce(new Error('ipc down'));
+    fireEvent.click(screen.getByText('Check'));
+    await screen.findByText("Zana couldn't check the error just now. Try again.");
+    expect(screen.queryByText(/Matches rule 1/)).toBeNull();
+  });
+
+  it('ignores an older Check failure that arrives after a newer answer', async () => {
+    setup(on([rule()]));
+    let fail!: (e: Error) => void;
+    check.mockImplementationOnce(() => new Promise((_r, reject) => { fail = reject; }));
+    check.mockResolvedValueOnce({ ruleId: null, skipped: [] });
+    fireEvent.click(screen.getByText('Check'));
+    fireEvent.click(screen.getByText('Check'));
+    await screen.findByText('No rule matches. Zana would leave the agent waiting for you.');
+    fail(new Error('late'));
+    await Promise.resolve();
+    expect(screen.queryByText(/couldn't check/)).toBeNull();
+  });
+
   it('Check says it is desktop-only when the API is missing', async () => {
     delete (window as any).cc;
     setup(on());

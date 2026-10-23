@@ -19,6 +19,7 @@
  */
 
 import {
+  API_ERROR_RESUME_DEFAULTS,
   buildApiErrorMatchText,
   type ApiErrorResumeConfig,
   type ApiErrorResumeRule
@@ -27,23 +28,33 @@ import { createRegexScanner } from '../projects/regex-worker.js';
 
 export type RegexMatchResult = 'match' | 'no-match' | 'timeout' | 'unavailable' | 'invalid';
 export type RegexMatcher = (text: string, pattern: string, flags: string) => Promise<RegexMatchResult>;
+export interface RegexSession { match: RegexMatcher; dispose: () => void }
 
-export function createRegexMatcher(createScanner: typeof createRegexScanner = createRegexScanner): RegexMatcher {
-  return async (text, pattern, flags) => {
-    const scanner = createScanner();
+/**
+ * One regex worker for a whole rule check: it starts on the first regex rule and
+ * is reused for the rest and for retries. A timeout or crash stops the worker,
+ * so the next rule starts a fresh one.
+ */
+export function openRegexSession(createScanner: typeof createRegexScanner = createRegexScanner): RegexSession {
+  let scanner: ReturnType<typeof createRegexScanner> = null;
+  const dispose = () => {
+    scanner?.dispose();
+    scanner = null;
+  };
+  const match: RegexMatcher = async (text, pattern, flags) => {
+    scanner ??= createScanner();
     if (!scanner) return 'unavailable';
     try {
       const hits = await scanner.scan(text, pattern, flags);
       return hits.length > 0 ? 'match' : 'no-match';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('time limit')) return 'timeout';
-      if (message.includes('Invalid search expression')) return 'invalid';
-      return 'unavailable';
-    } finally {
-      scanner.dispose();
+      if (message.includes('Invalid search expression')) return 'invalid'; // the worker is still usable
+      dispose();
+      return message.includes('time limit') ? 'timeout' : 'unavailable';
     }
   };
+  return { match, dispose };
 }
 
 export type SkippedReason = 'timeout' | 'unavailable' | 'invalid';
@@ -64,7 +75,8 @@ export interface ApiErrorResumeDeps {
   reply: (sessionId: string, text: string) => boolean;
   markNeedsYou: (sessionId: string) => void;
   pushInbox: (input: { projectId: string; subject?: string; comments: string; dedupeKey?: string }) => void;
-  matchRegex: RegexMatcher;
+  /** A regex worker session for one rule check; disposed when the check ends. */
+  openRegex: () => RegexSession;
   now: () => number;
   setTimer: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimer: (handle: NodeJS.Timeout) => void;
@@ -77,12 +89,14 @@ interface Pending {
   /** The rule as armed; an edit during the wait must not send for the old match. */
   match: string;
   matchMode: ApiErrorResumeRule['matchMode'];
+  caseSensitive: boolean;
   lastInputAt: number | undefined;
 }
 
 const RESTING = new Set(['idle', 'done', 'waiting']);
 const UNAVAILABLE_RETRIES = 3;
 const UNAVAILABLE_RETRY_MS = 1000;
+const MAX_WINDOW_MS = API_ERROR_RESUME_DEFAULTS.maxWindowMinutes * 60000;
 
 export class ApiErrorResumeService {
   private pending = new Map<string, Pending>();
@@ -101,21 +115,27 @@ export class ApiErrorResumeService {
   ): Promise<{ rule?: ApiErrorResumeRule; skipped: SkippedRule[] }> {
     const skipped: SkippedRule[] = [];
     const lowered = matchText.toLowerCase();
-    for (const rule of rules) {
-      if (!rule.enabled) continue;
-      if (rule.matchMode === 'contains') {
-        if (lowered.includes(rule.match.toLowerCase())) return { rule, skipped };
-        continue;
+    const regex = this.deps.openRegex();
+    try {
+      for (const rule of rules) {
+        if (!rule.enabled) continue;
+        if (rule.matchMode === 'contains') {
+          if (lowered.includes(rule.match.toLowerCase())) return { rule, skipped };
+          continue;
+        }
+        const flags = rule.caseSensitive ? '' : 'i';
+        let result = await regex.match(matchText, rule.match, flags);
+        for (let attempt = 0; retry && result === 'unavailable' && attempt < UNAVAILABLE_RETRIES; attempt++) {
+          await new Promise<void>(resolve => this.deps.setTimer(resolve, UNAVAILABLE_RETRY_MS));
+          result = await regex.match(matchText, rule.match, flags);
+        }
+        if (result === 'match') return { rule, skipped };
+        if (result !== 'no-match') skipped.push({ ruleId: rule.id, reason: result });
       }
-      let result = await this.deps.matchRegex(matchText, rule.match, rule.caseSensitive ? '' : 'i');
-      for (let attempt = 0; retry && result === 'unavailable' && attempt < UNAVAILABLE_RETRIES; attempt++) {
-        await new Promise<void>(resolve => this.deps.setTimer(resolve, UNAVAILABLE_RETRY_MS));
-        result = await this.deps.matchRegex(matchText, rule.match, rule.caseSensitive ? '' : 'i');
-      }
-      if (result === 'match') return { rule, skipped };
-      if (result !== 'no-match') skipped.push({ ruleId: rule.id, reason: result });
+      return { skipped };
+    } finally {
+      regex.dispose();
     }
-    return { skipped };
   }
 
   async onApiErrorStop(sessionId: string, event: { error: string; text: string }): Promise<void> {
@@ -137,28 +157,50 @@ export class ApiErrorResumeService {
     }
     if (!rule) return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: no rule matched`);
 
-    const now = deps.now();
-    const windowMs = config.windowMinutes * 60000;
-    const recent = (this.sends.get(sessionId) ?? []).filter(t => now - t < windowMs);
-    if (recent.length > 0) this.sends.set(sessionId, recent); else this.sends.delete(sessionId);
-    if (recent.length >= config.maxPerWindow) {
-      deps.markNeedsYou(sessionId);
-      safely(() => deps.pushInbox({
-        projectId: session.projectId,
-        subject: `Resume stopped — ${session.title}`,
-        comments:
-          `Stopped resuming “${session.title}”: “${rule.match}” matched ${recent.length} times in ` +
-          `${config.windowMinutes} minutes. Type in the agent to carry on.`,
-        dedupeKey: `api-error-resume:cap:${sessionId}:${Math.floor(now / windowMs)}`
-      }));
-      return deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: cap reached`);
-    }
+    if (this.capReached(sessionId, session, config)) return;
 
     this.clearPending(sessionId);
     const timer = deps.setTimer(() => this.fire(sessionId), rule.delaySeconds * 1000);
     this.pending.set(sessionId, {
-      timer, ruleId: rule.id, match: rule.match, matchMode: rule.matchMode, lastInputAt: session.lastInputAt
+      timer,
+      ruleId: rule.id,
+      match: rule.match,
+      matchMode: rule.matchMode,
+      caseSensitive: rule.caseSensitive === true,
+      lastInputAt: session.lastInputAt
     });
+  }
+
+  /**
+   * Sends to this session inside the current window. History is kept for the
+   * longest window Settings allows, so widening the window still counts them.
+   */
+  private recentSends(sessionId: string, config: ApiErrorResumeConfig, now: number): number[] {
+    const kept = (this.sends.get(sessionId) ?? []).filter(t => now - t < MAX_WINDOW_MS);
+    if (kept.length > 0) this.sends.set(sessionId, kept); else this.sends.delete(sessionId);
+    return kept.filter(t => now - t < config.windowMinutes * 60000);
+  }
+
+  /**
+   * Checked when a resume is armed and again just before it sends, so lowering
+   * the cap or the window during the wait applies to the pending resume too.
+   */
+  private capReached(sessionId: string, session: ApiErrorResumeSession, config: ApiErrorResumeConfig): boolean {
+    const { deps } = this;
+    const now = deps.now();
+    const sent = this.recentSends(sessionId, config, now).length;
+    if (sent < config.maxPerWindow) return false;
+    deps.markNeedsYou(sessionId);
+    this.safely('pushInbox', () => deps.pushInbox({
+      projectId: session.projectId,
+      subject: `Resume stopped — ${session.title}`,
+      comments:
+        `Stopped resuming “${session.title}”: Zana already resumed it ${sent} ${sent === 1 ? 'time' : 'times'} ` +
+        `in the last ${config.windowMinutes} minutes. Type in the agent to carry on.`,
+      dedupeKey: `api-error-resume:cap:${sessionId}:${Math.floor(now / (config.windowMinutes * 60000))}`
+    }));
+    deps.log(`[api-error-resume] session=${sessionId.slice(0, 8)} skip: cap reached`);
+    return true;
   }
 
   private notifySlow(session: ApiErrorResumeSession, rules: ApiErrorResumeRule[], skipped: SkippedRule[]): void {
@@ -167,7 +209,7 @@ export class ApiErrorResumeService {
       if (s.reason !== 'timeout') continue;
       const rule = rules.find(r => r.id === s.ruleId);
       if (!rule) continue;
-      safely(() => this.deps.pushInbox({
+      this.safely('pushInbox', () => this.deps.pushInbox({
         projectId: session.projectId,
         subject: 'Resume rule skipped',
         comments:
@@ -188,18 +230,31 @@ export class ApiErrorResumeService {
     if (!config?.enabled) return deps.log(`${tag} skip: feature turned off`);
     const rule = config.rules.find(r => r.id === entry.ruleId);
     if (!rule || !rule.enabled) return deps.log(`${tag} skip: rule removed or disabled`);
-    if (rule.match !== entry.match || rule.matchMode !== entry.matchMode) return deps.log(`${tag} skip: rule edited`);
+    if (
+      rule.match !== entry.match ||
+      rule.matchMode !== entry.matchMode ||
+      (rule.caseSensitive === true) !== entry.caseSensitive
+    ) return deps.log(`${tag} skip: rule edited`);
     const session = deps.getSession(sessionId);
     if (!session || session.status === 'exited') return deps.log(`${tag} skip: session gone`);
     const state = deps.getAgentState(sessionId);
     if (!RESTING.has(state)) return deps.log(`${tag} skip: agent is ${state}`);
     if (session.lastInputAt !== entry.lastInputAt) return deps.log(`${tag} skip: user typed`);
+    if (this.capReached(sessionId, session, config)) return;
     if (!deps.reply(sessionId, rule.message)) return deps.log(`${tag} skip: reply failed`);
     const now = deps.now();
-    const history = (this.sends.get(sessionId) ?? []).filter(t => now - t < config.windowMinutes * 60000);
-    history.push(now);
-    this.sends.set(sessionId, history);
-    deps.log(`${tag} rule=${rule.id} attempt ${history.length}/${config.maxPerWindow}`);
+    const attempt = this.recentSends(sessionId, config, now).length + 1;
+    this.sends.set(sessionId, [...(this.sends.get(sessionId) ?? []), now]);
+    deps.log(`${tag} rule=${rule.id} attempt ${attempt}/${config.maxPerWindow}`);
+  }
+
+  /** Notifying is best-effort: a failure is logged and never breaks the timer path. */
+  private safely(what: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      this.deps.log(`[api-error-resume] ${what} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private bump(sessionId: string): number {
@@ -247,10 +302,3 @@ export class ApiErrorResumeService {
   }
 }
 
-function safely(fn: () => void): void {
-  try {
-    fn();
-  } catch {
-    /* notifying is best-effort; never let it break the timer path */
-  }
-}

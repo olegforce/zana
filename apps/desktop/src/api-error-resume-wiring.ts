@@ -6,7 +6,7 @@
 import type { ApiErrorResumeConfig } from '@zana-ai/zcc-domain/product';
 import {
   ApiErrorResumeService,
-  createRegexMatcher
+  openRegexSession
 } from '@zana-ai/zcc-server/services/followups/api-error-resume';
 
 export interface ApiErrorResumeWiringDeps {
@@ -42,7 +42,7 @@ export function createApiErrorResume(deps: ApiErrorResumeWiringDeps): ApiErrorRe
     pushInbox: (input) => {
       void deps.inboxStore.append(input).catch((err) => deps.logMainError('api-error-resume pushInbox', err));
     },
-    matchRegex: createRegexMatcher(),
+    openRegex: () => openRegexSession(),
     now: () => Date.now(),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle),
