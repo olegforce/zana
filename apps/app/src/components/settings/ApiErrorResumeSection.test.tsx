@@ -323,6 +323,27 @@ describe('ApiErrorResumeSection', () => {
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
+  it('a blur with nothing changed saves nothing', () => {
+    const { onUpdate } = setup(on([rule()]));
+    fireEvent.blur(screen.getByLabelText('When the error matches (rule 1)'));
+    fireEvent.blur(screen.getByLabelText('Send (rule 1)'));
+    fireEvent.blur(screen.getByLabelText('After (seconds) (rule 1)'), { target: { value: '20' } });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('an older save failing after a newer one landed shows no alert', async () => {
+    let failFirst!: () => void;
+    const onUpdate = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_r, reject) => { failFirst = () => reject(new Error('late')); }))
+      .mockResolvedValueOnce(undefined);
+    render(<ApiErrorResumeSection config={on()} onConfigDraft={vi.fn()} onUpdate={onUpdate} />);
+    fireEvent.click(screen.getByText('+ Provider anthropic not found'));
+    fireEvent.click(screen.getByText('+ Connection lost mid-response'));
+    expect(onUpdate.mock.calls[1][0].apiErrorResume.rules).toHaveLength(2);
+    await act(async () => { failFirst(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('flags a match the store would drop: too long, or the same as another row', () => {
     const { onUpdate } = setup(on([rule(), rule({ id: 'b', match: 'second rule' }), rule({ id: 'c', matchMode: 'regex', match: 'Over.*' })]));
     const second = screen.getByLabelText('When the error matches (rule 2)');

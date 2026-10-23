@@ -91,6 +91,8 @@ function useResumeRules(current: ApiErrorResumeConfig, save: Save, latestRules: 
   const apply: Apply = (id, patch, commitIfValid) => {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
+    const changes = (Object.keys(patch) as (keyof ApiErrorResumeRule)[]).some((k) => patch[k] !== row[k]);
+    if (!changes && !(id in local)) return; // a blur with nothing to save
     const updated = { ...row, ...patch };
     setLocal((prev) => ({ ...prev, [id]: updated }));
     if (commitIfValid && !ruleError(updated, rows)) void commit(updated);
@@ -307,6 +309,7 @@ export function ApiErrorResumeSection({
   // While saves are in flight the next one builds on the newest sent config, not
   // the stored one, so two quick changes (say, two suggestions) both land.
   const inFlight = useRef<{ count: number; sent: ApiErrorResumeConfig }>({ count: 0, sent: current });
+  const saveSeq = useRef(0);
   const base = () => (inFlight.current.count > 0 ? inFlight.current.sent : current);
   const draft = (patch: Partial<ApiErrorResumeConfig>) =>
     onConfigDraft({ ...config, apiErrorResume: { ...current, ...patch } });
@@ -315,12 +318,15 @@ export function ApiErrorResumeSection({
     const from = base();
     const next = { ...from, ...(typeof patch === 'function' ? patch(from) : patch) };
     inFlight.current = { count: inFlight.current.count + 1, sent: next };
+    const seq = ++saveSeq.current;
+    let failed = false;
     try {
       await onUpdate({ apiErrorResume: next }, { throwOnError: true });
-      setSaveFailed(false);
     } catch {
-      setSaveFailed(true);
+      failed = true;
     } finally {
+      // Only the newest save decides the alert: it already carries any older save's change.
+      if (seq === saveSeq.current) setSaveFailed(failed);
       inFlight.current = { ...inFlight.current, count: inFlight.current.count - 1 };
     }
   };
