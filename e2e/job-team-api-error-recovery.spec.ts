@@ -159,6 +159,11 @@ test('a restart re-delivers the unit to the same session, back in the Squad work
     const worktree = realpathSync(view.worktreePath!);
     expect(worktree).not.toBe(realpathSync(ctx.projectDir));
     expect(realpathSync(observed.get(before)!)).toBe(worktree);
+
+    // The restarted process must attest as the same worker session, not as the session that started tmux.
+    const bootSids = [...readFileSync(join(worktree, '.fake-coordinator.log'), 'utf8').matchAll(/WORK:\d+ boot .*resumed=(true|false) sid=(\S+)/g)];
+    expect(bootSids.map((match) => match[1])).toEqual(['false', 'true']);
+    expect(bootSids.map((match) => match[2])).toEqual([before, before]);
   } catch (error) {
     throw await failure(ctx, error, run);
   } finally {
