@@ -23,7 +23,7 @@ test('launch-only PATH directories stay ahead of the login-shell directories', a
   const realHome = process.env.HOME ?? '';
   console.log(`main PATH (first 15): ${dirs.slice(0, 15).join(delimiter).replaceAll(realHome, '~')}`);
 
-  const system = ['/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'].filter((dir) => dirs.includes(dir));
+  const system = (process.platform === 'darwin' ? ['/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'] : ['/usr/bin']).filter((dir) => dirs.includes(dir));
   for (const [name, dir] of [['launch-bin', launchBin], ['isolated-cli-bin', isolatedBin]] as const) {
     const at = dirs.indexOf(dir);
     expect(at, `${name} (${dir}) is missing from the main process PATH`).toBeGreaterThanOrEqual(0);

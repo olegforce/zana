@@ -43,13 +43,18 @@ describe('launchedPathOverrides', () => {
 });
 
 describe('loginShellProbePath', () => {
-  it('uses the Finder baseline PATH on macOS, where path_helper reorders an inherited one', () => {
-    expect(loginShellProbePath('darwin', '/a:/usr/bin')).toBe(LOGIN_SHELL_BASE_PATH);
+  it('uses the baseline PATH on macOS when a terminal or tool started us, since path_helper reorders an inherited one', () => {
+    expect(loginShellProbePath('darwin', 4242, '/a:/usr/bin')).toBe(LOGIN_SHELL_BASE_PATH);
   });
 
-  it('keeps the inherited PATH elsewhere', () => {
-    expect(loginShellProbePath('linux', '/a:/usr/bin')).toBe('/a:/usr/bin');
-    expect(loginShellProbePath('linux', undefined)).toBeUndefined();
+  it('keeps the inherited PATH when launchd started us on macOS', () => {
+    expect(loginShellProbePath('darwin', 1, '/opt/homebrew/bin:/usr/bin')).toBe('/opt/homebrew/bin:/usr/bin');
+  });
+
+  it('keeps the inherited PATH on Linux, whatever the parent', () => {
+    expect(loginShellProbePath('linux', 4242, '/a:/usr/bin')).toBe('/a:/usr/bin');
+    expect(loginShellProbePath('linux', 1, '/a:/usr/bin')).toBe('/a:/usr/bin');
+    expect(loginShellProbePath('linux', 4242, undefined)).toBeUndefined();
   });
 });
 
@@ -61,14 +66,18 @@ describe('ensureProcessPath login-shell probe', () => {
 
   afterEach(() => {
     Object.defineProperty(process, 'platform', realPlatform);
+    vi.unstubAllGlobals();
     process.env.PATH = savedPath;
     if (savedShell === undefined) delete process.env.SHELL;
     else process.env.SHELL = savedShell;
     for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  function setPlatform(value: NodeJS.Platform): void {
+  // Not launchd (pid 1) unless a test says so, whatever started the test run.
+  function setPlatform(value: NodeJS.Platform, ppid = 4242): void {
     Object.defineProperty(process, 'platform', { ...realPlatform, value });
+    // `process.ppid` ignores defineProperty under vitest, so wrap `process` instead.
+    vi.stubGlobal('process', new Proxy(process, { get: (target, key) => (key === 'ppid' ? ppid : Reflect.get(target, key)) }));
   }
 
   /**
@@ -133,6 +142,14 @@ describe('ensureProcessPath login-shell probe', () => {
     const first = run(`${join(dir, 'fake-bin')}:/opt/homebrew/bin:/usr/bin:/bin`);
     const second = run(first.join(':'));
     expect(second).toEqual(first);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(i) a launchd start on macOS probes with the inherited PATH', () => {
+    setPlatform('darwin', 1);
+    const { received } = fakeLoginShell();
+    const launched = '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+    run(launched);
+    expect(readFileSync(received, 'utf8')).toBe(launched);
   }, 15_000);
 
   it.skipIf(process.platform === 'win32')('(f) probes with the inherited PATH on Linux', () => {

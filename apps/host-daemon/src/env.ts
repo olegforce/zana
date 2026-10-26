@@ -293,9 +293,15 @@ export function ensureInteractiveTerminalEnv(env: Record<string, string>): void 
 /** The PATH a Finder or Dock launch already hands to an app. */
 export const LOGIN_SHELL_BASE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
-/** PATH to start the login-shell probe with; `undefined` keeps the inherited one. */
-export function loginShellProbePath(platform: NodeJS.Platform, inherited: string | undefined): string | undefined {
-  return platform === 'darwin' ? LOGIN_SHELL_BASE_PATH : inherited;
+/**
+ * PATH to start the login-shell probe with; `undefined` keeps the inherited one.
+ * Only a macOS process started by something other than launchd (a terminal,
+ * pnpm, a test runner) gets the baseline. launchd (parent pid 1: Finder, Dock,
+ * `open`, login items) never prepends launch-only dirs, so its PATH, including
+ * one set with `launchctl config user path`, is passed on as before.
+ */
+export function loginShellProbePath(platform: NodeJS.Platform, ppid: number, inherited: string | undefined): string | undefined {
+  return platform === 'darwin' && ppid !== 1 ? LOGIN_SHELL_BASE_PATH : inherited;
 }
 
 /**
@@ -316,12 +322,14 @@ export function loginShellProbePath(platform: NodeJS.Platform, inherited: string
  * strings are hardcoded constants — never interpolate user input here, or the
  * `-c` payload becomes an injection surface.
  *
- * On macOS the shell is started with {@link LOGIN_SHELL_BASE_PATH} instead of
- * our own PATH. `/etc/zprofile` runs `path_helper`, which puts the `/etc/paths`
- * directories first and the inherited ones after them, so probing with a
- * launcher's PATH would bury the directories the launcher put in front. Other
- * platforms keep the inherited PATH: Linux has no `path_helper`, and its
- * `/usr/local/bin` and similar come from PAM or systemd, not from the shell.
+ * On macOS, when something other than launchd started us, the shell gets
+ * {@link LOGIN_SHELL_BASE_PATH} instead of our own PATH. `/etc/zprofile` runs
+ * `path_helper`, which puts the `/etc/paths` directories first and the
+ * inherited ones after them, so probing with a launcher's PATH would bury the
+ * directories the launcher put in front. A launchd start (Finder, Dock) and
+ * other platforms keep the inherited PATH: launchd adds no launch-only dirs,
+ * Linux has no `path_helper`, and its `/usr/local/bin` and similar come from
+ * PAM or systemd, not from the shell.
  */
 function loginShellPath(): string | null {
   if (process.platform === 'win32') return null;
@@ -332,7 +340,7 @@ function loginShellPath(): string | null {
     const out = execFileSync(shell, ['-ilc', `printf '%s%s%s' '${marker}' "$PATH" '${endMarker}'`], {
       encoding: 'utf8',
       timeout: 3_000,
-      env: { ...process.env, PATH: loginShellProbePath(process.platform, process.env.PATH) },
+      env: { ...process.env, PATH: loginShellProbePath(process.platform, process.ppid, process.env.PATH) },
       // Interactive zsh ignores the default SIGTERM, so the timeout alone
       // would never end a shell wedged on a heavy rc file.
       killSignal: 'SIGKILL',
@@ -374,11 +382,11 @@ export function launchedPathOverrides(loginPath: string | null | undefined, laun
  * created.
  *
  * Order: launch-only PATH dirs first (the leading dirs a launcher put in front
- * of PATH, such as E2E fakes like a stub `gh`), then the
- * real login-shell PATH (authoritative for Finder/Dock launches), then the
- * PATH we were launched with, then the guessed fallback dirs, then node-prefix
- * bins behind `~/.<tool>/bin/node` shims (`npm i -g` CLIs), and finally the
- * bundled `zcc` CLI bin dir as the LOWEST-precedence entry.
+ * of PATH, such as a stub `gh` in E2E), then the real login-shell PATH
+ * (authoritative for Finder/Dock launches), then the PATH we were launched
+ * with, then the guessed fallback dirs, then node-prefix bins behind
+ * `~/.<tool>/bin/node` shims (`npm i -g` CLIs), and finally the bundled `zcc`
+ * CLI bin dir as the LOWEST-precedence entry.
  *
  * The `zcc` dir is appended HERE, not in fallbackDirs(): fallbackDirs() also
  * feeds augmentPath(), which composes the REMOTE SSH path, and a local

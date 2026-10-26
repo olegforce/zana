@@ -146,8 +146,10 @@ async function screenshot(window: Page, options: Parameters<Page["screenshot"]>[
 // a new tab; session views keep a plain "New tab" button.
 async function openMoreTools(window: Page) {
   const newTab = window.getByRole("button", { name: "New tab", exact: true });
+  const addTool = window.getByRole("button", { name: "Add tool to right panel", exact: true });
+  await expect(newTab.or(addTool)).toBeVisible();
   if (await newTab.isVisible()) return newTab.click();
-  await window.getByRole("button", { name: "Add tool to right panel", exact: true }).click();
+  await addTool.click();
   await window.getByRole("menuitem", { name: "More tools…", exact: true }).click();
 }
 
