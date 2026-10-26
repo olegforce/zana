@@ -19,6 +19,18 @@ import {
   INHERITED_CLAUDE_SESSION_VARS
 } from './env.js';
 
+// The probe gives a login shell 3s. Under a full parallel test run the first
+// exec of a freshly written fake shell can take longer than that, so the probe
+// falls back and the probe tests fail. Give only those fake shells more time;
+// every other shell still gets the real timeout.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const execFileSync = ((file: string, args?: readonly string[], options?: Record<string, unknown>) =>
+    actual.execFileSync(file, args, file.includes('zcc-login-shell-') ? { ...options, timeout: 12_000 } : options)
+  ) as typeof actual.execFileSync;
+  return { ...actual, execFileSync };
+});
+
 describe('launchedPathOverrides', () => {
   it('prepends launch-only dirs so a fake gh wins over the login-shell gh', () => {
     const overrides = launchedPathOverrides(
