@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdirSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { test as base, expect } from "./fixtures/app.js";
 import type { Page } from "@playwright/test";
@@ -84,7 +84,7 @@ const test = base.extend({
       `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.SF_E2E_TRACE, JSON.stringify({ args, cwd: process.cwd(), home: process.env.HOME }) + '\\n');
+fs.appendFileSync(process.env.SF_E2E_TRACE, JSON.stringify({ args, cwd: process.cwd(), home: process.env.HOME, keychain: process.env.SF_USE_GENERIC_UNIX_KEYCHAIN ?? null }) + '\\n');
 const alias = args[args.indexOf('--target-org') + 1] || 'dev';
 const org = { alias, username: alias + '@example.com', orgId: '00D000000000001', instanceUrl: process.env.SF_E2E_URL, isSandbox: alias !== 'org-158', isScratchOrg: false, isScratch: false, accessToken: 'FAKE_PRIVATE_TOKEN', apiVersion: '62.0' };
 const authFile = process.env.SF_E2E_TRACE + '.auth.json';
@@ -137,6 +137,11 @@ console.log(JSON.stringify({status:process.exitCode || 0, result}));
 test.use({ e2e: true, initialConfig: { sponsorPromptDismissed: true } });
 test.setTimeout(180_000);
 
+// Screenshots are opt-in: a full-window capture can time out on the Linux CI runner.
+async function screenshot(window: Page, options: Parameters<Page["screenshot"]>[0]) {
+  if (process.env.ZCC_E2E_SCREENSHOTS === "1") await window.screenshot(options);
+}
+
 async function route(window: Page, path: string) {
   await window.evaluate((path) => {
     history.pushState({}, "", path);
@@ -183,6 +188,12 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   const roster = (await window.evaluate(() =>
     window.cc.pluginApps.callRpc("salesforce", "orgs"),
   )) as { orgs: unknown[] };
+  const tracePath = join(home, "sf-trace.jsonl");
+  const rows = existsSync(tracePath)
+    ? readFileSync(tracePath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  expect(rows.length, "the plugin must run the spec's fake sf, not a real Salesforce CLI").toBeGreaterThan(0);
+  expect(rows.filter((row) => row.keychain !== "true")).toEqual([]);
   expect(roster.orgs).toHaveLength(160);
   expect(JSON.stringify(roster)).not.toContain("FAKE_PRIVATE_TOKEN");
   await route(window, `/projects/${projectId}`);
@@ -218,7 +229,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await connectButton.click();
   for (const theme of ['light', 'dark']) {
     await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    await window.screenshot({ path: testInfo.outputPath(`salesforce-connect-${theme}.png`), animations: 'disabled' });
+    await screenshot(window, { path: testInfo.outputPath(`salesforce-connect-${theme}.png`), animations: 'disabled' });
     const colors = await connectionDialog.getByRole('button', { name: 'Sign in with browser' }).evaluate(el => ({
       fg: getComputedStyle(el).color, bg: getComputedStyle(el).backgroundColor,
     }));
@@ -229,7 +240,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await connectionDialog.getByRole('radio', { name: 'My Domain', exact: true }).check();
   await expect(connectionDialog.getByRole('button', { name: 'Sign in with browser' })).toBeInViewport();
   expect(await connectionDialog.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-connect-narrow.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-connect-narrow.png') });
   await window.setViewportSize({ width: 1440, height: 900 });
   await connectionDialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   // Browser authentication travels through the real plugin RPC and sf child.
@@ -246,11 +257,11 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     if (instance === 'custom') await form.getByLabel('My Domain URL').fill('company.my.salesforce.com');
     await form.getByLabel('Org alias').fill(loginAlias);
     await expect(form.getByRole('button', { name: 'Sign in with browser' })).toBeInViewport();
-    if (instance === 'custom') await window.screenshot({ path: testInfo.outputPath('salesforce-my-domain-login.png') });
+    if (instance === 'custom') await screenshot(window, { path: testInfo.outputPath('salesforce-my-domain-login.png') });
     await form.getByRole('button', { name: 'Sign in with browser' }).click();
     await expect(form.getByRole('button', { name: 'Waiting for sign-in…' })).toBeDisabled();
     if (instance === 'production') {
-      await window.screenshot({ path: testInfo.outputPath('salesforce-connect-waiting.png') });
+      await screenshot(window, { path: testInfo.outputPath('salesforce-connect-waiting.png') });
       await form.getByRole('button', { name: 'Close', exact: true }).click();
       await connectButton.click();
       await expect(form.getByRole('button', { name: 'Waiting for sign-in…' })).toBeDisabled();
@@ -272,7 +283,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await expect(workbench).not.toContainText('FAKE_PRIVATE_TOKEN');
   const postLogin = await window.evaluate((projectId) => window.cc.pluginApps.callRpc('salesforce', 'orgs', { projectId }), projectId);
   expect(JSON.stringify(postLogin)).not.toMatch(/FAKE_PRIVATE_TOKEN|FAKE_REFRESH_TOKEN/);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-login.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-login.png') });
   await workbench.getByRole('button', { name: 'Cancel', exact: true }).click();
   await workbench.getByTestId('salesforce-org-picker').selectOption('org-159');
   await expect(workbench.getByTestId('salesforce-org-picker')).toHaveValue('org-159');
@@ -298,13 +309,13 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     .getByRole("button", { name: "Customer 0", exact: true })
     .click();
   await expect(workbench.locator(".sf-soql-record")).toContainText("Read only");
-  await window.screenshot({ path: testInfo.outputPath("salesforce-data.png") });
+  await screenshot(window, { path: testInfo.outputPath("salesforce-data.png") });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-  await window.screenshot({ path: testInfo.outputPath('salesforce-data-light.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-data-light.png') });
   await workbench.locator('.sf-soql-record').getByRole('button', { name: 'Close', exact: true }).click();
   await window.setViewportSize({ width: 720, height: 900 });
   expect(await workbench.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-data-narrow.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-data-narrow.png') });
   await window.setViewportSize({ width: 1440, height: 900 });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   // Standalone production browsing must not ask for an agent thread, including
@@ -333,12 +344,12 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   const configBox = await workbench.locator('.sf-workspace-config').boundingBox();
   const activityBox = await workbench.getByTestId('salesforce-operations').boundingBox();
   expect(activityBox!.x).toBeGreaterThan(configBox!.x + 250);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-deployment-setup-dark.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-deployment-setup-dark.png') });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-  await window.screenshot({ path: testInfo.outputPath('salesforce-deployment-setup-light.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-deployment-setup-light.png') });
   await window.setViewportSize({ width: 720, height: 900 });
   expect(await workbench.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-deployment-setup-narrow.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-deployment-setup-narrow.png') });
   await window.setViewportSize({ width: 1440, height: 900 });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await workbench.getByRole("button", { name: "Preview deployment" }).click();
@@ -367,7 +378,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await expect(
     workbench.getByRole("region", { name: "Component failures" }),
   ).toContainText("line 7, column 3");
-  await window.screenshot({
+  await screenshot(window, {
     path: testInfo.outputPath("salesforce-deployment-report.png"),
   });
   await workbench.getByLabel("Metadata type").selectOption("Flow");
@@ -468,7 +479,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await expect(
     window.getByRole("heading", { name: "Customer 0", exact: true }),
   ).toBeVisible();
-  await window.screenshot({
+  await screenshot(window, {
     path: testInfo.outputPath("salesforce-native-record.png"),
   });
   const resize = window.getByRole("separator", { name: "Resize right panel" });
@@ -497,7 +508,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   expect(
     await surface.evaluate((el) => el.scrollWidth - el.clientWidth),
   ).toBeLessThanOrEqual(1);
-  await window.screenshot({
+  await screenshot(window, {
     path: testInfo.outputPath("salesforce-narrow-light.png"),
   });
 
@@ -529,7 +540,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
       .first()
       .evaluate((el) => el.scrollWidth - el.clientWidth),
   ).toBeLessThanOrEqual(1);
-  await window.screenshot({
+  await screenshot(window, {
     path: testInfo.outputPath("salesforce-apex-failure-narrow.png"),
   });
 
@@ -570,7 +581,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     await expect(
       window.getByRole("heading", { name: "Customer 0", exact: true }),
     ).toBeVisible();
-    await window.screenshot({
+    await screenshot(window, {
       path: testInfo.outputPath("salesforce-cli-panel.png"),
     });
   } finally {
@@ -592,13 +603,13 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   await expect(workbench.getByText('1 match')).toBeVisible();
   await workbench.getByRole('button', { name: 'Next match' }).click();
   await expect(workbench.locator('.sf-log-code mark')).toBeInViewport();
-  await window.screenshot({ path: testInfo.outputPath('salesforce-log-reader.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-log-reader.png') });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await window.setViewportSize({ width: 720, height: 900 });
   await workbench.getByRole('button', { name: 'Next match' }).click();
   await expect(workbench.locator('.sf-log-code mark')).toBeInViewport();
   expect(await workbench.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await window.screenshot({ path: testInfo.outputPath('salesforce-log-reader-narrow.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-log-reader-narrow.png') });
   await window.setViewportSize({ width: 1440, height: 900 });
   await window.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await workbench.getByRole('tab', { name: 'Anonymous Apex', exact: true }).click();
@@ -608,7 +619,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
   const review = workbench.getByRole('group', { name: 'Approve anonymous Apex' });
   await expect(review.getByLabel('Code to run')).toHaveText('System.debug(42);');
   await expect(review.getByText('org-159 · sandbox')).toBeVisible();
-  await window.screenshot({ path: testInfo.outputPath('salesforce-action-review.png') });
+  await screenshot(window, { path: testInfo.outputPath('salesforce-action-review.png') });
   await review.getByRole('button', { name: 'Run on org-159' }).click();
   await expect(review).toBeHidden();
   await expect(workbench.locator('.sf-activity').getByText('Anonymous Apex').first()).toBeVisible();
