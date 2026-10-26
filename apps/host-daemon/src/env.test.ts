@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import * as fs from 'node:fs';
 import {
   augmentPath,
@@ -11,6 +11,8 @@ import {
   resolveZccCliBinDir,
   ensureProcessPath,
   launchedPathOverrides,
+  LOGIN_SHELL_BASE_PATH,
+  loginShellProbePath,
   nodePrefixBinDirs,
   stripInheritedClaudeSession,
   ensureInteractiveTerminalEnv,
@@ -29,6 +31,117 @@ describe('launchedPathOverrides', () => {
   it('is empty when the launch PATH is a subset of the login shell (Finder)', () => {
     expect(launchedPathOverrides('/opt/homebrew/bin:/usr/bin:/bin', '/usr/bin:/bin')).toBe('');
   });
+
+  it('keeps only the leading run of launch-only dirs', () => {
+    expect(launchedPathOverrides('/opt/homebrew/bin:/usr/bin', '/a:/b:/usr/bin:/c')).toBe('/a:/b');
+  });
+
+  it('treats a missing login or launch PATH as empty', () => {
+    expect(launchedPathOverrides(null, '/a::/b')).toBe('/a:/b');
+    expect(launchedPathOverrides('/usr/bin', undefined)).toBe('');
+  });
+});
+
+describe('loginShellProbePath', () => {
+  it('uses the Finder baseline PATH on macOS, where path_helper reorders an inherited one', () => {
+    expect(loginShellProbePath('darwin', '/a:/usr/bin')).toBe(LOGIN_SHELL_BASE_PATH);
+  });
+
+  it('keeps the inherited PATH elsewhere', () => {
+    expect(loginShellProbePath('linux', '/a:/usr/bin')).toBe('/a:/usr/bin');
+    expect(loginShellProbePath('linux', undefined)).toBeUndefined();
+  });
+});
+
+describe('ensureProcessPath login-shell probe', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const savedPath = process.env.PATH;
+  const savedShell = process.env.SHELL;
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform);
+    process.env.PATH = savedPath;
+    if (savedShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = savedShell;
+    for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  function setPlatform(value: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { ...realPlatform, value });
+  }
+
+  /**
+   * A fake login shell that mimics macOS `path_helper`: it puts the system
+   * directories in front of whatever PATH it received, and records that PATH.
+   * Pass `printsMarkers: false` for a shell whose output can't be parsed.
+   */
+  function fakeLoginShell(printsMarkers = true): { dir: string; received: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'zcc-login-shell-'));
+    chmodSync(dir, 0o700);
+    tmpDirs.push(dir);
+    const received = join(dir, 'received-path');
+    const body = printsMarkers
+      ? `printf '__ZCC_PATH_START__/usr/local/bin:/opt/homebrew/bin:%s__ZCC_PATH_END__' "$PATH"`
+      : 'echo no markers here';
+    const shell = join(dir, 'fake-shell');
+    writeFileSync(shell, `#!/bin/sh\nprintf '%s' "$PATH" > '${received}'\n${body}\n`, { mode: 0o700 });
+    process.env.SHELL = shell;
+    return { dir, received };
+  }
+
+  const run = (launched: string): string[] => {
+    process.env.PATH = launched;
+    ensureProcessPath();
+    return (process.env.PATH ?? '').split(':');
+  };
+
+  it.skipIf(process.platform === 'win32')('(a) keeps a launcher-prepended dir ahead of the login-shell dirs', () => {
+    setPlatform('darwin');
+    const { dir } = fakeLoginShell();
+    const fakeBin = join(dir, 'fake-bin');
+    const segments = run(`${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin`);
+    expect(segments[0]).toBe(fakeBin);
+    expect(segments.indexOf(fakeBin)).toBeLessThan(segments.indexOf('/opt/homebrew/bin'));
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(b) probes the login shell with the baseline PATH on macOS', () => {
+    setPlatform('darwin');
+    const { dir, received } = fakeLoginShell();
+    run(`${join(dir, 'fake-bin')}:/opt/homebrew/bin:/usr/bin:/bin`);
+    expect(readFileSync(received, 'utf8')).toBe(LOGIN_SHELL_BASE_PATH);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(c) a Finder launch gets the login-shell dirs first', () => {
+    setPlatform('darwin');
+    fakeLoginShell();
+    const segments = run('/usr/bin:/bin:/usr/sbin:/sbin');
+    expect(segments.slice(0, 2)).toEqual(['/usr/local/bin', '/opt/homebrew/bin']);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(d) falls back to the launched PATH when the shell prints no markers', () => {
+    setPlatform('darwin');
+    const { dir } = fakeLoginShell(false);
+    const fakeBin = join(dir, 'fake-bin');
+    const segments = run(`${fakeBin}:/usr/bin:/bin`);
+    expect(segments.slice(0, 3)).toEqual([fakeBin, '/usr/bin', '/bin']);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(e) is idempotent: a second run keeps the PATH it composed', () => {
+    setPlatform('darwin');
+    const { dir } = fakeLoginShell();
+    const first = run(`${join(dir, 'fake-bin')}:/opt/homebrew/bin:/usr/bin:/bin`);
+    const second = run(first.join(':'));
+    expect(second).toEqual(first);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(f) probes with the inherited PATH on Linux', () => {
+    setPlatform('linux');
+    const { dir, received } = fakeLoginShell();
+    const launched = `${join(dir, 'fake-bin')}:/usr/bin:/bin`;
+    run(launched);
+    expect(readFileSync(received, 'utf8')).toBe(launched);
+  }, 15_000);
 });
 
 describe('augmentPath', () => {

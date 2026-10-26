@@ -290,6 +290,14 @@ export function ensureInteractiveTerminalEnv(env: Record<string, string>): void 
   if (forceColor === '0' || forceColor === 'false') delete env.FORCE_COLOR;
 }
 
+/** The PATH a Finder or Dock launch already hands to an app. */
+export const LOGIN_SHELL_BASE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+/** PATH to start the login-shell probe with; `undefined` keeps the inherited one. */
+export function loginShellProbePath(platform: NodeJS.Platform, inherited: string | undefined): string | undefined {
+  return platform === 'darwin' ? LOGIN_SHELL_BASE_PATH : inherited;
+}
+
 /**
  * Resolve the PATH a real interactive login shell would have, by running it
  * once and printing `$PATH`. Returns null when it can't be determined (Windows,
@@ -307,6 +315,13 @@ export function ensureInteractiveTerminalEnv(env: Record<string, string>): void 
  * and similar interactive-shell noise can't corrupt the parse. The marker
  * strings are hardcoded constants — never interpolate user input here, or the
  * `-c` payload becomes an injection surface.
+ *
+ * On macOS the shell is started with {@link LOGIN_SHELL_BASE_PATH} instead of
+ * our own PATH. `/etc/zprofile` runs `path_helper`, which puts the `/etc/paths`
+ * directories first and the inherited ones after them, so probing with a
+ * launcher's PATH would bury the directories the launcher put in front. Other
+ * platforms keep the inherited PATH: Linux has no `path_helper`, and its
+ * `/usr/local/bin` and similar come from PAM or systemd, not from the shell.
  */
 function loginShellPath(): string | null {
   if (process.platform === 'win32') return null;
@@ -317,6 +332,7 @@ function loginShellPath(): string | null {
     const out = execFileSync(shell, ['-ilc', `printf '%s%s%s' '${marker}' "$PATH" '${endMarker}'`], {
       encoding: 'utf8',
       timeout: 3_000,
+      env: { ...process.env, PATH: loginShellProbePath(process.platform, process.env.PATH) },
       // Interactive zsh ignores the default SIGTERM, so the timeout alone
       // would never end a shell wedged on a heavy rc file.
       killSignal: 'SIGKILL',
@@ -334,12 +350,31 @@ function loginShellPath(): string | null {
 }
 
 /**
+ * The leading run of launched dirs that the login PATH lacks: walk the launched
+ * PATH in order and stop at the first dir the login PATH has. A launcher's
+ * prepended dirs are exactly that run. Dirs further along stay behind the login
+ * PATH, and a second `ensureProcessPath()` on an already composed PATH adds
+ * nothing new at the front, so the repair stays idempotent.
+ */
+export function launchedPathOverrides(loginPath: string | null | undefined, launchedPath: string | undefined): string {
+  const login = new Set((loginPath ?? '').split(delimiter).filter(Boolean));
+  const leading: string[] = [];
+  for (const dir of (launchedPath ?? '').split(delimiter)) {
+    if (!dir) continue;
+    if (login.has(dir)) break;
+    leading.push(dir);
+  }
+  return leading.join(delimiter);
+}
+
+/**
  * Repair this process's PATH so every downstream spawn (local pty, file
  * openers, scheduler fires) can resolve user-installed CLIs. Idempotent —
  * re-running only re-dedupes. Call once at app startup, before any pty is
  * created.
  *
- * Order: launch-only PATH dirs first (E2E fakes such as a stub `gh`), then the
+ * Order: launch-only PATH dirs first (the leading dirs a launcher put in front
+ * of PATH, such as E2E fakes like a stub `gh`), then the
  * real login-shell PATH (authoritative for Finder/Dock launches), then the
  * PATH we were launched with, then the guessed fallback dirs, then node-prefix
  * bins behind `~/.<tool>/bin/node` shims (`npm i -g` CLIs), and finally the
@@ -349,11 +384,6 @@ function loginShellPath(): string | null {
  * feeds augmentPath(), which composes the REMOTE SSH path, and a local
  * repo/resources path must never leak into a remote session.
  */
-export function launchedPathOverrides(loginPath: string | null | undefined, launchedPath: string | undefined): string {
-  const login = new Set((loginPath ?? '').split(delimiter).filter(Boolean));
-  return (launchedPath ?? '').split(delimiter).filter((dir) => dir.length > 0 && !login.has(dir)).join(delimiter);
-}
-
 export function ensureProcessPath(): void {
   const login = loginShellPath();
   const launched = process.env.PATH;
