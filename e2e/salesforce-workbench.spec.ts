@@ -237,7 +237,9 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     expect(colors.bg).not.toBe(colors.fg);
   }
   await window.setViewportSize({ width: 480, height: 700 });
-  await connectionDialog.getByRole('radio', { name: 'My Domain', exact: true }).check();
+  // The radio itself is a 1px visually hidden input; click the card a person would click.
+  await connectionDialog.locator('label.sf-login-option', { hasText: 'My Domain' }).click();
+  await expect(connectionDialog.getByRole('radio', { name: 'My Domain', exact: true })).toBeChecked();
   await expect(connectionDialog.getByRole('button', { name: 'Sign in with browser' })).toBeInViewport();
   expect(await connectionDialog.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await screenshot(window, { path: testInfo.outputPath('salesforce-connect-narrow.png') });
