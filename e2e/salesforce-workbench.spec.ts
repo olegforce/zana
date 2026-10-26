@@ -142,6 +142,15 @@ async function screenshot(window: Page, options: Parameters<Page["screenshot"]>[
   if (process.env.ZCC_E2E_SCREENSHOTS === "1") await window.screenshot(options);
 }
 
+// Thread views dock the right panel behind a "+" menu whose "More tools…" starts
+// a new tab; session views keep a plain "New tab" button.
+async function openMoreTools(window: Page) {
+  const newTab = window.getByRole("button", { name: "New tab", exact: true });
+  if (await newTab.isVisible()) return newTab.click();
+  await window.getByRole("button", { name: "Add tool to right panel", exact: true }).click();
+  await window.getByRole("menuitem", { name: "More tools…", exact: true }).click();
+}
+
 async function route(window: Page, path: string) {
   await window.evaluate((path) => {
     history.pushState({}, "", path);
@@ -255,7 +264,9 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     await workbench.locator('.sf-workbench-toolbar').getByRole('button', { name: 'Connect org', exact: true }).click();
     const form = workbench.getByTestId('salesforce-org-login');
     await expect(form).toBeVisible();
-    await form.getByRole('radio', { name: instance === 'production' ? 'Production' : instance === 'sandbox' ? 'Sandbox' : 'My Domain', exact: true }).check();
+    const environment = instance === 'production' ? 'Production' : instance === 'sandbox' ? 'Sandbox' : 'My Domain';
+    await form.locator('label.sf-login-option', { hasText: environment }).click();
+    await expect(form.getByRole('radio', { name: environment, exact: true })).toBeChecked();
     if (instance === 'custom') await form.getByLabel('My Domain URL').fill('company.my.salesforce.com');
     await form.getByLabel('Org alias').fill(loginAlias);
     await expect(form.getByRole('button', { name: 'Sign in with browser' })).toBeInViewport();
@@ -441,8 +452,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     name: "Salesforce record",
     exact: true,
   });
-  if (!(await recordAction.isVisible()))
-    await window.getByRole("button", { name: "New tab", exact: true }).click();
+  if (!(await recordAction.isVisible())) await openMoreTools(window);
   await expect
     .poll(() =>
       window.evaluate(() =>
@@ -514,7 +524,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
     path: testInfo.outputPath("salesforce-narrow-light.png"),
   });
 
-  await window.getByRole("button", { name: "New tab", exact: true }).click();
+  await openMoreTools(window);
   await window
     .getByRole("button", { name: "Apex & logs", exact: true })
     .click();
@@ -569,7 +579,7 @@ test("Salesforce workbench: real plugin, project targeting, data, operations and
       exact: true,
     });
     if (await show.isVisible()) await show.click();
-    await window.getByRole("button", { name: "New tab", exact: true }).click();
+    await openMoreTools(window);
     await window
       .getByRole("button", { name: "Salesforce record", exact: true })
       .click();
