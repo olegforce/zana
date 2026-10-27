@@ -49,7 +49,8 @@ interface Props {
    * Terminate a session: kills the pty and removes the tab. A restorable
    * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Archive" item
    * (Delete for a plain shell) routes here for live sessions (with a confirm);
-   * exited tombstones also route here from the X button / middle-click to dismiss without friction.
+   * exited tombstones also route here from the X button / middle-click to
+   * dismiss without friction.
    */
   onClose: (id: string) => void;
   /**
@@ -144,7 +145,8 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
 
   // Destroy one tab: terminate the process and remove the tab. Live sessions
   // get a confirm so a stray Archive/Delete can't silently stop a running
-  // agent; exited tabs are already dead, so they drop without friction. ⌘⇧T reopens.
+  // agent; exited tabs are already dead, so they drop without friction.
+  // ⌘⇧T reopens.
   const removeOne = (t: TerminalSession) => {
     if (
       t.status === 'exited' ||

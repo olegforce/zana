@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const realConfirm = window.confirm;
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 import { TabBar } from './TabBar';
+
+const realConfirm = window.confirm;
 
 const tab = (over: Partial<TerminalSession>) =>
   ({ id: 't1', projectId: 'p1', title: 'Review', status: 'running', profile: 'claude', ...over }) as unknown as TerminalSession;
