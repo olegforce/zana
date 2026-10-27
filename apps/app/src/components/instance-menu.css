@@ -1,4 +1,5 @@
-.instance-menu { position: absolute; right: 108px; top: 50%; transform: translateY(-50%); color: var(--text-primary); -webkit-app-region: no-drag; z-index: 115; }
+/* Keep the switcher above page content and below modal/palette backdrops (100). */
+.instance-menu { position: absolute; right: 108px; top: 50%; transform: translateY(-50%); color: var(--text-primary); -webkit-app-region: no-drag; z-index: 90; }
 .app-shell[data-windows-caption='true'] .instance-menu { right: calc(var(--windows-caption-reserve, 138px) + 108px); }
 .instance-menu > summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; height: 25px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); font-size: 11px; }
 .instance-menu > summary::-webkit-details-marker { display: none; }

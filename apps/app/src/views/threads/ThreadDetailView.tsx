@@ -9,7 +9,7 @@ import { mergeTimelinePages, type ThreadContextWindowUsage, type TimelineRow } f
 import { type TimelineViewWorkflowWorkRow } from '@zana-ai/zcc-thread-view';
 import { product } from '../../lib/product-client.js';
 import { ThreadCommandComposer } from '../../components/ThreadCommandComposer.js';
-import { useMobileThreadActionsTarget, useMobileThreadControlsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
+import { useMobileThreadControlsTarget, useMobileThreadTitleTarget } from '../../components/useMobileThreadTitleTarget.js';
 import { ThreadTimeline } from '../../components/thread/ThreadTimeline.js';
 import { ThreadDiffPanel } from '../../components/thread/ThreadDiffPanel.js';
 import { ThreadWorkspaceBanner } from '../../components/thread/ThreadWorkspaceBanner.js';
@@ -19,6 +19,7 @@ import {
   timelineRowsAwaitUser
 } from '../../components/thread/thread-timeline-model.js';
 import { ThreadDetailActions, ThreadDetailHeading, ThreadPromptModeCard, ThreadStatusBadge, ThreadTodoCard } from '../../components/thread/timeline/ThreadBanners.js';
+import { ThreadDetailContext } from '../../components/thread/ThreadDetailContext.js';
 import {
   BackgroundCommandsCard,
   ModelFallbackCard,
@@ -33,10 +34,13 @@ import { createThreadRefreshScheduler } from './thread-detail-refresh.js';
 import { getThreadRoutePath } from '../../lib/route-paths.js';
 import { useRouteState } from '../../hooks/useRouteState.js';
 import { useCompactLayout } from '../../hooks/useCompactLayout.js';
+import { useHosts } from '../../hooks/useHosts.js';
+import { sessionLocation } from '../../lib/session-location.js';
 import { pendingChildThreads, useThreads, type ThreadListItem } from '../../thread-store.js';
 import { useData } from '../../store.js';
 import { useThreadFindTarget } from '../../lib/use-thread-find-target.js';
 import { ThreadPendingInteractionBanner } from '../../components/thread/pending-interactions/ThreadPendingInteractionBanner.js';
+import { pendingInteractionSendBlockedHint } from '../../components/thread/pending-interactions/pending-interaction-formatting.js';
 import { ChildThreadPendingBanners } from '../../components/thread/pending-interactions/ChildThreadPendingBanners.js';
 import {
   isOpenThreadEvent,
@@ -163,7 +167,6 @@ function ThreadDetailBody({
   const mobileHeaderInShell = !modal && pane?.isFocused !== false
     && (mobileTitleInShell || (!embedded && route.threadId === threadId));
   const mobileTitleTarget = useMobileThreadTitleTarget(mobileHeaderInShell);
-  const mobileActionsTarget = useMobileThreadActionsTarget(mobileHeaderInShell);
   const mobileControlsTarget = useMobileThreadControlsTarget(mobileHeaderInShell);
   const compact = useCompactLayout();
   const hostedSecondary = pane?.secondaryPanelHost != null;
@@ -232,6 +235,8 @@ function ThreadDetailBody({
   const [projectId, setProjectId] = useState<string | null>(null);
   const project = useData((s) => (projectId ? s.projects.find((row) => row.id === projectId) ?? null : null));
   const [hostId, setHostId] = useState<string | undefined>();
+  const hosts = useHosts();
+  const executionLocation = sessionLocation(hostId, project ?? undefined, hosts);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
   const [isWorktree, setIsWorktree] = useState(false);
   const [branchName, setBranchName] = useState<string | null>(null);
@@ -963,24 +968,25 @@ function ThreadDetailBody({
       <div className="thread-detail-split">
       <div className={dockEnabled ? "thread-tool-main" : "thread-tool-main--legacy"}>
       <div ref={mainRef} className="thread-detail-main">
-        <header className="thread-detail-header" data-title-in-shell={Boolean(mobileTitleTarget) || undefined} data-controls-in-shell={Boolean(mobileControlsTarget) || undefined}>
+        <header className="thread-detail-header thread-detail-header--balanced" data-title-in-shell={Boolean(mobileTitleTarget) || undefined} data-controls-in-shell={Boolean(mobileControlsTarget) || undefined}>
           <ThreadDetailHeading
             title={title}
             titleTarget={mobileTitleTarget}
-            overflowTarget={mobileActionsTarget}
             draggable={Boolean(pane?.beginPaneDrag)}
             onPointerDown={
               pane?.beginPaneDrag
                 ? (event) => pane.beginPaneDrag?.(event, title)
                 : undefined
             }
-            overflow={mobileControlsTarget ? null : overflow}
-            agent={{
+            status={!mobileControlsTarget ? <ThreadStatusBadge status={status} waitingOnUser={awaitingUser} thinking={thinking} /> : null}
+            metadata={!mobileControlsTarget && <ThreadDetailContext key={threadId} agent={{
               providerId: threadProviderId,
               model: threadModel,
               projectName: project?.name ?? null,
+              machineName: executionLocation.machineName,
+              machineRemote: executionLocation.remote,
               branchName
-            }}
+            }} />}
           />
           <ThreadDetailActions target={mobileControlsTarget}>
             {(!mobileControlsTarget || mobileSearchOpen) && <ThreadDetailSearch
@@ -995,7 +1001,7 @@ function ThreadDetailBody({
               matchCount={searchActive && !search.pending ? search.matches.length : undefined}
               partial={searchActive && search.partial}
             />}
-            <ThreadStatusBadge status={status} waitingOnUser={awaitingUser} thinking={thinking} />
+            {mobileControlsTarget && <ThreadStatusBadge status={status} waitingOnUser={awaitingUser} thinking={thinking} />}
             {!mobileControlsTarget && <PluginThreadHeaderActions threadId={threadId} projectId={projectId} />}
             <SplitPaneHeaderActions />
             {dockEnabled ? <button type="button" className="icon-btn"
@@ -1016,7 +1022,7 @@ function ThreadDetailBody({
                 <PanelRight size={14} />
               </button>
             ) : null}
-            {mobileControlsTarget ? overflow : null}
+            {overflow}
           </ThreadDetailActions>
         </header>
         <div className="thread-detail-body">
@@ -1127,6 +1133,7 @@ function ThreadDetailBody({
                 status={status}
                 inFlightRetry={inFlightRetry}
                 sendBlocked={pendingInteractions.length > 0}
+                sendBlockedHint={pendingInteractionSendBlockedHint(pendingInteractions)}
                 environmentLabel={isWorktree ? 'Worktree' : 'Local'}
                 contextWindowUsage={contextWindow}
                 providerId={threadProviderId ?? undefined}

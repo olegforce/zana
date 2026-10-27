@@ -272,7 +272,7 @@ export interface CcApi {
     retryDelivery(projectId: string, executionId: string, expectedStateVersion: number, blockerId: string, deliveryId: string): Promise<Result<ExecutionBoardProjection>>;
     recoverTimedOut(projectId: string, executionId: string, expectedStateVersion: number, clientRequestId: string): Promise<Result<ExecutionBoardProjection>>;
     recoverRetainedSquad(projectId: string, executionId: string, expectedStateVersion: number, mode: 'exact-native' | 'fresh-plan'): Promise<Result<ExecutionBoardProjection>>;
-    worktreeAction(projectId: string, executionId: string, expectedStateVersion: number, action: 'leave' | 'instruct' | 'delete' | 'force-delete', instruction?: string): Promise<Result<true>>;
+    worktreeAction(projectId: string, executionId: string, expectedStateVersion: number, action: 'leave' | 'instruct' | 'delete' | 'force-delete', instruction?: string, personaId?: string): Promise<Result<true>>;
     clearResumeToken(projectId: string, executionId: string): Promise<Result<true>>;
     relaunchMonitor(projectId: string, executionId: string): Promise<Result<{ sessionId: string }>>;
   };
@@ -354,11 +354,11 @@ export interface CcApi {
      * Live progress lines arrive on `onCloneProgress`. On a DEST_EXISTS result
      * the folder already existed and was left untouched.
      */
-    clone(input: { url: string; name?: string }): Promise<CloneProjectResult>;
+    clone(input: { url: string; name?: string; hostId?: string }): Promise<CloneProjectResult>;
     /** Subscribe to `git clone --progress` lines for the in-flight clone. */
     onCloneProgress(cb: (line: string) => void): () => void;
     /** The absolute directory new clones land in (default `~/zcc-workspace`). */
-    cloneRoot(): Promise<string>;
+    cloneRoot(hostId?: string): Promise<string>;
     /**
      * Ensure the built-in Quick Agent scratch project exists (rooted at
      * `~/zcc-workspace`, created on first call) and return it. Idempotent.
