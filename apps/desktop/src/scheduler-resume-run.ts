@@ -41,59 +41,73 @@ export interface ResumeRunDeps {
   realpath: (path: string) => string;
 }
 
-const fail = (code: string, message: string): Result<ResumeRunValue> => ({ ok: false, code, message });
+type ResumableRegistration = Registration & { nativeConversationResume: NonNullable<Registration['nativeConversationResume']> };
+const fail = <T = ResumeRunValue>(code: string, message: string): Result<T> => ({ ok: false, code, message });
 const NO_CONVERSATION = "This run didn't record a conversation to reopen";
 const UNSUPPORTED = "This agent can't reopen a past conversation";
 
 /**
- * Opens still waiting for their terminal, by conversation id. Two clicks (or two
- * windows) that both pass the live-tab check before either tab exists join the
- * same open instead of starting two agents on one conversation.
+ * Opens still waiting for their terminal, by project + harness + conversation id.
+ * Two clicks (or two windows) that both pass the live-tab check before either tab
+ * exists join the same open instead of starting two agents on one conversation.
+ * The key carries the project and harness because ids are only unique within one
+ * harness, and the same id recorded in another project is another conversation.
  */
 const opening = new Map<string, Promise<Result<ResumeRunValue>>>();
 
-export async function resumeScheduledRun(input: ResumeRunInput, deps: ResumeRunDeps): Promise<Result<ResumeRunValue>> {
-  const task = deps.getTask(input.scheduleId);
-  if (!task) return fail('NOT_FOUND', 'This schedule is no longer available');
+const openingKey = (projectId: string, profile: string, id: string): string => JSON.stringify([projectId, profile, id]);
 
-  const runs = task.status?.runs ?? [];
-  let run: ScheduleRun | undefined;
-  if (input.runId !== undefined) {
-    run = runs.find((candidate) => candidate.id === input.runId);
-    if (!run) return fail('RUN_NOT_FOUND', "This run is no longer in the schedule's history");
-  } else {
-    run = latestResumableRun(runs);
+/** Collapse `.`, `..` and repeated or trailing slashes. Pure string work: the folder lives on another host, so no realpath. */
+export function normalizePosixPath(path: string): string {
+  const out: string[] = [];
+  for (const part of path.trim().split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
   }
-  // One rule for "latest" and an explicit run: launched, not a Squad run, valid recorded id.
-  if (!run || !resumableRun(run)) return fail('NO_CONVERSATION', NO_CONVERSATION);
-  const conversation = run.conversation!;
-  const id = conversation.id!;
+  return `/${out.join('/')}`;
+}
 
-  const project = deps.listProjects().find((candidate) => candidate.id === task.projectId);
-  if (!project) return fail('PROJECT_MISSING', 'The project for this schedule is no longer registered');
-  let cwd: string | undefined;
-  if (!project.remote) {
-    try { cwd = deps.realpath(project.path); }
-    catch { return fail('PROJECT_MISSING', 'The project folder for this schedule is missing'); }
-    // The recorded folder comes from an editable file, and a global schedule can move to
-    // another project: reopen only in the folder the conversation was recorded in (Rule 2).
-    let recorded: string | undefined;
-    try { recorded = deps.realpath(conversation.cwd); } catch { recorded = undefined; }
-    if (recorded !== cwd) {
-      return fail('CONVERSATION_MOVED', "This run's conversation was recorded in another folder, so it can't be reopened here");
-    }
+const moved = () => fail<{ cwd?: string }>('CONVERSATION_MOVED', "This run's conversation was recorded in another folder, so it can't be reopened here");
+
+/**
+ * Rule 2: reopen only in the folder the conversation was recorded in. The recorded folder comes
+ * from an editable file, and a global schedule can move to another project.
+ * Local: both sides are realpath'd. Remote: the folder is on another host, so compare normalised
+ * POSIX paths against the folder the project record names (`remote.remotePath`). A remote project
+ * that names none starts in a machine, global or home default resolved at launch, which the record
+ * cannot tell us, so there is nothing to compare against.
+ */
+function checkFolder(project: Project, recordedCwd: string, deps: Pick<ResumeRunDeps, 'realpath'>): Result<{ cwd?: string }> {
+  if (project.remote) {
+    const named = project.remote.remotePath?.trim();
+    // `project.path` also counts: a local-agent-with-remote-tools session records the project's own path.
+    if (named?.startsWith('/') && ![named, project.path].map(normalizePosixPath).includes(normalizePosixPath(recordedCwd))) return moved();
+    return { ok: true, value: {} };
   }
+  let cwd: string;
+  try { cwd = deps.realpath(project.path); }
+  catch { return fail<{ cwd?: string }>('PROJECT_MISSING', 'The project folder for this schedule is missing'); }
+  let recorded: string | undefined;
+  try { recorded = deps.realpath(recordedCwd); } catch { recorded = undefined; }
+  return recorded === cwd ? { ok: true, value: { cwd } } : moved();
+}
 
-  const registration = deps.registrationFor(conversation.profile);
-  if (!registration?.nativeConversationResume) return fail('UNSUPPORTED', UNSUPPORTED);
-
+/** Reuse an already open tab (the run's own, or any live tab of the same harness on the same conversation), else launch once. */
+async function reuseOrLaunch(
+  project: Project, task: ScheduledTask, run: ScheduleRun, id: string, cwd: string | undefined,
+  registration: ResumableRegistration, deps: ResumeRunDeps
+): Promise<Result<ResumeRunValue>> {
+  const profile = run.conversation!.profile;
   const live = deps.listLiveSessions(project.id);
   const ownTab = run.sessionId ? live.find((session) => session.id === run.sessionId) : undefined;
   if (ownTab) return { ok: true, value: { session: ownTab, reused: true } };
-  const sameConversation = live.find((session) => deps.registrationFor(session.profile)?.nativeConversationId?.(session) === id);
+  // An id only means something within its own harness: never match another harness's tab.
+  const sameConversation = live.find((session) => session.profile === profile && registration.nativeConversationId?.(session) === id);
   if (sameConversation) return { ok: true, value: { session: sameConversation, reused: true } };
 
-  const pending = opening.get(id);
+  const key = openingKey(project.id, profile, id);
+  const pending = opening.get(key);
   if (pending) {
     const joined = await pending;
     return joined.ok ? { ok: true, value: { session: joined.value.session, reused: true } } : joined;
@@ -111,7 +125,28 @@ export async function resumeScheduledRun(input: ResumeRunInput, deps: ResumeRunD
     } as CreateTerminalRequest);
     return created.ok ? { ok: true, value: { session: created.value, reused: false } } : created;
   })();
-  opening.set(id, open);
+  opening.set(key, open);
   try { return await open; }
-  finally { opening.delete(id); }
+  finally { opening.delete(key); }
+}
+
+export async function resumeScheduledRun(input: ResumeRunInput, deps: ResumeRunDeps): Promise<Result<ResumeRunValue>> {
+  const task = deps.getTask(input.scheduleId);
+  if (!task) return fail('NOT_FOUND', 'This schedule is no longer available');
+
+  const runs = task.status?.runs ?? [];
+  const run = input.runId === undefined ? latestResumableRun(runs) : runs.find((candidate) => candidate.id === input.runId);
+  if (input.runId !== undefined && !run) return fail('RUN_NOT_FOUND', "This run is no longer in the schedule's history");
+  // One rule for "latest" and an explicit run: launched, not a Squad run, valid recorded id.
+  if (!run || !resumableRun(run)) return fail('NO_CONVERSATION', NO_CONVERSATION);
+  const conversation = run.conversation!;
+
+  const project = deps.listProjects().find((candidate) => candidate.id === task.projectId);
+  if (!project) return fail('PROJECT_MISSING', 'The project for this schedule is no longer registered');
+  const folder = checkFolder(project, conversation.cwd, deps);
+  if (!folder.ok) return folder;
+
+  const registration = deps.registrationFor(conversation.profile);
+  if (!registration?.nativeConversationResume) return fail('UNSUPPORTED', UNSUPPORTED);
+  return reuseOrLaunch(project, task, run, conversation.id!, folder.value.cwd, registration as ResumableRegistration, deps);
 }

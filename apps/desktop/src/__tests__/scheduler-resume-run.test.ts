@@ -4,7 +4,7 @@ import { registrationFor } from '@zana-ai/zcc-host-daemon/harness/registry';
 import { resumeScheduledRun, type ResumeRunDeps } from '../scheduler-resume-run.js';
 
 const local: Project = { id: 'p1', name: 'P', path: '/proj', createdAt: 0, lastActiveAt: 0 };
-const remote = { ...local, remote: { host: 'h', path: '/r' } } as unknown as Project;
+const remote = { ...local, remote: { host: 'h', remotePath: '/r' } } as unknown as Project;
 const at = (minutesAgo: number) => new Date(Date.parse('2026-10-27T12:00:00Z') - minutesAgo * 60_000).toISOString();
 const conv = (over: Record<string, unknown> = {}) => ({ profile: 'claude', id: 'conv-1', cwd: '/proj', startedAt: at(10), ...over });
 const run = (over: Partial<ScheduleRun> = {}): ScheduleRun => ({ id: 'r1', at: at(10), result: 'success', sessionId: 'old-pty', conversation: conv() as never, ...over });
@@ -124,6 +124,12 @@ describe('resumeScheduledRun', () => {
     expect(deps.createInteractiveTerminal).not.toHaveBeenCalled();
   });
 
+  it('does not reuse a tab of another harness that happens to hold the same id', async () => {
+    const codexTab = session('codex-tab', { profile: 'codex', codexSessionId: 'conv-1' });
+    const { deps, created } = setup(task([run()]), { live: [codexTab] });
+    await expect(go(deps)).resolves.toEqual({ ok: true, value: { session: created, reused: false } });
+  });
+
   describe('a harness that detects its id after launch (Codex, OpenCode)', () => {
     it('reopens with the id the run detected while it was live', async () => {
       const { deps } = setup(task([run({ conversation: conv({ profile: 'codex', id: 'codex-9' }) as never })]));
@@ -159,8 +165,32 @@ describe('resumeScheduledRun', () => {
       await expect(go(deps)).resolves.toMatchObject({ ok: true });
     });
 
-    it('does not check the folder for a remote project (its folder is on the remote host)', async () => {
-      const { deps } = setup(task([run({ conversation: conv({ cwd: '/r' }) as never })]), { project: remote });
+    it('reopens a remote project in its named folder, compared as normalised POSIX paths without touching the local disk', async () => {
+      const { deps } = setup(task([run({ conversation: conv({ cwd: '/r/./sub/..//' }) as never })]), { project: remote });
+      await expect(go(deps)).resolves.toMatchObject({ ok: true, value: { reused: false } });
+      expect(deps.realpath).not.toHaveBeenCalled();
+      expect((deps.createInteractiveTerminal as ReturnType<typeof vi.fn>).mock.calls[0]![0].cwd).toBeUndefined();
+    });
+
+    it('refuses a remote conversation recorded in another folder than the project names', async () => {
+      const { deps } = setup(task([run({ conversation: conv({ cwd: '/elsewhere' }) as never })]), { project: remote });
+      await expect(go(deps)).resolves.toMatchObject({ ok: false, code: 'CONVERSATION_MOVED' });
+      expect(deps.createInteractiveTerminal).not.toHaveBeenCalled();
+    });
+
+    it('does not let a dot-dot path climb out of the named remote folder', async () => {
+      const { deps } = setup(task([run({ conversation: conv({ cwd: '/r/../etc' }) as never })]), { project: remote });
+      await expect(go(deps)).resolves.toMatchObject({ code: 'CONVERSATION_MOVED' });
+    });
+
+    it('accepts the project path a local-agent-with-remote-tools session records', async () => {
+      const { deps } = setup(task([run()]), { project: remote });
+      await expect(go(deps)).resolves.toMatchObject({ ok: true });
+    });
+
+    it('has nothing to compare for a remote project that names no folder (the start folder is resolved at launch)', async () => {
+      const unnamed = { ...local, remote: { host: 'h' } } as unknown as Project;
+      const { deps } = setup(task([run({ conversation: conv({ cwd: '/machine/default' }) as never })]), { project: unnamed });
       await expect(go(deps)).resolves.toMatchObject({ ok: true });
     });
   });
@@ -193,6 +223,41 @@ describe('resumeScheduledRun', () => {
       await expect(second).resolves.toBe(failure);
       createInteractiveTerminal.mockImplementationOnce(async () => ({ ok: true, value: session('later') }));
       await expect(go(deps)).resolves.toMatchObject({ ok: true, value: { reused: false } });
+    });
+  });
+
+  describe('identical ids that are different conversations', () => {
+    const hold = () => {
+      const resolvers: Array<(value: { ok: true; value: TerminalSession }) => void> = [];
+      const createInteractiveTerminal = vi.fn(() => new Promise<{ ok: true; value: TerminalSession }>((resolve) => { resolvers.push(resolve); }));
+      return { resolvers, createInteractiveTerminal };
+    };
+
+    it('in different projects each start their own launch and get their own tab', async () => {
+      const { resolvers, createInteractiveTerminal } = hold();
+      const otherProject = { ...local, id: 'p2', path: '/proj2' } as Project;
+      const a = setup(task([run()]), { createInteractiveTerminal: createInteractiveTerminal as never });
+      const b = setup(task([run({ conversation: conv({ cwd: '/proj2' }) as never })], { projectId: 'p2' }), { project: otherProject, createInteractiveTerminal: createInteractiveTerminal as never });
+      const first = go(a.deps);
+      const second = go(b.deps);
+      await vi.waitFor(() => expect(createInteractiveTerminal).toHaveBeenCalledTimes(2));
+      resolvers[0]!({ ok: true, value: session('tab-p1') });
+      resolvers[1]!({ ok: true, value: session('tab-p2', { projectId: 'p2' }) });
+      await expect(first).resolves.toMatchObject({ value: { session: { id: 'tab-p1' }, reused: false } });
+      await expect(second).resolves.toMatchObject({ value: { session: { id: 'tab-p2' }, reused: false } });
+    });
+
+    it('under different harnesses each start their own launch', async () => {
+      const { resolvers, createInteractiveTerminal } = hold();
+      const a = setup(task([run()]), { createInteractiveTerminal: createInteractiveTerminal as never });
+      const b = setup(task([run({ conversation: conv({ profile: 'codex' }) as never })]), { createInteractiveTerminal: createInteractiveTerminal as never });
+      const first = go(a.deps);
+      const second = go(b.deps);
+      await vi.waitFor(() => expect(createInteractiveTerminal).toHaveBeenCalledTimes(2));
+      resolvers[0]!({ ok: true, value: session('claude-tab') });
+      resolvers[1]!({ ok: true, value: session('codex-tab', { profile: 'codex' }) });
+      await expect(first).resolves.toMatchObject({ value: { session: { id: 'claude-tab' }, reused: false } });
+      await expect(second).resolves.toMatchObject({ value: { session: { id: 'codex-tab' }, reused: false } });
     });
   });
 
