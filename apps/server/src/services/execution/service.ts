@@ -3,7 +3,7 @@ import { squadLaunchTextProblem } from '@zana-ai/zcc-domain/squad-proposal';
 import { fitRecoveryObjective } from './recovery-objective.js';
 import { createHash } from 'node:crypto';
 import { launchDigest } from '../launch/digest.js';
-import { EXECUTION_RETENTION_MS, KICKOFF_FAILURE_BLOCK_THRESHOLD, isTerminalExecutionState, isWorkerRecoveryActive, NO_PROGRESS_CLAIM_REASON, WORK_CLAIM_LEASE_MS, WorkUnitRecoveryGuardError, executionReportTarget, type ActiveClaimCursor, type ExecutionCohortAuthority, type ExecutionDispatchAssignment, type ExecutionEvent, type ExecutionLaunchDisplayV1, type ExecutionLaunchKind, type ExecutionPolicyV1, type ExecutionRecord, type ExecutionWorkUnitInput, type RetainedRecoveryMode, type ResolvedModelSnapshotV1 } from './store.js';
+import { EXECUTION_RETENTION_MS, KICKOFF_FAILURE_BLOCK_THRESHOLD, isTerminalExecutionState, isWorkerRecoveryLive, NO_PROGRESS_CLAIM_REASON, WORK_CLAIM_LEASE_MS, WorkUnitRecoveryGuardError, executionReportTarget, type ActiveClaimCursor, type ExecutionCohortAuthority, type ExecutionDispatchAssignment, type ExecutionEvent, type ExecutionLaunchDisplayV1, type ExecutionLaunchKind, type ExecutionPolicyV1, type ExecutionRecord, type ExecutionWorkUnitInput, type RetainedRecoveryMode, type ResolvedModelSnapshotV1 } from './store.js';
 import type { createExecutionStore } from './store.js';
 import type { ExecutionArtifactRecord, createExecutionArtifactStore } from './artifact-store.js';
 import { validateWorkflowPolicyResult, type WorkflowPolicyResultV1 } from './policy-result.js';
@@ -992,7 +992,7 @@ export class ExecutionService {
     if (unit.leaseExpiresAt === undefined || unit.leaseExpiresAt > now) return {};
     const state = worker.sessionId === undefined ? undefined : this.deps.getAgentState?.(worker.sessionId);
     // Zana is recovering this worker from an API error (nudge, restart): keep the claim until its deadline.
-    if (isWorkerRecoveryActive(unit) && unit.apiErrorRecovery!.deadlineAt !== undefined && now < unit.apiErrorRecovery!.deadlineAt) {
+    if (isWorkerRecoveryLive(unit, now)) {
       return { renewSlot: unit.assignedSlotId };
     }
     if (state !== undefined && isRestfulAgentState(state)) return { claim: claimOf(SILENT_WORKER_CLAIM_REASON) };
@@ -1144,8 +1144,7 @@ export class ExecutionService {
       if (unit.state !== 'CLAIMED') continue;
       const lastProgressAt = unit.progressAt ?? unit.claimedAt;
       // progressAt can predate the API error, so an active recovery before its deadline is live, not wedged.
-      const recovering = isWorkerRecoveryActive(unit) && unit.apiErrorRecovery!.deadlineAt !== undefined
-        && now < unit.apiErrorRecovery!.deadlineAt;
+      const recovering = isWorkerRecoveryLive(unit, now);
       const stalled = !recovering && stallMs !== undefined && lastProgressAt !== undefined
         && now - lastProgressAt >= stallMs;
       if (enforce && record.coordinatorState === 'PARKED' && stalled

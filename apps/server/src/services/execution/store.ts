@@ -93,6 +93,13 @@ const MAX_RECOVERY_KIND = 64;
 const MAX_RECOVERY_TEXT = 500;
 const MAX_RECOVERY_DETAIL = 300;
 const MAX_RECOVERY_STEPS = 8;
+/** Length of the last-error excerpt quoted in the blocker question. */
+const MAX_BLOCKER_ERROR_EXCERPT = 300;
+
+/** Steps at which Zana is still working through the ladder: the claim is held and the board shows it. */
+const LIVE_RECOVERY_STEPS: ReadonlySet<WorkerRecoveryStep> = new Set(['waiting', 'nudged', 'restarted']);
+/** Unfinished steps the blocker may close: the live ones plus a failed restart ('resumed' and 'exhausted' are finished). */
+const BLOCKABLE_RECOVERY_STEPS: ReadonlySet<WorkerRecoveryStep> = new Set([...LIVE_RECOVERY_STEPS, 'restart-failed']);
 
 /** Durable record of one claim's API-error recovery; only meaningful while it names the unit's current claim. */
 export interface WorkerApiErrorRecovery {
@@ -125,7 +132,7 @@ export interface RecordWorkerRecoveryInput {
 
 /** Steps at which a recovery is unfinished: a 'resumed' or 'exhausted' recovery must not be blocked as unrecovered. */
 function isWorkerRecoveryActiveStep(step: WorkerRecoveryStep): boolean {
-  return step === 'waiting' || step === 'nudged' || step === 'restarted' || step === 'restart-failed';
+  return BLOCKABLE_RECOVERY_STEPS.has(step);
 }
 
 /** True while Zana is still recovering the unit's CURRENT claim (not a stale or finished attempt). */
@@ -133,7 +140,13 @@ export function isWorkerRecoveryActive(unit: ExecutionWorkUnit): boolean {
   const recovery = unit.apiErrorRecovery;
   return unit.state === 'CLAIMED' && recovery !== undefined && unit.claimId !== undefined
     && recovery.claimId === unit.claimId && recovery.claimGeneration === unit.claimGeneration
-    && (recovery.step === 'waiting' || recovery.step === 'nudged' || recovery.step === 'restarted');
+    && LIVE_RECOVERY_STEPS.has(recovery.step);
+}
+
+/** {@link isWorkerRecoveryActive} and before its deadline: past it nothing more will be tried, so ordinary reclaim applies. */
+export function isWorkerRecoveryLive(unit: ExecutionWorkUnit, now: number): boolean {
+  const deadlineAt = unit.apiErrorRecovery?.deadlineAt;
+  return isWorkerRecoveryActive(unit) && deadlineAt !== undefined && now < deadlineAt;
 }
 
 /** Local HH:MM used in blocker text that tells a human when recovery was tried. */
@@ -2602,7 +2615,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       const blockerId = `no-progress:${record.attempt}:${unit.id}:${unit.attempt}`;
       if (record.blockers?.some((blocker) => blocker.id === blockerId)) throw new WorkUnitRecoveryGuardError('duplicate kickoff blocker');
       const slotId = unit.assignedSlotId ?? 'engine';
-      const lastError = recovery ? `${recovery.errorKind ?? 'unknown'}: ${(recovery.errorText ?? 'no details').slice(0, 300)}` : '';
+      const lastError = recovery ? `${recovery.errorKind ?? 'unknown'}: ${(recovery.errorText ?? 'no details').slice(0, MAX_BLOCKER_ERROR_EXCERPT)}` : '';
       let question: string;
       if (apiError && recovery) {
         const tried = recovery.steps.flatMap((entry) => entry.step === 'nudged' ? [`nudged it at ${formatRecoveryClock(entry.at)}`]

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createExecutionStore, formatRecoveryClock, isWorkerRecoveryActive, KICKOFF_FAILURE_BLOCK_THRESHOLD, NO_PROGRESS_CLAIM_REASON, WorkUnitRecoveryGuardError, type ExecutionWorkUnit, type RecordWorkerRecoveryInput } from '../store.js';
+import { createExecutionStore, formatRecoveryClock, isWorkerRecoveryActive, isWorkerRecoveryLive, KICKOFF_FAILURE_BLOCK_THRESHOLD, NO_PROGRESS_CLAIM_REASON, WorkUnitRecoveryGuardError, type ExecutionWorkUnit, type RecordWorkerRecoveryInput } from '../store.js';
 
 async function fixture(run: (filePath: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'zcc-execution-api-error-'));
@@ -164,6 +164,18 @@ describe('recordWorkerRecovery', () => {
     expect(next.workUnits![0].apiErrorRecovery).toMatchObject({ claimId: unit.claimId, startedAt: 1_000, steps: [{ step: 'waiting' }] });
     expect(isWorkerRecoveryActive(next.workUnits![0])).toBe(true);
     expect(isWorkerRecoveryActive({ ...next.workUnits![0], state: 'READY' } as ExecutionWorkUnit)).toBe(false);
+  }));
+
+  it('is live only while active and before its deadline', async () => fixture(async (filePath) => {
+    const store = createExecutionStore({ filePath, id: () => 'execution', now: () => 1_000 });
+    const { record, input } = await claimed(store);
+    let next = await store.recordWorkerRecovery(record.id, input());
+    expect(isWorkerRecoveryLive(next.workUnits![0], 1_000)).toBe(false); // no deadline recorded
+    next = await store.recordWorkerRecovery(record.id, input({ step: 'nudged', deadlineAt: 5_000 }));
+    expect(isWorkerRecoveryLive(next.workUnits![0], 4_999)).toBe(true);
+    expect(isWorkerRecoveryLive(next.workUnits![0], 5_000)).toBe(false);
+    next = await store.recordWorkerRecovery(record.id, input({ step: 'restart-failed' }));
+    expect(isWorkerRecoveryLive(next.workUnits![0], 1_000)).toBe(false); // blockable, but no longer live
   }));
 
   it('is cleared by retryWork', async () => fixture(async (filePath) => {

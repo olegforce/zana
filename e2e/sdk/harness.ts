@@ -932,66 +932,43 @@ function apiErrorHooks() {
   };
 }
 
-async function apiErrorWorker() {
-  log('api-error worker start', EXECUTION_ID, 'resumed=' + RESUMED, 'sid=' + process.env.ZCC_SESSION_ID, 'argv=' + JSON.stringify(process.argv.slice(2).filter(function (a) { return a.length < 40; })));
-  const execFile = execFileFor();
-  if (EXECUTION_ID) fs.writeFileSync(execFile, EXECUTION_ID);
-  const typedLog = path.join(__dirname, 'typed.log');
-  const hooks = apiErrorHooks();
-  const permanent = API_ERROR_PERMANENT;
-  const kind = permanent ? 'authentication_failed' : 'invalid_request';
-  const detail = permanent ? 'Invalid API key' : '400 litellm.BadRequestError: LLM Provider NOT provided. Error doing the fallback: Provider anthropic not found';
-  if (!RESUMED && !hooks.has('StopFailure')) {
-    log('fatal: the injected --settings has no StopFailure hook');
-    process.stderr.write('API-error worker: no StopFailure hook in --settings\n');
-    process.exit(70);
-  }
+// What the API-error fake reports on StopFailure: a permanent authentication failure, or the
+// temporary proxy 400 from #416.
+function apiErrorProfile() {
+  return API_ERROR_PERMANENT
+    ? { permanent: true, kind: 'authentication_failed', detail: 'Invalid API key' }
+    : { permanent: false, kind: 'invalid_request', detail: '400 litellm.BadRequestError: LLM Provider NOT provided. Error doing the fallback: Provider anthropic not found' };
+}
+
+// One worker turn as Claude Code reports it: UserPromptSubmit at submit time, while the tab still
+// shows its resting title, then 'working' long enough to pass the 250 ms status debounce.
+function apiErrorTurns(hooks) {
+  return {
+    start: async function () {
+      hooks.run('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt: 'work' });
+      setWorking();
+      await sleep(400);
+    },
+    finish: async function (unitId) {
+      await doUnit(unitId);
+      await sleep(300);
+      setIdle();
+      hooks.run('Stop', { hook_event_name: 'Stop' });
+    }
+  };
+}
+
+// Splits what the engine types into assignments and other lines. An assignment (and the restart
+// preface before a redelivered one) is buffered until its closing sentence has arrived.
+function apiErrorInput(onAssignment, onLine) {
   const ASSIGN_RE = new RegExp('assigned work unit ' + BT + '([^' + BT + ']+)' + BT);
   const END = 'coordinator.';
-  const seen = Object.create(null);
   let buf = '';
   let inAssignment = false;
-  let failedOnce = false;
-  let nudged = false;
-  async function turn(unitId) {
-    // Claude fires UserPromptSubmit at submit time, while the tab still shows its resting title.
-    hooks.run('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt: 'work' });
-    setWorking();
-    await sleep(400); // dwell past the 250 ms status debounce so 'working' is committed
-    return unitId;
-  }
-  async function finishUnit(unitId) {
-    await doUnit(unitId);
-    await sleep(300);
-    setIdle();
-    hooks.run('Stop', { hook_event_name: 'Stop' });
-  }
-  async function onAssignment(id) {
-    if (seen[id]) return;
-    seen[id] = true;
-    await turn(id);
-    if (!RESUMED && !failedOnce) {
-      failedOnce = true;
-      hooks.run('StopFailure', { hook_event_name: 'StopFailure', error: kind, error_details: detail });
-      setIdle();
-      log('api-error: stopped on ' + kind + ', not completing');
-      return;
-    }
-    if (RESUMED && !permanent) await finishUnit(id);
-  }
-  function consume(chunk) {
+  return function consume(chunk) {
     const s = String(chunk).replace(/\x1b\[20[01]~/g, '');
     if (!inAssignment && !ASSIGN_RE.test(s) && s.indexOf('Zana restarted your session') === -1) {
-      s.split(/[\r\n]+/).map(function (line) { return line.trim(); }).filter(Boolean).forEach(function (line) {
-        fs.appendFileSync(typedLog, line + '\n');
-        if (line.indexOf('Continue with your current assignment') !== -1 && API_ERROR_NUDGE && !RESUMED && !nudged) {
-          nudged = true;
-          (async function () {
-            await turn('api-error-unit');
-            await finishUnit('api-error-unit');
-          })().catch(function (e) { log('nudge error', String((e && e.message) || e)); });
-        }
-      });
+      s.split(/[\r\n]+/).map(function (line) { return line.trim(); }).filter(Boolean).forEach(function (line) { onLine(line); });
       return;
     }
     inAssignment = true;
@@ -1001,15 +978,53 @@ async function apiErrorWorker() {
       const endIdx = buf.indexOf(END, m.index);
       if (endIdx === -1) return; // still arriving
       const end = endIdx + END.length;
-      const id = m[1];
-      assignText[id] = buf.slice(m.index, end);
+      assignText[m[1]] = buf.slice(m.index, end);
       buf = buf.slice(end);
       inAssignment = false;
-      onAssignment(id).catch(function (e) { log('assignment error', String((e && e.message) || e)); });
+      onAssignment(m[1]);
     }
+  };
+}
+
+async function apiErrorWorker() {
+  log('api-error worker start', EXECUTION_ID, 'resumed=' + RESUMED, 'sid=' + process.env.ZCC_SESSION_ID, 'argv=' + JSON.stringify(process.argv.slice(2).filter(function (a) { return a.length < 40; })));
+  if (EXECUTION_ID) fs.writeFileSync(execFileFor(), EXECUTION_ID);
+  const typedLog = path.join(__dirname, 'typed.log');
+  const hooks = apiErrorHooks();
+  const profile = apiErrorProfile();
+  if (!RESUMED && !hooks.has('StopFailure')) {
+    log('fatal: the injected --settings has no StopFailure hook');
+    process.stderr.write('API-error worker: no StopFailure hook in --settings\n');
+    process.exit(70);
+  }
+  const turns = apiErrorTurns(hooks);
+  const seen = Object.create(null);
+  let failedOnce = false;
+  let nudged = false;
+  async function onAssignment(id) {
+    if (seen[id]) return;
+    seen[id] = true;
+    await turns.start();
+    if (!RESUMED && !failedOnce) {
+      failedOnce = true;
+      hooks.run('StopFailure', { hook_event_name: 'StopFailure', error: profile.kind, error_details: profile.detail });
+      setIdle();
+      log('api-error: stopped on ' + profile.kind + ', not completing');
+      return;
+    }
+    if (RESUMED && !profile.permanent) await turns.finish(id);
+  }
+  function onLine(line) {
+    fs.appendFileSync(typedLog, line + '\n');
+    if (line.indexOf('Continue with your current assignment') === -1 || !API_ERROR_NUDGE || RESUMED || nudged) return;
+    nudged = true;
+    turns.start().then(function () { return turns.finish('api-error-unit'); })
+      .catch(function (e) { log('nudge error', String((e && e.message) || e)); });
   }
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', consume);
+  process.stdin.on('data', apiErrorInput(function (id) {
+    onAssignment(id).catch(function (e) { log('assignment error', String((e && e.message) || e)); });
+  }, onLine));
   process.stdin.resume();
   setIdle();
   await new Promise(function () {});
