@@ -85,6 +85,91 @@ export class WorkUnitRecoveryGuardError extends Error {
   }
 }
 
+/** Ordered steps of Zana's automatic recovery of a worker that stopped on an API error. */
+export const WORKER_RECOVERY_STEPS = ['waiting', 'nudged', 'restarted', 'resumed', 'restart-failed', 'exhausted'] as const;
+export type WorkerRecoveryStep = typeof WORKER_RECOVERY_STEPS[number];
+
+const MAX_RECOVERY_KIND = 64;
+const MAX_RECOVERY_TEXT = 500;
+const MAX_RECOVERY_DETAIL = 300;
+const MAX_RECOVERY_STEPS = 8;
+/** Length of the last-error excerpt quoted in the blocker question. */
+const MAX_BLOCKER_ERROR_EXCERPT = 300;
+
+/** Steps at which Zana is still working through the ladder: the claim is held and the board shows it. */
+const LIVE_RECOVERY_STEPS: ReadonlySet<WorkerRecoveryStep> = new Set(['waiting', 'nudged', 'restarted']);
+/** Unfinished steps the blocker may close: the live ones plus a failed restart ('resumed' and 'exhausted' are finished). */
+const BLOCKABLE_RECOVERY_STEPS: ReadonlySet<WorkerRecoveryStep> = new Set([...LIVE_RECOVERY_STEPS, 'restart-failed']);
+
+/** Durable record of one claim's API-error recovery; only meaningful while it names the unit's current claim. */
+export interface WorkerApiErrorRecovery {
+  claimId: string;
+  claimGeneration: number;
+  slotId: string;
+  executionAttempt: number;
+  step: WorkerRecoveryStep;
+  errorKind?: string;
+  errorText?: string;
+  startedAt: number;
+  updatedAt: number;
+  deadlineAt?: number;
+  steps: Array<{ step: WorkerRecoveryStep; at: number; detail?: string }>;
+}
+
+export interface RecordWorkerRecoveryInput {
+  workUnitId: string;
+  claimId: string;
+  claimGeneration: number;
+  slotId: string;
+  step: WorkerRecoveryStep;
+  errorKind?: string;
+  errorText?: string;
+  deadlineAt?: number;
+  detail?: string;
+  severity: 'info' | 'warning';
+  summary: string;
+}
+
+/** Steps at which a recovery is unfinished: a 'resumed' or 'exhausted' recovery must not be blocked as unrecovered. */
+function isWorkerRecoveryActiveStep(step: WorkerRecoveryStep): boolean {
+  return BLOCKABLE_RECOVERY_STEPS.has(step);
+}
+
+/** True while Zana is still recovering the unit's CURRENT claim (not a stale or finished attempt). */
+export function isWorkerRecoveryActive(unit: ExecutionWorkUnit): boolean {
+  const recovery = unit.apiErrorRecovery;
+  return unit.state === 'CLAIMED' && recovery !== undefined && unit.claimId !== undefined
+    && recovery.claimId === unit.claimId && recovery.claimGeneration === unit.claimGeneration
+    && LIVE_RECOVERY_STEPS.has(recovery.step);
+}
+
+/** {@link isWorkerRecoveryActive} and before its deadline: past it nothing more will be tried, so ordinary reclaim applies. */
+export function isWorkerRecoveryLive(unit: ExecutionWorkUnit, now: number): boolean {
+  const deadlineAt = unit.apiErrorRecovery?.deadlineAt;
+  return isWorkerRecoveryActive(unit) && deadlineAt !== undefined && now < deadlineAt;
+}
+
+/** Local HH:MM used in blocker text that tells a human when recovery was tried. */
+export function formatRecoveryClock(at: number): string {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function validWorkerApiErrorRecovery(value: unknown): value is WorkerApiErrorRecovery {
+  if (!value || typeof value !== 'object') return false;
+  const recovery = value as Partial<WorkerApiErrorRecovery>;
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+  return validString(recovery.claimId) && validNonNegativeInteger(recovery.claimGeneration) && validString(recovery.slotId)
+    && validNonNegativeInteger(recovery.executionAttempt)
+    && (WORKER_RECOVERY_STEPS as readonly unknown[]).includes(recovery.step)
+    && (recovery.errorKind === undefined || validString(recovery.errorKind) && recovery.errorKind.length <= MAX_RECOVERY_KIND)
+    && (recovery.errorText === undefined || validString(recovery.errorText) && recovery.errorText.length <= MAX_RECOVERY_TEXT)
+    && finite(recovery.startedAt) && finite(recovery.updatedAt) && (recovery.deadlineAt === undefined || finite(recovery.deadlineAt))
+    && Array.isArray(recovery.steps) && recovery.steps.length <= MAX_RECOVERY_STEPS
+    && recovery.steps.every((entry) => !!entry && (WORKER_RECOVERY_STEPS as readonly unknown[]).includes(entry.step)
+      && finite(entry.at) && (entry.detail === undefined || validString(entry.detail) && entry.detail.length <= MAX_RECOVERY_DETAIL));
+}
+
 /** Backend-neutral label captured with a durable execution request. */
 export interface ExecutionLaunchDisplayV1 {
   label: string;
@@ -158,6 +243,8 @@ export interface ExecutionWorkUnit extends ExecutionWorkUnitInput {
    * completeWork}. Runtime-only (stripped by {@link stripWorkUnitState}).
    */
   reclaimedClaim?: { slotId: string; claimId: string; claimGeneration: number };
+  /** Zana's API-error recovery of this unit's worker; inactive once the claim changes ({@link isWorkerRecoveryActive}). */
+  apiErrorRecovery?: WorkerApiErrorRecovery;
   attempt: number;
   failureCode?: ExecutionFailureCode;
   failure?: string;
@@ -736,6 +823,7 @@ function validWorkUnit(value: unknown): value is ExecutionWorkUnit {
       && unit.noProgressSlots.every((entry) => validString(entry.slotId) && validNonNegativeInteger(entry.executionAttempt)
         && validNonNegativeInteger(entry.unitAttempt) && validNonNegativeInteger(entry.claimGeneration)
         && isNoProgressReason(entry.reason) && typeof entry.reclaimedAt === 'number' && Number.isFinite(entry.reclaimedAt)))
+    && (unit.apiErrorRecovery === undefined || validWorkerApiErrorRecovery(unit.apiErrorRecovery))
     && (unit.failureCode === undefined || failureCodes.has(unit.failureCode))
     && (unit.failure === undefined || validString(unit.failure)) && (unit.result === undefined || validString(unit.result))
     && (unit.structuredResult === undefined || validStructuredJson(unit.structuredResult))
@@ -784,6 +872,7 @@ function resetRetainedWork(record: ExecutionRecord): void {
     unit.structuredResult = undefined;
     unit.reclaimedClaim = undefined;
     unit.noProgressSlots = undefined;
+    unit.apiErrorRecovery = undefined;
   }
   record.blockers = [];
   record.deliveries = [];
@@ -2449,6 +2538,54 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
   }
 
   /**
+   * Durably record one step of Zana's automatic recovery of a worker that stopped
+   * on an API error. Store-initiated like {@link blockKickoffFailure} (no cohort
+   * authority, no CAS version) and fenced on the exact claim, so a late recovery
+   * decision can never touch a unit that was reclaimed or re-claimed. Appends
+   * exactly ONE event.
+   */
+  async function recordWorkerRecovery(executionId: string, input: RecordWorkerRecoveryInput): Promise<ExecutionRecord> {
+    return storeQueue.run(async () => {
+      const snapshot = read();
+      const record = snapshot.state.records.find((candidate) => candidate.id === string(executionId, 'id'));
+      if (!record) throw new Error('execution not found');
+      assertActive(record);
+      const unit = findUnit(record, input.workUnitId);
+      if (unit.state !== 'CLAIMED' || unit.claimId !== input.claimId || unit.claimGeneration !== input.claimGeneration
+        || unit.assignedSlotId !== input.slotId) throw new WorkUnitRecoveryGuardError('work unit claim does not match the recovery');
+      if (!(WORKER_RECOVERY_STEPS as readonly string[]).includes(input.step)) throw new Error('invalid worker recovery step');
+      const timestamp = now();
+      const detail = input.detail ? input.detail.slice(0, MAX_RECOVERY_DETAIL) : undefined;
+      const errorKind = input.errorKind ? input.errorKind.slice(0, MAX_RECOVERY_KIND) : undefined;
+      const errorText = input.errorText ? input.errorText.slice(0, MAX_RECOVERY_TEXT) : undefined;
+      const entry = { step: input.step, at: timestamp, ...(detail ? { detail } : {}) };
+      const existing = unit.apiErrorRecovery;
+      if (existing && existing.claimId === input.claimId && existing.claimGeneration === input.claimGeneration) {
+        existing.step = input.step;
+        existing.updatedAt = timestamp;
+        if (errorKind) existing.errorKind = errorKind;
+        if (errorText) existing.errorText = errorText;
+        if (input.deadlineAt !== undefined) existing.deadlineAt = input.deadlineAt;
+        existing.steps = [...existing.steps, entry].slice(-MAX_RECOVERY_STEPS);
+      } else {
+        unit.apiErrorRecovery = {
+          claimId: input.claimId, claimGeneration: input.claimGeneration, slotId: input.slotId, executionAttempt: record.attempt,
+          step: input.step, ...(errorKind ? { errorKind } : {}), ...(errorText ? { errorText } : {}),
+          startedAt: timestamp, updatedAt: timestamp, ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
+          steps: [entry]
+        };
+      }
+      record.stateVersion += 1;
+      record.updatedAt = timestamp;
+      // A summary can carry a restart error message; over MAX_STRING it would fail the whole persist.
+      append(snapshot.state, record, record.state, input.severity, input.summary.slice(0, MAX_STRING), timestamp,
+        { kind: 'event', eventType: 'progress', slotId: input.slotId, ...(detail ? { detail } : {}) });
+      persist(snapshot.state, snapshot.hash);
+      return clone(record);
+    });
+  }
+
+  /**
    * Kickoff-churn escape hatch. A unit reclaimed {@link
    * KICKOFF_FAILURE_BLOCK_THRESHOLD} times while its worker never reported a
    * completed turn (`kickoffFailures`) is stuck at delivery, not making progress —
@@ -2462,27 +2599,49 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
    * spuriously bumps the version / appends an event / re-cascades (mirrors {@link
    * escalateBlockerToHuman}); the service caller catches and ignores.
    */
-  async function blockKickoffFailure(executionId: string, workUnitId: string): Promise<ExecutionRecord> {
+  async function blockKickoffFailure(executionId: string, workUnitId: string, apiError?: { claimId: string; claimGeneration: number }): Promise<ExecutionRecord> {
     return mutateRecord(executionId, undefined, (record, timestamp) => {
       const unit = findUnit(record, workUnitId);
       if (unit.state === 'BLOCKED' || unit.state === 'COMPLETED' || unit.state === 'FAILED') throw new WorkUnitRecoveryGuardError('work unit is not blockable for kickoff failure');
-      if (!(unit.noProgressSlots ?? []).some((entry) => entry.executionAttempt === record.attempt)
+      const recovery = unit.apiErrorRecovery;
+      if (apiError) {
+        if (unit.state !== 'CLAIMED' || unit.claimId !== apiError.claimId || unit.claimGeneration !== apiError.claimGeneration
+          || !recovery || recovery.claimId !== apiError.claimId || recovery.claimGeneration !== apiError.claimGeneration
+          || !isWorkerRecoveryActiveStep(recovery.step)) {
+          throw new WorkUnitRecoveryGuardError('work unit has no API-error recovery for this claim');
+        }
+      } else if (!(unit.noProgressSlots ?? []).some((entry) => entry.executionAttempt === record.attempt)
         && (unit.kickoffFailures ?? 0) < KICKOFF_FAILURE_BLOCK_THRESHOLD) throw new WorkUnitRecoveryGuardError('kickoff failures below block threshold');
       const blockerId = `no-progress:${record.attempt}:${unit.id}:${unit.attempt}`;
       if (record.blockers?.some((blocker) => blocker.id === blockerId)) throw new WorkUnitRecoveryGuardError('duplicate kickoff blocker');
       const slotId = unit.assignedSlotId ?? 'engine';
+      const lastError = recovery ? `${recovery.errorKind ?? 'unknown'}: ${(recovery.errorText ?? 'no details').slice(0, MAX_BLOCKER_ERROR_EXCERPT)}` : '';
+      let question: string;
+      if (apiError && recovery) {
+        const tried = recovery.steps.flatMap((entry) => entry.step === 'nudged' ? [`nudged it at ${formatRecoveryClock(entry.at)}`]
+          : entry.step === 'restarted' ? [`restarted its session at ${formatRecoveryClock(entry.at)}`]
+          : entry.step === 'restart-failed' ? [`could not restart its session at ${formatRecoveryClock(entry.at)}`] : []);
+        const what = tried.length ? tried.join(' and ') : 'did not retry it because this kind of error is not temporary';
+        // A long unit title must not push the question past MAX_STRING, which would fail the persist and leave the unit unblocked.
+        question = `Work unit \`${unit.id}\` (${unit.title}) stopped after an API error on ${slotId} and did not recover. Zana ${what}. Last error: ${lastError}. Check the worker terminal, then retry the unit or restart the run.`.slice(0, MAX_STRING);
+        recovery.step = 'exhausted';
+        recovery.updatedAt = timestamp;
+        recovery.steps = [...recovery.steps, { step: 'exhausted' as const, at: timestamp }].slice(-MAX_RECOVERY_STEPS);
+      } else {
+        const earlier = recovery && recovery.executionAttempt === record.attempt
+          ? ` Earlier, Zana tried to recover ${recovery.slotId} after an API error: ${recovery.steps.map((entry) => entry.step).join(', ')}. Last error: ${lastError}.`
+          : '';
+        question = `Work unit ${unit.id}${unit.title ? ` (${unit.title})` : ''} made no progress on every eligible worker slot; its worker never started a turn.${earlier} Check the worker terminal, then retry the unit or restart the run.`;
+        if (earlier) question = question.slice(0, MAX_STRING);
+      }
       unit.state = 'BLOCKED';
-      unit.history.push({ action: 'blocked', slotId: unit.assignedSlotId, attempt: unit.attempt, at: timestamp, detail: 'kickoff delivery produced no worker turn' });
+      unit.history.push({ action: 'blocked', slotId: unit.assignedSlotId, attempt: unit.attempt, at: timestamp, detail: apiError ? 'stopped after an API error' : 'kickoff delivery produced no worker turn' });
       clearClaim(unit);
       unit.assignedSlotId = undefined;
       record.blockers ??= [];
-      record.blockers.push({
-        id: blockerId, workUnitId: unit.id, slotId,
-        question: `Work unit ${unit.id}${unit.title ? ` (${unit.title})` : ''} made no progress on every eligible worker slot; its worker never started a turn. Check the worker terminal, then retry the unit or restart the run.`,
-        audience: 'human', resolved: false, createdAt: timestamp
-      });
+      record.blockers.push({ id: blockerId, workUnitId: unit.id, slotId, question, audience: 'human', resolved: false, createdAt: timestamp });
       record.state = 'BLOCKED';
-    }, `Work unit blocked after repeated kickoff failure: ${workUnitId}`);
+    }, `Work unit blocked after ${apiError ? 'an unrecovered API error' : 'repeated kickoff failure'}: ${workUnitId}`);
   }
 
   /**
@@ -2551,6 +2710,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       // worker, so a prior kickoff-churn block must not immediately re-block.
       unit.kickoffFailures = undefined;
       unit.noProgressSlots = undefined;
+      unit.apiErrorRecovery = undefined;
       unit.history.push({ action: 'retried', slotId: unit.assignedSlotId, attempt: unit.attempt, at: timestamp });
       for (const blocker of record.blockers ?? []) {
         if (blocker.workUnitId === unit.id && !blocker.resolved) {
@@ -3241,7 +3401,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
     });
   }
 
-  return { claim, transition, stopForPlanCorrection, setSquadWorktree, markSquadWorktreeTerminalEffects, markReported, markBlockerReported, disposeSquadWorktree, reserveTimeoutRecovery, linkTimeoutSuccessor, decideDeadline, event, command, producerEvent, setPolicyResult, setAuthorizationContext, prepareLaunchIntent, addEffectiveOwner, removeEffectiveOwner, rotateRecoveryGeneration, upsertNativeRecoverySnapshot, beginRetry, beginRetainedRecovery, clearPriorNativeRecoverySnapshots, registerPlan, claimWork, heartbeatWork, renewWorkerLease, dispatchReady, replaceResolvedModels, failRouteFacts, completeWork, failWork, releaseWork, releaseUndelivered, reclaimExpiredClaims, blockKickoffFailure, reassignKickoffToFreshSlot, retryWork, reassignWork, blockWork, escalateBlockerToHuman, acknowledgeNotice, deferNotice, cancelNotice, listPendingNotices, enqueueBlockerDelivery, pullBlockerDelivery, ackBlockerDelivery, retryBlockerDelivery, completeExecution, failExecution, queueCoordinatorWake, acknowledgeCoordinatorWake, appendUsageObservation, blockForResource, recordOutputRepair, setRouteFitProposal, dismiss, get, getInProject, list, countActiveOwned, listInProject, listActive, listUndisposedSquadWorktrees, listUnreportedExecutions, listUnreportedBlockers, listActiveClaims, retainedSourceContentRefs, upgradeSourceBundle, events, eventsInProject };
+  return { claim, transition, stopForPlanCorrection, setSquadWorktree, markSquadWorktreeTerminalEffects, markReported, markBlockerReported, disposeSquadWorktree, reserveTimeoutRecovery, linkTimeoutSuccessor, decideDeadline, event, command, producerEvent, setPolicyResult, setAuthorizationContext, prepareLaunchIntent, addEffectiveOwner, removeEffectiveOwner, rotateRecoveryGeneration, upsertNativeRecoverySnapshot, beginRetry, beginRetainedRecovery, clearPriorNativeRecoverySnapshots, registerPlan, claimWork, heartbeatWork, renewWorkerLease, dispatchReady, replaceResolvedModels, failRouteFacts, completeWork, failWork, releaseWork, releaseUndelivered, reclaimExpiredClaims, recordWorkerRecovery, blockKickoffFailure, reassignKickoffToFreshSlot, retryWork, reassignWork, blockWork, escalateBlockerToHuman, acknowledgeNotice, deferNotice, cancelNotice, listPendingNotices, enqueueBlockerDelivery, pullBlockerDelivery, ackBlockerDelivery, retryBlockerDelivery, completeExecution, failExecution, queueCoordinatorWake, acknowledgeCoordinatorWake, appendUsageObservation, blockForResource, recordOutputRepair, setRouteFitProposal, dismiss, get, getInProject, list, countActiveOwned, listInProject, listActive, listUndisposedSquadWorktrees, listUnreportedExecutions, listUnreportedBlockers, listActiveClaims, retainedSourceContentRefs, upgradeSourceBundle, events, eventsInProject };
 }
 
 function normalizeModelSnapshot(snapshot: ResolvedModelSnapshotV1): ResolvedModelSnapshotV1 {
@@ -3321,7 +3481,7 @@ function normalizePlan(inputs: ExecutionWorkUnitInput[], requireComplete = false
 }
 
 function stripWorkUnitState(unit: ExecutionWorkUnit): ExecutionWorkUnitInput {
-  const { state: _state, assignedSlotId: _assignedSlotId, claimGeneration: _claimGeneration, claimId: _claimId, claimedBy: _claimedBy, claimedAt: _claimedAt, leaseExpiresAt: _leaseExpiresAt, heartbeatAt: _heartbeatAt, progressAt: _progressAt, turnCount: _turnCount, kickoffFailures: _kickoffFailures, reclaimedClaim: _reclaimedClaim, attempt: _attempt, failureCode: _failureCode, failure: _failure, result: _result, structuredResult: _structuredResult, repairDigests: _repairDigests, history: _history, ...input } = unit;
+  const { state: _state, assignedSlotId: _assignedSlotId, claimGeneration: _claimGeneration, claimId: _claimId, claimedBy: _claimedBy, claimedAt: _claimedAt, leaseExpiresAt: _leaseExpiresAt, heartbeatAt: _heartbeatAt, progressAt: _progressAt, turnCount: _turnCount, kickoffFailures: _kickoffFailures, reclaimedClaim: _reclaimedClaim, apiErrorRecovery: _apiErrorRecovery, attempt: _attempt, failureCode: _failureCode, failure: _failure, result: _result, structuredResult: _structuredResult, repairDigests: _repairDigests, history: _history, ...input } = unit;
   return input;
 }
 
@@ -3431,7 +3591,7 @@ function append(
   severity: ExecutionEvent['severity'],
   summary: string,
   createdAt: number,
-  metadata: Pick<ExecutionEvent, 'kind' | 'fromState' | 'toState' | 'slotId'> = {}
+  metadata: Pick<ExecutionEvent, 'kind' | 'fromState' | 'toState' | 'slotId' | 'eventType' | 'detail'> = {}
 ): void {
   const sequence = (record.lastEventSequence ?? nextSequence(state, record.id) - 1) + 1;
   record.lastEventSequence = sequence;

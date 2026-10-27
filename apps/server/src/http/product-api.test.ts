@@ -2257,6 +2257,40 @@ describe('product HTTP plugin side-panel conversations', () => {
 });
 
 describe('product HTTP plugins', () => {
+  it('routes plugin packs through the shared Origin and mutation content-type guards', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-plugin-packs-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    const identity = { marketplaceSource: 'path:/catalog', packId: 'starter' };
+    const list = vi.fn(() => [{ identity }]);
+    const plan = vi.fn(async () => ({ identity, planId: 'review' }));
+    server.ctx.plugins = { pluginPacks: { list, plan } } as never;
+    const url = `${server.url}api/v1/plugin-packs`;
+    const listed = await fetch(url);
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toEqual([{ identity }]);
+    expect(list).toHaveBeenCalledOnce();
+
+    const hostile = await fetch(`${url}/plan`, {
+      method: 'POST', headers: { Origin: 'https://evil.example', 'content-type': 'application/json' }, body: JSON.stringify(identity)
+    });
+    expect(hostile.status).toBe(403);
+    const nonJson = await fetch(`${url}/plan`, {
+      method: 'POST', headers: { Origin: 'http://127.0.0.1:5173', 'content-type': 'text/plain' }, body: JSON.stringify(identity)
+    });
+    expect(nonJson.status).toBe(415);
+    expect(plan).not.toHaveBeenCalled();
+
+    const reviewed = await fetch(`${url}/plan`, {
+      method: 'POST', headers: { Origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' }, body: JSON.stringify(identity)
+    });
+    expect(reviewed.status).toBe(200);
+    await expect(reviewed.json()).resolves.toEqual({ identity, planId: 'review' });
+    expect(plan).toHaveBeenCalledWith(identity);
+
+    server.ctx.plugins = undefined as never;
+    expect((await fetch(url)).status).toBe(503);
+  });
+
   it('lists contributions and dispatches plugin CLI and HTTP', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-plugins-'));
     server = await startTestProductServer({
@@ -2720,6 +2754,24 @@ describe('product HTTP plugins', () => {
     const value = { updated: ['sample'], failed: [{ id: 'other', message: 'source unavailable' }] };
     server.ctx.plugins = { applyAllUpdates: async () => value } as never;
     await expect((await request()).json()).resolves.toEqual({ ok: true, value });
+  });
+
+  it('runs core recovery without plugin RPC and exposes progress', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zcc-product-plugin-recovery-'));
+    server = await startTestProductServer({ dataDir, origins: { serverPort: 0, devAppPort: 5173 } });
+    const start = () => fetch(`${server.url}api/v1/plugin-apps/hard-reload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const status = () => fetch(`${server.url}api/v1/plugin-apps/recovery`);
+    server.ctx.plugins = undefined;
+    expect((await start()).status).toBe(503);
+    expect((await status()).status).toBe(503);
+    const value = { phase: 'running', total: 1, current: 'provider-codex', restored: [], failed: [], skipped: [] };
+    const hardReload = vi.fn(async () => value);
+    server.ctx.plugins = { hardReload, recoveryStatus: () => value } as never;
+    const response = await start();
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual(value);
+    expect(hardReload).toHaveBeenCalledExactlyOnceWith();
+    await expect((await status()).json()).resolves.toEqual(value);
   });
 
   it('adds, lists, refreshes, and removes marketplace catalogs', async () => {
