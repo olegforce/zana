@@ -129,6 +129,8 @@ import { createExecutionHandoffStore } from '@zana-ai/zcc-server/services/execut
 import { createResumeGrantStore } from '@zana-ai/zcc-server/services/execution/resume-grant-store';
 import { createResumeTokenStore } from '@zana-ai/zcc-server/services/execution/resume-token-store';
 import { createInboxActionRegistry } from './inbox-actions/registry.js';
+import { createSquadWorkerRestarter } from './squad-worker-restart.js';
+import { lifecycleClaimOps } from './terminal-restore-launch.js';
 import { squadWorktreeHasActiveFollowUp, withSquadWorktreeLifecycleLock, type SquadWorktreeTerminalOutcome } from './squad-worktree-lifecycle.js';
 import { relaunchExecutionMonitor } from '@zana-ai/zcc-server/services/execution/relaunch-monitor';
 import { preflightWorkflowProfile } from '@zana-ai/zcc-server/services/agents/squad-bundle';
@@ -343,7 +345,8 @@ import { Overseer, type OverseerToolEvent } from '@zana-ai/zcc-server/services/f
 import { OverseerAuditRing } from '@zana-ai/zcc-server/services/followups/overseer-audit';
 import { ContentScreen, type ContentScreenEvent, buildWarningText } from './window/content-screen.js';
 import { HeartbeatService } from '@zana-ai/zcc-server/services/followups/heartbeat';
-import { createApiErrorResume, handleApiErrorStop } from './api-error-resume-wiring.js';
+import { createApiErrorResume } from './api-error-resume-wiring.js';
+import { createWorkerApiErrorRecovery, routeApiErrorStop, workerApiErrorRecoveryEnabled } from './worker-api-error-recovery-wiring.js';
 import { LocalExtensionWatcher } from '@zana-ai/zcc-server/services/extensions/local-extension-watcher';
 import { AutonomousRunSupervisor, AUTONOMOUS_DEFAULTS } from '@zana-ai/zcc-server/services/agents/autonomous-run-supervisor';
 import { AutoCloseIdleService } from '@zana-ai/zcc-server/services/followups/auto-close-idle';
@@ -1140,6 +1143,25 @@ function restorePrincipal(capability: { id: string; request: CreateTerminalReque
     ? { kind: 'team', id: `restore:${capability.id}` }
     : { kind: 'automation', id: `restore:${capability.id}` };
 }
+
+const squadWorkerRestarter = createSquadWorkerRestarter({
+  getSession: (id) => ptys.getSession(id) ?? undefined,
+  getProject: (projectId) => store.listProjects().find((project) => project.id === projectId),
+  getExecution: (projectId, executionId) => executionStore.getInProject(projectId, executionId),
+  teamLaunchEnabled: () => store.getConfig().teamLaunchEnabled === true,
+  restoreCapabilities,
+  followUp: lifecycleClaimOps((capability) => squadFollowUpClaims.restoreClaim(capability)),
+  restorePrincipal,
+  isTeamWorkerRestore,
+  launchAuthorizedTerminal,
+  closeSession: async (id) => {
+    ptys.closeExpected(id);
+    await killLocalTmuxSession(id);
+  },
+  sessionGone: async (id) => !(await listLocalTmuxSessionIds()).includes(id),
+  // The restarter refuses a session without a cohort, so a relaunched worker always has one.
+  onRelaunched: (session) => { teamLaunchSessions.set(session.id, session.cohort!.cohortId); }
+});
 
 async function withPreparedNativeSession<T extends { profile: LaunchProfileId; resumeSessionId?: string; extraArgs?: string[] }>(
   req: T,
@@ -4965,7 +4987,7 @@ export function jobWorkerPrompt(input: {
   return [
     `Team worker standby. You are ${input.label} (${input.personaName}), slot \`${input.slotId}\`${input.executionId ? ` in execution \`${input.executionId}\`` : ''}.`,
     'Your working directory is the trusted project workspace. Wait for an assignment for this slot; each assignment carries a fully-specified work unit — its task is the complete instruction. When it arrives, EXECUTE it: do the task using the file scope, the upstream results included in the assignment, and your own reading of the project workspace. Do the work yourself; do not wait for extra "source context" to be pushed to you and do not ask the coordinator to re-explain a task you can carry out. Do not, however, start the overall job or units not assigned to this slot.',
-    'Do not poll `agent_inbox`. After your standby prompt settles, call `execution.snapshot` once for this execution. If it shows a work unit CLAIMED for your slot, execute that unit using its task and claim fence even when no pasted assignment is visible; this recovers a launch-time terminal-input race. Execute only bounded work assigned to this slot. Close every unit through exactly one structured outcome: `execution.work.complete`, `execution.work.fail`, `execution.work.block`, or `execution.work.release`. Call the ZCC execution MCP tool exposed in your own tool list, not an AI Suite Python bridge or a colon-form tool name. On OpenCode, `execution.work.complete` is exposed as `zcc-inbox_execution_work_complete`. Do not use `agent_send` for routine progress or results.',
+    'Do not poll `agent_inbox`. After your standby prompt settles, call `execution.snapshot` once for this execution. If it shows a work unit CLAIMED for your slot, execute that unit using its task and claim fence even when no pasted assignment is visible; this recovers a launch-time terminal-input race. Execute only bounded work assigned to this slot. Close every unit through exactly one structured outcome: `execution.work.complete`, `execution.work.fail`, `execution.work.block`, or `execution.work.release`. Call the ZCC execution MCP tool exposed in your own tool list, not a separate Python bridge or a colon-form tool name. On OpenCode, `execution.work.complete` is exposed as `zcc-inbox_execution_work_complete`. Do not use `agent_send` for routine progress or results.',
     'Use `execution.work.block` ONLY when you genuinely cannot proceed, and pick the audience: `audience: "coordinator"` when you need ONE specific, decidable plan/spec choice from the coordinator (e.g. which of two interfaces to target, an ambiguous path) — phrase it as a single concrete question the coordinator can answer, and the worker resumes automatically once answered; `audience: "human"` (the default) only when a real human decision or credential is required. Do not block just because a task looks large or under-detailed — attempt it. Do not use AskUserQuestion. While blocked, do not poll `execution.delivery.pull`. Responses inject when idle. Call `execution.delivery.pull` only after an injected notification. Delivery is at-least-once and may repeat after a crash: use the stable deliveryId as an idempotency key, apply side effects idempotently or transactionally where possible, and persist a completed-application marker only after successful application (or atomically with it). If that completed marker already exists, do not apply the payload again. A crash before that marker may replay delivery, so do not claim exactly-once processing. Then call `execution.delivery.ack` with the deliveryId and leaseId: set `delivered: true` once you have applied the response in this session, and set `delivered: false` with an error ONLY when applying the payload genuinely failed. Pulling then acking IS the entire way to consume a response — never call `execution.resume` or `execution.respond` to accept your own delivered answer. Those are owner-only control tools; a worker or coordinator calling them fails with "execution not found for caller", and that authorization denial is NOT an application failure — do not report it as a delivery `error` or you will loop the response forever.'
   ].join('\n\n');
 }
@@ -6653,9 +6675,20 @@ const squadExecutionService = new SquadExecutionService({
   , now: Date.now
 });
 
+const workerApiErrorRecovery = createWorkerApiErrorRecovery({
+  getConfig: () => store.getConfig(),
+  executionService: squadExecutionService,
+  executionStore,
+  agentStatus,
+  ptys,
+  workerInjector,
+  restarter: squadWorkerRestarter,
+  override: e2eTimingOverrideMs
+});
+
 /**
  * Flow B/C file handoff: when a durable coordinator cannot reach the execution
- * MCP bridge (AI Suite sandbox), it writes its authored plan to a project-
+ * MCP bridge in its sandbox, it writes its authored plan to a project-
  * confined `.zana/` file with its native file tool; the host reads that file on
  * coordinator-idle and registers it host-side through the SAME pipeline the
  * pre-launch seed uses. Subscribe-once (Rule 3) — one instance for the app.
@@ -7290,7 +7323,7 @@ function wireBridgeListeners() {
     void squadFollowUpClaims.releaseOnExit(sessionId);
     // Capture final counters before lifecycle reconciliation can make execution
     // terminal. Then forward exit detail so FAILED settlement includes provider cause.
-    void (async () => {
+    squadWorkerRestarter.onSessionExit(sessionId, async () => {
       if (exitedSession?.cohort?.executionId) {
         await squadExecutionService.observeSessionUsage(exitedSession.cohort.executionId, sessionId, 'terminal').catch((error) =>
           logMainError(`execution usage terminal ${sessionId}`, error)
@@ -7314,7 +7347,7 @@ function wireBridgeListeners() {
           logMainError(`execution coordinator exit ${sessionId}`, error)
         );
       }
-    })();
+    });
     if (exitedSession) {
       const cachedEntry = liveSessionStats.get(sessionId);
       const finalRead = readLiveSessionStats(exitedSession, { fresh: true });
@@ -7359,6 +7392,7 @@ function wireBridgeListeners() {
     // Same release for the OpenCode session-id resolver's cache (Rule 5).
     heartbeat.remove(sessionId);
     apiErrorResume.forget(sessionId);
+    workerApiErrorRecovery.forget(sessionId);
     // Drop a session that exits while working so a dead pty can't pin the Mac
     // awake; releases (after grace) if it was the last working agent.
     keepAwake.remove(sessionId);
@@ -7747,16 +7781,6 @@ export async function sendQueuedMessageNow(win: BrowserWindow, threadId: unknown
 
 function registerIpc() {
   safeHandleFromWindow(IPC.uiSend, sendQueuedMessageNow, err => { throw err; });
-  // A plugin asking to use a connection: core pushes the owed approval, main draws and signs the sheet (once, at init).
-  /* v8 ignore next -- started at built-Electron boot; startPeerUsePrompts is unit-tested */
-  stopPeerUsePrompts ??= startPeerUsePrompts({
-    secret: ensureProductServerCredential,
-    serverUrl: () => productServerUrl(),
-    listApps: () => runtimeSupervisor ? runtimeSupervisor.listPluginApps() : listPluginAppsFromProductServer(),
-    showSheet: (parent, view) => showApprovalSheet(parent, view, (options) => new BrowserWindow(options)),
-    pickParent: () => BrowserWindow.getFocusedWindow() ?? mainWindow(),
-    log: (message, error) => logMainError(message, error ?? 'peer use')
-  }).stop;
   // Plugin buttons with no thread (release actions) get a sheet main draws and signs.
   /* v8 ignore next -- registered at built-Electron boot; createPluginApprovalHandler is unit-tested */
   safeHandleFromWindow(IPC.pluginApprovals.request, createPluginApprovalHandler({
@@ -7859,6 +7883,8 @@ function registerIpc() {
     get openProjectWindow() { return openProjectWindow; },
     get overseerAudit() { return overseerAudit; },
     get apiErrorResume() { return apiErrorResume; },
+    get squadWorkerRestarter() { return squadWorkerRestarter; },
+    get workerApiErrorRecovery() { return workerApiErrorRecovery; },
     get packAndInstallLocal() { return packAndInstallLocal; },
     get pendingWhatsNew() { return pendingWhatsNew; },
     set pendingWhatsNew(value) { pendingWhatsNew = value; },
@@ -8724,7 +8750,9 @@ async function bootstrapNormal() {
         if (event?.kind === 'requested') agentStatus.inputRequested(sessionId, event.key);
         else if (event?.kind === 'resolved') agentStatus.inputResolved(sessionId, event.keys);
         else if (event?.kind === 'interrupted') agentStatus.turnFinished(sessionId);
-        else if (event?.kind === 'api-error-stop') handleApiErrorStop({ service: apiErrorResume, agentStatus, logMainError }, sessionId, event);
+        else if (event?.kind === 'api-error-stop') {
+          routeApiErrorStop({ service: apiErrorResume, recovery: workerApiErrorRecovery, enabled: () => workerApiErrorRecoveryEnabled(store.getConfig()), agentStatus, logMainError }, sessionId, session, event);
+        }
         return;
       }
       if (action === 'blocked') {
@@ -8744,6 +8772,7 @@ async function bootstrapNormal() {
         agentStatus.markBlocked(sessionId);
       } else {
         apiErrorResume.cancel(sessionId);
+        workerApiErrorRecovery.onTurnStarted(sessionId, agentStatus.get(sessionId));
         agentStatus.turnStarted(sessionId);
       }
       // Diagnostic: confirms the hook reached the main process. The emit to the
@@ -9409,6 +9438,18 @@ async function bootstrapNormal() {
     normalBootstrapStarted = false;
     throw error;
   }
+  // Subscribe only after the supervised origin exists. A healthy stream at the
+  // legacy :8780 fallback could belong to another running app and never reconnect.
+  // A plugin asking to use a connection: core pushes the owed approval, main draws and signs the sheet (once, at init).
+  /* v8 ignore next -- started at built-Electron boot; startPeerUsePrompts is unit-tested */
+  stopPeerUsePrompts ??= startPeerUsePrompts({
+    secret: ensureProductServerCredential,
+    serverUrl: () => productServerUrl(),
+    listApps: () => runtimeSupervisor ? runtimeSupervisor.listPluginApps() : listPluginAppsFromProductServer(),
+    showSheet: (parent, view) => showApprovalSheet(parent, view, (options) => new BrowserWindow(options)),
+    pickParent: () => BrowserWindow.getFocusedWindow() ?? mainWindow(),
+    log: (message, error) => logMainError(message, error ?? 'peer use')
+  }).stop;
   // Start the Zana Mobile gateway if the user has enabled phone access. It must
   // start only after ensureRendererStaticHost() has called
   // setProductionRendererOrigin(): the gateway resolves its loopback upstream
@@ -9830,6 +9871,8 @@ app.on('before-quit', (event) => {
   goals.stopWatching();
   goals.stopAll();
   followups.stopWatching();
+  workerApiErrorRecovery.dispose();
+  squadWorkerRestarter.dispose();
   squadExecutionService.dispose();
   squadProposalNotifier.dispose();
   executionStorage.close();

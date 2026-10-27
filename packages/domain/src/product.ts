@@ -5670,6 +5670,15 @@ export interface PluginUpdateAllResult {
   failed: Array<{ id: string; message: string }>;
 }
 
+export interface PluginRecoveryState {
+  phase: 'idle' | 'running' | 'complete';
+  total: number;
+  current?: string;
+  restored: string[];
+  skipped: Array<{ id: string; message: string }>;
+  failed: Array<{ id: string; message: string }>;
+}
+
 export interface PluginUpdateStatus {
   checkedAt: number;
   outcome: 'current' | 'available' | 'pinned' | 'incompatible' | 'unavailable';
@@ -6341,6 +6350,8 @@ export interface ExecutionBoardProjection {
        reclaimCount?: number;
        attemptedSlots?: string[];
        quarantinedSlots?: string[];
+       /** Present only while Zana is recovering this unit's worker after an API error. */
+       recovery?: { step: string; errorKind?: string; since: number };
     }>;
     rosterSlotIds: string[];
   };

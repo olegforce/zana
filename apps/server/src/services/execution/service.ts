@@ -3,7 +3,7 @@ import { squadLaunchTextProblem } from '@zana-ai/zcc-domain/squad-proposal';
 import { fitRecoveryObjective } from './recovery-objective.js';
 import { createHash } from 'node:crypto';
 import { launchDigest } from '../launch/digest.js';
-import { EXECUTION_RETENTION_MS, KICKOFF_FAILURE_BLOCK_THRESHOLD, isTerminalExecutionState, NO_PROGRESS_CLAIM_REASON, WORK_CLAIM_LEASE_MS, WorkUnitRecoveryGuardError, executionReportTarget, type ActiveClaimCursor, type ExecutionCohortAuthority, type ExecutionDispatchAssignment, type ExecutionEvent, type ExecutionLaunchDisplayV1, type ExecutionLaunchKind, type ExecutionPolicyV1, type ExecutionRecord, type ExecutionWorkUnitInput, type RetainedRecoveryMode, type ResolvedModelSnapshotV1 } from './store.js';
+import { EXECUTION_RETENTION_MS, KICKOFF_FAILURE_BLOCK_THRESHOLD, isTerminalExecutionState, isWorkerRecoveryLive, NO_PROGRESS_CLAIM_REASON, WORK_CLAIM_LEASE_MS, WorkUnitRecoveryGuardError, executionReportTarget, type ActiveClaimCursor, type ExecutionCohortAuthority, type ExecutionDispatchAssignment, type ExecutionEvent, type ExecutionLaunchDisplayV1, type ExecutionLaunchKind, type ExecutionPolicyV1, type ExecutionRecord, type ExecutionWorkUnitInput, type RetainedRecoveryMode, type ResolvedModelSnapshotV1 } from './store.js';
 import type { createExecutionStore } from './store.js';
 import type { ExecutionArtifactRecord, createExecutionArtifactStore } from './artifact-store.js';
 import { validateWorkflowPolicyResult, type WorkflowPolicyResultV1 } from './policy-result.js';
@@ -543,6 +543,15 @@ export function dependencyResultsSection(record: ExecutionRecord, workUnitId: st
   return `\n\nUpstream results (outputs of your completed dependencies — use these, do NOT re-ask the human for information already decided here):\n${lines.join('\n')}`;
 }
 
+/** The text a worker receives for an assignment; shared by first delivery and recovery redelivery. */
+export function assignmentText(record: ExecutionRecord, assignment: ExecutionDispatchAssignment): string {
+  const upstream = dependencyResultsSection(record, assignment.workUnitId);
+  const claim = assignment.claimId && assignment.claimGeneration
+    ? `\nClaim fence: claimId=${assignment.claimId}; claimGeneration=${assignment.claimGeneration}. Include both in execution.work.heartbeat and every structured work outcome.`
+    : '';
+  return `You are assigned work unit \`${assignment.workUnitId}\`${assignment.title ? ` — ${assignment.title}` : ''}.\nTask: ${assignment.task}${assignment.files?.length ? `\nFile scope: ${assignment.files.join(', ')}` : ''}${upstream}${claim}\n\nClose the unit through exactly one structured outcome: execution.work.complete, execution.work.block, execution.work.fail, or execution.work.release. Do not send routine progress or results to the coordinator.`;
+}
+
 /** Build renderer-safe, resolved capability gaps from admission checks before any execution is claimed. */
 export function requirementFailureFromAdmission(
   workUnits: readonly ExecutionWorkUnitInput[] | undefined,
@@ -982,6 +991,10 @@ export class ExecutionService {
     }
     if (unit.leaseExpiresAt === undefined || unit.leaseExpiresAt > now) return {};
     const state = worker.sessionId === undefined ? undefined : this.deps.getAgentState?.(worker.sessionId);
+    // Zana is recovering this worker from an API error (nudge, restart): keep the claim until its deadline.
+    if (isWorkerRecoveryLive(unit, now)) {
+      return { renewSlot: unit.assignedSlotId };
+    }
     if (state !== undefined && isRestfulAgentState(state)) return { claim: claimOf(SILENT_WORKER_CLAIM_REASON) };
     const maxStall = record.request.policy?.maxClaimStallMs;
     const lastProgressAt = unit.progressAt ?? unit.claimedAt;
@@ -1130,7 +1143,9 @@ export class ExecutionService {
     for (const unit of record.workUnits ?? []) {
       if (unit.state !== 'CLAIMED') continue;
       const lastProgressAt = unit.progressAt ?? unit.claimedAt;
-      const stalled = stallMs !== undefined && lastProgressAt !== undefined
+      // progressAt can predate the API error, so an active recovery before its deadline is live, not wedged.
+      const recovering = isWorkerRecoveryLive(unit, now);
+      const stalled = !recovering && stallMs !== undefined && lastProgressAt !== undefined
         && now - lastProgressAt >= stallMs;
       if (enforce && record.coordinatorState === 'PARKED' && stalled
         && unit.claimId !== undefined && unit.claimGeneration !== undefined) {
@@ -1249,14 +1264,60 @@ export class ExecutionService {
    * so a churning unit left neither reassigned nor blocked is visible.
    */
   private async blockKickoffToHuman(reclaimed: ExecutionRecord, unit: NonNullable<ExecutionRecord['workUnits']>[number]): Promise<boolean> {
+    return this.blockUnitToHuman(reclaimed.id, unit.id, () => this.deps.store.blockKickoffFailure(reclaimed.id, unit.id),
+      `NO_PROGRESS_EXHAUSTED: work unit ${unit.id} made no progress after attempts across every eligible worker slot — check the worker terminal or restart the run.`,
+      'kickoff-failure block');
+  }
+
+  /**
+   * A Squad worker stopped on an API error and Zana's recovery is exhausted (or the
+   * error is permanent): block the unit to a human, then re-dispatch whatever is ready.
+   */
+  async blockApiErrorToHuman(executionId: string, workUnitId: string, fence: { claimId: string; claimGeneration: number }): Promise<boolean> {
+    const blocked = await this.blockUnitToHuman(executionId, workUnitId, () => this.deps.store.blockKickoffFailure(executionId, workUnitId, fence),
+      `NO_PROGRESS_EXHAUSTED: work unit ${workUnitId} stopped after an API error and did not recover — check the worker terminal or restart the run.`,
+      'API-error block');
+    if (blocked) await this.cascadeDispatch(executionId);
+    return blocked;
+  }
+
+  /** The CLAIMED unit currently assigned to a slot, with its claim fence. */
+  async findWorkerClaim(executionId: string, slotId: string): Promise<{ workUnitId: string; claimId: string; claimGeneration: number } | undefined> {
+    const record = await this.deps.store.get(executionId);
+    const unit = record?.workUnits?.find((candidate) => candidate.state === 'CLAIMED' && candidate.assignedSlotId === slotId);
+    if (!unit || !unit.claimId || unit.claimGeneration === undefined) return undefined;
+    return { workUnitId: unit.id, claimId: unit.claimId, claimGeneration: unit.claimGeneration };
+  }
+
+  /** Send the assignment again, behind a preface, while the unit is still CLAIMED with this fence. */
+  async redeliverClaim(
+    executionId: string, workUnitId: string, fence: { claimId: string; claimGeneration: number }, sessionId: string, preface: string
+  ): Promise<boolean> {
+    const record = await this.deps.store.get(executionId);
+    const unit = record?.workUnits?.find((candidate) => candidate.id === workUnitId);
+    if (!record || !unit || unit.state !== 'CLAIMED' || unit.claimId !== fence.claimId
+      || unit.claimGeneration !== fence.claimGeneration || !unit.assignedSlotId) return false;
+    const text = assignmentText(record, {
+      workUnitId: unit.id, slotId: unit.assignedSlotId, title: unit.title ?? '', task: unit.task, files: unit.files,
+      claimId: unit.claimId, claimGeneration: unit.claimGeneration
+    });
+    return Boolean(await (this.deps.deliverToWorker ?? this.deps.replyToSession)(sessionId, `${preface}\n\n${text}`));
+  }
+
+  /**
+   * Shared tail of the two "block a unit to a human" paths: persist the block, wake the
+   * coordinator, fire the human blocker and append the Inbox entry. Returns true iff the
+   * unit was blocked; a guard rejection is logged and returns false.
+   */
+  private async blockUnitToHuman(
+    executionId: string, workUnitId: string, block: () => Promise<ExecutionRecord>, message: string, label: string
+  ): Promise<boolean> {
     try {
-      const updated = await this.deps.store.blockKickoffFailure(reclaimed.id, unit.id);
+      const updated = await block();
       await this.wakeCoordinator(updated, {
-        cause: 'NO_PROGRESS_EXHAUSTED',
-        message: `NO_PROGRESS_EXHAUSTED: work unit ${unit.id} made no progress after attempts across every eligible worker slot — check the worker terminal or restart the run.`,
-        workUnitId: unit.id, stateOrClaimGeneration: updated.state
+        cause: 'NO_PROGRESS_EXHAUSTED', message, workUnitId, stateOrClaimGeneration: updated.state
       });
-      const blocker = updated.blockers?.find((candidate) => candidate.workUnitId === unit.id && candidate.audience === 'human' && !candidate.resolved);
+      const blocker = updated.blockers?.find((candidate) => candidate.workUnitId === workUnitId && candidate.audience === 'human' && !candidate.resolved);
       if (blocker) {
         this.fireHumanBlocker(updated, blocker);
         void this.deps.inbox?.append({
@@ -1266,16 +1327,16 @@ export class ExecutionService {
           executionId: updated.id,
           blockerId: blocker.id
         }).catch((err) => {
-          (this.deps.logError ?? ((context: string, cause: unknown) => console.error(context, cause)))('Failed to append inbox entry for kickoff-failure block', err);
+          (this.deps.logError ?? ((context: string, cause: unknown) => console.error(context, cause)))(`Failed to append inbox entry for ${label}`, err);
         });
       }
       return true;
     } catch (error) {
       if (!(error instanceof WorkUnitRecoveryGuardError)) {
-        this.deps.logError?.(`Execution kickoff-failure block FAILED (persistence) for ${reclaimed.id}/${unit.id}`, error);
+        this.deps.logError?.(`Execution ${label} FAILED (persistence) for ${executionId}/${workUnitId}`, error);
       } else {
         // Guard rejection: below threshold / already blocked / duplicate → not an error.
-        this.deps.logError?.(`Execution kickoff-failure block skipped for ${reclaimed.id}/${unit.id}`, error);
+        this.deps.logError?.(`Execution ${label} skipped for ${executionId}/${workUnitId}`, error);
       }
       return false;
     }
@@ -1840,11 +1901,7 @@ export class ExecutionService {
           continue;
         }
       }
-      const upstream = dependencyResultsSection(record, assignment.workUnitId);
-      const claim = assignment.claimId && assignment.claimGeneration
-        ? `\nClaim fence: claimId=${assignment.claimId}; claimGeneration=${assignment.claimGeneration}. Include both in execution.work.heartbeat and every structured work outcome.`
-        : '';
-      const text = `You are assigned work unit \`${assignment.workUnitId}\`${assignment.title ? ` — ${assignment.title}` : ''}.\nTask: ${assignment.task}${assignment.files?.length ? `\nFile scope: ${assignment.files.join(', ')}` : ''}${upstream}${claim}\n\nClose the unit through exactly one structured outcome: execution.work.complete, execution.work.block, execution.work.fail, or execution.work.release. Do not send routine progress or results to the coordinator.`;
+      const text = assignmentText(record, assignment);
       if (this.deps.deliverAssignment) {
         const correlation = assignmentCorrelation(record.id, assignment);
         if (!correlation) {
