@@ -365,6 +365,23 @@ describe('ScheduleInfoPanel', () => {
       expect(screen.queryByRole('button', { name: 'Resume latest run' })).toBeNull();
     });
 
+    it.each(['codex', 'opencode'])('shows Resume as non-resumable for a %s run that ended before its id was detected', (profile) => {
+      const noId = { id: 'short', at: new Date().toISOString(), result: 'success', sessionId: 'gone', conversation: { profile, cwd: '/p', startedAt: '2026-01-01T00:00:00Z' } };
+      render(<ScheduleInfoPanel task={ran([noId])} />);
+      const button = screen.getByRole('button', { name: 'Resume latest run' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe("This run didn't record a conversation to reopen");
+      expect(screen.queryByRole('button', { name: 'Resume this run' })).toBeNull();
+      fireEvent.click(button);
+      expect(resume).not.toHaveBeenCalled();
+    });
+
+    it('offers Resume once a codex run did record its id', () => {
+      const withId = { id: 'long', at: new Date().toISOString(), result: 'success', sessionId: 'gone', conversation: { profile: 'codex', id: 'codex-9', cwd: '/p', startedAt: '2026-01-01T00:00:00Z' } };
+      render(<ScheduleInfoPanel task={ran([withId])} />);
+      expect((screen.getByRole('button', { name: 'Resume latest run' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
     it('is disabled with the reason when the schedule\'s project is gone', () => {
       store.projects = [{ id: 'other' }];
       render(<ScheduleInfoPanel task={ran([good])} />);
