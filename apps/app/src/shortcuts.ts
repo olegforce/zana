@@ -217,9 +217,10 @@ export function installShortcuts(): () => void {
       }).catch(() => {});
       return;
     }
-    // cmd+shift+w — ARCHIVE the current tab (Delete for a plain shell): terminate
-    // the process and remove it. The keyboard counterpart to right-click → Archive (⌘W only hides, so
-    // without this there'd be no keyboard path to actually end a process).
+    // cmd+shift+w — ARCHIVE the current tab (Delete for a plain shell):
+    // terminate the process and remove it. The keyboard counterpart to
+    // right-click → Archive (⌘W only hides, so without this there'd be no
+    // keyboard path to actually end a process).
     // Confirm for a live session so a stray chord can't kill a running agent;
     // an exited tombstone is dismissed without a prompt. ⌘⇧T reopens.
     if ((e.key === 'W' || (e.key === 'w' && e.shiftKey)) && e.shiftKey) {

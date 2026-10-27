@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const realConfirm = window.confirm;
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 import { TabBar } from './TabBar';
 
@@ -14,7 +16,7 @@ function open(t: TerminalSession, onClose = vi.fn()) {
 }
 
 beforeEach(() => vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); window.confirm = realConfirm; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('TabBar Archive wording', () => {
   it('shows Archive with the History tooltip for a live agent tab, and no Delete', () => {

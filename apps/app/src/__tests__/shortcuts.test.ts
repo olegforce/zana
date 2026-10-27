@@ -270,7 +270,8 @@ describe('shortcuts: ⌘⇧W archives an agent tab and deletes a plain shell', (
     uninstall = installShortcuts();
     closeTerminal.mockClear();
     confirmMock.mockReset().mockReturnValue(false);
-    vi.stubGlobal('window', Object.assign(globalThis.window ?? globalThis, { confirm: confirmMock }));
+    // the harness's fake window is dropped on teardown, so this does not leak
+    (globalThis as unknown as { window: { confirm: unknown } }).window.confirm = confirmMock;
     (dataState as Record<string, unknown>).closeTerminal = closeTerminal;
     uiState.selectedProjectId = 'p1';
     uiState.selectedTabId = { p1: 't1' };
@@ -279,7 +280,7 @@ describe('shortcuts: ⌘⇧W archives an agent tab and deletes a plain shell', (
   afterEach(() => {
     uninstall();
     kb.teardown();
-    vi.unstubAllGlobals();
+    delete (dataState as Record<string, unknown>).closeTerminal;
     dataState.terminals = {};
     uiState.selectedTabId = {};
   });

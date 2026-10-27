@@ -47,9 +47,9 @@ interface Props {
   onSelect: (id: string) => void;
   /**
    * Terminate a session: kills the pty and removes the tab. A restorable
-   * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Archive" item (Delete for a plain shell)
-   * routes here for live sessions (with a confirm); exited tombstones also
-   * route here from the X button / middle-click to dismiss without friction.
+   * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Archive" item
+   * (Delete for a plain shell) routes here for live sessions (with a confirm);
+   * exited tombstones also route here from the X button / middle-click to dismiss without friction.
    */
   onClose: (id: string) => void;
   /**
@@ -132,8 +132,8 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   // keeps its pty running and stays in the project's vertical list under its
   // real status (click that row to re-open it); an exited tab has no process
   // left, so it's just dismissed. The process is only ever terminated via the
-  // context-menu "Archive" (Delete for a plain shell) or the project-list row's X — see `removeOne`. No
-  // confirm here: closing is non-destructive.
+  // context-menu "Archive" (Delete for a plain shell) or the project-list
+  // row's X — see `removeOne`. No confirm here: closing is non-destructive.
   const closeOne = (t: TerminalSession) => {
     if (t.status === 'exited' || !onDetach) {
       onClose(t.id); // dead tombstone (or no detach wired) — just remove it
@@ -143,8 +143,8 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   };
 
   // Destroy one tab: terminate the process and remove the tab. Live sessions
-  // get a confirm so a stray Archive/Delete can't silently stop a running agent;
-  // exited tabs are already dead, so they drop without friction. ⌘⇧T reopens.
+  // get a confirm so a stray Archive/Delete can't silently stop a running
+  // agent; exited tabs are already dead, so they drop without friction. ⌘⇧T reopens.
   const removeOne = (t: TerminalSession) => {
     if (
       t.status === 'exited' ||

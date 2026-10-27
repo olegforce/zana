@@ -158,6 +158,7 @@ describe('AgentSessionActions', () => {
         onSessionClosed={onSessionClosed}
       />
     );
+    expect(screen.getByText('Archive').closest('button')?.title).toBe('archive-title');
     fireEvent.click(screen.getByText('Archive'));
     expect(window.confirm).toHaveBeenCalledWith(
       'Archive “PTY agent”? The agent stops and its conversation stays in History.'
@@ -172,6 +173,9 @@ describe('AgentSessionActions', () => {
       <AgentSessionActions session={session({ profile: 'shell' })} projectId="p1" state="idle" />
     );
     expect(screen.queryByText('Archive')).toBeNull();
+    expect(screen.getByText('Delete').closest('button')?.title).toBe(
+      "Terminate the agent's process and close this view"
+    );
     fireEvent.click(screen.getByText('Delete'));
     expect(window.confirm).toHaveBeenCalledWith('Delete “PTY agent”? The process will be terminated.');
     expect(closeTerminal).toHaveBeenCalledWith('s1', 'p1');

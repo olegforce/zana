@@ -2013,8 +2013,8 @@ let stopClientRecovery: (() => void) | undefined;
  * scheduler creates them this way; the user also produces them by hiding a
  * tab — the tab's X button, ⌘W, ⌘⇧W, and middle-click all route to
  * `hideTerminal`. Terminating a process (and removing the tab) happens only
- * via the tab's right-click → Archive (Delete for a plain shell) or the project-list row's X — see
- * `closeTerminal`.
+ * via the tab's right-click → Archive (Delete for a plain shell) or the
+ * project-list row's X — see `closeTerminal`.
  */
 export function visibleTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
   return (list ?? []).filter((t) => !t.headless);

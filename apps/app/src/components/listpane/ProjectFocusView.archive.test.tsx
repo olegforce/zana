@@ -39,7 +39,8 @@ vi.mock('../agentCardActions.js', async (importOriginal) => ({
 
 import { ProjectFocusView } from './ProjectFocusView.js';
 
-afterEach(() => { cleanup(); closeTerminal.mockClear(); vi.restoreAllMocks(); });
+const realConfirm = window.confirm;
+afterEach(() => { cleanup(); closeTerminal.mockClear(); window.confirm = realConfirm; vi.restoreAllMocks(); });
 
 function renderView() {
   render(<MemoryRouter><ProjectFocusView project={{ id: 'project', name: 'Project', path: '/tmp/project' } as never} /></MemoryRouter>);

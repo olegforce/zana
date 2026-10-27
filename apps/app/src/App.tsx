@@ -548,7 +548,8 @@ function AppShell() {
           if (tab?.pinned) return;
           // ⌘W hides the active tab (does NOT kill the process): a live session
           // detaches to the background, an exited tombstone is dismissed.
-          // Terminating is only via the tab's right-click → Archive (Delete for a plain shell). ⌘⇧T reopens.
+          // Terminating is only via the tab's right-click → Archive (Delete for
+          // a plain shell). ⌘⇧T reopens.
           if (tab && tab.status !== 'exited') {
             data.hideTerminal(activeId, projectId);
           } else {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
+import { MemoryRouter } from 'react-router-dom';
 
 const h = vi.hoisted(() => ({
   closeTerminal: vi.fn(),
@@ -13,8 +14,15 @@ vi.mock('../store.js', () => ({
     (selector: (s: {
       closeTerminal: typeof h.closeTerminal;
       closingFollowupIds: Set<string>;
+      projects: unknown[];
+      idleAttentionSensitivity: string;
     }) => unknown) =>
-      selector({ closeTerminal: h.closeTerminal, closingFollowupIds: h.closingFollowupIds }),
+      selector({
+        closeTerminal: h.closeTerminal,
+        closingFollowupIds: h.closingFollowupIds,
+        projects: [],
+        idleAttentionSensitivity: 'balanced'
+      }),
     {
       getState: () => ({
         closeTerminal: h.closeTerminal,
@@ -27,6 +35,7 @@ vi.mock('../store.js', () => ({
 }));
 
 import {
+  AgentCardMenu,
   AgentDeleteQuickAction,
   canCloseWithFollowup,
   cliAgentArchives,
@@ -127,6 +136,43 @@ describe('plugin agent card menu', () => {
     expect(source).toContain('cliAgentRemoveLabel(card.session)');
     expect(source).toContain('cliAgentRestartLiveTitle()');
     expect(source).not.toContain('Kill and');
+  });
+});
+
+describe('AgentCardMenu remove item', () => {
+  function removeButton(session: Record<string, unknown>) {
+    const card = {
+      projectId: 'p1',
+      state: 'idle',
+      session: { id: 's1', title: 'Boss', status: 'running', profile: 'claude', ...session }
+    } as never;
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <AgentCardMenu menu={{ card, x: 0, y: 0 }} setMenu={() => {}} actions={{} as never} />
+      </MemoryRouter>
+    );
+    const match = /<button class="tab-context-danger" title="([^"]*)">([^<]*)<\/button>/.exec(html);
+    return { title: match?.[1], label: match?.[2] };
+  }
+
+  it('archives a live agent with the History tooltip', () => {
+    const button = removeButton({});
+    expect(button.label).toBe('Archive');
+    expect(button.title).toBe(
+      'Stop the agent and remove it from the board. Its conversation stays in History.'
+    );
+  });
+
+  it('keeps Delete for a live plain shell', () => {
+    const button = removeButton({ profile: 'shell' });
+    expect(button.label).toBe('Delete');
+    expect(button.title).toBe('Terminate this agent and remove it from the board');
+  });
+
+  it('keeps Dismiss for an exited card', () => {
+    const button = removeButton({ status: 'exited' });
+    expect(button.label).toBe('Dismiss');
+    expect(button.title).toBe('Dismiss this finished agent from the board');
   });
 });
 
