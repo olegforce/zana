@@ -27,6 +27,8 @@ export interface ResumeRunInput { scheduleId: string; runId?: string }
 export interface ResumeRunValue { session: TerminalSession; reused: boolean }
 
 interface Registration {
+  /** The harness family: every profile of one harness (claude, claude-yolo, claude-resume) shares it. */
+  id: string;
   nativeConversationResume?: (id: string) => NativeConversationResume | undefined;
   nativeConversationId?: (session: TerminalSession) => string | undefined;
 }
@@ -55,7 +57,7 @@ const UNSUPPORTED = "This agent can't reopen a past conversation";
  */
 const opening = new Map<string, Promise<Result<ResumeRunValue>>>();
 
-const openingKey = (projectId: string, profile: string, id: string): string => JSON.stringify([projectId, profile, id]);
+const openingKey = (projectId: string, harness: string, id: string): string => JSON.stringify([projectId, harness, id]);
 
 /** Collapse `.`, `..` and repeated or trailing slashes. Pure string work: the folder lives on another host, so no realpath. */
 export function normalizePosixPath(path: string): string {
@@ -98,15 +100,15 @@ async function reuseOrLaunch(
   project: Project, task: ScheduledTask, run: ScheduleRun, id: string, cwd: string | undefined,
   registration: ResumableRegistration, deps: ResumeRunDeps
 ): Promise<Result<ResumeRunValue>> {
-  const profile = run.conversation!.profile;
   const live = deps.listLiveSessions(project.id);
   const ownTab = run.sessionId ? live.find((session) => session.id === run.sessionId) : undefined;
   if (ownTab) return { ok: true, value: { session: ownTab, reused: true } };
-  // An id only means something within its own harness: never match another harness's tab.
-  const sameConversation = live.find((session) => session.profile === profile && registration.nativeConversationId?.(session) === id);
+  // An id only means something within its own harness, but the resume tab opens under the harness's fixed
+  // resume profile, not the recorded one (claude-yolo reopens as claude): compare harnesses, not profile names.
+  const sameConversation = live.find((session) => deps.registrationFor(session.profile) === registration && registration.nativeConversationId?.(session) === id);
   if (sameConversation) return { ok: true, value: { session: sameConversation, reused: true } };
 
-  const key = openingKey(project.id, profile, id);
+  const key = openingKey(project.id, registration.id, id);
   const pending = opening.get(key);
   if (pending) {
     const joined = await pending;

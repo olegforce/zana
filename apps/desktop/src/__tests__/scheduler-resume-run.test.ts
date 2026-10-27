@@ -124,6 +124,27 @@ describe('resumeScheduledRun', () => {
     expect(deps.createInteractiveTerminal).not.toHaveBeenCalled();
   });
 
+  it.each(['claude-yolo', 'claude-resume'])('reuses the tab a %s run reopened as plain claude, instead of opening another each time', async (recorded) => {
+    const reopened = session('reopened', { profile: 'claude', claudeSessionId: 'conv-1' });
+    const { deps } = setup(task([run({ conversation: conv({ profile: recorded }) as never })]), { live: [reopened] });
+    await expect(go(deps)).resolves.toEqual({ ok: true, value: { session: reopened, reused: true } });
+    expect(deps.createInteractiveTerminal).not.toHaveBeenCalled();
+  });
+
+  it('joins one pending launch for the same conversation recorded under two profiles of one harness', async () => {
+    let finish!: (value: { ok: true; value: TerminalSession }) => void;
+    const createInteractiveTerminal = vi.fn(() => new Promise<{ ok: true; value: TerminalSession }>((resolve) => { finish = resolve; }));
+    const a = setup(task([run({ conversation: conv({ profile: 'claude-yolo' }) as never })]), { createInteractiveTerminal: createInteractiveTerminal as never });
+    const b = setup(task([run()]), { createInteractiveTerminal: createInteractiveTerminal as never });
+    const first = go(a.deps);
+    const second = go(b.deps);
+    await vi.waitFor(() => expect(createInteractiveTerminal).toHaveBeenCalledTimes(1));
+    finish({ ok: true, value: session('one') });
+    await expect(first).resolves.toMatchObject({ value: { reused: false } });
+    await expect(second).resolves.toMatchObject({ value: { session: { id: 'one' }, reused: true } });
+    expect(createInteractiveTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it('does not reuse a tab of another harness that happens to hold the same id', async () => {
     const codexTab = session('codex-tab', { profile: 'codex', codexSessionId: 'conv-1' });
     const { deps, created } = setup(task([run()]), { live: [codexTab] });
