@@ -322,10 +322,16 @@ describe('salesforce family tools', () => {
     const soql = harness.agentTools.find((row) => row.name === 'sf_soql')!;
     await expect(soql.execute({ action: 'query.validate', query: 'SELECT COUNT() FROM Account' }, ctx)).resolves.toMatchObject({
       ok: true,
-      summary: 'Query parsed. A bare COUNT() runs as written, with no added LIMIT.'
+      summary: 'Query parsed. A bare COUNT() runs as written, with no added LIMIT.',
+      data: { limit: null }
+    });
+    await expect(soql.execute({ action: 'query.validate', query: 'SELECT COUNT() FROM Account LIMIT 5', limit: 50 }, ctx)).resolves.toMatchObject({
+      summary: 'Query parsed. A bare COUNT() runs as written, with no added LIMIT.',
+      data: { limit: 5 }
     });
     await expect(soql.execute({ action: 'query.validate', query: 'SELECT Id FROM Account LIMIT 1' }, ctx)).resolves.toMatchObject({
-      summary: 'Query parsed. Bounded run will use LIMIT 1.'
+      summary: 'Query parsed. Bounded run will use LIMIT 1.',
+      data: { limit: 1 }
     });
   });
 

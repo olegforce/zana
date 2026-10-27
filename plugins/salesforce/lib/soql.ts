@@ -23,6 +23,8 @@ export interface SoqlPlan {
   sobject?: string;
   term?: string;
   limit: number;
+  /** The LIMIT written in the query itself, or null. */
+  queryLimit: number | null;
   allRows: boolean;
   unbounded: boolean;
   envelope?: EnvelopeKind;
@@ -78,6 +80,7 @@ export function parseSoqlInput(input: unknown): { ok: true; plan: SoqlPlan } | {
         sobject,
         term,
         limit,
+        queryLimit: inspection.limit,
         allRows: inspection.allRows,
         unbounded: Boolean(envelope),
         envelope
@@ -92,6 +95,7 @@ export function parseSoqlInput(input: unknown): { ok: true; plan: SoqlPlan } | {
       sobject,
       term,
       limit: action === 'schema.search' ? Math.min(25, Math.max(1, requestedLimit ?? 25)) : QUERY_SAMPLE_LIMIT,
+      queryLimit: null,
       allRows: false,
       unbounded: false
     }

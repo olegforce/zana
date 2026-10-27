@@ -91,6 +91,12 @@ describe('bare COUNT() queries', () => {
     expect(plan('query.run', 'SELECT COUNT() FROM Account')).toMatchObject({ ok: true, plan: { unbounded: true } });
   });
 
+  it('keeps the LIMIT written in the query apart from the run limit', () => {
+    expect(parseSoqlInput({ action: 'query.run', query: 'SELECT COUNT() FROM Account LIMIT 5', limit: 50 })).toMatchObject({ ok: true, plan: { limit: 50, queryLimit: 5 } });
+    expect(parseSoqlInput({ action: 'query.run', query: 'SELECT Id FROM Account' })).toMatchObject({ ok: true, plan: { limit: 200, queryLimit: null } });
+    expect(parseSoqlInput({ action: 'schema.search', term: 'Acc' })).toMatchObject({ ok: true, plan: { queryLimit: null } });
+  });
+
   it('detects a bare COUNT() behind full-line comments only', () => {
     expect(isBareCountQuery('-- note\nSELECT COUNT() FROM Account')).toBe(true);
     expect(isBareCountQuery('/* c */ SELECT COUNT() FROM Account')).toBe(false);
