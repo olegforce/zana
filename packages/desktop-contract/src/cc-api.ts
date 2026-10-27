@@ -788,6 +788,8 @@ export interface CcApi {
       followedUp: number;
       /** Why a step produced nothing; absent from older main. */
       failures?: CloseFollowupFailure[];
+      /** True when the thread is wrapping up in the background and will be archived when it finishes. */
+      wrappingUp?: boolean;
     }>;
     fork(threadId: string, options?: { sourceSeqEnd?: number }): Promise<Result<{
       id: string;

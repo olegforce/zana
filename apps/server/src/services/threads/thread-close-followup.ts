@@ -11,6 +11,7 @@ import type { CloseSummaryFailure } from '../followups/close-summary.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
 import { archiveConversation } from './conversation-lifecycle.js';
 import { conversationOutline } from './conversation-timeline.js';
+import { threadWrapUps } from './thread-wrap-up.js';
 
 export function lastAssistantPreview(
   items: Array<{ role: 'user' | 'assistant'; preview: string }>
@@ -32,13 +33,19 @@ export function canCloseThreadWithFollowup(thread: {
 export async function closeConversationWithFollowup(
   ctx: ProductHttpContext,
   threadId: string
-): Promise<{ ok: true; summarized: number; followedUp: number; failures?: CloseSummaryFailure[] }> {
+): Promise<{ ok: true; summarized: number; followedUp: number; failures?: CloseSummaryFailure[]; wrappingUp?: true }> {
   const thread = getConversationThread(ctx.db, threadId);
   if (!thread) {
     throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
   }
   if (!canCloseThreadWithFollowup(thread)) {
     throw new ThreadCreateError(409, 'already_archived', 'thread is already archived');
+  }
+
+  // "Wrap up before closing" (Experimental): the thread wraps up in the background and is archived
+  // when it finishes. If it cannot be asked (host offline, send failed) it falls through to today's close.
+  if (ctx.config.getConfig().closeWrapUpEnabled === true && (await threadWrapUps(ctx).request(thread))) {
+    return { ok: true, summarized: 0, followedUp: 0, wrappingUp: true };
   }
 
   let summarized = 0;

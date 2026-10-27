@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Archive, Puzzle } from 'lucide-react';
 import { runningProcessCount, withRunningProcessWarning } from '../lib/thread-running-processes.js';
 import { product } from '../lib/product-client.js';
-import { errorMessage, useUi } from '../store.js';
+import { errorMessage, useData, useUi } from '../store.js';
 import { getAgentsRoutePath, getProjectRoutePath, getThreadRoutePath, projectIdFromThreadPath, threadIdFromPath } from '../lib/route-paths.js';
 import { openThreadInSplit } from '../lib/split-layout/openThreadInSplit.js';
 import { useSplitWorkspace } from '../lib/split-layout/store.js';
@@ -44,7 +44,7 @@ export interface ThreadMenuContext {
   stop: (id: string) => Promise<unknown>;
   fork: (id: string) => Promise<{ ok: boolean; value?: { id: string } }>;
   archive: (id: string) => Promise<{ ok?: boolean }>;
-  closeFollowup: (id: string) => Promise<{ ok?: boolean; summarized?: number; followedUp?: number }>;
+  closeFollowup: (id: string) => Promise<{ ok?: boolean; summarized?: number; followedUp?: number; wrappingUp?: boolean }>;
   pin: (id: string) => Promise<unknown>;
   unpin: (id: string) => Promise<unknown>;
   read: (id: string) => Promise<unknown>;
@@ -117,9 +117,18 @@ export async function runThreadMenuAction(
   }
   const title = threadTitle(thread);
   if (action === 'close-followup') {
-    if (ctx.confirm && !ctx.confirm(withRunningProcessWarning(`Close “${title}” and file a follow-up if work is left?`, thread))) return;
+    const wrapUp = useData.getState().closeWrapUpEnabled;
+    const prompt = wrapUp
+      ? `Close “${title}” with follow-up? The agent first saves what it learnt and tidies up, then closes with a summary in your inbox. If it asks you something, it stays open.`
+      : `Close “${title}” and file a follow-up if work is left?`;
+    if (ctx.confirm && !ctx.confirm(withRunningProcessWarning(prompt, thread))) return;
     const result = await ctx.closeFollowup(thread.id);
     if (result && result.ok === false) return;
+    if (result?.wrappingUp) {
+      // The thread archives itself when it finishes; it stays here until the normal thread updates remove it.
+      useUi.getState().pushToast(`Wrapping up… “${title}” closes when it finishes.`, 'info');
+      return;
+    }
     ctx.remove(thread.id);
     const closed = useSplitWorkspace.getState().closePanesForThreads([thread.id]);
     if (closed.removedAny && closed.focusedRouteContent) {
