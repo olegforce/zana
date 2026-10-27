@@ -143,14 +143,22 @@ async function screenshot(window: Page, options: Parameters<Page["screenshot"]>[
 }
 
 // Thread views dock the right panel behind a "+" menu whose "More tools…" starts
-// a new tab; session views keep a plain "New tab" button.
+// a new tab; session views keep a plain "New tab" button. Right after a route
+// change the old view can still be on screen, so retry the whole choice until
+// a click lands on the view that stays.
 async function openMoreTools(window: Page) {
   const newTab = window.getByRole("button", { name: "New tab", exact: true });
   const addTool = window.getByRole("button", { name: "Add tool to right panel", exact: true });
-  await expect(newTab.or(addTool)).toBeVisible();
-  if (await newTab.isVisible()) return newTab.click();
-  await addTool.click();
-  await window.getByRole("menuitem", { name: "More tools…", exact: true }).click();
+  await expect(async () => {
+    try {
+      if (await newTab.isVisible()) return await newTab.click({ timeout: 3_000 });
+      await addTool.click({ timeout: 3_000 });
+      await window.getByRole("menuitem", { name: "More tools…", exact: true }).click({ timeout: 3_000 });
+    } catch (error) {
+      await window.keyboard.press("Escape");
+      throw error;
+    }
+  }).toPass({ timeout: 30_000 });
 }
 
 async function route(window: Page, path: string) {
