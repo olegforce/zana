@@ -211,6 +211,94 @@ describe('restart flow', () => {
   });
 });
 
+describe('restart failures release the held-back exit (CodeNod #509)', () => {
+  it('runs the held-back exit once when closing the session fails after the exit arrived', async () => {
+    vi.useFakeTimers();
+    let failClose!: (error: Error) => void;
+    const deps = makeDeps({ closeSession: vi.fn(() => new Promise<void>((_resolve, reject) => { failClose = reject; })) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    await vi.advanceTimersByTimeAsync(0);
+    const finalize = vi.fn(async () => {});
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(0); // the relaunch is waiting for the close
+    failClose(new Error('kill failed'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toMatchObject({ ok: false, reason: 'relaunch-failed', message: 'kill failed' });
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(deps.launchAuthorizedTerminal).not.toHaveBeenCalled();
+    expect(restarter.isRestarting('w1')).toBe(false);
+  });
+
+  it('times out a restart whose tmux check never answers and runs the held-back exit', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ restartTimeoutMs: 500, sessionGone: vi.fn(() => new Promise<boolean>(() => {})) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    const finalize = vi.fn(async () => {});
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toMatchObject({ ok: false, reason: 'restart-timeout', message: 'the restart did not finish within 1 s' });
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(deps.launchAuthorizedTerminal).not.toHaveBeenCalled();
+    expect(restarter.isRestarting('w1')).toBe(false);
+  });
+
+  it('times out a stalled relaunch, then closes the session if it arrives late', async () => {
+    vi.useFakeTimers();
+    let launched!: (value: unknown) => void;
+    const deps = makeDeps({ restartTimeoutMs: 1_000, launchAuthorizedTerminal: vi.fn(() => new Promise((resolve) => { launched = resolve; })) as never });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    const finalize = vi.fn(async () => {});
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.launchAuthorizedTerminal).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await result).toMatchObject({ ok: false, reason: 'restart-timeout' });
+    expect(finalize).toHaveBeenCalledTimes(1);
+    launched({ ok: true, value: session() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.onRelaunched).not.toHaveBeenCalled();
+    expect(deps.closeSession).toHaveBeenCalledTimes(2);
+    expect(deps.closeSession).toHaveBeenLastCalledWith('w1');
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not relaunch once disposed, even when the tmux check answers afterwards', async () => {
+    vi.useFakeTimers();
+    let gone!: (value: boolean) => void;
+    const deps = makeDeps({ sessionGone: vi.fn(() => new Promise<boolean>((resolve) => { gone = resolve; })) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    const finalize = vi.fn(async () => {});
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.sessionGone).toHaveBeenCalledWith('w1');
+    restarter.dispose();
+    gone(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toMatchObject({ ok: false, reason: 'relaunch-failed', message: 'disposed' });
+    expect(deps.launchAuthorizedTerminal).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it('leaves a relaunch that finishes after dispose to the shutdown path', async () => {
+    vi.useFakeTimers();
+    let launched!: (value: unknown) => void;
+    const deps = makeDeps({ launchAuthorizedTerminal: vi.fn(() => new Promise((resolve) => { launched = resolve; })) as never });
+    const restarter = createSquadWorkerRestarter(deps);
+    void restarter.restart('w1');
+    restarter.onSessionExit('w1', vi.fn(async () => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    restarter.dispose();
+    launched({ ok: true, value: session() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.onRelaunched).not.toHaveBeenCalled();
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('relaunchSquadWorker', () => {
   it('re-confines the worktree and launches with the team spawn options', async () => {
     const deps = makeDeps();

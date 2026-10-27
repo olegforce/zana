@@ -358,4 +358,103 @@ describe('WorkerApiErrorRecovery', () => {
     await advance(T.nudgeDelayMs * 3);
     expect(calls).toEqual(['record:waiting', 'record:resumed']);
   });
+
+  // CodeNod #509: a stale nudge continuation must not drop the session a second stop installed.
+  it('restarts when the nudged turn fails again before the nudge call returns', async () => {
+    let release!: () => void;
+    const nudges: string[] = [];
+    const { engine, calls, records } = setup({ nudge: () => { nudges.push('nudge'); return new Promise<void>((r) => { release = r; }); } });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    engine.onTurnStarted('s1', 'idle'); // the nudged turn starts...
+    await engine.onApiErrorStop('s1', COHORT, TEMP); // ...and fails while the nudge call is still awaited
+    release();
+    await advance(0);
+    expect(calls).toEqual(['record:waiting', 'record:nudged', 'record:waiting']);
+    expect(records.at(-1)?.summary).toBe('Engineer slot-1 stopped on another temporary API error (rate_limit); Zana will restart it in 60 s');
+    await advance(T.restartDelayMs);
+    expect(calls.slice(-3)).toEqual(['restart', 'redeliver', 'record:restarted']);
+    expect(nudges).toHaveLength(1);
+    expect(calls).not.toContain('record:resumed');
+  });
+
+  it('records the nudge once when the nudged turn fails while that nudge is being recorded', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const h = setup();
+    const record = h.deps.record;
+    h.deps.record = async (id, input) => { if (input.step === 'nudged') await gate; return record(id, input); };
+    await h.engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    h.engine.onTurnStarted('s1', 'idle');
+    await h.engine.onApiErrorStop('s1', COHORT, TEMP);
+    release();
+    await advance(0);
+    expect(h.calls).toEqual(['record:waiting', 'nudge', 'record:waiting', 'record:nudged']);
+    await advance(T.restartDelayMs);
+    expect(h.calls.filter((c) => c === 'record:nudged')).toHaveLength(1);
+    expect(h.calls).toContain('restart');
+    expect(h.calls).not.toContain('record:resumed');
+  });
+
+  it('asks the user when the restarted session fails again before the restart is recorded', async () => {
+    let deliver!: (value: boolean) => void;
+    const { engine, calls, records } = setup({ redeliver: () => new Promise<boolean>((r) => { deliver = r; }) });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs + T.nudgeTurnMs);
+    expect(calls.at(-1)).toBe('restart'); // the redelivery is still in flight
+    engine.onTurnStarted('s1', 'unknown');
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    expect(calls.slice(-3)).toEqual(['record:restarted', 'record:waiting', 'block']);
+    expect(records.at(-2)?.summary).toBe('Restarted engineer slot-1 after an API error');
+    deliver(true);
+    await advance(T.restartTurnMs * 2);
+    expect(calls.filter((c) => c === 'record:restarted')).toHaveLength(1);
+    expect(calls.filter((c) => c === 'block')).toHaveLength(1);
+  });
+
+  it('stops when recording the in-flight nudge reports the claim moved on', async () => {
+    let release!: () => void;
+    const h = setup({ nudge: () => new Promise<void>((r) => { release = r; }) });
+    await h.engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    const record = h.deps.record;
+    h.deps.record = async (id, input) => { if (input.step === 'nudged') throw new WorkUnitRecoveryGuardError('moved'); return record(id, input); };
+    await h.engine.onApiErrorStop('s1', COHORT, TEMP);
+    release();
+    await advance(T.restartDelayMs * 3);
+    expect(h.calls).toEqual(['record:waiting']);
+  });
+
+  it('records nothing for a nudge whose session exited meanwhile', async () => {
+    let release!: () => void;
+    const { engine, calls } = setup({ nudge: () => new Promise<void>((r) => { release = r; }) });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    await advance(T.nudgeDelayMs);
+    engine.forget('s1');
+    release();
+    await advance(T.nudgeTurnMs + T.restartDelayMs);
+    expect(calls).toEqual(['record:waiting']);
+  });
+
+  // CodeNod #509: an unreadable agent state at the nudge rung used to drop the recovery silently.
+  it.each([['unavailable', undefined], ['unknown', 'unknown']])('restarts instead of nudging when the agent state is %s, and logs why', async (label, agentState) => {
+    const log = vi.fn();
+    const { engine, calls, state } = setup({ log });
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    state.agent = agentState;
+    await advance(T.nudgeDelayMs + 1);
+    expect(calls).toEqual(['record:waiting', 'restart', 'redeliver', 'record:restarted']);
+    expect(log).toHaveBeenCalledWith(`Worker API-error recovery did not nudge s1 (state ${label}); restarting it instead`);
+  });
+
+  it('asks the user when an engineer in an unreadable state cannot be restarted either', async () => {
+    const { engine, calls, state, records } = setup();
+    state.restart = { ok: false, reason: 'not-found' };
+    await engine.onApiErrorStop('s1', COHORT, TEMP);
+    state.agent = undefined;
+    await advance(T.nudgeDelayMs + 1);
+    expect(calls).toEqual(['record:waiting', 'restart', 'record:restart-failed', 'block']);
+    expect(records.at(-1)?.summary).toBe('Could not restart engineer slot-1: not-found');
+  });
 });
