@@ -299,6 +299,58 @@ describe('restart failures release the held-back exit (CodeNod #509)', () => {
   });
 });
 
+describe('restart edge cases from the independent review', () => {
+  it('abandons the relaunch and runs the newer exit path when the relaunched process exits before the hand-over', async () => {
+    vi.useFakeTimers();
+    let launched!: (value: unknown) => void;
+    const deps = makeDeps({ launchAuthorizedTerminal: vi.fn(() => new Promise((resolve) => { launched = resolve; })) as never });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    const firstExit = vi.fn(async () => {});
+    restarter.onSessionExit('w1', firstExit);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.launchAuthorizedTerminal).toHaveBeenCalledTimes(1);
+    const secondExit = vi.fn(async () => {});
+    restarter.onSessionExit('w1', secondExit); // the relaunched process died while the launch waited
+    expect(await result).toMatchObject({ ok: false, reason: 'relaunch-failed', message: 'the relaunched session exited' });
+    expect(secondExit).toHaveBeenCalledTimes(1);
+    expect(firstExit).not.toHaveBeenCalled();
+    launched({ ok: true, value: session() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.onRelaunched).not.toHaveBeenCalled();
+    expect(deps.launchAuthorizedTerminal).toHaveBeenCalledTimes(1);
+    expect(deps.closeSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('still settles the restart when onRelaunched throws', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ onRelaunched: vi.fn(() => { throw new Error('registry'); }) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    restarter.onSessionExit('w1', vi.fn(async () => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual({ ok: true });
+    expect(restarter.isRestarting('w1')).toBe(false);
+  });
+
+  it('settles a failed restart even when the held-back exit path never finishes', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ exitTimeoutMs: 200, sessionGone: vi.fn(async () => false) });
+    const restarter = createSquadWorkerRestarter(deps);
+    const result = restarter.restart('w1');
+    const finalize = vi.fn(() => new Promise<void>(() => {}));
+    restarter.onSessionExit('w1', finalize);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finalize).toHaveBeenCalledTimes(1);
+    let settled = false;
+    void result.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(199);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toMatchObject({ ok: false, reason: 'relaunch-failed', message: 'the old session is still running' });
+  });
+});
+
 describe('relaunchSquadWorker', () => {
   it('re-confines the worktree and launches with the team spawn options', async () => {
     const deps = makeDeps();

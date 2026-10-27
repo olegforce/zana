@@ -184,7 +184,8 @@ interface PendingRestart {
 /**
  * Restarts a Squad worker in place: closes its session, holds back the host's exit path while the
  * worker is relaunched with the same session id, and runs that exit path after all if the relaunch
- * does not happen. Every attempt is bounded by `restartTimeoutMs`.
+ * does not happen. Every attempt settles within `restartTimeoutMs`, plus at most `exitTimeoutMs`
+ * spent waiting for a held-back exit path to finish.
  */
 export class SquadWorkerRestarter {
   private readonly pending = new Map<string, PendingRestart>();
@@ -224,6 +225,13 @@ export class SquadWorkerRestarter {
     const entry = this.pending.get(sessionId);
     if (!entry) {
       void finalizeExit();
+      return;
+    }
+    if (entry.relaunchTimer !== undefined) {
+      // A second exit while the relaunch is pending: the relaunched process died before it was handed
+      // over. Its exit path is the one that must run; the late relaunch result is then closed.
+      entry.finalizeExit = finalizeExit;
+      void this.abandon(sessionId, entry, { ok: false, reason: 'relaunch-failed', message: 'the relaunched session exited' });
       return;
     }
     if (entry.exitTimer !== undefined) this.clearTimer(entry.exitTimer);
@@ -285,8 +293,16 @@ export class SquadWorkerRestarter {
     this.end(sessionId, entry);
     const finalize = entry.finalizeExit;
     entry.finalizeExit = undefined;
-    await finalize?.().catch(() => undefined);
+    if (finalize) await this.within(finalize().catch(() => undefined), this.exitTimeoutMs);
     entry.resolve(failure);
+  }
+
+  /** Waits for `work`, but no longer than `ms`; the work itself keeps running. */
+  private within(work: Promise<unknown>, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = this.setTimer(resolve, ms);
+      void work.then(() => { this.clearTimer(timer); resolve(); });
+    });
   }
 
   private async runRelaunch(sessionId: string, entry: PendingRestart): Promise<void> {
@@ -319,8 +335,11 @@ export class SquadWorkerRestarter {
     }
     this.end(sessionId, entry);
     entry.finalizeExit = undefined;
-    this.deps.onRelaunched(entry.session);
-    entry.resolve({ ok: true });
+    try {
+      this.deps.onRelaunched(entry.session);
+    } finally {
+      entry.resolve({ ok: true });
+    }
   }
 }
 
