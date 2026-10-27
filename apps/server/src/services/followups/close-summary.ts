@@ -26,6 +26,7 @@
 
 import type { CloseFollowupFailure, LlmRunResult } from '@zana-ai/zcc-domain/product';
 import type { TranscriptRef } from './idle-triage.js';
+import { cleanSessionTitle, parseSessionSummary, trimAtLineBoundary } from './session-summary-text.js';
 
 /** What the summarizer needs to know about a session to summarize it. */
 export interface CloseSummarySessionInfo {
@@ -221,7 +222,7 @@ export function renderCloseSummary(
       ? `Closed ${n} idle ${noun} in **${projectLabel}**.`
       : `Caught up on ${n} ${noun} in **${projectLabel}**.`;
   const sections = notes.map(({ title, note }) => {
-    const lines = [`### ${title}`, `**Did:** ${note.did || '—'}`];
+    const lines = [`### ${cleanSessionTitle(title)}`, `**Did:** ${note.did || '—'}`];
     if (note.left) lines.push(`**Left:** ${note.left}`);
     return lines.join('\n');
   });
@@ -242,7 +243,7 @@ export function renderSessionSummary(title: string, summary: string): string {
     .split('\n')
     .map((line) => (/^#{1,5}\s/.test(line) ? `#${line}` : line))
     .join('\n');
-  return `### ${title}\n\n${body}`;
+  return `### ${cleanSessionTitle(title)}\n\n${body}`;
 }
 
 /**
@@ -428,7 +429,7 @@ export class CloseSummaryService {
           const created = await this.deps.createFollowUp({
             projectId,
             sessionId,
-            title: `Follow up: ${title}`,
+            title: `Follow up: ${cleanSessionTitle(title)}`,
             detail:
               `**Did:** ${note.did || '—'}\n\n**Left:** ${note.left}` +
               `\n\n_Filed when the agent was closed from the Agents view._`
@@ -520,8 +521,9 @@ export class CloseSummaryService {
       });
       if (!digest.trim()) return { ok: false, reason: 'empty' };
       const result = await this.deps.runSessionSummary(digest, `session-summary:${sessionId}`);
-      if (!result.ok || !result.text.trim()) return { ok: false, reason: 'summary-failed' };
-      summary = result.text.trim();
+      if (!result.ok) return { ok: false, reason: 'summary-failed' };
+      summary = trimAtLineBoundary(parseSessionSummary(result.text.trim()).body);
+      if (!summary) return { ok: false, reason: 'summary-failed' };
     } catch {
       return { ok: false, reason: 'summary-failed' };
     }
