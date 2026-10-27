@@ -838,6 +838,7 @@ function mirroredConfigFlags(config: AppConfig) {
     autoCloseIdleEnabled: config.autoCloseIdleEnabled ?? false,
     overseerMode: config.overseerMode ?? 'off',
     catchUpSummaryEnabled: config.catchUpSummaryEnabled ?? false,
+    closeWrapUpEnabled: config.closeWrapUpEnabled ?? false,
     classicSessionViewEnabled: config.classicSessionViewEnabled ?? false,
     threadTabsEnabled: config.threadTabsEnabled ?? true,
     dockableThreadToolsEnabled: config.dockableThreadToolsEnabled ?? true,
@@ -1652,6 +1653,10 @@ interface DataState {
    *  in the agent modal (EXPERIMENTAL). Hydrated on init, kept live by the Settings
    *  toggle. Default off. */
   catchUpSummaryEnabled: boolean;
+  /** Mirror of AppConfig.closeWrapUpEnabled — Close with follow-up first asks the
+   *  agent to wrap up (EXPERIMENTAL). Hydrated on init, kept live by the Settings
+   *  toggle. Default off. */
+  closeWrapUpEnabled: boolean;
   /** Mirror of AppConfig.classicSessionViewEnabled — skip the inspector overlay
    *  and open CLI agents / threads as full pages (EXPERIMENTAL). Hydrated on init,
    *  kept live by the Settings toggle. Default off. */
@@ -1767,6 +1772,7 @@ interface DataState {
   setCliRemoteToolProxyEnabled: (on: boolean) => void;
   setFollowUpsEnabled: (on: boolean) => void;
   setCatchUpSummaryEnabled: (on: boolean) => void;
+  setCloseWrapUpEnabled: (on: boolean) => void;
   setClassicSessionViewEnabled: (on: boolean) => void;
   setThreadTabsEnabled: (on: boolean) => void;
   setDockableThreadToolsEnabled: (on: boolean) => void;
@@ -2166,6 +2172,7 @@ export const useData = create<DataState>((set, get) => ({
   overseerMode: 'off',
   reviewerApprovalMode: 'ask',
   catchUpSummaryEnabled: false,
+  closeWrapUpEnabled: false,
   classicSessionViewEnabled: false,
   threadTabsEnabled: true,
   dockableThreadToolsEnabled: true,
@@ -2309,6 +2316,9 @@ export const useData = create<DataState>((set, get) => ({
 
   setCatchUpSummaryEnabled(on) {
     set({ catchUpSummaryEnabled: on });
+  },
+  setCloseWrapUpEnabled(on) {
+    set({ closeWrapUpEnabled: on });
   },
 
   setDockableThreadToolsEnabled(on) {
