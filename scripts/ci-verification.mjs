@@ -42,8 +42,8 @@ export function boundarySpecs(paths) {
     if (/services\/execution\/service\.ts|services\/mcp\/mcp-server|squad-proposals\/(notifier|report)/.test(path)) add('squad-direct-report');
     // Close with follow-up crosses the main/renderer seam: the summary, its failure reasons and the toast (#352).
     if (/followups\/close-summary|lib\/close-idle-agents|claude-cli-provider|main-claude-binary/.test(path)) add('close-with-follow-up-needs-you');
-    // #532: project Back stalled seconds once route renders could be restarted by store updates.
-    if (/apps\/app\/src\/(main\.tsx|lib\/split-layout\/|views\/thread-detail\/SplitThreadArea|hooks\/useRouteSync|lib\/app-navigate|components\/ProjectScopedNav)/.test(path)) add('project-back-navigation');
+    // #532: route timing seams. Back stalled for seconds, and a project window's route lock can loop.
+    if (/apps\/app\/src\/(main\.tsx|lib\/split-layout\/|views\/thread-detail\/SplitThreadArea|hooks\/useRouteSync|lib\/app-navigate|components\/ProjectScopedNav)/.test(path)) add('project-back-navigation', 'app-routing');
     if (/execution-source-picker|ipc\/execution-board|services\/execution\/source-registry|team-launch-support|TeamComposer|team-composer-sources/.test(path)) add('squad-source-retry');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }

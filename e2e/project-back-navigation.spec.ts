@@ -45,6 +45,8 @@ cat
 const CPU_THROTTLE = 6;
 const EXTRA_PROJECTS = 16;
 const BACK_BUDGET_MS = 3_000;
+// Room for one reparenting frame; before the fix the thread was gone for ~5 s.
+const MISSING_TOLERANCE_MS = 150;
 
 type BackSample = { switchedMs: number | null; projectThreadMissingMs: number };
 
@@ -106,8 +108,11 @@ test('Back from a busy project lands on the global view without blinking the pro
       await page.evaluate(() => {
         const probe = { clickedAt: 0, switchedAt: 0, missingSince: 0, missingMs: 0, observer: null as MutationObserver | null };
         (window as unknown as { __backProbe: typeof probe }).__backProbe = probe;
-        const projectThreadShown = () =>
-          [...document.querySelectorAll<HTMLElement>('.term .xterm')].some((el) => el.offsetParent !== null);
+        // The busy thread is the only terminal on screen now. Its element lives
+        // for the whole session, so watch that element, not any terminal.
+        const busyTerminal = [...document.querySelectorAll<HTMLElement>('.term')].find((el) => el.offsetParent !== null);
+        if (!busyTerminal) throw new Error('busy thread terminal is not on screen');
+        const projectThreadShown = () => busyTerminal.isConnected && busyTerminal.offsetParent !== null;
         const sample = () => {
           if (!probe.clickedAt || probe.switchedAt) return;
           const now = performance.now();
@@ -146,7 +151,7 @@ test('Back from a busy project lands on the global view without blinking the pro
       console.log(`[project-back] attempt ${attempt}: switched after ${sample.switchedMs} ms, project thread missing ${sample.projectThreadMissingMs} ms`);
       expect(sample.switchedMs).not.toBeNull();
       expect(sample.switchedMs!).toBeLessThan(BACK_BUDGET_MS);
-      expect(sample.projectThreadMissingMs).toBe(0);
+      expect(sample.projectThreadMissingMs).toBeLessThan(MISSING_TOLERANCE_MS);
     }
   } finally {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => undefined);
