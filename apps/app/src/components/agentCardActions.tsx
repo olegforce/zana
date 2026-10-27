@@ -124,8 +124,9 @@ export async function closeAgentWithFollowup(
     return false;
   }
   const res = await useData.getState().closeIdleAgents(projectId, [session.id], true, { force: true });
-  // An agent that stayed open (it asked something, was typed in, or timed out) was not closed.
-  return !res?.keptOpen?.some((k) => k.sessionId === session.id);
+  // With the wrap-up on, only a real close counts: not one that stayed open (it asked something, was
+  // typed in, or timed out), nor one whose close itself failed. Off keeps today's answer.
+  return wrapUp ? res?.closed === 1 : true;
 }
 
 /**

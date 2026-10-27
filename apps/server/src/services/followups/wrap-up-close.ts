@@ -274,6 +274,8 @@ export class WrapUpCloseService {
   /** Summarise a session that is not typed into and record it as closed without a wrap-up. */
   private async summaryOutcome(sessionId: string, entry: Active, how: 'waiting-on-prompt' | 'no-wrap-up'): Promise<Outcome> {
     const res = await this.summarize(entry.projectId, sessionId);
+    // A key press during the summary (for example answering the prompt) means a person took over.
+    if (this.keysMoved(sessionId, entry)) return { ...EMPTY, keptOpen: 'typed' };
     if (!res.ok) return this.failed(res.reason);
     return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, how));
   }
@@ -290,6 +292,12 @@ export class WrapUpCloseService {
     return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, 'wrapped'));
   }
 
+  /** A key was pressed since the click. */
+  private keysMoved(sessionId: string, entry: Active): boolean {
+    const session = this.deps.getSession(sessionId);
+    return !!session && session.lastKeyInputAt !== entry.keyAtClick;
+  }
+
   /** A key was pressed since the click, or the agent is no longer resting: it is no longer ours to close. */
   private tookOver(sessionId: string, entry: Active): boolean {
     const session = this.deps.getSession(sessionId);
@@ -301,9 +309,14 @@ export class WrapUpCloseService {
   private async blockEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
     const res = await this.summarize(entry.projectId, sessionId);
     if (!res.ok && res.reason === 'ineligible') return EMPTY;
-    const failures: CloseSummaryFailure[] = res.ok || res.reason === 'ineligible' ? [] : [{ reason: res.reason }];
     const session = this.deps.getSession(sessionId);
-    const title = res.ok ? res.title : (session?.title ?? sessionId);
+    if (!session) return EMPTY;
+    // Answered while the summary ran (a key press, or the prompt is gone): it is the person's again, so write nothing.
+    if (session.lastKeyInputAt !== entry.keyAtClick || this.deps.getAgentState(sessionId) !== 'blocked') {
+      return { ...EMPTY, keptOpen: 'typed' };
+    }
+    const failures: CloseSummaryFailure[] = res.ok || res.reason === 'ineligible' ? [] : [{ reason: res.reason }];
+    const title = res.ok ? res.title : session.title;
     const kept = await this.deps.recordKeptOpen(entry.projectId, sessionId, title, 'asks-you', res.ok ? res.note : undefined);
     return { ...this.kept(kept, 'asks-you'), failures: [...failures, ...(kept.failures ?? [])] };
   }

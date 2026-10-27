@@ -153,6 +153,11 @@ class Job {
       }
       this.watchPending(view.hasPendingInteraction === true);
       if (!this.edge) {
+        // The turn the wrap-up was queued behind failed: the queue drains only on idle, so it would never run.
+        if (this.needIdle && view.status === 'error') {
+          void this.closeAfterQueuedError();
+          return;
+        }
         if (this.needIdle) this.needIdle = isActive(view.status);
         else if (view.status === 'active') this.edge = true;
         return;
@@ -178,9 +183,18 @@ class Job {
     this[which] = undefined;
   }
 
-  /** The rest lasted: re-check, then summarise and close (or keep open). */
+  /** The rest lasted: re-check, then summarise and close (or keep open). A throw ends the job, never leaves it stuck. */
   private async onRest(): Promise<void> {
     this.rest = undefined;
+    try {
+      await this.closeAfterRest();
+    } catch (err) {
+      this.host.log(`[thread-wrap-up] thread=${this.thread.id.slice(0, 8)} close failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.finish();
+    }
+  }
+
+  private async closeAfterRest(): Promise<void> {
     const { host, thread } = this;
     if (this.done || host.getStatus(thread.id) !== 'idle' || host.hasPendingInteraction(thread.id)) return;
     if (this.userWroteAfterWrapUp()) return this.finish(); // the user took over: keep it open, no record
@@ -188,19 +202,34 @@ class Job {
     const note = await this.summarize();
     // The summary takes a while: the user may have written meanwhile, or the job may have been disposed.
     if (!this.stillResting()) return this.finish();
-    try {
-      if (note?.asksUser) {
-        await host.recordKeptOpen(thread.projectId, thread.id, this.title, 'asks-you', note);
-      } else {
-        if (note) await host.recordClose(thread.projectId, thread.id, this.title, note, 'wrapped');
-        else await this.recordWithoutSummary();
-        if (!this.stillResting()) return this.finish();
-        await host.archive(thread.id);
-      }
-    } catch (err) {
-      host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} close failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (note?.asksUser) {
+      await host.recordKeptOpen(thread.projectId, thread.id, this.title, 'asks-you', note);
+    } else {
+      if (note) await host.recordClose(thread.projectId, thread.id, this.title, note, 'wrapped');
+      else await this.recordWithoutSummary();
+      if (!this.stillResting()) return this.finish();
+      await host.archive(thread.id);
     }
     this.finish();
+  }
+
+  /** The turn the wrap-up was queued behind failed: drop the queued wrap-up and close the way today's path does. */
+  private async closeAfterQueuedError(): Promise<void> {
+    const { host, thread } = this;
+    this.stop();
+    try {
+      this.dropUnsentWrapUp();
+      const lastTurn = this.lastAssistantText();
+      if (lastTurn) await host.recordLastTurn(thread.projectId, thread.id, this.title, lastTurn);
+      await host.archive(thread.id);
+    } catch (err) {
+      host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} close after the earlier error failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.finish();
+  }
+
+  private lastAssistantText(): string {
+    return [...this.host.messages(this.thread.id)].reverse().find((m) => m.role === 'assistant' && m.text.trim())?.text.trim() ?? '';
   }
 
   /** Still ours to close: not disposed or archived, resting, nothing pending, and the user has not written. */
@@ -212,7 +241,7 @@ class Job {
   /** The whole-thread summary failed: still leave a record, from today's last-turn note or a one-line note. */
   private async recordWithoutSummary(): Promise<void> {
     const { host, thread } = this;
-    const lastTurn = [...host.messages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.text.trim())?.text.trim() ?? '';
+    const lastTurn = this.lastAssistantText();
     if (lastTurn) {
       const paper = await host.recordLastTurn(thread.projectId, thread.id, this.title, lastTurn);
       if (paper.summarized > 0) return;
@@ -229,10 +258,17 @@ class Job {
   /** The thread waits on the user: record what we know and keep it open. */
   private async onBlocked(): Promise<void> {
     this.block = undefined;
-    if (this.done || !this.host.hasPendingInteraction(this.thread.id)) return;
-    this.stop();
-    const note = await this.summarize();
-    await this.keepOpen('asks-you', note);
+    try {
+      if (this.done || !this.host.hasPendingInteraction(this.thread.id)) return;
+      this.stop();
+      const note = await this.summarize();
+      // Answered while the summary ran: the thread is the person's again, so write nothing.
+      if (this.done || !this.host.hasPendingInteraction(this.thread.id)) return this.finish();
+      await this.keepOpen('asks-you', note);
+    } catch (err) {
+      this.host.log(`[thread-wrap-up] thread=${this.thread.id.slice(0, 8)} could not record the question: ${err instanceof Error ? err.message : String(err)}`);
+      this.finish();
+    }
   }
 
   private userWroteAfterWrapUp(): boolean {
@@ -300,7 +336,7 @@ class Job {
 
 /** One wrap-up job per thread id. */
 export class ThreadWrapUpRegistry {
-  private jobs = new Map<string, Job>();
+  private jobs = new Map<string, { job: Job; start: Promise<ThreadWrapUpStart> }>();
 
   constructor(private readonly host: ThreadWrapUpHost) {}
 
@@ -312,17 +348,26 @@ export class ThreadWrapUpRegistry {
    * Start the wrap-up, or join the one already running (nothing is sent twice).
    * Resolves `fallback` when the caller must use today's close path, and
    * `kept-open` when the thread already waits on the user and was left open.
+   * A joiner gets the first request's answer, except `fallback`: the first
+   * caller already runs today's close, so the joiner reports `wrapping-up`.
    */
   async request(thread: ThreadWrapUpTarget): Promise<ThreadWrapUpStart> {
-    if (this.jobs.has(thread.id)) return 'wrapping-up';
+    const running = this.jobs.get(thread.id);
+    if (running) {
+      const first = await running.start;
+      return first === 'fallback' ? 'wrapping-up' : first;
+    }
     let job: Job | undefined;
     try {
       const created = new Job(this.host, thread, () => {
-        if (this.jobs.get(thread.id) === created) this.jobs.delete(thread.id);
+        if (this.jobs.get(thread.id)?.job === created) this.jobs.delete(thread.id);
       });
       job = created;
-      this.jobs.set(thread.id, created);
-      return await created.start();
+      // Registered before start() runs, so a synchronous finish inside it removes the entry again.
+      const entry = { job: created, start: Promise.resolve<ThreadWrapUpStart>('wrapping-up') };
+      this.jobs.set(thread.id, entry);
+      entry.start = created.start();
+      return await entry.start;
     } catch (err) {
       this.host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} request failed: ${err instanceof Error ? err.message : String(err)}`);
       job?.dispose();
@@ -331,7 +376,7 @@ export class ThreadWrapUpRegistry {
   }
 
   dispose(): void {
-    for (const job of [...this.jobs.values()]) job.dispose();
+    for (const { job } of [...this.jobs.values()]) job.dispose();
   }
 }
 

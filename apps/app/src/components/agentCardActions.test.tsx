@@ -383,9 +383,20 @@ describe('closeAgentWithFollowup with wrap-up', () => {
 
   it('returns false when the agent stayed open, true when it was closed', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true));
+    h.closeWrapUpEnabled = true;
     h.closeIdleAgents.mockResolvedValueOnce({ closed: 0, summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'asks-you' }] } as never);
     expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(false);
     h.closeIdleAgents.mockResolvedValueOnce({ closed: 1, summarized: 1, followedUp: 0, keptOpen: [{ sessionId: 'other', reason: 'typed' }] } as never);
+    expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(true);
+  });
+
+  it('returns false when the close itself failed with the wrap-up on, and today\'s true with it off', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    h.closeWrapUpEnabled = true;
+    h.closeIdleAgents.mockResolvedValueOnce({ closed: 0, summarized: 1, followedUp: 0 } as never);
+    expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(false);
+    h.closeWrapUpEnabled = false;
+    h.closeIdleAgents.mockResolvedValueOnce({ closed: 0, summarized: 0, followedUp: 0 } as never);
     expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(true);
   });
 });

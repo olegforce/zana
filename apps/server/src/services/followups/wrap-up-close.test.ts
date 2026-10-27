@@ -138,6 +138,52 @@ describe('WrapUpCloseService wrap-up of a resting local Claude agent', () => {
     expect(deps.recordKeptOpen).toHaveBeenCalledWith('p', 's1', 'T-s1', 'asks-you', undefined);
   });
 
+  it('writes no asks-you note when the prompt is answered while the summary runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { svc, deps, add, set, states } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'blocked');
+    await settle();
+    expect(deps.summarizeForClose).toHaveBeenCalledTimes(1);
+    states.set('s1', 'working'); // the person answered the prompt
+    release();
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    expect(deps.recordKeptOpen).not.toHaveBeenCalled();
+  });
+
+  it('writes no asks-you note when a key moves while the summary of a block runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { svc, deps, add, set, sessions } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+    add('s1', 'idle', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'blocked');
+    await settle();
+    sessions.get('s1')!.lastKeyInputAt = 2;
+    release();
+    expect(await p).toMatchObject({ keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    expect(deps.recordKeptOpen).not.toHaveBeenCalled();
+  });
+
+  it('resolves as gone when the session disappears while the summary of a block runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { svc, deps, add, set, sessions } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'blocked');
+    await settle();
+    sessions.delete('s1');
+    release();
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [] });
+    expect(deps.recordKeptOpen).not.toHaveBeenCalled();
+  });
+
   it('treats a block that lifts before the settle time as not finished', async () => {
     const { svc, deps, add, set } = make();
     add('s1');
@@ -266,6 +312,22 @@ describe('WrapUpCloseService state at the click', () => {
     set('s1', 'idle');
     expect(await p).toMatchObject({ keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
     expect(deps.reply).not.toHaveBeenCalled();
+  });
+
+  it('writes no record and keeps it open as typed when a key moves while a no-wrap-up summary runs', async () => {
+    for (const [state, profile] of [['blocked', 'claude'], ['idle', 'codex']] as const) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const { svc, deps, add, sessions } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+      add('s1', state, { profile, lastKeyInputAt: 1 });
+      const p = svc.run('p', ['s1']);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deps.summarizeForClose).toHaveBeenCalledTimes(1);
+      sessions.get('s1')!.lastKeyInputAt = 2; // for example, the person answered the prompt
+      release();
+      expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+      expect(deps.recordClose).not.toHaveBeenCalled();
+    }
   });
 
   it('records waiting-on-prompt for a blocked agent, without typing', async () => {

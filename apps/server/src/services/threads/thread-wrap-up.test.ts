@@ -506,6 +506,139 @@ describe('ThreadWrapUpRegistry', () => {
   });
 });
 
+describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
+  it('drops the queued wrap-up and closes the way today does when the turn it waits behind fails', async () => {
+    const h = make({ queuedSendIds: vi.fn(() => ['ours']) });
+    h.host.queuedSendIds.mockReturnValueOnce([]); // nothing queued before the send
+    h.state.status = 'active';
+    h.state.messages = [{ seq: 1, role: 'user', text: 'go' }, { seq: 2, role: 'assistant', text: ' The full last answer. ' }];
+    expect(await h.registry.request(thread)).toBe('wrapping-up');
+    h.emit({ status: 'error' }); // the earlier turn ended in an error; the queue never drains
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.dropQueuedSend).toHaveBeenCalledWith('t1', 'ours');
+    expect(h.host.recordLastTurn).toHaveBeenCalledWith('p1', 't1', 'Build it', 'The full last answer.');
+    expect(h.host.archive).toHaveBeenCalledWith('t1');
+    expect(h.host.recordKeptOpen).not.toHaveBeenCalled();
+    expect(h.host.summarizeForClose).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    expect(h.listeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('archives without a record when the failed earlier turn left no assistant text, and logs a failed archive', async () => {
+    const h = make({ archive: vi.fn(async () => { throw new Error('db gone'); }) });
+    h.state.status = 'active';
+    await h.registry.request(thread);
+    h.emit({ status: 'error' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordLastTurn).not.toHaveBeenCalled();
+    expect(h.host.log).toHaveBeenCalledWith(expect.stringContaining('close after the earlier error failed: db gone'));
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    const plain = make({ archive: vi.fn(async () => { throw 'x'; }) });
+    plain.state.status = 'active';
+    await plain.registry.request(thread);
+    plain.emit({ status: 'error' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plain.host.log).toHaveBeenCalledWith(expect.stringContaining('close after the earlier error failed: x'));
+  });
+
+  it('ends the job, logged, when a re-check throws after the summary (never stuck)', async () => {
+    let calls = 0;
+    const h = make({
+      messages: vi.fn(() => {
+        calls += 1;
+        if (calls > 2) throw new Error('db locked'); // start and the pre-summary check pass, the late re-check throws
+        return [];
+      })
+    });
+    await rest(h);
+    expect(h.host.summarizeForClose).toHaveBeenCalledTimes(1);
+    expect(h.host.log).toHaveBeenCalledWith(expect.stringContaining('close failed: db locked'));
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    expect(h.listeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    const plain = make({ getStatus: vi.fn(() => { throw 'x'; }) });
+    plain.host.getStatus.mockReturnValueOnce('idle'); // start reads the status once
+    expect(await plain.registry.request(thread)).toBe('wrapping-up');
+    plain.emit({ status: 'active' });
+    plain.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(plain.host.log).toHaveBeenCalledWith(expect.stringContaining('close failed: x'));
+    expect(plain.registry.isWrappingUp('t1')).toBe(false);
+  });
+
+  it('writes no question note when the question is answered while the summary runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = make({
+      summarizeForClose: vi.fn(async (): Promise<SummarizeForCloseResult> => { await gate; return { ok: true, title: 'Build it', note: note() }; })
+    });
+    await h.registry.request(thread);
+    h.emit({ status: 'active' });
+    h.state.pending = true;
+    h.emit({ status: 'active', hasPendingInteraction: true });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(h.host.summarizeForClose).toHaveBeenCalledTimes(1);
+    h.state.pending = false; // the person answered
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordKeptOpen).not.toHaveBeenCalled();
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    expect(h.listeners.size).toBe(0);
+  });
+
+  it('ends the job, logged, when the question re-check throws', async () => {
+    let calls = 0;
+    const h = make({
+      hasPendingInteraction: vi.fn(() => {
+        calls += 1;
+        if (calls === 1) return false; // start
+        if (calls === 2) return true; // the block timer
+        throw new Error('db locked');
+      })
+    });
+    await h.registry.request(thread);
+    h.emit({ status: 'active' });
+    h.emit({ status: 'active', hasPendingInteraction: true });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(h.host.log).toHaveBeenCalledWith(expect.stringContaining('could not record the question: db locked'));
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    const plain = make({ hasPendingInteraction: vi.fn(() => { throw 'x'; }) });
+    plain.host.hasPendingInteraction.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await plain.registry.request(thread);
+    plain.emit({ status: 'active' });
+    plain.emit({ status: 'active', hasPendingInteraction: true });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(plain.host.log).toHaveBeenCalledWith(expect.stringContaining('could not record the question: x'));
+  });
+
+  it('gives a request that joins a starting job the first answer, and wrapping-up when the first falls back', async () => {
+    let releaseKeep!: () => void;
+    const keepGate = new Promise<void>((resolve) => { releaseKeep = resolve; });
+    const kept = make({ recordKeptOpen: vi.fn(async () => { await keepGate; }) });
+    kept.state.pending = true;
+    const first = kept.registry.request(thread);
+    const joiner = kept.registry.request(thread);
+    releaseKeep();
+    expect(await first).toBe('kept-open');
+    expect(await joiner).toBe('kept-open');
+    expect(kept.host.recordKeptOpen).toHaveBeenCalledTimes(1);
+
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const failing = make({ send: vi.fn(async () => { await sendGate; throw new Error('queue full'); }) });
+    const firstFail = failing.registry.request(thread);
+    const joinFail = failing.registry.request(thread);
+    releaseSend();
+    expect(await firstFail).toBe('fallback'); // the first caller runs today's close
+    expect(await joinFail).toBe('wrapping-up'); // the joiner must not run it a second time
+    expect(failing.host.send).toHaveBeenCalledTimes(1);
+    expect(failing.registry.isWrappingUp('t1')).toBe(false);
+  });
+});
+
 describe('threadWrapUps', () => {
   it('builds one registry per ctx, wired to the live services, and disposes it with the ctx', async () => {
     const unsubscribe = vi.fn();
