@@ -1,11 +1,13 @@
-import type { AgentState, CloseFollowupFailure } from '@zana-ai/zcc-domain/product';
+import type { AgentState, CloseFollowupFailure, CloseFollowupKeptOpen } from '@zana-ai/zcc-domain/product';
 
-export type { CloseFollowupFailure };
+export type { CloseFollowupFailure, CloseFollowupKeptOpen };
 
 export type CloseIdleAgentsResult = {
   closed: number;
   summarized: number;
   followedUp: number;
+  /** Agents the wrap-up left open; absent when every agent was closed. */
+  keptOpen?: CloseFollowupKeptOpen[];
 };
 
 /**
@@ -16,8 +18,14 @@ export function closedToastMessage(
   closed: number,
   summarized: number,
   followedUp: number,
-  failures?: CloseFollowupFailure[]
+  failures?: CloseFollowupFailure[],
+  keptOpen: CloseFollowupKeptOpen[] = []
 ): string {
+  // A kept-open agent that asked something or timed out left a note in the inbox; a `typed` one did not.
+  const seeInbox = keptOpen.some((k) => k.reason === 'asks-you' || k.reason === 'timeout') ? ' (see your inbox)' : '';
+  if (closed === 0 && keptOpen.length > 0) {
+    return `Kept ${keptOpen.length} agent${keptOpen.length === 1 ? '' : 's'} open${seeInbox}.`;
+  }
   const bits = [`Closed ${closed} agent${closed === 1 ? '' : 's'}`];
   if (summarized > 0) bits.push(`${summarized} summarized to inbox`);
   if (followedUp > 0) {
@@ -35,7 +43,8 @@ export function closedToastMessage(
     else if (failures?.some((f) => f.reason === 'write-failed')) bits.push('could not save the summary or follow-up');
     else bits.push('no readable transcript found');
   }
-  return `${bits.join(' · ')}.`;
+  if (keptOpen.length > 0) bits.push(`${keptOpen.length} kept open`);
+  return `${bits.join(' · ')}${seeInbox}.`;
 }
 
 
@@ -52,7 +61,12 @@ export function selectCloseableIdleIds(
 }
 
 /** Sticky progress copy while Close with follow-up waits on the LLM paper trail. */
-export function closeFollowupProgressMessage(count: number): string {
+export function closeFollowupProgressMessage(count: number, wrapUp = false): string {
+  if (wrapUp) {
+    return count === 1
+      ? 'Wrapping up… the agent saves what it learnt, then closes.'
+      : `Wrapping up ${count} agents… each closes when it finishes.`;
+  }
   return count === 1
     ? 'Closing… filing a follow-up if work is left.'
     : `Closing ${count} agents… filing follow-ups.`;
@@ -63,6 +77,8 @@ export async function runCloseIdleAgents(input: {
   sessionIds: string[];
   summarize: boolean;
   force: boolean;
+  /** "Wrap up before closing": one call per agent, each closed as soon as its own result arrives. */
+  wrapUp?: boolean;
   deps: {
     statusById: Record<string, AgentState | undefined>;
     alreadyClosingIds: ReadonlySet<string>;
@@ -71,16 +87,27 @@ export async function runCloseIdleAgents(input: {
     closeFollowup: (
       projectId: string,
       ids: string[]
-    ) => Promise<{ summarized: number; followedUp: number; failures?: CloseFollowupFailure[] }>;
+    ) => Promise<{
+      summarized: number;
+      followedUp: number;
+      failures?: CloseFollowupFailure[];
+      keptOpen?: CloseFollowupKeptOpen[];
+    }>;
     closeTerminal: (sessionId: string, projectId: string) => Promise<void>;
     pushBusyToast: (requestedCount: number) => void;
     pushErrorToast: (err: unknown) => void;
-    pushClosedToast: (closed: number, summarized: number, followedUp: number, failures?: CloseFollowupFailure[]) => void;
+    pushClosedToast: (
+      closed: number,
+      summarized: number,
+      followedUp: number,
+      failures?: CloseFollowupFailure[],
+      keptOpen?: CloseFollowupKeptOpen[]
+    ) => void;
     pushProgressToast: (count: number) => string;
     dismissProgressToast: (id: string) => void;
   };
 }): Promise<CloseIdleAgentsResult> {
-  const { projectId, sessionIds, summarize, force, deps } = input;
+  const { projectId, sessionIds, summarize, force, wrapUp = false, deps } = input;
   if (sessionIds.length === 0) return { closed: 0, summarized: 0, followedUp: 0 };
   const eligible = selectCloseableIdleIds(sessionIds, deps.statusById, force);
   if (eligible.length === 0) {
@@ -96,33 +123,62 @@ export async function runCloseIdleAgents(input: {
     let summarized = 0;
     let followedUp = 0;
     let failures: CloseFollowupFailure[] | undefined;
-    if (summarize) {
-      progressToastId = deps.pushProgressToast(ids.length);
-      try {
-        const res = await deps.closeFollowup(projectId, ids);
-        summarized = res.summarized;
-        followedUp = res.followedUp;
-        failures = res.failures;
-      } catch (err) {
-        deps.pushErrorToast(err);
-      }
-    }
-
+    const keptOpen: CloseFollowupKeptOpen[] = [];
     let closed = 0;
-    for (const id of ids) {
+    const closeOne = async (id: string) => {
       try {
         await deps.closeTerminal(id, projectId);
         closed++;
       } catch {
         /* closeTerminal already toasts */
       }
+    };
+    if (summarize && wrapUp) {
+      progressToastId = deps.pushProgressToast(ids.length);
+      let errorShown = false;
+      await Promise.all(
+        ids.map(async (id) => {
+          let kept = false;
+          try {
+            const res = await deps.closeFollowup(projectId, [id]);
+            summarized += res.summarized;
+            followedUp += res.followedUp;
+            if (res.failures?.length) failures = [...(failures ?? []), ...res.failures];
+            const own = (res.keptOpen ?? []).filter((k) => k.sessionId === id);
+            kept = own.length > 0;
+            keptOpen.push(...own);
+          } catch (err) {
+            if (!errorShown) deps.pushErrorToast(err);
+            errorShown = true;
+          }
+          // Close each agent as soon as its own wrap-up is done, so a fast one does not sit idle meanwhile.
+          if (!kept) await closeOne(id);
+        })
+      );
+    } else {
+      if (summarize) {
+        progressToastId = deps.pushProgressToast(ids.length);
+        try {
+          const res = await deps.closeFollowup(projectId, ids);
+          summarized = res.summarized;
+          followedUp = res.followedUp;
+          failures = res.failures;
+          keptOpen.push(...(res.keptOpen ?? []));
+        } catch (err) {
+          deps.pushErrorToast(err);
+        }
+      }
+      const keptIds = new Set(keptOpen.map((k) => k.sessionId));
+      for (const id of ids) {
+        if (!keptIds.has(id)) await closeOne(id);
+      }
     }
     if (progressToastId) {
       deps.dismissProgressToast(progressToastId);
       progressToastId = undefined;
     }
-    if (closed > 0) deps.pushClosedToast(closed, summarized, followedUp, failures);
-    return { closed, summarized, followedUp };
+    if (closed > 0 || keptOpen.length > 0) deps.pushClosedToast(closed, summarized, followedUp, failures, keptOpen);
+    return keptOpen.length > 0 ? { closed, summarized, followedUp, keptOpen } : { closed, summarized, followedUp };
   } finally {
     if (progressToastId) deps.dismissProgressToast(progressToastId);
     deps.clearClosing(ids);

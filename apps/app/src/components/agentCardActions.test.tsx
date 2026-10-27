@@ -6,7 +6,8 @@ import { MemoryRouter } from 'react-router-dom';
 const h = vi.hoisted(() => ({
   closeTerminal: vi.fn(),
   closeIdleAgents: vi.fn(async () => ({ closed: 1, summarized: 1, followedUp: 1 })),
-  closingFollowupIds: new Set<string>()
+  closingFollowupIds: new Set<string>(),
+  closeWrapUpEnabled: false
 }));
 
 vi.mock('../store.js', () => ({
@@ -14,6 +15,7 @@ vi.mock('../store.js', () => ({
     (selector: (s: {
       closeTerminal: typeof h.closeTerminal;
       closingFollowupIds: Set<string>;
+      closeWrapUpEnabled: boolean;
       projects: unknown[];
       idleAttentionSensitivity: string;
     }) => unknown) =>
@@ -21,13 +23,15 @@ vi.mock('../store.js', () => ({
         closeTerminal: h.closeTerminal,
         closingFollowupIds: h.closingFollowupIds,
         projects: [],
-        idleAttentionSensitivity: 'balanced'
+        idleAttentionSensitivity: 'balanced',
+        closeWrapUpEnabled: h.closeWrapUpEnabled
       }),
     {
       getState: () => ({
         closeTerminal: h.closeTerminal,
         closeIdleAgents: h.closeIdleAgents,
-        closingFollowupIds: h.closingFollowupIds
+        closingFollowupIds: h.closingFollowupIds,
+        closeWrapUpEnabled: h.closeWrapUpEnabled
       })
     }
   ),
@@ -125,7 +129,7 @@ describe('plugin agent card menu', () => {
     expect(source).toContain('canCloseWithFollowup(card.session)');
     expect(source).toContain('actions.closeWithFollowup(card)');
     expect(source).toContain('Close with follow-up');
-    expect(source).toContain("closingWithFollowup ? 'Closing…' : 'Close with follow-up'");
+    expect(source).toContain("closingWithFollowup ? (wrapUpClose ? 'Wrapping up…' : 'Closing…') : 'Close with follow-up'");
     expect(source).toContain('disabled={closingWithFollowup}');
     expect(source).toContain('closingFollowupIds.has(card.session.id)');
     expect(source).toContain('closeIdleAgents(projectId, [session.id], true, { force: true })');
@@ -136,6 +140,43 @@ describe('plugin agent card menu', () => {
     expect(source).toContain('cliAgentRemoveLabel(card.session)');
     expect(source).toContain('cliAgentRestartLiveTitle()');
     expect(source).not.toContain('Kill and');
+  });
+});
+
+describe('AgentCardMenu Close with follow-up item', () => {
+  afterEach(() => {
+    h.closeWrapUpEnabled = false;
+    h.closingFollowupIds.clear();
+  });
+
+  function followupButton() {
+    const card = { projectId: 'p1', state: 'idle', session: { id: 's1', title: 'Boss', status: 'running', profile: 'claude' } } as never;
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <AgentCardMenu menu={{ card, x: 0, y: 0 }} setMenu={() => {}} actions={{} as never} />
+      </MemoryRouter>
+    );
+    const match = /<button type="button"( disabled="")? title="([^"]*)">((?:Close with follow-up|Closing…|Wrapping up…))<\/button>/.exec(html);
+    return { title: match?.[2], label: match?.[3] };
+  }
+
+  it('keeps today\'s label and tooltip with the experiment off', () => {
+    expect(followupButton()).toEqual({
+      title: 'Close the agent, summarising its work to your inbox and filing a follow-up if it left something unfinished',
+      label: 'Close with follow-up'
+    });
+    h.closingFollowupIds.add('s1');
+    expect(followupButton().label).toBe('Closing…');
+  });
+
+  it('says Wrapping up… and explains the wrap-up with the experiment on', () => {
+    h.closeWrapUpEnabled = true;
+    expect(followupButton()).toEqual({
+      title: 'Ask the agent to wrap up, then close it with a summary in your inbox and a follow-up if work is left',
+      label: 'Close with follow-up'
+    });
+    h.closingFollowupIds.add('s1');
+    expect(followupButton().label).toBe('Wrapping up…');
   });
 });
 
@@ -318,6 +359,34 @@ describe('closeAgentWithFollowup', () => {
     expect(h.closeIdleAgents).not.toHaveBeenCalled();
     h.closingFollowupIds.clear();
     vi.unstubAllGlobals();
+  });
+});
+
+describe('closeAgentWithFollowup with wrap-up', () => {
+  afterEach(() => {
+    h.closeWrapUpEnabled = false;
+    h.closingFollowupIds.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it('asks with the wrap-up confirm text only when on', async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirm);
+    await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1');
+    expect(confirm).toHaveBeenLastCalledWith('Close “Review” and file a follow-up if work is left?');
+    h.closeWrapUpEnabled = true;
+    await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1');
+    expect(confirm).toHaveBeenLastCalledWith(
+      'Close “Review” with follow-up? The agent first saves what it learnt and tidies up, then closes with a summary in your inbox. If it asks you something, it stays open.'
+    );
+  });
+
+  it('returns false when the agent stayed open, true when it was closed', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    h.closeIdleAgents.mockResolvedValueOnce({ closed: 0, summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'asks-you' }] } as never);
+    expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(false);
+    h.closeIdleAgents.mockResolvedValueOnce({ closed: 1, summarized: 1, followedUp: 0, keptOpen: [{ sessionId: 'other', reason: 'typed' }] } as never);
+    expect(await closeAgentWithFollowup({ id: 's1', title: 'Review' }, 'p1')).toBe(true);
   });
 });
 
