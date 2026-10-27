@@ -227,6 +227,25 @@ describe('runThreadMenuAction', () => {
     }
   });
 
+  it('toasts that the thread is waiting on the user and keeps it when the route says it was left open', async () => {
+    useData.setState({ closeWrapUpEnabled: true });
+    const pushToast = vi.fn();
+    useUi.setState({ pushToast } as never);
+    try {
+      const c = ctx({
+        pathname: `/threads/${thread.id}`,
+        closeFollowup: vi.fn(async () => ({ ok: true, summarized: 0, followedUp: 0, keptOpen: 'asks-you' as const }))
+      });
+      await runThreadMenuAction('close-followup', thread, c);
+      expect(pushToast).toHaveBeenCalledWith('“hello” is waiting on your answer, so it was left open (see your inbox).', 'info');
+      expect(pushToast).not.toHaveBeenCalledWith(expect.stringContaining('Wrapping up'), expect.anything());
+      expect(c.remove).not.toHaveBeenCalled();
+      expect(c.navigate).not.toHaveBeenCalled();
+    } finally {
+      useData.setState({ closeWrapUpEnabled: false });
+    }
+  });
+
   it('keeps today\'s confirm text with the experiment off', async () => {
     const c = ctx();
     await runThreadMenuAction('close-followup', thread, c);

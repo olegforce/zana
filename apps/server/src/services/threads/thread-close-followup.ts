@@ -11,7 +11,7 @@ import type { CloseSummaryFailure } from '../followups/close-summary.js';
 import { ThreadCreateError } from '../../http/thread-create.js';
 import { archiveConversation } from './conversation-lifecycle.js';
 import { conversationOutline } from './conversation-timeline.js';
-import { threadWrapUps } from './thread-wrap-up.js';
+import { threadWrapUps, type ThreadWrapUpStart } from './thread-wrap-up.js';
 
 export function lastAssistantPreview(
   items: Array<{ role: 'user' | 'assistant'; preview: string }>
@@ -33,7 +33,15 @@ export function canCloseThreadWithFollowup(thread: {
 export async function closeConversationWithFollowup(
   ctx: ProductHttpContext,
   threadId: string
-): Promise<{ ok: true; summarized: number; followedUp: number; failures?: CloseSummaryFailure[]; wrappingUp?: true }> {
+): Promise<{
+  ok: true;
+  summarized: number;
+  followedUp: number;
+  failures?: CloseSummaryFailure[];
+  wrappingUp?: true;
+  /** The thread already waits on the user, so it was left open and the inbox says why. */
+  keptOpen?: 'asks-you';
+}> {
   const thread = getConversationThread(ctx.db, threadId);
   if (!thread) {
     throw new ThreadCreateError(404, 'unknown-thread', 'thread is not registered');
@@ -43,10 +51,15 @@ export async function closeConversationWithFollowup(
   }
 
   // "Wrap up before closing" (Experimental): the thread wraps up in the background and is archived
-  // when it finishes. If it cannot be asked (host offline, send failed) it falls through to today's close.
-  if (ctx.config.getConfig().closeWrapUpEnabled === true && (await threadWrapUps(ctx).request(thread))) {
-    return { ok: true, summarized: 0, followedUp: 0, wrappingUp: true };
+  // when it finishes. If it cannot be asked (host offline, send failed, any error) it falls through to today's close.
+  let started: ThreadWrapUpStart = 'fallback';
+  try {
+    if (ctx.config.getConfig().closeWrapUpEnabled === true) started = await threadWrapUps(ctx).request(thread);
+  } catch {
+    /* fall through to today's close */
   }
+  if (started === 'wrapping-up') return { ok: true, summarized: 0, followedUp: 0, wrappingUp: true };
+  if (started === 'kept-open') return { ok: true, summarized: 0, followedUp: 0, keptOpen: 'asks-you' };
 
   let summarized = 0;
   let followedUp = 0;

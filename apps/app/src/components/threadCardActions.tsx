@@ -44,7 +44,7 @@ export interface ThreadMenuContext {
   stop: (id: string) => Promise<unknown>;
   fork: (id: string) => Promise<{ ok: boolean; value?: { id: string } }>;
   archive: (id: string) => Promise<{ ok?: boolean }>;
-  closeFollowup: (id: string) => Promise<{ ok?: boolean; summarized?: number; followedUp?: number; wrappingUp?: boolean }>;
+  closeFollowup: (id: string) => Promise<{ ok?: boolean; summarized?: number; followedUp?: number; wrappingUp?: boolean; keptOpen?: 'asks-you' }>;
   pin: (id: string) => Promise<unknown>;
   unpin: (id: string) => Promise<unknown>;
   read: (id: string) => Promise<unknown>;
@@ -124,6 +124,10 @@ export async function runThreadMenuAction(
     if (ctx.confirm && !ctx.confirm(withRunningProcessWarning(prompt, thread))) return;
     const result = await ctx.closeFollowup(thread.id);
     if (result && result.ok === false) return;
+    if (result?.keptOpen) {
+      useUi.getState().pushToast(`“${title}” is waiting on your answer, so it was left open (see your inbox).`, 'info');
+      return;
+    }
     if (result?.wrappingUp) {
       // The thread archives itself when it finishes; it stays here until the normal thread updates remove it.
       useUi.getState().pushToast(`Wrapping up… “${title}” closes when it finishes.`, 'info');

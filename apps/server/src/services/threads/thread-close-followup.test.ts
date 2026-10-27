@@ -55,9 +55,12 @@ describe('closeConversationWithFollowup failures', () => {
 });
 
 describe('closeConversationWithFollowup wrap-up', () => {
-  async function run(opts: { enabled: boolean; wrapUp?: boolean; thread?: unknown }) {
+  async function run(opts: { enabled: boolean; wrapUp?: 'wrapping-up' | 'kept-open' | 'fallback' | 'throws'; thread?: unknown }) {
     vi.resetModules();
-    const request = vi.fn(async () => opts.wrapUp ?? true);
+    const request = vi.fn(async () => {
+      if (opts.wrapUp === 'throws') throw new Error('registry broke');
+      return opts.wrapUp ?? 'wrapping-up';
+    });
     const archive = vi.fn(async () => true);
     const summarize = vi.fn(async () => ({ summarized: 1, followedUp: 0 }));
     vi.doMock('@zana-ai/zcc-db', () => ({
@@ -81,7 +84,21 @@ describe('closeConversationWithFollowup wrap-up', () => {
   });
 
   it('falls back to today\'s close when the job cannot ask the thread', async () => {
-    const { result, summarize, archive } = await run({ enabled: true, wrapUp: false });
+    const { result, summarize, archive } = await run({ enabled: true, wrapUp: 'fallback' });
+    expect(result).toEqual({ ok: true, summarized: 1, followedUp: 0 });
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers keptOpen when the thread already waits on the user, without the paper trail or archive', async () => {
+    const { result, summarize, archive } = await run({ enabled: true, wrapUp: 'kept-open' });
+    expect(result).toEqual({ ok: true, summarized: 0, followedUp: 0, keptOpen: 'asks-you' });
+    expect(summarize).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
+  });
+
+  it('falls back to today\'s close when starting the wrap-up throws', async () => {
+    const { result, summarize, archive } = await run({ enabled: true, wrapUp: 'throws' });
     expect(result).toEqual({ ok: true, summarized: 1, followedUp: 0 });
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(archive).toHaveBeenCalledTimes(1);

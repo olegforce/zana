@@ -179,6 +179,50 @@ describe('WrapUpCloseService yielding to the human', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('keeps a working agent open as typed, typing nothing, when a key moved before it rested', async () => {
+    const { svc, deps, add, set, sessions } = make();
+    add('s1', 'working', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ['s1']);
+    sessions.get('s1')!.lastKeyInputAt = 2; // the person typed a new instruction while it worked
+    set('s1', 'idle');
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    expect(deps.reply).not.toHaveBeenCalled();
+    expect(deps.summarizeForClose).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('writes no record and keeps it open as typed when a key moves while the summary runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { svc, deps, add, set, sessions } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+    add('s1', 'idle', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'idle');
+    await settle();
+    expect(deps.summarizeForClose).toHaveBeenCalledTimes(1);
+    sessions.get('s1')!.lastKeyInputAt = 2; // typed while the summary was being written
+    release();
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    expect(deps.recordClose).not.toHaveBeenCalled();
+    expect(deps.recordKeptOpen).not.toHaveBeenCalled();
+  });
+
+  it('writes no record and keeps it open as typed when the agent starts working again during the summary', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { svc, deps, add, set, states } = make({ summarizeForClose: vi.fn(async () => { await gate; return okSummary(); }) });
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'idle');
+    await settle();
+    states.set('s1', 'working');
+    release();
+    expect(await p).toMatchObject({ summarized: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    expect(deps.recordClose).not.toHaveBeenCalled();
+  });
+
   it('types nothing and keeps it open as typed when a draft is pending at the click', async () => {
     const { svc, deps, add } = make();
     add('s1', 'idle', { draftPending: true });
@@ -338,6 +382,16 @@ describe('WrapUpCloseService timeout, forget and repeat runs', () => {
     expect(deps.recordKeptOpen).toHaveBeenCalledWith('p', 's1', 'T-s1', 'timeout');
     expect(deps.summarizeForClose).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('times out a working agent that was never asked: nothing is typed', async () => {
+    const { svc, deps, add } = make();
+    add('s1', 'working');
+    const p = svc.run('p', ['s1']);
+    await vi.advanceTimersByTimeAsync(TURN_TIMEOUT_MS);
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'timeout' }] });
+    expect(deps.reply).not.toHaveBeenCalled();
+    expect(deps.recordKeptOpen).toHaveBeenCalledWith('p', 's1', 'T-s1', 'timeout');
   });
 
   it('falls back to the session id as title when the session vanished before the timeout', async () => {

@@ -9,7 +9,12 @@
  * the agent stays open and its tab reads Needs you.
  *
  * The stub ends its turn with `Stop`, not `StopFailure` (that is the API-error path).
+ *
+ * The third test closes a conversation thread (fake provider) the same way: the thread
+ * is asked to wrap up in the background, archived when its turn ends, and the inbox
+ * holds the record. The summary call is served by the same stub through `claudeBinary`.
  */
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -179,5 +184,60 @@ test('an agent that asks the user something stays open and reads Needs you', asy
     expect(stub.typed()).toHaveLength(1);
   } finally {
     await stub.cleanup();
+  }
+});
+
+test('Close with follow-up wraps a thread up in the background, then archives it with a full record', async ({ home }) => {
+  test.setTimeout(150_000);
+  const stubDir = mkdtempSync(join(tmpdir(), 'zcc-wrap-up-thread-'));
+  writeFileSync(join(stubDir, 'claude-stub.cjs'), `#!${process.execPath}\n${CLAUDE_STUB}`, { mode: 0o700 });
+  const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-wrap-up-thread-project-')));
+  execFileSync('git', ['init', '--quiet'], { cwd: projectDir });
+  writeFileSync(join(projectDir, 'README.md'), 'Wrap-up thread fixture\n');
+  execFileSync('git', ['add', 'README.md'], { cwd: projectDir });
+  execFileSync('git', ['-c', 'user.name=Wrap Up E2E', '-c', 'user.email=wrap-up@example.test', 'commit', '--quiet', '-m', 'Initial'], { cwd: projectDir });
+  const app = await launchApp(home, {
+    e2e: true,
+    env: { ZCC_FAKE_PROVIDER: '1' },
+    initialConfig: { sponsorPromptDismissed: true, claudeBinary: join(stubDir, 'claude-stub.cjs'), closeWrapUpEnabled: true }
+  });
+  const win = app.window;
+  try {
+    const { projectId, threadId } = await win.evaluate(async (path) => {
+      const project = await window.cc.projects.add(path);
+      if (!project.ok) throw new Error(project.message);
+      const response = await fetch('/api/v1/threads', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: project.value.id, providerId: 'fake', input: 'Check the wrap-up thread' })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(JSON.stringify(body));
+      return { projectId: project.value.id as string, threadId: (body.thread ?? body.value).id as string };
+    }, projectDir);
+    const thread = () => win.evaluate(async (id) => (await (await fetch(`/api/v1/threads/${id}`)).json()).thread as { status: string; archivedAt?: number | null; title?: string }, threadId);
+    await expect.poll(async () => (await thread()).status, { timeout: 30_000 }).toBe('idle');
+    await win.evaluate((id) => {
+      window.history.pushState({}, '', `/threads/${id}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, threadId);
+    await win.getByTestId('thread-overflow-trigger').click();
+    let confirmText = '';
+    win.once('dialog', (dialog) => { confirmText = dialog.message(); void dialog.accept(); });
+    await win.getByRole('menuitem', { name: 'Close with follow-up' }).click();
+    expect(confirmText).toContain('The agent first saves what it learnt and tidies up');
+    await expect(win.locator('.toast').filter({ hasText: /Wrapping up… “.+” closes when it finishes\./ })).toBeVisible({ timeout: 10_000 });
+
+    await expect.poll(async () => (await thread()).archivedAt ?? null, { timeout: 90_000, message: 'the thread was not archived' }).not.toBeNull();
+    const entries = await win.evaluate(async ({ pid, tid }) => {
+      const { entries } = await window.cc.inbox.history({ projectId: pid, limit: 50 });
+      return entries.filter((e) => e.sessionId === tid).map((e) => e.comments ?? '');
+    }, { pid: projectId, tid: threadId });
+    expect(entries.join('\n')).toContain('Closed after it wrapped up.');
+    expect(entries.join('\n')).toContain('Probe goal');
+  } finally {
+    await closeApp(app.electron);
+    rmSync(stubDir, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
   }
 });

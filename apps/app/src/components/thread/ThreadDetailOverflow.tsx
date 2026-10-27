@@ -260,6 +260,10 @@ export function ThreadDetailOverflow({
         if (!window.confirm(withRunningProcessWarning(prompt, currentThread()))) return;
         void product.threads.closeFollowup(threadId).then((result) => {
           if (result && result.ok === false) return;
+          if (result?.keptOpen) {
+            useUi.getState().pushToast(`“${title}” is waiting on your answer, so it was left open (see your inbox).`, 'info');
+            return;
+          }
           if (result?.wrappingUp) {
             // The thread archives itself when it finishes: stay on it, and let the normal thread updates remove it.
             useUi.getState().pushToast(`Wrapping up… “${title}” closes when it finishes.`, 'info');

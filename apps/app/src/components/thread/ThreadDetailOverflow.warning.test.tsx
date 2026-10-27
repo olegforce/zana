@@ -7,7 +7,7 @@ import { useData, useUi } from '../../store.js';
 
 const threads = vi.hoisted(() => ({
   archive: vi.fn(async () => ({ ok: true })),
-  closeFollowup: vi.fn(async (_id: string) => ({ ok: true, wrappingUp: undefined as boolean | undefined })),
+  closeFollowup: vi.fn(async (_id: string) => ({ ok: true, wrappingUp: undefined as boolean | undefined, keptOpen: undefined as 'asks-you' | undefined })),
   // The menu's notification-level control loads on open; these tests leave it loading.
   notificationLevel: vi.fn(() => new Promise(() => undefined))
 }));
@@ -108,6 +108,19 @@ describe('ThreadDetailOverflow running-process warning', () => {
     choose('Close with follow-up');
     expect(confirm).toHaveBeenCalledWith('Close “hello” with follow-up? The agent first saves what it learnt and tidies up, then closes with a summary in your inbox. If it asks you something, it stays open.');
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith('Wrapping up… “hello” closes when it finishes.', 'info'));
+    expect(useThreads.getState().threads).toHaveLength(1);
+  });
+
+  it('toasts that the thread is waiting on the user and keeps it when the route says it was left open', async () => {
+    useData.setState({ closeWrapUpEnabled: true });
+    useThreads.setState({ threads: [row(0)] });
+    const pushToast = vi.fn();
+    useUi.setState({ pushToast } as never);
+    threads.closeFollowup.mockResolvedValueOnce({ ok: true, wrappingUp: undefined, keptOpen: 'asks-you' });
+    stubConfirm(true);
+    choose('Close with follow-up');
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith('“hello” is waiting on your answer, so it was left open (see your inbox).', 'info'));
+    expect(pushToast).not.toHaveBeenCalledWith(expect.stringContaining('Wrapping up'), expect.anything());
     expect(useThreads.getState().threads).toHaveLength(1);
   });
 

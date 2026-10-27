@@ -790,6 +790,8 @@ export interface CcApi {
       failures?: CloseFollowupFailure[];
       /** True when the thread is wrapping up in the background and will be archived when it finishes. */
       wrappingUp?: boolean;
+      /** The thread already waits on the user, so it was left open (the inbox says why). */
+      keptOpen?: 'asks-you';
     }>;
     fork(threadId: string, options?: { sourceSeqEnd?: number }): Promise<Result<{
       id: string;

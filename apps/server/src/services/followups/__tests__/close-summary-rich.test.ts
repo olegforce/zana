@@ -164,7 +164,7 @@ describe('recordClose', () => {
 describe('recordKeptOpen', () => {
   it.each([
     ['asks-you', '_Still open: it asked you something while wrapping up. Answer it, then close it again._'],
-    ['timeout', '_Still open: it was still working 15 minutes after the wrap-up request, so it was left running._'],
+    ['timeout', '_Still open: it was still working 15 minutes after you chose Close with follow-up, so it was left running._'],
     ['turn-error', '_Still open: the wrap-up turn ended with an error._']
   ] as const)('writes the exact entry for %s, with and without a note', async (reason, line) => {
     const { svc, appendInbox, createFollowUp } = makeDeps();

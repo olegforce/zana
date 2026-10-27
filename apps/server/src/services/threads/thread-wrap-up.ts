@@ -14,20 +14,27 @@
  *    `active` edge seen after the send.
  *  - A pending interaction before the send means the thread already waits on the
  *    user: nothing is sent, the inbox says so, the thread stays open.
- *  - An offline host, or a send that throws, falls back to today's close path.
+ *  - An offline host, a send that throws, or any other failure while starting,
+ *    falls back to today's close path.
  *  - Outcome after the send, whichever comes first: a pending interaction that
  *    lasts 5 s or a question in the summary (kept open, inbox note), a rest that
- *    lasts 5 s (summary, inbox, archive), the user writing in the thread (kept
- *    open, no record), an error turn, or 15 minutes (kept open).
- *  - A failed summary still archives: a failed courtesy never blocks the close.
+ *    lasts 5 s (summary, inbox, archive), the user writing in the thread, even
+ *    while the summary is being written (kept open, no record), an error turn
+ *    of the wrap-up itself, or 15 minutes (kept open).
+ *  - A failed summary still leaves a record (today's last-turn note, else a
+ *    one-line note) and archives: a failed courtesy never blocks the close.
+ *  - A job that ends before its wrap-up message was sent from the queue removes
+ *    that message, so it cannot wrap the agent up later with nobody watching.
+ *  - A thread archived or deleted by someone else ends the job with no record.
  *  - The hub listener catches everything and never throws.
  */
 
-import { getConversationThread } from '@zana-ai/zcc-db';
+import { getConversationThread, listDeferredThreadMessages } from '@zana-ai/zcc-db';
 import { resolveCloseWrapUpInstructions } from '@zana-ai/zcc-domain/product';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import type { CloseRecordHow, KeptOpenReason, SessionCloseNote, SummarizeForCloseResult } from '../followups/close-summary.js';
 import { conversationDigest } from './conversation-digest.js';
+import { dropDeferredConversationMessage, parseDeferredSendPayload } from './conversation-deferred-messages.js';
 import { archiveConversation, sendConversationTurn } from './conversation-lifecycle.js';
 import { conversationMessageTexts } from './conversation-timeline.js';
 
@@ -41,7 +48,11 @@ interface ThreadUpdate {
   id?: string;
   status?: string;
   hasPendingInteraction?: boolean;
+  archivedAt?: number | null;
 }
+
+/** How a close request starts: `fallback` means today's close path must run instead. */
+export type ThreadWrapUpStart = 'wrapping-up' | 'kept-open' | 'fallback';
 
 export interface ThreadWrapUpHost {
   instructions: () => string;
@@ -55,6 +66,11 @@ export interface ThreadWrapUpHost {
   summarizeForClose: (projectId: string, threadId: string, opts: { digest: string; title: string }) => Promise<SummarizeForCloseResult>;
   recordClose: (projectId: string, threadId: string, title: string, note: SessionCloseNote, how: CloseRecordHow) => Promise<unknown>;
   recordKeptOpen: (projectId: string, threadId: string, title: string, reason: KeptOpenReason, note?: SessionCloseNote) => Promise<unknown>;
+  /** Today's last-turn record, for when the whole-thread summary failed. */
+  recordLastTurn: (projectId: string, threadId: string, title: string, lastTurn: string) => Promise<{ summarized: number }>;
+  /** Ids of the queued sends of exactly this text (the wrap-up message waiting for the thread to rest). */
+  queuedSendIds: (threadId: string, text: string) => string[];
+  dropQueuedSend: (threadId: string, id: string) => void;
   archive: (threadId: string) => Promise<unknown>;
   setTimer: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimer: (handle: NodeJS.Timeout) => void;
@@ -76,6 +92,8 @@ class Job {
   private block: NodeJS.Timeout | undefined;
   private timeout: NodeJS.Timeout | undefined;
   private armed = false;
+  private sent = false;
+  private queuedBefore = new Set<string>();
   private needIdle = false;
   private edge = false;
   private done = false;
@@ -92,30 +110,31 @@ class Job {
     this.instructions = host.instructions();
   }
 
-  /** Returns false when today's close path must run instead. */
-  async start(): Promise<boolean> {
+  async start(): Promise<ThreadWrapUpStart> {
     const { host, thread } = this;
-    if (host.hasPendingInteraction(thread.id)) {
-      await this.keepOpen('asks-you');
-      return true;
-    }
-    if (!host.hostOnline(thread)) {
-      this.finish();
-      return false;
-    }
-    this.unsubscribe = host.subscribe((payload) => this.onUpdate(payload));
-    this.timeout = host.setTimer(() => void this.keepOpen('timeout'), WRAP_UP_TIMEOUT_MS);
     try {
+      if (host.hasPendingInteraction(thread.id)) {
+        await this.keepOpen('asks-you');
+        return 'kept-open';
+      }
+      if (!host.hostOnline(thread)) {
+        this.finish();
+        return 'fallback';
+      }
+      this.unsubscribe = host.subscribe((payload) => this.onUpdate(payload));
+      this.timeout = host.setTimer(() => void this.keepOpen('timeout'), WRAP_UP_TIMEOUT_MS);
       this.seqBeforeSend = Math.max(0, ...host.messages(thread.id).map((m) => m.seq));
+      this.queuedBefore = new Set(host.queuedSendIds(thread.id, this.instructions));
       this.needIdle = isActive(host.getStatus(thread.id));
       this.armed = true;
+      this.sent = true;
       await host.send(thread.id, this.instructions);
     } catch (err) {
-      host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} send failed: ${err instanceof Error ? err.message : String(err)}`);
+      host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} could not start: ${err instanceof Error ? err.message : String(err)}`);
       this.finish();
-      return false;
+      return 'fallback';
     }
-    return true;
+    return 'wrapping-up';
   }
 
   dispose(): void {
@@ -126,7 +145,9 @@ class Job {
     try {
       const view = payload as ThreadUpdate | null;
       if (this.done || !this.armed || !view || view.id !== this.thread.id) return;
-      if (view.status === 'error') {
+      if (view.archivedAt != null) return this.finish(); // someone else archived it: nothing left to do
+      // An `error` before the wrap-up turn began is the earlier turn's, not the wrap-up's.
+      if (view.status === 'error' && this.edge) {
         void this.keepOpen('turn-error');
         return;
       }
@@ -165,17 +186,44 @@ class Job {
     if (this.userWroteAfterWrapUp()) return this.finish(); // the user took over: keep it open, no record
     this.stop();
     const note = await this.summarize();
+    // The summary takes a while: the user may have written meanwhile, or the job may have been disposed.
+    if (!this.stillResting()) return this.finish();
     try {
       if (note?.asksUser) {
         await host.recordKeptOpen(thread.projectId, thread.id, this.title, 'asks-you', note);
       } else {
         if (note) await host.recordClose(thread.projectId, thread.id, this.title, note, 'wrapped');
+        else await this.recordWithoutSummary();
+        if (!this.stillResting()) return this.finish();
         await host.archive(thread.id);
       }
     } catch (err) {
       host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} close failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     this.finish();
+  }
+
+  /** Still ours to close: not disposed or archived, resting, nothing pending, and the user has not written. */
+  private stillResting(): boolean {
+    const { host, thread } = this;
+    return !this.done && host.getStatus(thread.id) === 'idle' && !host.hasPendingInteraction(thread.id) && !this.userWroteAfterWrapUp();
+  }
+
+  /** The whole-thread summary failed: still leave a record, from today's last-turn note or a one-line note. */
+  private async recordWithoutSummary(): Promise<void> {
+    const { host, thread } = this;
+    const lastTurn = [...host.messages(thread.id)].reverse().find((m) => m.role === 'assistant' && m.text.trim())?.text.trim() ?? '';
+    if (lastTurn) {
+      const paper = await host.recordLastTurn(thread.projectId, thread.id, this.title, lastTurn);
+      if (paper.summarized > 0) return;
+    }
+    await host.recordClose(
+      thread.projectId,
+      thread.id,
+      this.title,
+      { body: 'The summary could not be written.', unfinished: false, asksUser: false },
+      'wrapped'
+    );
   }
 
   /** The thread waits on the user: record what we know and keep it open. */
@@ -188,8 +236,8 @@ class Job {
   }
 
   private userWroteAfterWrapUp(): boolean {
-    const after = this.host.messages(this.thread.id).filter((m) => m.role === 'user' && m.seq > this.seqBeforeSend);
-    return after.length > 1 || (after.length === 1 && after[0].text.trim() !== this.instructions.trim());
+    // The first user message after the send is the wrap-up itself, however the provider stored its text.
+    return this.host.messages(this.thread.id).filter((m) => m.role === 'user' && m.seq > this.seqBeforeSend).length > 1;
   }
 
   /** Summary of the whole thread, or undefined when it failed (the close goes on without it). */
@@ -218,6 +266,7 @@ class Job {
   private async keepOpen(reason: KeptOpenReason, note?: SessionCloseNote): Promise<void> {
     if (this.done) return;
     this.stop();
+    if (this.host.getStatus(this.thread.id) === undefined) return this.finish(); // deleted meanwhile
     try {
       await this.host.recordKeptOpen(this.thread.projectId, this.thread.id, this.title, reason, note);
     } catch (err) {
@@ -232,7 +281,20 @@ class Job {
     this.stop();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.dropUnsentWrapUp();
     this.onDone();
+  }
+
+  /** Ended before the wrap-up turn began: take its message out of the queue, so it is not sent later with nobody watching. */
+  private dropUnsentWrapUp(): void {
+    if (!this.sent || this.edge) return;
+    try {
+      for (const id of this.host.queuedSendIds(this.thread.id, this.instructions)) {
+        if (!this.queuedBefore.has(id)) this.host.dropQueuedSend(this.thread.id, id);
+      }
+    } catch (err) {
+      this.host.log(`[thread-wrap-up] thread=${this.thread.id.slice(0, 8)} could not drop the queued wrap-up: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
@@ -248,19 +310,39 @@ export class ThreadWrapUpRegistry {
 
   /**
    * Start the wrap-up, or join the one already running (nothing is sent twice).
-   * Resolves `false` when the caller must fall back to today's close path.
+   * Resolves `fallback` when the caller must use today's close path, and
+   * `kept-open` when the thread already waits on the user and was left open.
    */
-  async request(thread: ThreadWrapUpTarget): Promise<boolean> {
-    if (this.jobs.has(thread.id)) return true;
-    const job = new Job(this.host, thread, () => {
-      if (this.jobs.get(thread.id) === job) this.jobs.delete(thread.id);
-    });
-    this.jobs.set(thread.id, job);
-    return job.start();
+  async request(thread: ThreadWrapUpTarget): Promise<ThreadWrapUpStart> {
+    if (this.jobs.has(thread.id)) return 'wrapping-up';
+    let job: Job | undefined;
+    try {
+      const created = new Job(this.host, thread, () => {
+        if (this.jobs.get(thread.id) === created) this.jobs.delete(thread.id);
+      });
+      job = created;
+      this.jobs.set(thread.id, created);
+      return await created.start();
+    } catch (err) {
+      this.host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} request failed: ${err instanceof Error ? err.message : String(err)}`);
+      job?.dispose();
+      return 'fallback';
+    }
   }
 
   dispose(): void {
     for (const job of [...this.jobs.values()]) job.dispose();
+  }
+}
+
+/** The text of a queued send, or undefined for anything that is not a plain text send. */
+export function deferredText(row: Parameters<typeof parseDeferredSendPayload>[0]): string | undefined {
+  try {
+    const input = parseDeferredSendPayload(row).input;
+    if (!Array.isArray(input)) return undefined;
+    return input.flatMap((part: { type?: string; text?: string }) => (part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])).join('\n').trim();
+  } catch {
+    return undefined;
   }
 }
 
@@ -282,6 +364,13 @@ export function threadWrapUps(ctx: ProductHttpContext): ThreadWrapUpRegistry {
       summarizeForClose: (projectId, id, opts) => ctx.closeSummary.summarizeForClose(projectId, id, opts),
       recordClose: (...args) => ctx.closeSummary.recordClose(...args),
       recordKeptOpen: (...args) => ctx.closeSummary.recordKeptOpen(...args),
+      recordLastTurn: (projectId, id, title, lastTurn) =>
+        ctx.closeSummary.summarizeAndFollowUpFromLastTurn(projectId, { sessionId: id, title, lastTurn }),
+      queuedSendIds: (id, text) =>
+        listDeferredThreadMessages(ctx.db, id)
+          .filter((row) => deferredText(row) === text.trim())
+          .map((row) => row.id),
+      dropQueuedSend: (id, itemId) => dropDeferredConversationMessage(ctx, id, itemId),
       archive: (id) => archiveConversation(ctx, id),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (handle) => clearTimeout(handle),

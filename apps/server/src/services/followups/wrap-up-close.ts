@@ -13,7 +13,7 @@
  *    draft, never into a permission prompt (`blocked`) or while it works, and
  *    only ONE line (a TUI without bracketed paste submits each line).
  *  - Yields to the human: if `lastKeyInputAt` (real keys only, not mouse or
- *    focus reports) moved since the send, the person typed, so we stop and keep
+ *    focus reports) moved since the click, at any point until the record is written, the person typed, so we stop and keep
  *    the agent open. `reply()` never stamps it.
  *  - Every other session with a transcript (Codex, OpenCode, remote Claude, an
  *    agent at a prompt) is not typed into; it gets a record without a wrap-up.
@@ -109,7 +109,8 @@ type Phase = 'pre' | 'sent' | 'active' | 'finishing';
 interface Active {
   projectId: string;
   phase: Phase;
-  keyAtSend: number | undefined;
+  /** `lastKeyInputAt` when the click came; any change after it means a person typed. */
+  keyAtClick: number | undefined;
   settle?: { timer: NodeJS.Timeout; kind: 'rest' | 'blocked' };
   timeout?: NodeJS.Timeout;
   settleOutcome: (outcome: Outcome) => void;
@@ -150,11 +151,9 @@ export class WrapUpCloseService {
     const entry = this.active.get(sessionId);
     if (!entry || entry.phase === 'finishing') return;
     const { deps } = this;
-    if (entry.phase !== 'pre') {
-      const session = deps.getSession(sessionId);
-      if (!session) return this.finish(sessionId, entry, EMPTY);
-      if (session.lastKeyInputAt !== entry.keyAtSend) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
-    }
+    const session = deps.getSession(sessionId);
+    if (!session) return this.finish(sessionId, entry, EMPTY);
+    if (session.lastKeyInputAt !== entry.keyAtClick) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
     if (entry.phase === 'pre') {
       if (state === 'blocked') void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'waiting-on-prompt'));
       else if (isRestfulAgentState(state as AgentState)) this.send(sessionId, entry);
@@ -190,7 +189,7 @@ export class WrapUpCloseService {
     }
     let settleOutcome!: (outcome: Outcome) => void;
     const promise = new Promise<Outcome>((resolve) => { settleOutcome = resolve; });
-    const entry: Active = { projectId, phase: 'pre', keyAtSend: undefined, settleOutcome, promise, startedAt: deps.now() };
+    const entry: Active = { projectId, phase: 'pre', keyAtClick: session.lastKeyInputAt, settleOutcome, promise, startedAt: deps.now() };
     this.active.set(sessionId, entry);
     entry.timeout = deps.setTimer(() => this.onTimeout(sessionId, entry), TURN_TIMEOUT_MS);
 
@@ -210,8 +209,9 @@ export class WrapUpCloseService {
     const { deps } = this;
     const session = deps.getSession(sessionId);
     if (!session) return this.finish(sessionId, entry, EMPTY);
-    if (session.draftPending) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
-    entry.keyAtSend = session.lastKeyInputAt;
+    if (session.draftPending || session.lastKeyInputAt !== entry.keyAtClick) {
+      return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    }
     if (!deps.reply(sessionId, oneLine(deps.getInstructions()))) {
       deps.log(`[wrap-up-close] session=${sessionId.slice(0, 8)} skip: reply failed`);
       return this.finish(sessionId, entry, EMPTY);
@@ -229,7 +229,7 @@ export class WrapUpCloseService {
     if (!still) return;
     const session = deps.getSession(sessionId);
     if (!session) return this.finish(sessionId, entry, EMPTY);
-    if (session.lastKeyInputAt !== entry.keyAtSend) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    if (session.lastKeyInputAt !== entry.keyAtClick) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
     void this.settleAfter(sessionId, entry, kind === 'rest' ? this.restEndOutcome(sessionId, entry) : this.blockEndOutcome(sessionId, entry));
   }
 
@@ -280,12 +280,21 @@ export class WrapUpCloseService {
 
   private async restEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
     const res = await this.summarize(entry.projectId, sessionId);
+    // The summary can take a minute; a person who typed meanwhile has taken over, so write nothing and keep the agent.
+    if (this.tookOver(sessionId, entry)) return { ...EMPTY, keptOpen: 'typed' };
     if (!res.ok) return this.failed(res.reason);
     if (res.note.asksUser) {
       this.deps.markNeedsYou(sessionId);
       return this.kept(await this.deps.recordKeptOpen(entry.projectId, sessionId, res.title, 'asks-you', res.note), 'asks-you');
     }
     return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, 'wrapped'));
+  }
+
+  /** A key was pressed since the click, or the agent is no longer resting: it is no longer ours to close. */
+  private tookOver(sessionId: string, entry: Active): boolean {
+    const session = this.deps.getSession(sessionId);
+    if (!session) return false;
+    return session.lastKeyInputAt !== entry.keyAtClick || !isRestfulAgentState(this.deps.getAgentState(sessionId) as AgentState);
   }
 
   /** The agent stopped on a prompt or a question: record what we know and keep it open. */
