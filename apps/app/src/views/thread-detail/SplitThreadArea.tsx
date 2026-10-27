@@ -108,7 +108,9 @@ export function SplitThreadArea({ routeContent }: { routeContent: PaneContent })
   // Render must not switch the shared scope. A route render React discards
   // would flip it under the tree on screen, which flips it back, and the
   // navigation never lands (#532). Until the scope is active, show its saved
-  // slot; activate it before any passive effect writes the layout.
+  // slot; activate it before any passive effect writes the layout. This
+  // assumes one mounted instance per window (the store has one active scope),
+  // which `split-thread-area-single-mount.guard.test.ts` holds.
   const scopeActive = storedScopeKey === scopeKey;
   const layout = scopeActive ? layoutFromStore : savedScopeSlot?.layout ?? null;
   const maximizedPaneId = scopeActive ? maximizedFromStore : savedScopeSlot?.maximizedPaneId ?? null;

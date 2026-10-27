@@ -689,6 +689,36 @@ describe('route renders that never commit', () => {
     expect(screen.queryByText('loading')).toBeNull();
   });
 
+  it('opens a project with no saved split as that project alone, not the global split', () => {
+    const globalLayout = splitPane(createSinglePaneLayout({ kind: 'home' }), 'pane-1', 'right', { kind: 'agents' });
+    useSplitWorkspace.setState({
+      scopeKey: GLOBAL_SPLIT_SCOPE_KEY,
+      layout: globalLayout,
+      maximizedPaneId: 'pane-2',
+      scopes: {}
+    });
+    let firstCommit: { panes: number; modes: string[]; maximized: boolean } | null = null;
+    function FirstCommit() {
+      useLayoutEffect(() => {
+        firstCommit = {
+          panes: document.querySelectorAll('.split-pane').length,
+          modes: [...document.querySelectorAll('[data-testid="project-mode-pane"]')].map((pane) => pane.getAttribute('data-mode') ?? ''),
+          maximized: document.querySelector('.split-pane.is-maximized') !== null
+        };
+      }, []);
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={[getProjectModeRoutePath('p1', 'explorer')]}>
+        <RoutedArea />
+        <FirstCommit />
+      </MemoryRouter>
+    );
+    expect(firstCommit).toEqual({ panes: 1, modes: ['explorer'], maximized: false });
+    expect(useSplitWorkspace.getState().scopeKey).toBe(projectSplitScopeKey('p1'));
+    expect(useSplitWorkspace.getState().scopes[GLOBAL_SPLIT_SCOPE_KEY]).toEqual({ layout: globalLayout, maximizedPaneId: 'pane-2' });
+  });
+
   it('shows a saved project split, maximized pane included, when the project opens', () => {
     const projectLayout = splitPane(
       createSinglePaneLayout({ kind: 'project-view', projectId: 'p1', mode: 'explorer' }),
