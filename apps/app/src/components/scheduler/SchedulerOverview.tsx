@@ -25,6 +25,7 @@ import { KpiCard } from './KpiCard.js';
 import { ProjectDot } from '../listpane/ProjectDot.js';
 import {
   formatRelative,
+  isSessionAlive,
   formatDuration,
   formatCountdown,
   cadenceLabel,
@@ -474,7 +475,7 @@ export function SchedulerOverview({
                       <FileText size={13} strokeWidth={1.75} />
                     </button>
                   )}
-                  {onResumeRun && run.id && canResumeRun(task, run) && !(run.sessionId && (terminalsByProject[task.projectId] ?? []).some((s) => s.id === run.sessionId && (s.status === 'running' || s.status === 'starting'))) && (
+                  {onResumeRun && run.id && canResumeRun(task, run) && !isSessionAlive(terminalsByProject[task.projectId], run.sessionId) && (
                     <button
                       type="button"
                       className="scheduler-run-report-btn"

@@ -6,6 +6,7 @@ import type { Project, ScheduledTask, ScheduleRunOutcome, ScheduleRunRef, Schedu
 import { canManualRetry, collectRunRows, isRecoveryMode, openRetryRefs } from '@zana-ai/zcc-domain/schedule-health';
 import { RunOutcomeBadge } from './RunOutcomeBadge.js';
 import { canResumeRun } from './resumeScheduledRun.js';
+import { isSessionAlive } from './schedulerUtils.js';
 // The filter bar reuses the overview's styled controls (`schedule-filters`, `schedule-search`).
 import './scheduler-overview.css';
 import './scheduler-problems.css';
@@ -284,7 +285,7 @@ export function ProblemsPanel({ tasks, projects, onOpenSchedule, onOpenSession, 
                           {row.outcome === 'missed' ? 'Run now' : 'Retry'}
                         </button>
                       )}
-                      {onResumeRun && task && hasId && !isLive(row) && canResumeRun(task, row.run) && (
+                      {onResumeRun && task && hasId && !isSessionAlive(terminals[row.projectId], row.run.sessionId) && canResumeRun(task, row.run) && (
                         <button
                           type="button"
                           className="settings-btn"

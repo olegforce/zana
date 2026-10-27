@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, ScheduledTask, ScheduleRun } from '@zana-ai/zcc-domain/product';
 
 const h = vi.hoisted(() => ({
-  terminals: {} as Record<string, Array<{ id: string }>>,
+  terminals: {} as Record<string, Array<{ id: string; status?: string }>>,
   pushToast: vi.fn(), retryRuns: vi.fn(), dismissRuns: vi.fn()
 }));
 vi.mock('../../lib/product-client.js', () => ({ product: { scheduler: { retryRuns: h.retryRuns, dismissRuns: h.dismissRuns } } }));
@@ -278,10 +278,16 @@ describe('ProblemsPanel', () => {
     });
 
     it('keeps Open session for a live row instead of Resume', () => {
-      h.terminals = { p1: [{ id: 'r1-pty' }] };
+      h.terminals = { p1: [{ id: 'r1-pty', status: 'running' }] };
       mount([make('A', [resumableFailure('r1')])], { onResumeRun: vi.fn() });
       expect(screen.queryByRole('button', { name: /^Resume / })).toBeNull();
       expect(screen.getByRole('button', { name: /^Open session / })).toBeTruthy();
+    });
+
+    it('offers Resume when the run tab is still listed but has exited, like the Overview and schedule panel do', () => {
+      h.terminals = { p1: [{ id: 'r1-pty', status: 'exited' }] };
+      mount([make('A', [resumableFailure('r1')])], { onResumeRun: vi.fn() });
+      expect(screen.getByRole('button', { name: /^Resume / })).toBeTruthy();
     });
 
     it('never shows for Squads, markers or without a handler', () => {

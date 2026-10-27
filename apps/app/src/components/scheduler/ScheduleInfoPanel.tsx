@@ -39,6 +39,7 @@ import {
   formatCountdown,
   formatDuration,
   formatRelative,
+  isSessionAlive as isSessionOpen,
   pickLiveRun
 } from './schedulerUtils.js';
 
@@ -83,10 +84,7 @@ export function ScheduleInfoPanel({
   void tick;
 
   const projectTerminals = task ? terminals[task.projectId] ?? [] : [];
-  const isSessionAlive = (sessionId: string) =>
-    projectTerminals.some(
-      (s) => s.id === sessionId && (s.status === 'running' || s.status === 'starting')
-    );
+  const isSessionAlive = (sessionId: string) => isSessionOpen(projectTerminals, sessionId);
 
   const runs = task?.status.runs ?? [];
   // A later finished success closes earlier problems, also for history written before recovery existed.

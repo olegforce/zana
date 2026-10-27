@@ -20,6 +20,7 @@ import { useNavigate } from 'react-router-dom';
 import { groupIcon, GROUP_FALLBACK_COLOR } from '../scheduleGroupMeta.js';
 import {
   pickLiveRun,
+  isSessionAlive as isSessionOpen,
   formatCountdown,
   PROFILE_LABEL
 } from './schedulerUtils.js';
@@ -70,10 +71,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
   };
 
   const projectTerminals = terminals[task.projectId] ?? [];
-  const isSessionAlive = (sessionId: string) =>
-    projectTerminals.some(
-      (s) => s.id === sessionId && (s.status === 'running' || s.status === 'starting')
-    );
+  const isSessionAlive = (sessionId: string) => isSessionOpen(projectTerminals, sessionId);
 
   const runs = task.status.runs ?? [];
   const lastReportRun = runs.find((r) => !!r.report) ?? null;
