@@ -55,10 +55,11 @@ describe('closeConversationWithFollowup failures', () => {
 });
 
 describe('closeConversationWithFollowup wrap-up', () => {
-  async function run(opts: { enabled: boolean; wrapUp?: 'wrapping-up' | 'kept-open' | 'fallback' | 'throws'; thread?: unknown }) {
+  async function run(opts: { enabled: boolean; wrapUp?: 'wrapping-up' | 'kept-open' | 'fallback' | 'throws' | 'throws-plain'; thread?: unknown }) {
     vi.resetModules();
     const request = vi.fn(async () => {
       if (opts.wrapUp === 'throws') throw new Error('registry broke');
+      if (opts.wrapUp === 'throws-plain') throw 'plain';
       return opts.wrapUp ?? 'wrapping-up';
     });
     const archive = vi.fn(async () => true);
@@ -97,11 +98,19 @@ describe('closeConversationWithFollowup wrap-up', () => {
     expect(archive).not.toHaveBeenCalled();
   });
 
-  it('falls back to today\'s close when starting the wrap-up throws', async () => {
-    const { result, summarize, archive } = await run({ enabled: true, wrapUp: 'throws' });
-    expect(result).toEqual({ ok: true, summarized: 1, followedUp: 0 });
-    expect(summarize).toHaveBeenCalledTimes(1);
-    expect(archive).toHaveBeenCalledTimes(1);
+  it('falls back to today\'s close when starting the wrap-up throws, and logs why', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result, summarize, archive } = await run({ enabled: true, wrapUp: 'throws' });
+      expect(result).toEqual({ ok: true, summarized: 1, followedUp: 0 });
+      expect(summarize).toHaveBeenCalledTimes(1);
+      expect(archive).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('thread=t1 wrap-up could not start, closing now: registry broke'));
+      await run({ enabled: true, wrapUp: 'throws-plain' });
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('closing now: plain'));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('is unchanged when off', async () => {

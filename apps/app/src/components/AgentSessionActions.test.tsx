@@ -39,6 +39,10 @@ vi.mock('./agentCardActions.js', () => ({
   canCloseWithFollowup: (...args: unknown[]) => canCloseWithFollowup(...args),
   closeAgentWithFollowup: (...args: unknown[]) => closeAgentWithFollowup(...args),
   CLI_AGENT_ARCHIVE_TITLE: 'archive-title',
+  closeFollowupTitle: (wrapUp: boolean) =>
+    wrapUp
+      ? 'Ask the agent to wrap up, then close it with a summary in your inbox and a follow-up if work is left'
+      : 'Close the agent, summarising its work to your inbox and filing a follow-up if it left something unfinished',
   cliAgentArchives: (s: { status: string; profile: string }) => s.status !== 'exited' && s.profile !== 'shell',
   cliAgentRemoveLabel: (s: { status: string; profile: string }) =>
     s.status === 'exited' ? 'Dismiss' : s.profile === 'shell' ? 'Delete' : 'Archive',

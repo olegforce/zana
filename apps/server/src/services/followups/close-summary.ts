@@ -24,7 +24,7 @@
  * rather than whatever a possibly-disabled add-on happened to cache.
  */
 
-import type { CloseFollowupFailure, LlmRunResult } from '@zana-ai/zcc-domain/product';
+import { CLOSE_WRAP_UP_TIMEOUT_MINUTES, type CloseFollowupFailure, type LlmRunResult } from '@zana-ai/zcc-domain/product';
 import type { TranscriptRef } from './idle-triage.js';
 import { cleanSessionTitle, firstLeftItem, parseSessionSummary, trimAtLineBoundary } from './session-summary-text.js';
 
@@ -278,7 +278,7 @@ const CLOSE_HOW_LINES: Record<CloseRecordHow, string> = {
 
 const KEPT_OPEN_LINES: Record<KeptOpenReason, string> = {
   'asks-you': '_Still open: it asked you something while wrapping up. Answer it, then close it again._',
-  timeout: '_Still open: it was still working 15 minutes after you chose Close with follow-up, so it was left running._',
+  timeout: `_Still open: it was still working ${CLOSE_WRAP_UP_TIMEOUT_MINUTES} minutes after you chose Close with follow-up, so it was left running._`,
   'turn-error': '_Still open: the wrap-up turn ended with an error._'
 };
 
@@ -619,14 +619,14 @@ export class CloseSummaryService {
       if (!digest.trim()) return { ok: false, reason: 'empty' };
       const result = await this.deps.runSessionSummary(digest, `close-session-summary:${sessionId}`);
       if (!result.ok) {
-        this.deps.log?.('close-summary', `summary-failed: ${failureDetail(result.error) ?? 'no detail'}`);
+        this.deps.log?.('close-summary', `summary-failed project=${projectId} session=${sessionId}: ${failureDetail(result.error) ?? 'no detail'}`);
         return { ok: false, reason: 'summary-failed' };
       }
       const { body, unfinished, asksUser } = parseSessionSummary(result.text.trim());
       if (!body) return { ok: false, reason: 'summary-failed' };
       return { ok: true, title, note: { body, unfinished, asksUser } };
     } catch (err) {
-      this.deps.log?.('close-summary', `summary-failed: ${failureDetail(err) ?? 'no detail'}`);
+      this.deps.log?.('close-summary', `summary-failed project=${projectId} session=${sessionId}: ${failureDetail(err) ?? 'no detail'}`);
       return { ok: false, reason: 'summary-failed' };
     }
   }

@@ -55,8 +55,11 @@ export async function closeConversationWithFollowup(
   let started: ThreadWrapUpStart = 'fallback';
   try {
     if (ctx.config.getConfig().closeWrapUpEnabled === true) started = await threadWrapUps(ctx).request(thread);
-  } catch {
-    /* fall through to today's close */
+  } catch (err) {
+    // Fall through to today's close, but leave a trace of why the wrap-up did not run.
+    console.warn(
+      `[thread-close-followup] thread=${threadId.slice(0, 8)} wrap-up could not start, closing now: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
   if (started === 'wrapping-up') return { ok: true, summarized: 0, followedUp: 0, wrappingUp: true };
   if (started === 'kept-open') return { ok: true, summarized: 0, followedUp: 0, keptOpen: 'asks-you' };

@@ -30,6 +30,7 @@ import {
   clampMenuAnchor,
   canCloseWithFollowup,
   CLI_AGENT_ARCHIVE_TITLE,
+  closeFollowupTitle,
   cliAgentArchives,
   cliAgentRemoveLabel,
   cliAgentRestartLiveTitle,
@@ -704,7 +705,7 @@ function AgentMonitorSession({
           className="agent-monitor-action"
           onClick={closeWithFollowup}
           disabled={closingWithFollowup}
-          title={wrapUpClose ? "Ask the agent to wrap up, then close it with a summary in your inbox and a follow-up if work is left" : "Close the agent, summarising its work to your inbox and filing a follow-up if it left something unfinished"}
+          title={closeFollowupTitle(wrapUpClose)}
         >
           {closingWithFollowup ? <Loader2 size={13} className="spin" /> : <MailCheck size={13} />}
           {closingWithFollowup ? (wrapUpClose ? 'Wrapping up…' : 'Closing…') : 'Close with follow-up'}

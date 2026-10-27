@@ -120,67 +120,102 @@ export async function runCloseIdleAgents(input: {
   deps.markClosing(ids);
   let progressToastId: string | undefined;
   try {
-    let summarized = 0;
-    let followedUp = 0;
-    let failures: CloseFollowupFailure[] | undefined;
-    const keptOpen: CloseFollowupKeptOpen[] = [];
-    let closed = 0;
-    const closeOne = async (id: string) => {
-      try {
-        await deps.closeTerminal(id, projectId);
-        closed++;
-      } catch {
-        /* closeTerminal already toasts */
-      }
-    };
-    if (summarize && wrapUp) {
-      progressToastId = deps.pushProgressToast(ids.length);
-      let errorShown = false;
-      await Promise.all(
-        ids.map(async (id) => {
-          let kept = false;
-          try {
-            const res = await deps.closeFollowup(projectId, [id]);
-            summarized += res.summarized;
-            followedUp += res.followedUp;
-            if (res.failures?.length) failures = [...(failures ?? []), ...res.failures];
-            const own = (res.keptOpen ?? []).filter((k) => k.sessionId === id);
-            kept = own.length > 0;
-            keptOpen.push(...own);
-          } catch (err) {
-            if (!errorShown) deps.pushErrorToast(err);
-            errorShown = true;
-          }
-          // Close each agent as soon as its own wrap-up is done, so a fast one does not sit idle meanwhile.
-          if (!kept) await closeOne(id);
-        })
-      );
-    } else {
-      if (summarize) {
-        progressToastId = deps.pushProgressToast(ids.length);
-        try {
-          const res = await deps.closeFollowup(projectId, ids);
-          summarized = res.summarized;
-          followedUp = res.followedUp;
-          failures = res.failures;
-          keptOpen.push(...(res.keptOpen ?? []));
-        } catch (err) {
-          deps.pushErrorToast(err);
-        }
-      }
-      const keptIds = new Set(keptOpen.map((k) => k.sessionId));
-      for (const id of ids) {
-        if (!keptIds.has(id)) await closeOne(id);
-      }
-    }
+    const tally: CloseTally = { closed: 0, summarized: 0, followedUp: 0, keptOpen: [] };
+    if (summarize) progressToastId = deps.pushProgressToast(ids.length);
+    if (summarize && wrapUp) await closeEachAfterWrapUp(deps, projectId, ids, tally);
+    else await closeBatch(deps, projectId, ids, summarize, tally);
     if (progressToastId) {
       deps.dismissProgressToast(progressToastId);
       progressToastId = undefined;
     }
+    const { closed, summarized, followedUp, failures, keptOpen } = tally;
     if (closed > 0 || keptOpen.length > 0) deps.pushClosedToast(closed, summarized, followedUp, failures, keptOpen);
     return keptOpen.length > 0 ? { closed, summarized, followedUp, keptOpen } : { closed, summarized, followedUp };
   } finally {
     if (progressToastId) deps.dismissProgressToast(progressToastId);
     deps.clearClosing(ids);
   }
+}
+
+/** Wrap-ups run at most this many at a time: each types into an agent and makes its own summary call. */
+export const MAX_PARALLEL_WRAP_UPS = 4;
+
+type CloseIdleAgentsDeps = Parameters<typeof runCloseIdleAgents>[0]['deps'];
+
+/** What a close run adds up for its toast and result. */
+interface CloseTally {
+  closed: number;
+  summarized: number;
+  followedUp: number;
+  failures?: CloseFollowupFailure[];
+  keptOpen: CloseFollowupKeptOpen[];
+}
+
+async function closeCounted(deps: CloseIdleAgentsDeps, projectId: string, id: string, tally: CloseTally): Promise<void> {
+  try {
+    await deps.closeTerminal(id, projectId);
+    tally.closed++;
+  } catch {
+    /* closeTerminal already toasts */
+  }
+}
+
+/** Today's path: one call for the whole batch, then every agent that may close is closed in order. */
+async function closeBatch(
+  deps: CloseIdleAgentsDeps,
+  projectId: string,
+  ids: string[],
+  summarize: boolean,
+  tally: CloseTally
+): Promise<void> {
+  if (summarize) {
+    try {
+      const res = await deps.closeFollowup(projectId, ids);
+      tally.summarized = res.summarized;
+      tally.followedUp = res.followedUp;
+      tally.failures = res.failures;
+      tally.keptOpen.push(...(res.keptOpen ?? []));
+    } catch (err) {
+      deps.pushErrorToast(err);
+    }
+  }
+  const keptIds = new Set(tally.keptOpen.map((k) => k.sessionId));
+  for (const id of ids) {
+    if (!keptIds.has(id)) await closeCounted(deps, projectId, id, tally);
+  }
+}
+
+/**
+ * "Wrap up before closing": one call per agent, at most {@link MAX_PARALLEL_WRAP_UPS}
+ * at a time, and each agent closes as soon as its own result arrives, so a fast
+ * one does not sit idle while a slow one wraps up.
+ */
+async function closeEachAfterWrapUp(
+  deps: CloseIdleAgentsDeps,
+  projectId: string,
+  ids: string[],
+  tally: CloseTally
+): Promise<void> {
+  let next = 0;
+  let errorShown = false;
+  const worker = async (): Promise<void> => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      let kept = false;
+      try {
+        const res = await deps.closeFollowup(projectId, [id]);
+        tally.summarized += res.summarized;
+        tally.followedUp += res.followedUp;
+        if (res.failures?.length) tally.failures = [...(tally.failures ?? []), ...res.failures];
+        const own = (res.keptOpen ?? []).filter((k) => k.sessionId === id);
+        kept = own.length > 0;
+        tally.keptOpen.push(...own);
+      } catch (err) {
+        if (!errorShown) deps.pushErrorToast(err);
+        errorShown = true;
+      }
+      if (!kept) await closeCounted(deps, projectId, id, tally);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_WRAP_UPS, ids.length) }, worker));
 }

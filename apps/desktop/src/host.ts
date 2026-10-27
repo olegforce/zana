@@ -1999,7 +1999,8 @@ const heartbeat = new HeartbeatService({
   isEnabled: () => store.getConfig().heartbeatEnabled === true,
   getSession: (sessionId) => {
     const s = ptys.getSession(sessionId);
-    return s
+    // An agent that is wrapping up belongs to that close: no nudge, armed or new, may type into it.
+    return s && !wrapUpClose.isWrappingUp(sessionId)
       ? {
           heartbeat: s.heartbeat,
           scheduled: s.scheduled,
@@ -8742,6 +8743,7 @@ async function bootstrapNormal() {
        // A lifecycle Stop is the authoritative end of an interactive turn. The
        // tracker keeps fallback behaviour for harnesses that never send one.
        agentStatus.turnFinished(sessionId);
+       wrapUpClose.onTurnFinished(sessionId);
        apiErrorResume.cancel(sessionId);
        void scheduler.onAgentFinished(sessionId).catch(error => logMainError('scheduler Stop', error));
       // A goal worker finishing its turn is the trigger to evaluate + branch
@@ -8790,6 +8792,7 @@ async function bootstrapNormal() {
         apiErrorResume.cancel(sessionId);
         workerApiErrorRecovery.onTurnStarted(sessionId, agentStatus.get(sessionId));
         agentStatus.turnStarted(sessionId);
+        wrapUpClose.onTurnStarted(sessionId);
       }
       // Diagnostic: confirms the hook reached the main process. The emit to the
       // renderer is debounced (~250ms), so the red/grey dot is the real proof

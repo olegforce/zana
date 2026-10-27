@@ -50,15 +50,15 @@ describe('summarizeForClose', () => {
   it('is summary-failed for a failed, empty or throwing model reply, logging the detail', async () => {
     const failed = makeDeps({ runSessionSummary: async () => bad('boom') });
     expect(await failed.svc.summarizeForClose('p', 's')).toEqual({ ok: false, reason: 'summary-failed' });
-    expect(failed.log).toHaveBeenCalledWith('close-summary', 'summary-failed: boom');
+    expect(failed.log).toHaveBeenCalledWith('close-summary', 'summary-failed project=p session=s: boom');
     const empty = makeDeps({ runSessionSummary: async () => ok('Unfinished: no\nAsks the user: no') });
     expect(await empty.svc.summarizeForClose('p', 's')).toEqual({ ok: false, reason: 'summary-failed' });
     const noDetail = makeDeps({ runSessionSummary: async () => bad('') });
     await noDetail.svc.summarizeForClose('p', 's');
-    expect(noDetail.log).toHaveBeenCalledWith('close-summary', 'summary-failed: no detail');
+    expect(noDetail.log).toHaveBeenCalledWith('close-summary', 'summary-failed project=p session=s: no detail');
     const thrown = makeDeps({ readDigest: async () => { throw new Error('spawn EACCES'); } });
     expect(await thrown.svc.summarizeForClose('p', 's')).toEqual({ ok: false, reason: 'summary-failed' });
-    expect(thrown.log).toHaveBeenCalledWith('close-summary', 'summary-failed: spawn EACCES');
+    expect(thrown.log).toHaveBeenCalledWith('close-summary', 'summary-failed project=p session=s: spawn EACCES');
   });
 
   it('parses both sentinels off the reply and returns the session title', async () => {

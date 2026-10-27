@@ -1834,6 +1834,9 @@ export const DEFAULT_CLOSE_WRAP_UP_INSTRUCTIONS = [
 /** Longest custom wrap-up instructions text kept by `normalizeConfig`. */
 export const CLOSE_WRAP_UP_INSTRUCTIONS_MAX = 4_000;
 
+/** How long a wrap-up may run before the agent or thread is left open; also named in the inbox note. */
+export const CLOSE_WRAP_UP_TIMEOUT_MINUTES = 15;
+
 /** The wrap-up instructions to send: the configured text when it has any, else the default. */
 export function resolveCloseWrapUpInstructions(
   config: Pick<AppConfig, 'closeWrapUpInstructions'> | null | undefined

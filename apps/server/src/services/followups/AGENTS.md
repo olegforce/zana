@@ -46,9 +46,11 @@ Touch `isFavorite` key resolution → verify reattach across restore.
 
 2. Yields to the human through `lastKeyInputAt` (real keys only), not `lastInputAt`, which also moves on mouse and focus reports. A change since the send keeps the agent open as `typed`, with no summary.
 
-3. Every gate (state, `lastKeyInputAt`, session still there) is re-checked when the settle timer fires. Every timer and pending entry is released on every path (Rule 3).
+3. Every gate (state, `lastKeyInputAt`, session still there) is re-checked when the settle timer fires, after the summary, and again after the inbox record is written: a key press or new work at any of those points keeps the agent open as `typed`. Every timer and pending entry is released on every path (Rule 3).
 
-4. Auto-close-idle spares a session while `isWrappingUp(sessionId)` (host.ts ORs it into `isFavorite`).
+4. While `isWrappingUp(sessionId)`, auto-close-idle spares the session (host.ts ORs it into `isFavorite`) and heartbeat sees no session (host.ts heartbeat `getSession` returns null), so no nudge, armed or new, types into it.
+
+7. The wrap-up turn is tracked through Claude's own hooks as well as the debounced status: `onTurnStarted` (UserPromptSubmit) and `onTurnFinished` (Stop), wired in host.ts `onNotifyHook`/`onStopHook`. A turn that starts and ends inside one 250 ms status debounce still finishes; a Stop before the wrap-up turn began is ignored.
 
 5. A failed summary never blocks the close: the agent stays closeable and the failure is reported. A question, an unanswered prompt, typing or the 15-minute timeout keep the agent open (`keptOpen`).
 
@@ -61,3 +63,5 @@ Type into a non-resting agent, or a multi-line text → `reply()` wedges the TUI
 Use `lastInputAt` for the typed check → mouse and focus reports end the wrap-up early.
 
 Add a timer or per-session map → release it in `finish`/`forget`.
+
+Add another service that types into resting agents (`reply()` on an idle edge) → exclude a wrapping-up session from it, as heartbeat does.

@@ -93,6 +93,19 @@ export function cliAgentRemoveConfirm(session: Pick<TerminalSession, 'title' | '
     : `Archive “${session.title}”? The agent stops and its conversation stays in History.`;
 }
 
+/** Close with follow-up tooltip when it closes straight away (today's behaviour). */
+export const CLOSE_FOLLOWUP_TITLE =
+  'Close the agent, summarising its work to your inbox and filing a follow-up if it left something unfinished';
+
+/** Close with follow-up tooltip when "Wrap up before closing" is on. */
+export const CLOSE_FOLLOWUP_WRAP_UP_TITLE =
+  'Ask the agent to wrap up, then close it with a summary in your inbox and a follow-up if work is left';
+
+/** The Close with follow-up tooltip for the current "Wrap up before closing" setting. */
+export function closeFollowupTitle(wrapUp: boolean): string {
+  return wrapUp ? CLOSE_FOLLOWUP_WRAP_UP_TITLE : CLOSE_FOLLOWUP_TITLE;
+}
+
 /** Tooltip for the Archive action on the board surfaces (card menu, modal and monitor footers). */
 export const CLI_AGENT_ARCHIVE_TITLE =
   'Stop the agent and remove it from the board. Its conversation stays in History.';
@@ -376,7 +389,7 @@ export function AgentCardMenu({ menu, setMenu, actions }: AgentCardMenuProps) {
             setMenu(null);
             actions.closeWithFollowup(card);
           }}
-          title={wrapUpClose ? "Ask the agent to wrap up, then close it with a summary in your inbox and a follow-up if work is left" : "Close the agent, summarising its work to your inbox and filing a follow-up if it left something unfinished"}
+          title={closeFollowupTitle(wrapUpClose)}
         >
           {closingWithFollowup ? (wrapUpClose ? 'Wrapping up…' : 'Closing…') : 'Close with follow-up'}
         </button>

@@ -95,4 +95,23 @@ describe('createWrapUpClose', () => {
       expect(deps.closeSummary.recordKeptOpen).toHaveBeenCalled();
     }
   });
+
+  it('does not mark a session that went away during the summary', async () => {
+    let gone = false;
+    const live = { projectId: 'p', profile: 'claude', status: 'running', title: 'T' };
+    const { deps, note } = make({ session: live });
+    deps.ptys.getSession = vi.fn(() => (gone ? null : live) as never);
+    deps.closeSummary.summarizeForClose = vi.fn(async () => {
+      gone = true;
+      return { ok: true as const, title: 'T', note: { ...note, asksUser: true } };
+    });
+    const service = createWrapUpClose(deps);
+    const p = service.run('p', ['s1']);
+    service.observe('s1', 'working');
+    service.observe('s1', 'idle');
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(deps.agentStatus.markBlocked).not.toHaveBeenCalled();
+    expect(deps.suppressesInteractiveBlocked).not.toHaveBeenCalled();
+  });
 });

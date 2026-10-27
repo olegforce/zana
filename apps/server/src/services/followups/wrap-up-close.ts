@@ -22,7 +22,7 @@
  *  - Every timer and pending entry is released on every path (Rule 3).
  */
 
-import { isRestfulAgentState, type AgentState, type CloseFollowupFailure, type CloseFollowupKeptOpen } from '@zana-ai/zcc-domain/product';
+import { CLOSE_WRAP_UP_TIMEOUT_MINUTES, isRestfulAgentState, type AgentState, type CloseFollowupFailure, type CloseFollowupKeptOpen } from '@zana-ai/zcc-domain/product';
 import type {
   CloseRecordHow,
   CloseSummaryFailure,
@@ -34,7 +34,7 @@ import type {
 /** A rest (or a block) must last this long before the turn counts as finished. */
 export const SETTLE_MS = 5_000;
 /** An agent still busy this long after the click is left running. */
-export const TURN_TIMEOUT_MS = 15 * 60_000;
+export const TURN_TIMEOUT_MS = CLOSE_WRAP_UP_TIMEOUT_MINUTES * 60_000;
 /** Summary calls in flight across the whole service; wrap-ups themselves run in parallel. */
 export const MAX_CONCURRENT_SUMMARIES = 5;
 
@@ -160,8 +160,10 @@ export class WrapUpCloseService {
       return;
     }
     if (entry.phase === 'sent') {
-      if (state === 'working') entry.phase = 'active';
-      return;
+      // The turn began: it shows as working, or goes straight to a prompt (the debounced status can skip "working").
+      if (state !== 'working' && state !== 'blocked') return;
+      entry.phase = 'active';
+      if (state === 'working') return;
     }
     // active: a rest or a block must last SETTLE_MS; anything else restarts the wait.
     const kind = state === 'blocked' ? 'blocked' : isRestfulAgentState(state as AgentState) ? 'rest' : null;
@@ -176,6 +178,23 @@ export class WrapUpCloseService {
   forget(sessionId: string): void {
     const entry = this.active.get(sessionId);
     if (entry && entry.phase !== 'finishing') this.finish(sessionId, entry, EMPTY);
+  }
+
+  /** Claude's UserPromptSubmit hook: the wrap-up turn began, even if the debounced status never showed "working". */
+  onTurnStarted(sessionId: string): void {
+    const entry = this.active.get(sessionId);
+    if (entry?.phase === 'sent') entry.phase = 'active';
+  }
+
+  /**
+   * Claude's Stop hook: the turn ended. Settle on the current state, so a turn
+   * that started and ended inside one status debounce still finishes. A Stop
+   * before the wrap-up turn began (a late one from an earlier turn) is ignored.
+   */
+  onTurnFinished(sessionId: string): void {
+    const entry = this.active.get(sessionId);
+    if (entry?.phase !== 'active') return;
+    this.observe(sessionId, this.deps.getAgentState(sessionId));
   }
 
   private wrapUp(projectId: string, sessionId: string): Promise<Outcome> {
@@ -277,7 +296,10 @@ export class WrapUpCloseService {
     // A key press during the summary (for example answering the prompt) means a person took over.
     if (this.keysMoved(sessionId, entry)) return { ...EMPTY, keptOpen: 'typed' };
     if (!res.ok) return this.failed(res.reason);
-    return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, how));
+    const written = this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, how));
+    // The record write takes a moment too: a key press or new work since then keeps the agent open.
+    const now = this.deps.getAgentState(sessionId);
+    return this.keysMoved(sessionId, entry) || now === 'working' ? { ...written, keptOpen: 'typed' } : written;
   }
 
   private async restEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
@@ -289,7 +311,9 @@ export class WrapUpCloseService {
       this.deps.markNeedsYou(sessionId);
       return this.kept(await this.deps.recordKeptOpen(entry.projectId, sessionId, res.title, 'asks-you', res.note), 'asks-you');
     }
-    return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, 'wrapped'));
+    const written = this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, 'wrapped'));
+    // The record write takes a moment too: a key press or new work since then keeps the agent open.
+    return this.tookOver(sessionId, entry) ? { ...written, keptOpen: 'typed' } : written;
   }
 
   /** A key was pressed since the click. */

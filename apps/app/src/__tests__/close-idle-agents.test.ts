@@ -3,6 +3,7 @@ import {
   closeFollowupProgressMessage,
   closedToastMessage,
   selectCloseableIdleIds,
+  MAX_PARALLEL_WRAP_UPS,
   runCloseIdleAgents
 } from '../lib/close-idle-agents.js';
 import type { AgentState } from '@zana-ai/zcc-domain/product';
@@ -330,6 +331,26 @@ describe('Wrap up before closing', () => {
     expect(d.dismissProgressToast).toHaveBeenCalledWith('progress-toast');
     expect(d.pushClosedToast).toHaveBeenCalledWith(2, 2, 1, undefined, []);
     expect(d.clearClosing).toHaveBeenCalledWith(['slow', 'fast']);
+  });
+
+  it(`runs at most ${MAX_PARALLEL_WRAP_UPS} wrap-ups at a time and starts the next as one finishes`, async () => {
+    const gates: Record<string, (v: { summarized: number; followedUp: number }) => void> = {};
+    const d = baseDeps({
+      closeFollowup: vi.fn((_p: string, ids: string[]) => new Promise((resolve) => { gates[ids[0]] = resolve as never; })) as never
+    });
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const p = run(d, ids, true);
+    await Promise.resolve();
+    expect(d.closeFollowup).toHaveBeenCalledTimes(MAX_PARALLEL_WRAP_UPS);
+    expect(d.closeFollowup).not.toHaveBeenCalledWith('p1', ['e']);
+    gates.b({ summarized: 1, followedUp: 0 });
+    await vi.waitFor(() => expect(d.closeFollowup).toHaveBeenCalledWith('p1', ['e']));
+    expect(d.closeFollowup).toHaveBeenCalledTimes(MAX_PARALLEL_WRAP_UPS + 1);
+    for (const id of ['a', 'c', 'd']) gates[id]({ summarized: 1, followedUp: 0 });
+    await vi.waitFor(() => expect(d.closeFollowup).toHaveBeenCalledWith('p1', ['f']));
+    gates.e({ summarized: 1, followedUp: 0 });
+    gates.f({ summarized: 1, followedUp: 0 });
+    expect(await p).toEqual({ closed: 6, summarized: 6, followedUp: 0 });
   });
 
   it('keeps a kept-open agent, sums failures and toasts a failing call once, still closing that agent', async () => {

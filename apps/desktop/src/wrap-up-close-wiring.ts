@@ -54,7 +54,9 @@ export function createWrapUpClose(deps: WrapUpCloseWiringDeps): WrapUpCloseServi
     getAgentState: (id) => deps.agentStatus.get(id),
     reply: (id, text) => deps.ptys.reply(id, text),
     markNeedsYou: (id) => {
-      if (!deps.suppressesInteractiveBlocked(deps.ptys.getSession(id))) deps.agentStatus.markBlocked(id);
+      // A session that is gone has nobody to wait on; a headless worker is never marked either.
+      const session = deps.ptys.getSession(id);
+      if (session && !deps.suppressesInteractiveBlocked(session)) deps.agentStatus.markBlocked(id);
     },
     summarizeForClose: (projectId, sessionId) => deps.closeSummary.summarizeForClose(projectId, sessionId),
     recordClose: (...args) => deps.closeSummary.recordClose(...args),

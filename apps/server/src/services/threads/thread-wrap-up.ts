@@ -11,11 +11,15 @@
  *
  * Rules:
  *  - The job subscribes to thread updates BEFORE it sends, and counts only an
- *    `active` edge seen after the send.
+ *    `active` edge seen after the send, once its own queued message has left
+ *    the queue: only the turn that message started is the wrap-up.
  *  - A pending interaction before the send means the thread already waits on the
  *    user: nothing is sent, the inbox says so, the thread stays open.
- *  - An offline host, a send that throws, or any other failure while starting,
- *    falls back to today's close path.
+ *  - An offline host, other messages already queued ahead, a send that throws,
+ *    or any other failure while starting, falls back to today's close path.
+ *  - Before every record and archive the thread is re-read from the store: it
+ *    must still be open (not archived or deleted), at rest, not asking, and the
+ *    user must not have written since the wrap-up request.
  *  - Outcome after the send, whichever comes first: a pending interaction that
  *    lasts 5 s or a question in the summary (kept open, inbox note), a rest that
  *    lasts 5 s (summary, inbox, archive), the user writing in the thread, even
@@ -30,7 +34,7 @@
  */
 
 import { getConversationThread, listDeferredThreadMessages } from '@zana-ai/zcc-db';
-import { resolveCloseWrapUpInstructions } from '@zana-ai/zcc-domain/product';
+import { CLOSE_WRAP_UP_TIMEOUT_MINUTES, resolveCloseWrapUpInstructions } from '@zana-ai/zcc-domain/product';
 import type { ProductHttpContext } from '../../http/product-context.js';
 import type { CloseRecordHow, KeptOpenReason, SessionCloseNote, SummarizeForCloseResult } from '../followups/close-summary.js';
 import { conversationDigest } from './conversation-digest.js';
@@ -41,7 +45,7 @@ import { conversationMessageTexts } from './conversation-timeline.js';
 /** A rest or a pending interaction must last this long before it counts. */
 export const WRAP_UP_SETTLE_MS = 5_000;
 /** A thread still busy this long after the request is left running. */
-export const WRAP_UP_TIMEOUT_MS = 15 * 60_000;
+export const WRAP_UP_TIMEOUT_MS = CLOSE_WRAP_UP_TIMEOUT_MINUTES * 60_000;
 
 /** The slice of the `threads:updated` payload the job reads. */
 interface ThreadUpdate {
@@ -70,7 +74,11 @@ export interface ThreadWrapUpHost {
   recordLastTurn: (projectId: string, threadId: string, title: string, lastTurn: string) => Promise<{ summarized: number }>;
   /** Ids of the queued sends of exactly this text (the wrap-up message waiting for the thread to rest). */
   queuedSendIds: (threadId: string, text: string) => string[];
+  /** How many sends of any text are queued for the thread. */
+  queuedCount: (threadId: string) => number;
   dropQueuedSend: (threadId: string, id: string) => void;
+  /** The thread still exists and is not archived (read from the store, not from an update). */
+  isOpen: (threadId: string) => boolean;
   archive: (threadId: string) => Promise<unknown>;
   setTimer: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimer: (handle: NodeJS.Timeout) => void;
@@ -117,7 +125,8 @@ class Job {
         await this.keepOpen('asks-you');
         return 'kept-open';
       }
-      if (!host.hostOnline(thread)) {
+      // Offline host, or other messages already queued ahead: the next turn would not be the wrap-up's.
+      if (!host.hostOnline(thread) || host.queuedCount(thread.id) > 0) {
         this.finish();
         return 'fallback';
       }
@@ -159,7 +168,8 @@ class Job {
           return;
         }
         if (this.needIdle) this.needIdle = isActive(view.status);
-        else if (view.status === 'active') this.edge = true;
+        // Only the turn our own message started counts: while it is still queued, this is someone else's turn.
+        else if (view.status === 'active' && !this.wrapUpStillQueued()) this.edge = true;
         return;
       }
       if (view.status === 'idle' && view.hasPendingInteraction !== true) {
@@ -219,13 +229,32 @@ class Job {
     this.stop();
     try {
       this.dropUnsentWrapUp();
+      if (!this.closableAfterError()) return this.finish();
       const lastTurn = this.lastAssistantText();
       if (lastTurn) await host.recordLastTurn(thread.projectId, thread.id, this.title, lastTurn);
+      // The record write takes a moment: re-check before the archive, the person may have written meanwhile.
+      if (!this.closableAfterError()) return this.finish();
       await host.archive(thread.id);
     } catch (err) {
       host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} close after the earlier error failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     this.finish();
+  }
+
+  /** Still ours to close after the earlier error: open, not running or asking, and the user has not written. */
+  private closableAfterError(): boolean {
+    const { host, thread } = this;
+    return (
+      host.isOpen(thread.id) &&
+      !isActive(host.getStatus(thread.id)) &&
+      !host.hasPendingInteraction(thread.id) &&
+      !host.messages(thread.id).some((m) => m.role === 'user' && m.seq > this.seqBeforeSend)
+    );
+  }
+
+  /** Our own wrap-up message is still in the thread's queue. */
+  private wrapUpStillQueued(): boolean {
+    return this.host.queuedSendIds(this.thread.id, this.instructions).some((id) => !this.queuedBefore.has(id));
   }
 
   private lastAssistantText(): string {
@@ -235,7 +264,13 @@ class Job {
   /** Still ours to close: not disposed or archived, resting, nothing pending, and the user has not written. */
   private stillResting(): boolean {
     const { host, thread } = this;
-    return !this.done && host.getStatus(thread.id) === 'idle' && !host.hasPendingInteraction(thread.id) && !this.userWroteAfterWrapUp();
+    return (
+      !this.done &&
+      host.isOpen(thread.id) &&
+      host.getStatus(thread.id) === 'idle' &&
+      !host.hasPendingInteraction(thread.id) &&
+      !this.userWroteAfterWrapUp()
+    );
   }
 
   /** The whole-thread summary failed: still leave a record, from today's last-turn note or a one-line note. */
@@ -263,7 +298,7 @@ class Job {
       this.stop();
       const note = await this.summarize();
       // Answered while the summary ran: the thread is the person's again, so write nothing.
-      if (this.done || !this.host.hasPendingInteraction(this.thread.id)) return this.finish();
+      if (this.done || !this.host.isOpen(this.thread.id) || !this.host.hasPendingInteraction(this.thread.id)) return this.finish();
       await this.keepOpen('asks-you', note);
     } catch (err) {
       this.host.log(`[thread-wrap-up] thread=${this.thread.id.slice(0, 8)} could not record the question: ${err instanceof Error ? err.message : String(err)}`);
@@ -302,7 +337,7 @@ class Job {
   private async keepOpen(reason: KeptOpenReason, note?: SessionCloseNote): Promise<void> {
     if (this.done) return;
     this.stop();
-    if (this.host.getStatus(this.thread.id) === undefined) return this.finish(); // deleted meanwhile
+    if (!this.host.isOpen(this.thread.id)) return this.finish(); // deleted or archived meanwhile
     try {
       await this.host.recordKeptOpen(this.thread.projectId, this.thread.id, this.title, reason, note);
     } catch (err) {
@@ -415,7 +450,12 @@ export function threadWrapUps(ctx: ProductHttpContext): ThreadWrapUpRegistry {
         listDeferredThreadMessages(ctx.db, id)
           .filter((row) => deferredText(row) === text.trim())
           .map((row) => row.id),
+      queuedCount: (id) => listDeferredThreadMessages(ctx.db, id).length,
       dropQueuedSend: (id, itemId) => dropDeferredConversationMessage(ctx, id, itemId),
+      isOpen: (id) => {
+        const row = getConversationThread(ctx.db, id);
+        return !!row && row.archivedAt == null;
+      },
       archive: (id) => archiveConversation(ctx, id),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (handle) => clearTimeout(handle),

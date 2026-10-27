@@ -546,6 +546,106 @@ describe('WrapUpCloseService timeout, forget and repeat runs', () => {
   });
 });
 
+describe('WrapUpCloseService races (Geoff review on #545)', () => {
+  const deferredRecord = () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const recordClose = vi.fn(async () => { await gate; return { summarized: 1 as const, followedUp: 0 as const }; });
+    return { recordClose, release };
+  };
+
+  it('keeps the agent open as typed when a key moves while the close record is written', async () => {
+    const { recordClose, release } = deferredRecord();
+    const { svc, add, set, sessions } = make({ recordClose });
+    add('s1', 'idle', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'idle');
+    await settle();
+    expect(recordClose).toHaveBeenCalledTimes(1);
+    sessions.get('s1')!.lastKeyInputAt = 2;
+    release();
+    expect(await p).toEqual({ summarized: 1, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+  });
+
+  it('keeps the agent open as typed when it starts working again while the close record is written', async () => {
+    const { recordClose, release } = deferredRecord();
+    const { svc, add, set, states } = make({ recordClose });
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'idle');
+    await settle();
+    states.set('s1', 'working');
+    release();
+    expect(await p).toMatchObject({ keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+  });
+
+  it('keeps a no-wrap-up agent open as typed when a key moves or it works while its record is written', async () => {
+    for (const change of ['key', 'working'] as const) {
+      const { recordClose, release } = deferredRecord();
+      const { svc, add, sessions, states } = make({ recordClose });
+      add('s1', 'idle', { profile: 'codex', lastKeyInputAt: 1 });
+      const p = svc.run('p', ['s1']);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(recordClose).toHaveBeenCalledTimes(1);
+      if (change === 'key') sessions.get('s1')!.lastKeyInputAt = 2;
+      else states.set('s1', 'working');
+      release();
+      expect(await p).toEqual({ summarized: 1, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'typed' }] });
+    }
+  });
+
+  it('still closes when nothing changed during the record write', async () => {
+    const { recordClose, release } = deferredRecord();
+    const { svc, add, set } = make({ recordClose });
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'working');
+    set('s1', 'idle');
+    await settle();
+    release();
+    expect(await p).toEqual({ summarized: 1, followedUp: 0, keptOpen: [] });
+  });
+
+  it('finishes a fast turn the debounced status never showed as working, through the turn hooks', async () => {
+    const { svc, deps, add } = make();
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    expect(deps.reply).toHaveBeenCalledTimes(1);
+    svc.onTurnStarted('s1'); // UserPromptSubmit
+    svc.onTurnFinished('s1'); // Stop, with the status still idle: no status event at all
+    await settle();
+    expect(await p).toEqual({ summarized: 1, followedUp: 0, keptOpen: [] });
+    expect(deps.recordClose).toHaveBeenCalledWith('p', 's1', 'Agent', note(), 'wrapped');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('treats a prompt straight after the send as the turn having started', async () => {
+    const { svc, deps, add, set } = make();
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    set('s1', 'blocked'); // "working" debounced away
+    await settle();
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'asks-you' }] });
+    expect(deps.recordKeptOpen).toHaveBeenCalledWith('p', 's1', 'Agent', 'asks-you', note());
+  });
+
+  it('ignores a Stop that arrives before the wrap-up turn began, and turn hooks for unknown sessions', async () => {
+    const { svc, deps, add } = make();
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    svc.onTurnFinished('s1'); // a late Stop from an earlier turn
+    svc.onTurnStarted('nope');
+    svc.onTurnFinished('nope');
+    await settle();
+    expect(deps.summarizeForClose).not.toHaveBeenCalled();
+    expect(svc.isWrappingUp('s1')).toBe(true);
+    svc.forget('s1');
+    await p;
+  });
+});
+
 describe('WrapUpCloseService summary concurrency', () => {
   it('runs at most 5 summary calls in flight across two concurrent runs of 4 agents each', async () => {
     let inFlight = 0;

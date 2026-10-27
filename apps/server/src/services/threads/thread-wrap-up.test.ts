@@ -36,7 +36,9 @@ function make(over: Partial<ThreadWrapUpHost> = {}) {
     recordKeptOpen: vi.fn(async () => undefined),
     recordLastTurn: vi.fn(async () => ({ summarized: 1 })),
     queuedSendIds: vi.fn((): string[] => []),
+    queuedCount: vi.fn(() => 0),
     dropQueuedSend: vi.fn(),
+    isOpen: vi.fn(() => true),
     archive: vi.fn(async () => true),
     setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
     clearTimer: (h: NodeJS.Timeout) => clearTimeout(h),
@@ -364,6 +366,7 @@ describe('ThreadWrapUpRegistry', () => {
     const gone = make();
     await gone.registry.request(thread);
     gone.host.getStatus.mockReturnValue(undefined as never);
+    gone.host.isOpen.mockReturnValue(false); // the store no longer has the thread
     await vi.advanceTimersByTimeAsync(WRAP_UP_TIMEOUT_MS);
     expect(gone.host.recordKeptOpen).not.toHaveBeenCalled();
     expect(gone.registry.isWrappingUp('t1')).toBe(false);
@@ -636,6 +639,115 @@ describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
     expect(await joinFail).toBe('wrapping-up'); // the joiner must not run it a second time
     expect(failing.host.send).toHaveBeenCalledTimes(1);
     expect(failing.registry.isWrappingUp('t1')).toBe(false);
+  });
+});
+
+describe('ThreadWrapUpRegistry ownership (Geoff review on #545)', () => {
+  it('falls back to today\'s close when other messages are queued ahead of the wrap-up', async () => {
+    const h = make({ queuedCount: vi.fn(() => 2) });
+    expect(await h.registry.request(thread)).toBe('fallback');
+    expect(h.host.send).not.toHaveBeenCalled();
+    expect(h.host.subscribe).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+  });
+
+  it('counts only the turn its own queued message started', async () => {
+    let queued = ['ours'];
+    const h = make({ queuedSendIds: vi.fn(() => [...queued]) });
+    h.host.queuedSendIds.mockReturnValueOnce([]); // nothing of ours queued before the send
+    await h.registry.request(thread);
+    h.emit({ status: 'active' }); // our message is still queued: this turn is not the wrap-up
+    h.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(h.host.summarizeForClose).not.toHaveBeenCalled();
+    queued = []; // the queue drained our message
+    h.emit({ status: 'active' });
+    h.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(h.host.recordClose).toHaveBeenCalledTimes(1);
+    expect(h.host.archive).toHaveBeenCalledWith('t1');
+  });
+
+  it('writes nothing and does not archive when the thread is archived while the summary runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = make({
+      summarizeForClose: vi.fn(async (): Promise<SummarizeForCloseResult> => { await gate; return { ok: true, title: 'Build it', note: note() }; })
+    });
+    expect(await h.registry.request(thread)).toBe('wrapping-up');
+    h.emit({ status: 'active' });
+    h.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    h.host.isOpen.mockReturnValue(false); // archived by the person, outside this job
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordClose).not.toHaveBeenCalled();
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+  });
+
+  it('writes no question note for a thread archived while its question summary runs, nor a timeout note for an archived one', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = make({
+      summarizeForClose: vi.fn(async (): Promise<SummarizeForCloseResult> => { await gate; return { ok: true, title: 'Build it', note: note() }; })
+    });
+    h.state.pending = false;
+    await h.registry.request(thread);
+    h.emit({ status: 'active' });
+    h.state.pending = true;
+    h.emit({ status: 'active', hasPendingInteraction: true });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    h.host.isOpen.mockReturnValue(false);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordKeptOpen).not.toHaveBeenCalled();
+    const t = make();
+    await t.registry.request(thread);
+    t.host.isOpen.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(WRAP_UP_TIMEOUT_MS);
+    expect(t.host.recordKeptOpen).not.toHaveBeenCalled();
+    expect(t.registry.isWrappingUp('t1')).toBe(false);
+  });
+
+  it('does not close after the earlier error when the person wrote, the thread is busy, asking or archived', async () => {
+    for (const change of ['wrote', 'busy', 'asking', 'archived'] as const) {
+      const h = make({ queuedSendIds: vi.fn(() => ['ours']) });
+      h.host.queuedSendIds.mockReturnValueOnce([]);
+      h.state.status = 'active';
+      h.state.messages = [{ seq: 1, role: 'assistant', text: 'Earlier answer.' }];
+      await h.registry.request(thread);
+      if (change === 'wrote') h.state.messages = [...h.state.messages, { seq: 2, role: 'user', text: 'one more thing' }];
+      if (change === 'asking') h.state.pending = true;
+      if (change === 'archived') h.host.isOpen.mockReturnValue(false);
+      if (change === 'busy') h.host.getStatus.mockReturnValue('active');
+      h.emit({ status: 'error' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.host.recordLastTurn).not.toHaveBeenCalled();
+      expect(h.host.archive).not.toHaveBeenCalled();
+      expect(h.registry.isWrappingUp('t1')).toBe(false);
+    }
+  });
+
+  it('does not archive after the earlier error when the person writes while the last-turn record is written', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = make({
+      queuedSendIds: vi.fn(() => ['ours']),
+      recordLastTurn: vi.fn(async () => { await gate; return { summarized: 1 }; })
+    });
+    h.host.queuedSendIds.mockReturnValueOnce([]);
+    h.state.status = 'active';
+    h.state.messages = [{ seq: 1, role: 'assistant', text: 'Earlier answer.' }];
+    await h.registry.request(thread);
+    h.emit({ status: 'error' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordLastTurn).toHaveBeenCalledTimes(1);
+    h.state.messages = [...h.state.messages, { seq: 2, role: 'user', text: 'wait' }];
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
   });
 });
 

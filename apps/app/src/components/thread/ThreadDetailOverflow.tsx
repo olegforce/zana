@@ -10,6 +10,7 @@ import { getAgentsRoutePath, getProjectRoutePath, getThreadRoutePath } from '../
 import { useRouteState } from '../../hooks/useRouteState.js';
 import { useThreads } from '../../thread-store.js';
 import { withRunningProcessWarning } from '../../lib/thread-running-processes.js';
+import { threadCloseFollowupConfirm, threadCloseFollowupToast } from '../../lib/thread-close-followup.js';
 import { errorMessage, useData, useUi } from '../../store.js';
 import { MobileActionSheet } from '../MobilePageHeader.js';
 import { useCompactLayout } from '../../hooks/useCompactLayout.js';
@@ -254,19 +255,14 @@ export function ThreadDetailOverflow({
       }}
       onCloseFollowup={() => {
         close();
-        const prompt = useData.getState().closeWrapUpEnabled
-          ? `Close “${title}” with follow-up? The agent first saves what it learnt and tidies up, then closes with a summary in your inbox. If it asks you something, it stays open.`
-          : `Close “${title}” and file a follow-up if work is left?`;
+        const prompt = threadCloseFollowupConfirm(title, useData.getState().closeWrapUpEnabled);
         if (!window.confirm(withRunningProcessWarning(prompt, currentThread()))) return;
         void product.threads.closeFollowup(threadId).then((result) => {
           if (result && result.ok === false) return;
-          if (result?.keptOpen) {
-            useUi.getState().pushToast(`“${title}” is waiting on your answer, so it was left open (see your inbox).`, 'info');
-            return;
-          }
-          if (result?.wrappingUp) {
-            // The thread archives itself when it finishes: stay on it, and let the normal thread updates remove it.
-            useUi.getState().pushToast(`Wrapping up… “${title}” closes when it finishes.`, 'info');
+          // Kept open, or wrapping up (the thread archives itself when it finishes): stay on it.
+          const leftInPlace = threadCloseFollowupToast(title, result);
+          if (leftInPlace) {
+            useUi.getState().pushToast(leftInPlace, 'info');
             return;
           }
           remove(threadId);
