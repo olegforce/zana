@@ -88,7 +88,7 @@ it('selects the close-with-follow-up spec for the close summary seams', () => {
   expect(boundarySpecs(['apps/server/src/services/followups/other-service.ts'])).not.toContain('e2e/close-with-follow-up-needs-you.spec.ts');
 });
 
-it('selects the project Back and routing specs for the router and split scope seams', () => {
+it('selects the project Back, routing and Settings reveal specs for the router and split scope seams', () => {
   for (const path of [
     'apps/app/src/main.tsx',
     'apps/app/src/lib/split-layout/store.ts',
@@ -97,7 +97,7 @@ it('selects the project Back and routing specs for the router and split scope se
     'apps/app/src/lib/app-navigate.ts',
     'apps/app/src/components/ProjectScopedNav.tsx'
   ]) {
-    expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/project-back-navigation.spec.ts', 'e2e/app-routing.spec.ts']));
+    expect(boundarySpecs([path])).toEqual(expect.arrayContaining(['e2e/project-back-navigation.spec.ts', 'e2e/app-routing.spec.ts', 'e2e/settings-search.spec.ts']));
   }
   expect(boundarySpecs(['apps/app/src/views/thread-detail/SplitDivider.tsx'])).not.toContain('e2e/project-back-navigation.spec.ts');
 });
