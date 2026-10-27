@@ -93,6 +93,7 @@ describe('bare COUNT() queries', () => {
 
   it('detects a bare COUNT() behind full-line comments only', () => {
     expect(isBareCountQuery('-- note\nSELECT COUNT() FROM Account')).toBe(true);
+    expect(isBareCountQuery('/* c */ SELECT COUNT() FROM Account')).toBe(false);
     expect(isBareCountQuery('SELECT COUNT(Id) FROM Account')).toBe(false);
     expect(isBareCountQuery('')).toBe(false);
     expect(isBareCountQuery(undefined)).toBe(false);
