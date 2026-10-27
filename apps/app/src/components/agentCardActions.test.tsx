@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 
@@ -29,12 +29,14 @@ vi.mock('../store.js', () => ({
 import {
   AgentDeleteQuickAction,
   canCloseWithFollowup,
-  cliAgentDeleteConfirm,
+  cliAgentArchives,
   cliAgentMenuProjectId,
+  cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
   cliAgentRestartConfirm,
   cliAgentRestartLiveTitle,
-  closeAgentWithFollowup
+  closeAgentWithFollowup,
+  useAgentCardActions
 } from './agentCardActions.js';
 
 describe('cliAgentMenuProjectId', () => {
@@ -44,22 +46,36 @@ describe('cliAgentMenuProjectId', () => {
 });
 
 describe('AgentDeleteQuickAction', () => {
-  it('renders a bin control to delete a live CLI agent', () => {
+  it('renders an Archive control for a live CLI agent', () => {
     const html = renderToStaticMarkup(
       <AgentDeleteQuickAction
-        session={{ id: 's1', title: 'Hello', status: 'running' }}
+        session={{ id: 's1', title: 'Hello', status: 'running', profile: 'claude' }}
         projectId="p1"
       />
     );
     expect(html).toContain('data-testid="agent-delete-quick"');
-    expect(html).toContain('Delete Hello');
+    expect(html).toContain('aria-label="Archive Hello"');
+    expect(html).toContain('lucide-archive');
+    expect(html).not.toContain('Delete Hello');
     expect(html).toContain('agent-delete-quick');
+  });
+
+  it('keeps the bin and Delete for a live plain shell', () => {
+    const html = renderToStaticMarkup(
+      <AgentDeleteQuickAction
+        session={{ id: 's1', title: 'Hello', status: 'running', profile: 'shell' }}
+        projectId="p1"
+      />
+    );
+    expect(html).toContain('aria-label="Delete Hello"');
+    expect(html).toContain('lucide-trash');
+    expect(html).not.toContain('Archive Hello');
   });
 
   it('labels an exited row as dismiss', () => {
     const html = renderToStaticMarkup(
       <AgentDeleteQuickAction
-        session={{ id: 's1', title: 'Hello', status: 'exited' }}
+        session={{ id: 's1', title: 'Hello', status: 'exited', profile: 'claude' }}
         projectId="p1"
       />
     );
@@ -108,25 +124,97 @@ describe('plugin agent card menu', () => {
     expect(source).toContain('openAgentSessionInSplit');
     expect(source).toContain('getAgentSessionRoutePath(card.session.id, menuProjectId)');
     expect(source).toContain('cliAgentMenuProjectId');
-    expect(source).toContain('cliAgentRemoveLabel(exited)');
+    expect(source).toContain('cliAgentRemoveLabel(card.session)');
     expect(source).toContain('cliAgentRestartLiveTitle()');
     expect(source).not.toContain('Kill and');
   });
 });
 
-describe('cliAgentRemoveLabel', () => {
-  it('uses Delete for live agents and Dismiss for exited', () => {
-    expect(cliAgentRemoveLabel(false)).toBe('Delete');
-    expect(cliAgentRemoveLabel(true)).toBe('Dismiss');
+describe('cliAgentArchives / cliAgentRemoveLabel', () => {
+  it('archives live agents, deletes live shells and dismisses exited sessions', () => {
+    const claude = { status: 'running', profile: 'claude' } as const;
+    const codex = { status: 'running', profile: 'codex' } as const;
+    const shell = { status: 'running', profile: 'shell' } as const;
+    expect(cliAgentArchives(claude)).toBe(true);
+    expect(cliAgentArchives(codex)).toBe(true);
+    expect(cliAgentArchives(shell)).toBe(false);
+    expect(cliAgentArchives({ status: 'exited', profile: 'claude' })).toBe(false);
+    expect(cliAgentRemoveLabel(claude)).toBe('Archive');
+    expect(cliAgentRemoveLabel(codex)).toBe('Archive');
+    expect(cliAgentRemoveLabel(shell)).toBe('Delete');
+    expect(cliAgentRemoveLabel({ status: 'exited', profile: 'claude' })).toBe('Dismiss');
+    expect(cliAgentRemoveLabel({ status: 'exited', profile: 'shell' })).toBe('Dismiss');
   });
 });
 
-describe('cliAgentDeleteConfirm', () => {
-  it('asks to delete without using Stop wording', () => {
-    expect(cliAgentDeleteConfirm('Review')).toBe(
-      'Delete “Review”? The process will be terminated.'
+describe('cliAgentRemoveConfirm', () => {
+  it('tells an agent it stays in History', () => {
+    expect(cliAgentRemoveConfirm({ title: 'Review', profile: 'claude' })).toBe(
+      'Archive “Review”? The agent stops and its conversation stays in History.'
     );
-    expect(cliAgentDeleteConfirm('Review')).not.toMatch(/Stop/);
+  });
+
+  it('keeps the Delete wording for a plain shell', () => {
+    const text = cliAgentRemoveConfirm({ title: 'Review', profile: 'shell' });
+    expect(text).toBe('Delete “Review”? The process will be terminated.');
+    expect(text).not.toMatch(/Stop/);
+  });
+});
+
+function captureActions(confirm: () => boolean) {
+  vi.stubGlobal('window', { confirm });
+  let actions!: ReturnType<typeof useAgentCardActions>['actions'];
+  function Probe() {
+    actions = useAgentCardActions().actions;
+    return null;
+  }
+  renderToStaticMarkup(<Probe />);
+  return actions;
+}
+
+describe('useAgentCardActions remove', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => h.closeTerminal.mockClear());
+
+  const card = (session: Record<string, unknown>) =>
+    ({ projectId: 'p1', session: { id: 's1', title: 'Boss', status: 'running', profile: 'claude', ...session } }) as never;
+  const lead = { cohort: { role: 'orchestrator', teamName: 'Crew' } };
+
+  it('warns that archiving an agent lead also stops its team', () => {
+    const confirm = vi.fn(() => false);
+    const actions = captureActions(confirm);
+    actions.remove(card(lead));
+    expect(confirm).toHaveBeenCalledWith(
+      'Archive “Boss”? It\'s the orchestrator, so archiving it also stops every other agent in “Crew”. Their conversations stay in History.'
+    );
+    expect(h.closeTerminal).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Close wording for a shell lead', () => {
+    const confirm = vi.fn(() => false);
+    const actions = captureActions(confirm);
+    actions.remove(card({ ...lead, profile: 'shell' }));
+    expect(confirm).toHaveBeenCalledWith(
+      'Close “Boss”? It\'s the orchestrator — closing it will also stop every other agent in “Crew”.'
+    );
+  });
+
+  it('uses the shared confirm for a non-lead and closes when accepted', () => {
+    const confirm = vi.fn(() => true);
+    const actions = captureActions(confirm);
+    actions.remove(card({}));
+    expect(confirm).toHaveBeenCalledWith(
+      'Archive “Boss”? The agent stops and its conversation stays in History.'
+    );
+    expect(h.closeTerminal).toHaveBeenCalledWith('s1', 'p1');
+  });
+
+  it('closes an exited card without a prompt', () => {
+    const confirm = vi.fn(() => true);
+    const actions = captureActions(confirm);
+    actions.remove(card({ status: 'exited' }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(h.closeTerminal).toHaveBeenCalledWith('s1', 'p1');
   });
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Puzzle, Trash2 } from 'lucide-react';
+import { Archive, Puzzle, Trash2 } from 'lucide-react';
 import { product } from '../lib/product-client.js';
 import { useData, useIdleTriage } from '../store.js';
 import { cardNeedsAttention, type AgentCard } from './AgentBoard.js';
@@ -73,14 +73,29 @@ export function canCloseWithFollowup(
   return session.status !== 'exited' && isClaudeProfile(session.profile);
 }
 
-/** Live: terminate and remove. Exited: drop the card. */
-export function cliAgentRemoveLabel(exited: boolean): 'Dismiss' | 'Delete' {
-  return exited ? 'Dismiss' : 'Delete';
+/** Live agents archive: the process stops and the conversation stays in History. Plain shells keep Delete. */
+export function cliAgentArchives(session: Pick<TerminalSession, 'status' | 'profile'>): boolean {
+  return session.status !== 'exited' && session.profile !== 'shell';
 }
 
-export function cliAgentDeleteConfirm(title: string): string {
-  return `Delete “${title}”? The process will be terminated.`;
+/** Live agents archive: the process stops and the conversation stays in History. Plain shells keep Delete. */
+export function cliAgentRemoveLabel(
+  session: Pick<TerminalSession, 'status' | 'profile'>
+): 'Dismiss' | 'Archive' | 'Delete' {
+  if (session.status === 'exited') return 'Dismiss';
+  return cliAgentArchives(session) ? 'Archive' : 'Delete';
 }
+
+/** Live agents archive: the process stops and the conversation stays in History. Plain shells keep Delete. */
+export function cliAgentRemoveConfirm(session: Pick<TerminalSession, 'title' | 'profile'>): string {
+  return session.profile === 'shell'
+    ? `Delete “${session.title}”? The process will be terminated.`
+    : `Archive “${session.title}”? The agent stops and its conversation stays in History.`;
+}
+
+/** Tooltip for the Archive action on the board surfaces (card menu, modal and monitor footers). */
+export const CLI_AGENT_ARCHIVE_TITLE =
+  'Stop the agent and remove it from the board. Its conversation stays in History.';
 
 export function cliAgentRestartLiveTitle(): string {
   return 'Stop the process and relaunch this session with the same profile and args';
@@ -202,8 +217,10 @@ export function useAgentCardActions(): {
       // close keeps the default single-session prompt.
       const isLead = c.session.cohort?.role === 'orchestrator';
       const message = isLead
-        ? `Close “${c.session.title}”? It's the orchestrator — closing it will also stop every other agent in “${c.session.cohort?.teamName}”.`
-        : cliAgentDeleteConfirm(c.session.title);
+        ? cliAgentArchives(c.session)
+          ? `Archive “${c.session.title}”? It's the orchestrator, so archiving it also stops every other agent in “${c.session.cohort?.teamName}”. Their conversations stay in History.`
+          : `Close “${c.session.title}”? It's the orchestrator — closing it will also stop every other agent in “${c.session.cohort?.teamName}”.`
+        : cliAgentRemoveConfirm(c.session);
       if (live && !window.confirm(message)) {
         return;
       }
@@ -382,33 +399,35 @@ export function AgentCardMenu({ menu, setMenu, actions }: AgentCardMenuProps) {
         title={
           exited
             ? 'Dismiss this finished agent from the board'
-            : 'Terminate this agent and remove it from the board'
+            : cliAgentArchives(card.session)
+              ? CLI_AGENT_ARCHIVE_TITLE
+              : 'Terminate this agent and remove it from the board'
         }
       >
-        {cliAgentRemoveLabel(exited)}
+        {cliAgentRemoveLabel(card.session)}
       </button>
     </div>
   );
   return typeof document === 'undefined' ? node : createPortal(node, document.body);
 }
 
-/** Hover-revealed one-click delete. Closes the PTY with no confirm, matching thread archive. */
+/** Hover-revealed one-click archive (delete for a plain shell). Closes the PTY with no confirm, matching thread archive. */
 export function AgentDeleteQuickAction({
   session,
   projectId
 }: {
-  session: Pick<TerminalSession, 'id' | 'title' | 'status'>;
+  session: Pick<TerminalSession, 'id' | 'title' | 'status' | 'profile'>;
   projectId: string;
 }) {
   const closeTerminal = useData((s) => s.closeTerminal);
-  const exited = session.status === 'exited';
+  const label = cliAgentRemoveLabel(session);
   return (
     <button
       type="button"
       className="project-terminal-close agent-delete-quick"
       data-testid="agent-delete-quick"
-      aria-label={`${cliAgentRemoveLabel(exited)} ${session.title}`}
-      title={cliAgentRemoveLabel(exited)}
+      aria-label={`${label} ${session.title}`}
+      title={label}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.preventDefault();
@@ -416,7 +435,7 @@ export function AgentDeleteQuickAction({
         void closeTerminal(session.id, projectId);
       }}
     >
-      <Trash2 size={12} />
+      {cliAgentArchives(session) ? <Archive size={12} /> : <Trash2 size={12} />}
     </button>
   );
 }

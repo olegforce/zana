@@ -258,3 +258,54 @@ describe('shortcuts: ⌘F picks thread search before terminal find', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('shortcuts: ⌘⇧W archives an agent tab and deletes a plain shell', () => {
+  let kb: KeyboardHarness;
+  let uninstall: () => void;
+  const closeTerminal = vi.fn(async () => undefined);
+  const confirmMock = vi.fn(() => false);
+
+  beforeEach(() => {
+    kb = installKeyboardHarness();
+    uninstall = installShortcuts();
+    closeTerminal.mockClear();
+    confirmMock.mockReset().mockReturnValue(false);
+    vi.stubGlobal('window', Object.assign(globalThis.window ?? globalThis, { confirm: confirmMock }));
+    (dataState as Record<string, unknown>).closeTerminal = closeTerminal;
+    uiState.selectedProjectId = 'p1';
+    uiState.selectedTabId = { p1: 't1' };
+  });
+
+  afterEach(() => {
+    uninstall();
+    kb.teardown();
+    vi.unstubAllGlobals();
+    dataState.terminals = {};
+    uiState.selectedTabId = {};
+  });
+
+  it('confirms with the Archive text for a live agent and closes it when accepted', () => {
+    dataState.terminals = { p1: [{ id: 't1', title: 'Review', status: 'running', profile: 'claude' }] };
+    kb.press('W', { meta: true, shift: true });
+    expect(confirmMock).toHaveBeenCalledWith(
+      'Archive “Review”? The agent stops and its conversation stays in History.'
+    );
+    expect(closeTerminal).not.toHaveBeenCalled();
+    confirmMock.mockReturnValue(true);
+    kb.press('W', { meta: true, shift: true });
+    expect(closeTerminal).toHaveBeenCalledWith('t1', 'p1');
+  });
+
+  it('confirms with the Delete text for a live plain shell', () => {
+    dataState.terminals = { p1: [{ id: 't1', title: 'zsh', status: 'running', profile: 'shell' }] };
+    kb.press('W', { meta: true, shift: true });
+    expect(confirmMock).toHaveBeenCalledWith('Delete “zsh”? The process will be terminated.');
+  });
+
+  it('dismisses an exited tab without a prompt', () => {
+    dataState.terminals = { p1: [{ id: 't1', title: 'Review', status: 'exited', profile: 'claude' }] };
+    kb.press('W', { meta: true, shift: true });
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(closeTerminal).toHaveBeenCalledWith('t1', 'p1');
+  });
+});

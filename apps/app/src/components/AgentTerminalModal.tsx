@@ -168,7 +168,7 @@ export function AgentTerminalModal({
         </header>
 
         {/* Body: live PTY beside the shared thread secondary panel (Info / Diff /
-            extra tabs). Actions stay in the panel footer so Delete remains
+            extra tabs). Actions stay in the panel footer so Archive remains
             available while Diff or a tab is open. */}
         <div className="agent-modal-body">
           <AgentSessionView

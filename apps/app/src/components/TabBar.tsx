@@ -5,7 +5,12 @@ import { useUi, useAgentStatus, usePersonas } from '../store.js';
 import { getTerminal } from '../lib/findRegistry.js';
 import { profileIcon, personaIcon } from '../lib/profileIcon.js';
 import type { AgentState } from '@zana-ai/zcc-domain/product';
-import { cliAgentDeleteConfirm, cliAgentRestartLiveTitle } from './agentCardActions.js';
+import {
+  cliAgentArchives,
+  cliAgentRemoveConfirm,
+  cliAgentRemoveLabel,
+  cliAgentRestartLiveTitle
+} from './agentCardActions.js';
 import { platformShortcut } from '../lib/platformShortcut.js';
 
 /** Human label for the status dot's tooltip + aria. */
@@ -42,7 +47,7 @@ interface Props {
   onSelect: (id: string) => void;
   /**
    * Terminate a session: kills the pty and removes the tab. A restorable
-   * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Delete" item
+   * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Archive" item (Delete for a plain shell)
    * routes here for live sessions (with a confirm); exited tombstones also
    * route here from the X button / middle-click to dismiss without friction.
    */
@@ -53,7 +58,7 @@ interface Props {
    * under its real status, and clicking that row re-opens it (re-attaching the
    * same live pty). This is what the X button, middle-click, ⌘W, and the
    * context-menu "Hide" items do for live sessions — closing is non-destructive;
-   * only "Delete" terminates.
+   * only "Archive" (Delete for a plain shell) terminates.
    */
   onDetach?: (id: string) => void;
   /** Spawn a new terminal (a plain shell). The "+" button routes here. Agent
@@ -127,7 +132,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   // keeps its pty running and stays in the project's vertical list under its
   // real status (click that row to re-open it); an exited tab has no process
   // left, so it's just dismissed. The process is only ever terminated via the
-  // context-menu "Delete" or the project-list row's X — see `deleteOne`. No
+  // context-menu "Archive" (Delete for a plain shell) or the project-list row's X — see `removeOne`. No
   // confirm here: closing is non-destructive.
   const closeOne = (t: TerminalSession) => {
     if (t.status === 'exited' || !onDetach) {
@@ -138,12 +143,12 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   };
 
   // Destroy one tab: terminate the process and remove the tab. Live sessions
-  // get a confirm so a stray Delete can't silently kill a running agent;
+  // get a confirm so a stray Archive/Delete can't silently stop a running agent;
   // exited tabs are already dead, so they drop without friction. ⌘⇧T reopens.
-  const deleteOne = (t: TerminalSession) => {
+  const removeOne = (t: TerminalSession) => {
     if (
       t.status === 'exited' ||
-      window.confirm(cliAgentDeleteConfirm(t.title))
+      window.confirm(cliAgentRemoveConfirm(t))
     ) {
       onClose(t.id);
     }
@@ -325,7 +330,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
               title={
                 t.status === 'exited'
                   ? 'Dismiss tab'
-                  : 'Close tab — keeps the process running, still listed in the sidebar. Right-click → Delete to end it.'
+                  : `Close tab — keeps the process running, still listed in the sidebar. Right-click → ${cliAgentRemoveLabel(t)} to end it.`
               }
               onClick={(e) => {
                 e.stopPropagation();
@@ -488,11 +493,15 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
             <div className="tab-context-sep" />
             <button
               className="tab-context-danger"
-              onClick={() => { setTabMenu(null); deleteOne(t); }}
+              onClick={() => { setTabMenu(null); removeOne(t); }}
               disabled={!!t.pinned}
-              title={platformShortcut('Terminate this session and remove the tab. Reopen with ⌘⇧T.')}
+              title={
+                cliAgentArchives(t)
+                  ? 'Stop the agent and remove the tab. Its conversation stays in History.'
+                  : platformShortcut('Terminate this session and remove the tab. Reopen with ⌘⇧T.')
+              }
             >
-              {t.status === 'exited' ? 'Dismiss' : 'Delete'}
+              {cliAgentRemoveLabel(t)}
             </button>
             <button
               onClick={() => { setTabMenu(null); dismissExited(); }}
