@@ -31,6 +31,8 @@ export function boundarySpecs(paths) {
     if (/native-tool|harness\/(claude\/hooks|codex\/provider)|services\/mcp\/mcp-server|utility-entry|runtime-supervisor|fixtures\/plugins\/platform-hooks-probe/.test(path)) add('native-tool-policy-pty', 'platform-hooks-probe-fixture');
     // #421: StopFailure hook, resume service, wiring, IPC and the Settings section.
     if (/harness\/claude\/(hooks|interaction-hooks)|followups\/api-error-resume|api-error-resume-wiring|ipc\/api-error-resume|ApiErrorResumeSection/.test(path)) add('api-error-resume');
+    // #416: a Squad engineer that stops on an API error is nudged, restarted, then handed to the user.
+    if (/services\/execution\/(worker-api-error-recovery|service|store|projection)\.ts|squad-worker-restart|worker-api-error-recovery-wiring|api-error-resume-wiring|harness\/claude\/interaction-hooks|ExecutionJobDetails/.test(path)) add('job-team-api-error-recovery');
     if (/build-plugin-(app|server)\.ts/.test(path)) add('plugin-authoring-live');
     if (/opencode/.test(path)) add('opencode-launch-boundary');
     if (/desktop-browser/.test(path)) add('desktop-browser-broker');
