@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
 import {
+  type Stats,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readlinkSync,
-  rmSync,
+  realpathSync,
+  rmdirSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface ClaudeSkillPluginRoot {
   id: string;
@@ -82,12 +85,51 @@ export function ensureClaudeSkillPlugin(args: {
     current = null;
   }
   if (current !== args.root.path) {
-    rmSync(skillsLink, { recursive: true, force: true });
+    removeSkillsLink(skillsLink);
     // A junction needs no Developer Mode or admin rights on Windows, where a
     // "dir" symlink fails with EPERM; other platforms ignore the type.
     symlinkSync(args.root.path, skillsLink, "junction");
   }
   return pluginPath;
+}
+
+/**
+ * Remove the `skills` link before re-pointing it, as a link only. Never a
+ * recursive delete: on Windows the link is a junction into a real user folder
+ * (`~/.claude/skills`), and Electron's `rmSync` walks a junction as a plain
+ * directory and empties it. A real directory here is not ours, so refuse it.
+ */
+function removeSkillsLink(skillsLink: string): void {
+  let stat: Stats;
+  try {
+    stat = lstatSync(skillsLink);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const isLink =
+    stat.isSymbolicLink() ||
+    !samePath(
+      realpathSync.native(skillsLink),
+      join(realpathSync.native(dirname(skillsLink)), "skills"),
+    );
+  if (!isLink) {
+    throw new Error(`refusing to replace a real directory at ${skillsLink}`);
+  }
+  try {
+    unlinkSync(skillsLink);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EPERM" && code !== "EISDIR") throw error;
+    // `rmdir` on a Windows junction removes the junction, never its target.
+    rmdirSync(skillsLink);
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
 }
 
 export function createClaudeSkillPluginsRoot(baseDir = tmpdir()): string {
