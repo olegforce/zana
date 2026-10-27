@@ -17,7 +17,8 @@ import { join } from 'node:path';
 
 test.use({
   e2e: true,
-  initialConfig: { tmuxScope: 'off' },
+  // The default session cap follows the runner's RAM; CI allows fewer than the 12 threads here.
+  initialConfig: { tmuxScope: 'off', maxLiveSessions: 20 },
   launchEnv: process.platform === 'linux' ? { ZCC_E2E_VISIBLE: '1' } : {}
 });
 test.setTimeout(180_000);
