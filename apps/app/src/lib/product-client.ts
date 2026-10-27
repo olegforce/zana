@@ -144,6 +144,7 @@ function httpProduct(): Pick<
   | 'voice'
   | 'hosts'
   | 'marketplaces'
+  | 'pluginPacks'
   | 'cliSkills'
 > {
   let terminalRosterRead: Promise<{ sessions: TerminalSession[] }> | undefined;
@@ -1133,6 +1134,13 @@ function httpProduct(): Pick<
         body: JSON.stringify(input)
       })
     },
+    pluginPacks: {
+      list: () => apiJson('/plugin-packs'),
+      listInstalled: () => apiJson('/plugin-packs/installed'),
+      plan: (identity) => apiJson('/plugin-packs/plan', { method: 'POST', body: JSON.stringify(identity) }),
+      install: (request) => apiJson('/plugin-packs/install', { method: 'POST', body: JSON.stringify(request) }),
+      forget: (identity) => apiJson('/plugin-packs/forget', { method: 'POST', body: JSON.stringify(identity) })
+    },
     pluginApps: {
       list: async () => {
         const body = await apiJson<{ apps?: PluginAppEntry[] }>('/plugin-apps');
@@ -1368,6 +1376,12 @@ export type { PeerLeftover, PeerLeftoverListResponse };
  * Core Peers hub: plugin links and the uses that justify them. Owner gestures only;
  * the server re-validates every request, so this client carries no authority.
  */
+/** Core recovery must remain usable when plugin UI and providers are broken. */
+export const pluginRecovery = {
+  status: () => apiJson<import('@zana-ai/zcc-domain/product').PluginRecoveryState>('/plugin-apps/recovery'),
+  start: () => apiJson<import('@zana-ai/zcc-domain/product').PluginRecoveryState>('/plugin-apps/hard-reload', { method: 'POST', body: '{}' })
+};
+
 export const peerLinks = {
   list: async (): Promise<PeerLinkListResponse> => apiJson<PeerLinkListResponse>('/peer-links'),
   removeUse: async (hostId: string, pluginId: string, scope?: string): Promise<RemovePeerLinkResponse> =>
