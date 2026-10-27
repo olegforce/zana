@@ -57,7 +57,13 @@ writeTranscript();
 console.log('Claude wrap-up probe ready');
 idle();
 createInterface({ input: process.stdin }).on('line', (raw) => {
-  const line = raw.replace(/\x1b\[20[01]~/g, '').trim();
+  // Drop bracketed-paste markers and terminal replies: on a slow host, tmux's late device-attributes
+  // reply (\x1b[>0;276;0c, sometimes only "0;276;0c") leaks into the pane ahead of the typed text.
+  const line = raw
+    .replace(/\x1b\[20[01]~/g, '')
+    .replace(/\x1b\[[?>]?[0-9;]*c/g, '')
+    .replace(/^(?:[0-9]+(?:;[0-9]+)+c)+/, '')
+    .trim();
   if (!line) return;
   fs.appendFileSync(join(__dirname, 'typed.log'), line + '\n');
   if (line.includes('Wrap up this session')) {
