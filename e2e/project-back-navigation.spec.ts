@@ -1,0 +1,155 @@
+/**
+ * #532: Back from a project to the global view stalled for seconds and blinked
+ * the project's thread. The route render ran as a React transition, and every
+ * store update restarted it; `SplitThreadArea` switching the split scope during
+ * render made the two trees flip that scope back and forth. It only landed when
+ * React forced the transition after 5 s.
+ *
+ * It needs a loaded renderer to show, so this throttles the CPU through CDP and
+ * keeps one thread in the project emitting output, as a working agent does.
+ * Before the fix each Back took about 5.3 s here and the project thread was
+ * missing for most of it.
+ */
+import { test, expect, dismissConsentOverlays } from './fixtures/app.js';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+test.use({
+  e2e: true,
+  initialConfig: { tmuxScope: 'off' },
+  launchEnv: process.platform === 'linux' ? { ZCC_E2E_VISIBLE: '1' } : {}
+});
+test.setTimeout(180_000);
+
+// One stub for every claude thread: some scrollback, then either idle, or (in a
+// project with `.live`) a braille spinner title and status line every 100 ms.
+const STUB = `#!/bin/sh
+i=0
+while [ $i -lt 300 ]; do i=$((i+1)); echo "scrollback line $i"; done
+if [ -f .live ]; then
+  n=0
+  while :; do
+    n=$((n+1))
+    for g in '\\342\\240\\213' '\\342\\240\\231' '\\342\\240\\271' '\\342\\240\\270'; do
+      printf "\\033]2;$g Working\\007"
+      printf "\\r\\033[K$g Working (%d)" $n
+      sleep 0.1
+    done
+  done
+fi
+printf '\\033]2;\\342\\234\\263 Claude Code\\007'
+cat
+`;
+
+const CPU_THROTTLE = 6;
+const EXTRA_PROJECTS = 16;
+const BACK_BUDGET_MS = 3_000;
+
+type BackSample = { switchedMs: number | null; projectThreadMissingMs: number };
+
+test('Back from a busy project lands on the global view without blinking the project thread', async ({ app }) => {
+  const { window: page } = app;
+  await dismissConsentOverlays(page);
+  const root = mkdtempSync(join(tmpdir(), 'zcc-project-back-'));
+  const stub = join(root, 'claude-stub.sh');
+  writeFileSync(stub, STUB);
+  chmodSync(stub, 0o755);
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await page.evaluate(async (bin) => { await window.cc.config.set({ claudeBinary: bin }); }, stub);
+    const addProject = async (name: string, live = false) => {
+      const dir = join(root, name);
+      mkdirSync(dir);
+      if (live) writeFileSync(join(dir, '.live'), '');
+      return page.evaluate(async (path) => {
+        const res = await window.cc.projects.add(path);
+        if (!res.ok) throw new Error(res.message);
+        return res.value.id;
+      }, dir);
+    };
+    const addThread = (projectId: string, title: string) =>
+      page.evaluate(async ({ projectId, title }) => {
+        const res = await window.cc.terminals.create({ projectId, profile: 'claude', cols: 120, rows: 40, title });
+        if (!res.ok) throw new Error(res.message);
+        return res.value.id;
+      }, { projectId, title });
+
+    const globalThread = await addThread(await addProject('global-project'), 'Global thread');
+    const busyProject = await addProject('busy-project', true);
+    const busyThread = await addThread(busyProject, 'Busy thread');
+    // A realistic global sidebar: many projects, several with threads.
+    for (let i = 0; i < EXTRA_PROJECTS; i++) {
+      const projectId = await addProject(`project-${i}`);
+      if (i < 10) await addThread(projectId, `Thread ${i}`);
+    }
+
+    const go = (path: string) => page.evaluate((to) => {
+      history.pushState({}, '', to);
+      dispatchEvent(new PopStateEvent('popstate'));
+    }, path);
+    const back = page.getByRole('button', { name: 'Back to all projects', exact: true });
+    const visibleTerminal = page.locator('.term .xterm:visible').first();
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Back returns to the last global route, so open a global thread first.
+      await go(`/sessions/${encodeURIComponent(globalThread)}`);
+      await expect(visibleTerminal).toBeVisible({ timeout: 20_000 });
+      await go(`/projects/${encodeURIComponent(busyProject)}/sessions/${encodeURIComponent(busyThread)}`);
+      await expect(back).toBeVisible({ timeout: 20_000 });
+      await expect(visibleTerminal).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(1_500);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
+      await page.waitForTimeout(500);
+
+      // Watch the DOM, not frames: a hidden CI window may never paint.
+      await page.evaluate(() => {
+        const probe = { clickedAt: 0, switchedAt: 0, missingSince: 0, missingMs: 0, observer: null as MutationObserver | null };
+        (window as unknown as { __backProbe: typeof probe }).__backProbe = probe;
+        const projectThreadShown = () =>
+          [...document.querySelectorAll<HTMLElement>('.term .xterm')].some((el) => el.offsetParent !== null);
+        const sample = () => {
+          if (!probe.clickedAt || probe.switchedAt) return;
+          const now = performance.now();
+          if (!document.querySelector('.settings-app-back')) {
+            probe.switchedAt = now;
+            if (probe.missingSince) probe.missingMs += now - probe.missingSince;
+            probe.observer?.disconnect();
+            return;
+          }
+          if (!projectThreadShown()) probe.missingSince ||= now;
+          else if (probe.missingSince) {
+            probe.missingMs += now - probe.missingSince;
+            probe.missingSince = 0;
+          }
+        };
+        document.addEventListener('click', (event) => {
+          if ((event.target as Element | null)?.closest('.settings-app-back')) probe.clickedAt = performance.now();
+        }, { capture: true, once: true });
+        probe.observer = new MutationObserver(sample);
+        probe.observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+      });
+
+      await back.click();
+      await expect(back).toBeHidden({ timeout: 30_000 });
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+      const sample: BackSample = await page.evaluate(() => {
+        const probe = (window as unknown as {
+          __backProbe: { clickedAt: number; switchedAt: number; missingMs: number; observer: MutationObserver | null };
+        }).__backProbe;
+        probe.observer?.disconnect();
+        return {
+          switchedMs: probe.switchedAt ? Math.round(probe.switchedAt - probe.clickedAt) : null,
+          projectThreadMissingMs: Math.round(probe.missingMs)
+        };
+      });
+      console.log(`[project-back] attempt ${attempt}: switched after ${sample.switchedMs} ms, project thread missing ${sample.projectThreadMissingMs} ms`);
+      expect(sample.switchedMs).not.toBeNull();
+      expect(sample.switchedMs!).toBeLessThan(BACK_BUDGET_MS);
+      expect(sample.projectThreadMissingMs).toBe(0);
+    }
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
