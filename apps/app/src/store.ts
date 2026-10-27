@@ -201,6 +201,7 @@ export type SettingsTab =
   | 'squads'
   | 'usage'
   | 'performance'
+  | 'development'
   | 'experimental'
   | 'about'
   | 'machines'
@@ -1822,7 +1823,7 @@ interface DataState {
     proxyJump?: string;
     name?: string;
   }) => Promise<Project | null>;
-  cloneProject: (input: { url: string; name?: string }) => Promise<CloneProjectResult>;
+  cloneProject: (input: { url: string; name?: string; hostId?: string }) => Promise<CloneProjectResult>;
   updateProject: (
     id: string,
     patch: {

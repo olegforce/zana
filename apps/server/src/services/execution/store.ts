@@ -8,7 +8,8 @@ import {
   readRawFile
 } from '../harness-routing/storage.js';
 import type { WorkflowPolicyResultV1 } from './policy-result.js';
-import { EXECUTION_FAILURE_CODES, isDurableCoordination } from '@zana-ai/zcc-domain/product';
+import { EXECUTION_FAILURE_CODES, isDurableCoordination, isSquadExecutionTargetSelector } from '@zana-ai/zcc-domain/product';
+import type { SquadExecutionTargetSelector, SquadWorktreeOwnership } from '@zana-ai/zcc-domain/product';
 import type { ExecutionFailureCode, ExecutionSourceSnapshot, TeamLaunchAuthorizationContextV1 } from '@zana-ai/zcc-domain/product';
 import type { SquadBundleWorkflowMetadataV1, TeamLaunchAuthorizationInputSlot, TeamLaunchRequestInput } from '@zana-ai/zcc-domain/product';
 import { SQUAD_GOAL_MAX_CHARS, SQUAD_SUMMARY_MAX_CHARS, squadStoredFieldTooLong } from '@zana-ai/zcc-domain/squad-proposal';
@@ -321,6 +322,11 @@ export interface ExecutionRecord {
   proposalNoticeVersion?: number;
   /** Blockers already reported to `reportTo`, so a restart neither repeats nor drops one. Newest last, at most {@link MAX_REPORTED_BLOCKER_IDS}. */
   reportedBlockerIds?: string[];
+  /**
+   * Set at claim on a local Composer run (principal {@link LOCAL_COMPOSER_PRINCIPAL}, no report target) so its
+   * terminal Inbox result can be marked reported durably. Absent on older records, which are never replayed.
+   */
+  localReport?: true;
   createdAt: number;
   updatedAt: number;
   /** User hid terminal history from board; durable evidence remains retained. */
@@ -347,6 +353,14 @@ export function executionReportTarget(record: Pick<ExecutionRecord, 'reportTo' |
   } : undefined;
 }
 
+/** Principal of a run launched from the local Composer (no proposer, no `reportTo`). */
+export const LOCAL_COMPOSER_PRINCIPAL = 'interactive:local';
+
+/** A local Composer run whose terminal result is tracked by the durable reported mark. A plan-correction stop is not a result. */
+export function isLocalReportRecord(record: Pick<ExecutionRecord, 'localReport' | 'reportTo' | 'proposal' | 'timeoutReason'>): boolean {
+  return record.localReport === true && !executionReportTarget(record) && record.timeoutReason !== 'plan-correction-cancelled';
+}
+
 /** The attempt whose terminal report was handled, under either key. */
 export function reportedAttempt(record: Pick<ExecutionRecord, 'reportNoticeVersion' | 'proposalNoticeVersion'>): number | undefined {
   return record.reportNoticeVersion ?? record.proposalNoticeVersion;
@@ -368,7 +382,7 @@ export interface ExecutionNativeRecoverySnapshotV1 {
 }
 
 export type ExecutionClaimInput = Omit<ExecutionRecord,
-  'id' | 'teamLaunchRequestId' | 'attempt' | 'attemptStartedAt' | 'state' | 'stateVersion' | 'reportNoticeVersion' | 'proposalNoticeVersion' | 'reportedBlockerIds' | 'createdAt' | 'updatedAt' | 'workUnits' | 'blockers'
+  'id' | 'teamLaunchRequestId' | 'attempt' | 'attemptStartedAt' | 'state' | 'stateVersion' | 'reportNoticeVersion' | 'proposalNoticeVersion' | 'reportedBlockerIds' | 'localReport' | 'createdAt' | 'updatedAt' | 'workUnits' | 'blockers'
 > & { workUnits?: ExecutionWorkUnitInput[] };
 
 export interface ExecutionRequestSnapshotV1 {
@@ -387,8 +401,10 @@ export interface ExecutionRequestSnapshotV1 {
   /** Explicit execution API override. Undefined defers to project then Team defaults. */
   worktree?: boolean;
   onComplete?: 'leave' | 'merge' | 'delete';
-  /** Opt-in terminal inbox notice for runs without an owner report target. */
-  completionInboxNotice?: boolean;
+    /** Opt-in terminal inbox notice for runs without an owner report target. */
+    completionInboxNotice?: boolean;
+    /** Trusted selector for an existing user-owned target; absent keeps the legacy generated-worktree flag. */
+    target?: SquadExecutionTargetSelector;
 }
 
 /** Minimal durable identity for one shared squad checkout. */
@@ -396,6 +412,18 @@ export interface SquadWorktreeRecord {
   path: string;
   branch: string;
   baseBranch?: string;
+  /**
+   * Lifecycle owner. Absent on records written before selectors existed: only the
+   * generated-worktree path wrote those, so absent is read as `managed`.
+   */
+  ownership?: SquadWorktreeOwnership;
+  /** Selector kind that resolved a user-owned target. */
+  targetKind?: SquadExecutionTargetSelector['kind'];
+}
+
+/** A user-owned target is never deleted, merged, branched, cleaned, reset, or force-deleted. */
+export function isUserOwnedSquadWorktree(worktree: SquadWorktreeRecord | undefined): boolean {
+  return worktree?.ownership === 'user';
 }
 
 export interface ExecutionPolicyV1 extends NonNullable<TeamLaunchRequestInput['policy']> {
@@ -596,6 +624,19 @@ function validNoticeIntent(intent: unknown): intent is ExecutionNoticeIntent {
     && typeof value.createdAt === 'number' && typeof value.updatedAt === 'number';
 }
 
+function validSquadWorktree(value: unknown): value is SquadWorktreeRecord {
+  if (!value || typeof value !== 'object') return false;
+  const worktree = value as Partial<SquadWorktreeRecord>;
+  return hasOnlyKeys(value as Record<string, unknown>, ['path', 'branch', 'baseBranch', 'ownership', 'targetKind'])
+    && validString(worktree.path) && worktree.path.trim().length > 0
+    && validString(worktree.branch) && worktree.branch.trim().length > 0
+    && (worktree.baseBranch === undefined || validString(worktree.baseBranch) && worktree.baseBranch.trim().length > 0)
+    && (worktree.ownership === undefined || worktree.ownership === 'managed' || worktree.ownership === 'user')
+    && (worktree.ownership === 'user'
+      ? worktree.targetKind === 'project-root' || worktree.targetKind === 'worktree'
+      : worktree.targetKind === undefined);
+}
+
 function validRecord(value: unknown): value is ExecutionRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<ExecutionRecord>;
@@ -614,6 +655,7 @@ function validRecord(value: unknown): value is ExecutionRecord {
     && (record.authorizationContext === undefined || validAuthorizationContext(record.authorizationContext))
     && (record.authorizationContextDigest === undefined || validString(record.authorizationContextDigest))
     && (record.launchIntent === undefined || validLaunchIntent(record.launchIntent))
+    && (record.squadWorktree === undefined || validSquadWorktree(record.squadWorktree))
     && (record.policyResult === undefined || validPolicyResult(record.policyResult))
     && (record.effectiveOwnerPrincipalIds === undefined || Array.isArray(record.effectiveOwnerPrincipalIds) && record.effectiveOwnerPrincipalIds.every(validString))
     && (record.recoveryGeneration === undefined || Number.isInteger(record.recoveryGeneration) && record.recoveryGeneration >= 0)
@@ -644,6 +686,7 @@ function validRecord(value: unknown): value is ExecutionRecord {
     && (record.proposal === undefined || validProposal(record.proposal))
     && (record.reportTo === undefined || validReportTarget(record.reportTo))
     && (record.reportNoticeVersion === undefined || validNonNegativeInteger(record.reportNoticeVersion))
+    && (record.localReport === undefined || record.localReport === true)
     && (record.proposalNoticeVersion === undefined || validNonNegativeInteger(record.proposalNoticeVersion))
     && (record.reportedBlockerIds === undefined || Array.isArray(record.reportedBlockerIds) && record.reportedBlockerIds.length <= MAX_REPORTED_BLOCKER_IDS && record.reportedBlockerIds.every(validString))
     && typeof record.createdAt === 'number' && typeof record.updatedAt === 'number'
@@ -976,6 +1019,7 @@ function validRequestSnapshot(value: unknown): value is ExecutionRequestSnapshot
     && (request.worktree === undefined || typeof request.worktree === 'boolean')
     && (request.onComplete === undefined || ['leave', 'merge', 'delete'].includes(request.onComplete))
     && (request.completionInboxNotice === undefined || typeof request.completionInboxNotice === 'boolean')
+    && (request.target === undefined || isSquadExecutionTargetSelector(request.target))
     && (request.sourceBundle === undefined || validSourceBundle(request.sourceBundle))
     && (request.policy === undefined || validExecutionPolicy(request.policy))
     && (request.workflow === undefined || typeof request.workflow === 'object');
@@ -1301,6 +1345,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
         ...(input.reportTo.title === undefined ? {} : { title: string(input.reportTo.title, 'report target title') })
       } } : {})
     };
+    const localReport = !bounded.reportTo && !bounded.proposal && bounded.callerPrincipalId === LOCAL_COMPOSER_PRINCIPAL;
     return storeQueue.run(async () => {
       const snapshot = read();
       const existing = snapshot.state.records.find((record) =>
@@ -1315,7 +1360,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       }
       const timestamp = now();
       const record: ExecutionRecord = {
-        ...bounded, id: string(id(), 'id'), teamLaunchRequestId: bounded.launchRequestId, attempt: 1, attemptStartedAt: timestamp, state: 'READY', stateVersion: 0, lastEventSequence: 0,
+        ...bounded, ...(localReport ? { localReport: true as const } : {}), id: string(id(), 'id'), teamLaunchRequestId: bounded.launchRequestId, attempt: 1, attemptStartedAt: timestamp, state: 'READY', stateVersion: 0, lastEventSequence: 0,
         deliveries: [], noticeIntents: [], recoveryGeneration: 0, recoveryDeadlineAt: timestamp + EXECUTION_RECOVERY_TTL_MS, createdAt: timestamp, updatedAt: timestamp
       };
       snapshot.state.records.push(record);
@@ -1386,18 +1431,37 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       const record = snapshot.state.records.find((candidate) => candidate.id === string(executionId, 'id'));
       if (!record) throw new Error('execution not found');
       if (record.stateVersion !== expectedStateVersion) throw new Error('stale execution state');
+      if (!squadWorktree || typeof squadWorktree !== 'object'
+        || !hasOnlyKeys(squadWorktree as unknown as Record<string, unknown>, ['path', 'branch', 'baseBranch', 'ownership', 'targetKind'])) {
+        throw new Error('invalid squad worktree record');
+      }
       const reattachingWorktree = record.squadWorktree !== undefined;
+      const ownership = squadWorktree.ownership ?? 'managed';
+      if (ownership !== 'managed' && ownership !== 'user') throw new Error('invalid squad worktree ownership');
+      if (ownership === 'user' && squadWorktree.targetKind !== 'project-root' && squadWorktree.targetKind !== 'worktree') {
+        throw new Error('invalid squad worktree target kind');
+      }
+      if (ownership === 'managed' && squadWorktree.targetKind !== undefined) throw new Error('invalid squad worktree target kind');
+      const path = string(squadWorktree.path, 'squad worktree path');
+      const branch = string(squadWorktree.branch, 'squad worktree branch');
+      if (!path.trim() || !branch.trim()) throw new Error('invalid squad worktree record');
+      const baseBranch = squadWorktree.baseBranch === undefined
+        ? undefined
+        : string(squadWorktree.baseBranch, 'squad worktree base branch');
+      if (baseBranch !== undefined && !baseBranch.trim()) throw new Error('invalid squad worktree record');
       if (record.squadWorktree) {
-        if (record.squadWorktree.branch !== squadWorktree.branch) {
+        if (record.squadWorktree.branch !== branch
+          || (record.squadWorktree.ownership ?? 'managed') !== ownership) {
           throw new Error('squad worktree already differs');
         }
-        if (record.squadWorktree.path === squadWorktree.path &&
-          (record.squadWorktree.baseBranch || !squadWorktree.baseBranch)) return clone(record);
+        if (record.squadWorktree.path === path &&
+          (record.squadWorktree.baseBranch || !baseBranch)) return clone(record);
       }
       record.squadWorktree = {
-        path: string(squadWorktree.path, 'squad worktree path'),
-        branch: string(squadWorktree.branch, 'squad worktree branch'),
-        ...(squadWorktree.baseBranch ? { baseBranch: string(squadWorktree.baseBranch, 'squad worktree base branch') } : {})
+        path,
+        branch,
+        ...(baseBranch !== undefined ? { baseBranch } : {}),
+        ...(ownership === 'user' ? { ownership, targetKind: squadWorktree.targetKind } : {})
       };
       record.stateVersion += 1;
       record.updatedAt = now();
@@ -1435,7 +1499,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       const snapshot = read();
       const record = snapshot.state.records.find((candidate) => candidate.id === string(executionId, 'id'));
       if (!record) throw new Error('execution not found');
-      if (!terminalStates.has(record.state) || !executionReportTarget(record)) throw new Error('terminal report target is unavailable');
+      if (!terminalStates.has(record.state) || !(executionReportTarget(record) || isLocalReportRecord(record))) throw new Error('terminal report target is unavailable');
       if (record.attempt !== attempt) throw new Error('stale execution attempt');
       if (reportedAttempt(record) === attempt) return clone(record);
       record.reportNoticeVersion = attempt;
@@ -1482,6 +1546,9 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
       if (!record) throw new Error('execution not found');
       if (record.stateVersion !== expectedStateVersion) throw new Error('stale execution state');
       if (!terminalStates.has(record.state) || !record.squadWorktree) throw new Error('terminal squad worktree is unavailable');
+      if (disposition === 'deleted' && isUserOwnedSquadWorktree(record.squadWorktree)) {
+        throw new Error('a user-owned squad target is never deleted');
+      }
       if (disposition === 'left') record.squadWorktreeDisposition = 'left';
       else {
         record.squadWorktree = undefined;
@@ -3074,7 +3141,7 @@ export function createExecutionStore(options: ExecutionStoreOptions) {
 
   async function listUnreportedExecutions(): Promise<ExecutionRecord[]> {
     return storeQueue.run(async () => clone(read().state.records.filter((record) =>
-      executionReportTarget(record) !== undefined && terminalStates.has(record.state) && reportedAttempt(record) !== record.attempt
+      (executionReportTarget(record) !== undefined || isLocalReportRecord(record)) && terminalStates.has(record.state) && reportedAttempt(record) !== record.attempt
     )));
   }
 
