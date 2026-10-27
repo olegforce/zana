@@ -1,0 +1,336 @@
+/**
+ * Wrap up before closing (issue #537) — when the user closes CLI agents with
+ * "Close with follow-up" and the experiment is on, ask each resting local
+ * Claude agent to summarise, self-learn and tidy up first, then write the inbox
+ * record from the whole session and let the renderer close it.
+ *
+ * Same shape as {@link ApiErrorResumeService}: every collaborator is injected
+ * (no Electron, timers via deps) and every gate is re-checked when a timer fires,
+ * because the agent may have moved on during the wait.
+ *
+ * Safety:
+ *  - Types only into a RESTING, local, Claude-family agent with no half-typed
+ *    draft, never into a permission prompt (`blocked`) or while it works, and
+ *    only ONE line (a TUI without bracketed paste submits each line).
+ *  - Yields to the human: if `lastKeyInputAt` (real keys only, not mouse or
+ *    focus reports) moved since the send, the person typed, so we stop and keep
+ *    the agent open. `reply()` never stamps it.
+ *  - Every other session with a transcript (Codex, OpenCode, remote Claude, an
+ *    agent at a prompt) is not typed into; it gets a record without a wrap-up.
+ *  - A question or an unanswered prompt keeps the agent open; a failed summary
+ *    never blocks the close the user asked for.
+ *  - Every timer and pending entry is released on every path (Rule 3).
+ */
+
+import { isRestfulAgentState, type AgentState, type CloseFollowupFailure, type CloseFollowupKeptOpen } from '@zana-ai/zcc-domain/product';
+import type {
+  CloseRecordHow,
+  CloseSummaryFailure,
+  KeptOpenReason,
+  SessionCloseNote,
+  SummarizeForCloseResult
+} from './close-summary.js';
+
+/** A rest (or a block) must last this long before the turn counts as finished. */
+export const SETTLE_MS = 5_000;
+/** An agent still busy this long after the click is left running. */
+export const TURN_TIMEOUT_MS = 15 * 60_000;
+/** Summary calls in flight across the whole service; wrap-ups themselves run in parallel. */
+export const MAX_CONCURRENT_SUMMARIES = 5;
+
+/** Collapse every whitespace run, newlines included, to one space: one line for a TUI prompt. */
+export function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export interface WrapUpSession {
+  projectId: string;
+  profile: string;
+  status: string;
+  title: string;
+  lastKeyInputAt?: number;
+  draftPending?: boolean;
+  /** A session whose harness runs on a remote host (no Stop hook, never typed into). */
+  remote: boolean;
+}
+
+export interface WrapUpCloseDeps {
+  /** The live instruction text (Settings value or the default). */
+  getInstructions: () => string;
+  getSession: (sessionId: string) => WrapUpSession | null;
+  hasTranscript: (profile: string) => boolean;
+  /** True for Claude-family profiles: the only ones that are typed into. */
+  isTypeable: (profile: string) => boolean;
+  getAgentState: (sessionId: string) => string;
+  /** Type a line into the session (body + deferred CR). Returns false if gone. */
+  reply: (sessionId: string, text: string) => boolean;
+  markNeedsYou: (sessionId: string) => void;
+  summarizeForClose: (projectId: string, sessionId: string) => Promise<SummarizeForCloseResult>;
+  recordClose: (
+    projectId: string,
+    sessionId: string,
+    title: string,
+    note: SessionCloseNote,
+    how: CloseRecordHow
+  ) => Promise<{ summarized: 0 | 1; followedUp: 0 | 1; failures?: CloseSummaryFailure[] }>;
+  recordKeptOpen: (
+    projectId: string,
+    sessionId: string,
+    title: string,
+    reason: KeptOpenReason,
+    note?: SessionCloseNote
+  ) => Promise<{ recorded: 0 | 1; failures?: CloseSummaryFailure[] }>;
+  now: () => number;
+  setTimer: (fn: () => void, ms: number) => NodeJS.Timeout;
+  clearTimer: (handle: NodeJS.Timeout) => void;
+  log: (line: string) => void;
+}
+
+export interface WrapUpCloseResult {
+  summarized: number;
+  followedUp: number;
+  failures?: CloseFollowupFailure[];
+  /** Agents that must stay open; absent ids (gone, skipped, closeable) are closed by the renderer. */
+  keptOpen: CloseFollowupKeptOpen[];
+}
+
+interface Outcome {
+  summarized: number;
+  followedUp: number;
+  failures: CloseSummaryFailure[];
+  keptOpen?: CloseFollowupKeptOpen['reason'];
+}
+
+const EMPTY: Outcome = { summarized: 0, followedUp: 0, failures: [] };
+
+/** `pre`: waiting for a working agent to rest. `sent`: typed, waiting for it to start. `active`: working on the wrap-up. `finishing`: summarising. */
+type Phase = 'pre' | 'sent' | 'active' | 'finishing';
+
+interface Active {
+  projectId: string;
+  phase: Phase;
+  keyAtSend: number | undefined;
+  settle?: { timer: NodeJS.Timeout; kind: 'rest' | 'blocked' };
+  timeout?: NodeJS.Timeout;
+  settleOutcome: (outcome: Outcome) => void;
+  promise: Promise<Outcome>;
+  startedAt: number;
+}
+
+export class WrapUpCloseService {
+  private active = new Map<string, Active>();
+  private summariesInFlight = 0;
+  private summaryWaiters: Array<() => void> = [];
+
+  constructor(private readonly deps: WrapUpCloseDeps) {}
+
+  /** True from the click until the outcome: auto-close-idle must not close the agent meanwhile. */
+  isWrappingUp(sessionId: string): boolean {
+    return this.active.has(sessionId);
+  }
+
+  async run(projectId: string, sessionIds: string[]): Promise<WrapUpCloseResult> {
+    const ids = [...new Set(sessionIds)];
+    const outcomes = await Promise.all(ids.map((id) => this.wrapUp(projectId, id)));
+    const result: WrapUpCloseResult = { summarized: 0, followedUp: 0, keptOpen: [] };
+    const failures: CloseSummaryFailure[] = [];
+    ids.forEach((sessionId, i) => {
+      const o = outcomes[i];
+      result.summarized += o.summarized;
+      result.followedUp += o.followedUp;
+      failures.push(...o.failures);
+      if (o.keptOpen) result.keptOpen.push({ sessionId, reason: o.keptOpen });
+    });
+    if (failures.length) result.failures = failures;
+    return result;
+  }
+
+  /** Feed every agent status change; drives the wrap-up of sessions in `run`. */
+  observe(sessionId: string, state: AgentState | string): void {
+    const entry = this.active.get(sessionId);
+    if (!entry || entry.phase === 'finishing') return;
+    const { deps } = this;
+    if (entry.phase !== 'pre') {
+      const session = deps.getSession(sessionId);
+      if (!session) return this.finish(sessionId, entry, EMPTY);
+      if (session.lastKeyInputAt !== entry.keyAtSend) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    }
+    if (entry.phase === 'pre') {
+      if (state === 'blocked') void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'waiting-on-prompt'));
+      else if (isRestfulAgentState(state as AgentState)) this.send(sessionId, entry);
+      return;
+    }
+    if (entry.phase === 'sent') {
+      if (state === 'working') entry.phase = 'active';
+      return;
+    }
+    // active: a rest or a block must last SETTLE_MS; anything else restarts the wait.
+    const kind = state === 'blocked' ? 'blocked' : isRestfulAgentState(state as AgentState) ? 'rest' : null;
+    if (entry.settle && entry.settle.kind === kind) return;
+    this.clearSettle(entry);
+    if (kind) {
+      entry.settle = { kind, timer: deps.setTimer(() => this.onSettle(sessionId, entry, kind), SETTLE_MS) };
+    }
+  }
+
+  /** The pty exited: resolve that session as gone and release its timers. */
+  forget(sessionId: string): void {
+    const entry = this.active.get(sessionId);
+    if (entry && entry.phase !== 'finishing') this.finish(sessionId, entry, EMPTY);
+  }
+
+  private wrapUp(projectId: string, sessionId: string): Promise<Outcome> {
+    const existing = this.active.get(sessionId);
+    // Already wrapping up: do not type again, await the same outcome (counted once).
+    if (existing) return existing.promise.then((o) => ({ ...EMPTY, keptOpen: o.keptOpen }));
+    const { deps } = this;
+    const session = deps.getSession(sessionId);
+    if (!session || session.projectId !== projectId || session.status === 'exited' || !deps.hasTranscript(session.profile)) {
+      return Promise.resolve(EMPTY);
+    }
+    let settleOutcome!: (outcome: Outcome) => void;
+    const promise = new Promise<Outcome>((resolve) => { settleOutcome = resolve; });
+    const entry: Active = { projectId, phase: 'pre', keyAtSend: undefined, settleOutcome, promise, startedAt: deps.now() };
+    this.active.set(sessionId, entry);
+    entry.timeout = deps.setTimer(() => this.onTimeout(sessionId, entry), TURN_TIMEOUT_MS);
+
+    const state = deps.getAgentState(sessionId);
+    if (!deps.isTypeable(session.profile) || session.remote || state === 'unknown') {
+      void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'no-wrap-up'));
+    } else if (state === 'blocked') {
+      void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'waiting-on-prompt'));
+    } else if (isRestfulAgentState(state as AgentState)) {
+      this.send(sessionId, entry);
+    }
+    return promise;
+  }
+
+  /** Type the instructions into a resting agent, once, unless a draft or a key press says a person is there. */
+  private send(sessionId: string, entry: Active): void {
+    const { deps } = this;
+    const session = deps.getSession(sessionId);
+    if (!session) return this.finish(sessionId, entry, EMPTY);
+    if (session.draftPending) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    entry.keyAtSend = session.lastKeyInputAt;
+    if (!deps.reply(sessionId, oneLine(deps.getInstructions()))) {
+      deps.log(`[wrap-up-close] session=${sessionId.slice(0, 8)} skip: reply failed`);
+      return this.finish(sessionId, entry, EMPTY);
+    }
+    entry.phase = 'sent';
+  }
+
+  /** A rest or block lasted SETTLE_MS: re-check every gate, then summarise and record. */
+  private onSettle(sessionId: string, entry: Active, kind: 'rest' | 'blocked'): void {
+    entry.settle = undefined;
+    if (this.active.get(sessionId) !== entry || entry.phase !== 'active') return;
+    const { deps } = this;
+    const state = deps.getAgentState(sessionId);
+    const still = kind === 'blocked' ? state === 'blocked' : isRestfulAgentState(state as AgentState);
+    if (!still) return;
+    const session = deps.getSession(sessionId);
+    if (!session) return this.finish(sessionId, entry, EMPTY);
+    if (session.lastKeyInputAt !== entry.keyAtSend) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    void this.settleAfter(sessionId, entry, kind === 'rest' ? this.restEndOutcome(sessionId, entry) : this.blockEndOutcome(sessionId, entry));
+  }
+
+  private onTimeout(sessionId: string, entry: Active): void {
+    entry.timeout = undefined;
+    if (this.active.get(sessionId) !== entry || entry.phase === 'finishing') return;
+    void this.settleAfter(sessionId, entry, this.timeoutOutcome(sessionId, entry));
+  }
+
+  /** Run `work` as the final step: stop the timers, mark `finishing`, then resolve with its outcome. */
+  private async settleAfter(sessionId: string, entry: Active, work: Promise<Outcome>): Promise<void> {
+    entry.phase = 'finishing';
+    this.clearTimers(entry);
+    let outcome = EMPTY;
+    try {
+      outcome = await work;
+    } catch (err) {
+      this.deps.log(`[wrap-up-close] session=${sessionId.slice(0, 8)} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.finish(sessionId, entry, outcome);
+  }
+
+  private finish(sessionId: string, entry: Active, outcome: Outcome): void {
+    this.clearTimers(entry);
+    if (this.active.get(sessionId) === entry) this.active.delete(sessionId);
+    this.deps.log(`[wrap-up-close] session=${sessionId.slice(0, 8)} done after ${Math.round((this.deps.now() - entry.startedAt) / 1000)}s${outcome.keptOpen ? ` kept open: ${outcome.keptOpen}` : ''}`);
+    entry.settleOutcome(outcome);
+  }
+
+  private clearSettle(entry: Active): void {
+    if (!entry.settle) return;
+    this.deps.clearTimer(entry.settle.timer);
+    entry.settle = undefined;
+  }
+
+  private clearTimers(entry: Active): void {
+    this.clearSettle(entry);
+    if (entry.timeout) this.deps.clearTimer(entry.timeout);
+    entry.timeout = undefined;
+  }
+
+  /** Summarise a session that is not typed into and record it as closed without a wrap-up. */
+  private async summaryOutcome(sessionId: string, entry: Active, how: 'waiting-on-prompt' | 'no-wrap-up'): Promise<Outcome> {
+    const res = await this.summarize(entry.projectId, sessionId);
+    if (!res.ok) return this.failed(res.reason);
+    return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, how));
+  }
+
+  private async restEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
+    const res = await this.summarize(entry.projectId, sessionId);
+    if (!res.ok) return this.failed(res.reason);
+    if (res.note.asksUser) {
+      this.deps.markNeedsYou(sessionId);
+      return this.kept(await this.deps.recordKeptOpen(entry.projectId, sessionId, res.title, 'asks-you', res.note), 'asks-you');
+    }
+    return this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, 'wrapped'));
+  }
+
+  /** The agent stopped on a prompt or a question: record what we know and keep it open. */
+  private async blockEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
+    const res = await this.summarize(entry.projectId, sessionId);
+    if (!res.ok && res.reason === 'ineligible') return EMPTY;
+    const failures: CloseSummaryFailure[] = res.ok || res.reason === 'ineligible' ? [] : [{ reason: res.reason }];
+    const session = this.deps.getSession(sessionId);
+    const title = res.ok ? res.title : (session?.title ?? sessionId);
+    const kept = await this.deps.recordKeptOpen(entry.projectId, sessionId, title, 'asks-you', res.ok ? res.note : undefined);
+    return { ...this.kept(kept, 'asks-you'), failures: [...failures, ...(kept.failures ?? [])] };
+  }
+
+  private async timeoutOutcome(sessionId: string, entry: Active): Promise<Outcome> {
+    const session = this.deps.getSession(sessionId);
+    const kept = await this.deps.recordKeptOpen(entry.projectId, sessionId, session?.title ?? sessionId, 'timeout');
+    return this.kept(kept, 'timeout');
+  }
+
+  /** A failed or empty summary is reported, and the agent stays closeable. `ineligible` is not a failure. */
+  private failed(reason: 'ineligible' | 'empty' | 'summary-failed'): Outcome {
+    return reason === 'ineligible' ? EMPTY : { ...EMPTY, failures: [{ reason }] };
+  }
+
+  private closed(r: { summarized: number; followedUp: number; failures?: CloseSummaryFailure[] }): Outcome {
+    return { summarized: r.summarized, followedUp: r.followedUp, failures: r.failures ?? [] };
+  }
+
+  private kept(r: { failures?: CloseSummaryFailure[] }, reason: CloseFollowupKeptOpen['reason']): Outcome {
+    return { ...EMPTY, failures: r.failures ?? [], keptOpen: reason };
+  }
+
+  /** One semaphore for every run: at most {@link MAX_CONCURRENT_SUMMARIES} summary calls at a time. */
+  private async summarize(projectId: string, sessionId: string): Promise<SummarizeForCloseResult> {
+    if (this.summariesInFlight >= MAX_CONCURRENT_SUMMARIES) {
+      await new Promise<void>((resolve) => this.summaryWaiters.push(resolve));
+    } else {
+      this.summariesInFlight++;
+    }
+    try {
+      return await this.deps.summarizeForClose(projectId, sessionId);
+    } finally {
+      const next = this.summaryWaiters.shift();
+      if (next) next(); // hand the slot straight over
+      else this.summariesInFlight--;
+    }
+  }
+}

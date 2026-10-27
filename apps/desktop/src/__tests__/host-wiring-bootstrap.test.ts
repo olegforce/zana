@@ -858,6 +858,39 @@ describe('host bootstrap wiring', () => {
     expect(await ctx().apiErrorResume.check('nothing', [])).toEqual({ ruleId: null, skipped: [] });
   });
 
+  it('feeds agent status to the wrap-up service, forgets it on exit and exposes it to IPC', async () => {
+    const observe = vi.spyOn(ctx().wrapUpClose, 'observe');
+    const forget = vi.spyOn(ctx().wrapUpClose, 'forget');
+    try {
+      h.ptys.sessions.set('wu1', sessionFixture({ id: 'wu1', projectId: project.id, profile: 'claude' }));
+      ctx().agentStatus.emit('status', 'wu1', 'working', 1);
+      expect(observe).toHaveBeenCalledWith('wu1', 'working');
+      h.ptys.emit('exit', 'wu1', 0);
+      await settle();
+      expect(forget).toHaveBeenCalledWith('wu1');
+    } finally {
+      observe.mockRestore();
+      forget.mockRestore();
+    }
+    expect(ctx().wrapUpClose.run).toBeTypeOf('function');
+  });
+
+  it('spares an agent from auto-close while it is wrapping up', async () => {
+    h.ptys.sessions.set('wu2', sessionFixture({ id: 'wu2', projectId: project.id, profile: 'claude' }));
+    const config = store.getConfig();
+    const cfg = vi.spyOn(store, 'getConfig').mockReturnValue({ ...config, autoCloseIdleEnabled: true });
+    const wrapping = vi.spyOn(ctx().wrapUpClose, 'isWrappingUp').mockReturnValue(true);
+    try {
+      const eligible = () => (ctx().autoCloseIdle as any).eligible('wu2') as boolean;
+      expect(eligible()).toBe(false);
+      wrapping.mockReturnValue(false);
+      expect(eligible()).toBe(true);
+    } finally {
+      wrapping.mockRestore();
+      cfg.mockRestore();
+    }
+  });
+
   it('spares an agent that rested on an API error from auto-close until its next turn', async () => {
     h.ptys.sessions.set('af3', sessionFixture({ id: 'af3', projectId: project.id, profile: 'claude' }));
     const config = store.getConfig();

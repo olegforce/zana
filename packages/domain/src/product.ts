@@ -5382,6 +5382,14 @@ export interface CloseFollowupFailure {
   detail?: string;
 }
 
+/** Why Close with follow-up left an agent open after a wrap-up request. */
+export type CloseFollowupKeptOpenReason = 'asks-you' | 'typed' | 'timeout';
+
+export interface CloseFollowupKeptOpen {
+  sessionId: string;
+  reason: CloseFollowupKeptOpenReason;
+}
+
 export interface FollowUpUpdateInput {
   title?: string;
   detail?: string;

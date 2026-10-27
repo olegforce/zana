@@ -37,3 +37,27 @@ Touch `lastTriageBySession` cache (size, fill, drop) → verify parked question 
 Modify foreground/favorite spares → verify they remain advisory-only, never authorize (Rule 1).
 
 Touch `isFavorite` key resolution → verify reattach across restore.
+
+## Wrap up before closing (wrap-up-close.ts)
+
+### Invariants
+
+1. Types only into a resting, local, Claude-family agent with no pending draft, as ONE line (`oneLine`) through `reply()`. Codex, OpenCode, remote Claude, `blocked` and `unknown` agents are summarised and recorded without a wrap-up, never typed into.
+
+2. Yields to the human through `lastKeyInputAt` (real keys only), not `lastInputAt`, which also moves on mouse and focus reports. A change since the send keeps the agent open as `typed`, with no summary.
+
+3. Every gate (state, `lastKeyInputAt`, session still there) is re-checked when the settle timer fires. Every timer and pending entry is released on every path (Rule 3).
+
+4. Auto-close-idle spares a session while `isWrappingUp(sessionId)` (host.ts ORs it into `isFavorite`).
+
+5. A failed summary never blocks the close: the agent stays closeable and the failure is reported. A question, an unanswered prompt, typing or the 15-minute timeout keep the agent open (`keptOpen`).
+
+6. The off path is today's `summarizeAndFollowUp`: `IPC.terminals.closeFollowup` calls the service only when `closeWrapUpEnabled === true`.
+
+### When changing
+
+Type into a non-resting agent, or a multi-line text → `reply()` wedges the TUI or submits each line.
+
+Use `lastInputAt` for the typed check → mouse and focus reports end the wrap-up early.
+
+Add a timer or per-session map → release it in `finish`/`forget`.

@@ -2,7 +2,7 @@ import type { ThreadHistoryQuery, ThreadHistoryPage, ConversationTranscript } fr
 import type { DesktopBrowserApi } from './browser.js';
 import type { SquadLaunchPrefill, SquadProposalErrorCode } from '@zana-ai/zcc-domain/squad-proposal';
 import type { MarketplaceCatalogRow } from '@zana-ai/zcc-domain';
-import type { CloseFollowupFailure } from '@zana-ai/zcc-domain/product';
+import type { CloseFollowupFailure, CloseFollowupKeptOpen } from '@zana-ai/zcc-domain/product';
 import type { OwnNotificationLevel, ThreadNotificationState } from '@zana-ai/zcc-domain';
 import type {
   ProviderCliInstallActionKind,
@@ -1097,6 +1097,8 @@ export interface CcApi {
       followedUp: number;
       /** Why a step produced nothing; absent from older main. */
       failures?: CloseFollowupFailure[];
+      /** Agents the wrap-up left open (asked a question, was typed in, or timed out); absent = every agent may be closed. */
+      keptOpen?: CloseFollowupKeptOpen[];
     }>;
   };
   config: {
