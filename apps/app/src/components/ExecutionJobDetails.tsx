@@ -50,6 +50,12 @@ function jobHeaderLines(projectId: string, execution: ExecutionProjection): stri
   return lines;
 }
 
+const RECOVERY_TEXT: Record<string, string> = {
+  waiting: 'waiting to nudge',
+  nudged: 'nudged, waiting for a new turn',
+  restarted: 'restarted, waiting for a new turn'
+};
+
 /** Work units + per-assignment claim/churn lines. */
 function workUnitLines(work: ExecutionProjection['work']): string[] {
   const lines: string[] = [];
@@ -63,6 +69,7 @@ function workUnitLines(work: ExecutionProjection['work']): string[] {
     lines.push(`      claimedAt: ${formatTimestamp(assignment.claimedAt)} · heartbeatAt: ${formatTimestamp(assignment.heartbeatAt)} · progressAt: ${formatTimestamp(assignment.progressAt)} · leaseExpiresAt: ${formatTimestamp(assignment.leaseExpiresAt)}`);
     lines.push(`      attempt: ${assignment.attempt ?? '—'} · turnCount: ${assignment.turnCount ?? '—'} · claimGeneration: ${assignment.claimGeneration ?? '—'} · claimId: ${assignment.claimId ?? '—'}`);
     lines.push(`      health: ${assignment.healthState ?? 'HEALTHY'} · reclaims: ${assignment.reclaimCount ?? 0} · attemptedSlots: ${assignment.attemptedSlots?.join(', ') || '—'} · quarantinedSlots: ${assignment.quarantinedSlots?.join(', ') || '—'}`);
+    if (assignment.recovery) lines.push(`      recovery: ${assignment.recovery.step}${assignment.recovery.errorKind ? ` (${assignment.recovery.errorKind})` : ''} since ${formatTimestamp(assignment.recovery.since)}`);
     if (assignment.dependencies?.length) lines.push(`      dependencies: ${assignment.dependencies.join(', ')}`);
     if (assignment.result) lines.push(`      result: ${assignment.result}`);
   }
@@ -392,6 +399,7 @@ export function ExecutionJobDetails({ projectId, executionId, onClose }: Props) 
         const assignedSlotId = assignmentDrafts[assignment.workUnitId] ?? assignment.slotId ?? execution.work?.rosterSlotIds[0] ?? '';
         return <div key={assignment.workUnitId}>
           {assignment.title} → {assignment.slotId ?? 'unassigned'} · {assignment.state}
+          {assignment.recovery && <p role="status" className="execution-details-recovery-reason">Recovering engineer after API error: {RECOVERY_TEXT[assignment.recovery.step] ?? assignment.recovery.step}</p>}
           {!isTerminal && (assignment.state === 'FAILED' || assignment.state === 'BLOCKED') && <>
             <select aria-label={`Assignment for ${assignment.title}`} value={assignedSlotId} onChange={(event) => setAssignmentDrafts((current) => ({ ...current, [assignment.workUnitId]: event.target.value }))}>
               <option value="">Unassigned</option>{execution.work?.rosterSlotIds.map((slotId) => <option key={slotId} value={slotId}>{slotId}</option>)}

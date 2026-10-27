@@ -23,6 +23,7 @@ import { PROVIDER_BRIDGE_PROTOCOL_VERSION } from "@zana-ai/zcc-provider-bridge-p
 import { handleLine } from "./bridge.js";
 import { ACP_BRIDGE_NO_ACTIVE_TURN_ERROR_CODE } from "../bridge-protocol.js";
 import { ACP_BRIDGE_MCP_SERVER_NAME } from "./tool-proxy-mcp.js";
+import * as cursorMaintenance from "./cursor-maintenance.js";
 
 const FAKE_AGENT_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -622,6 +623,96 @@ describe("acp bridge", () => {
       supported: true,
       health: { status: "ready" },
     });
+  });
+
+  it("checks the configured executable with its own cwd and environment", async () => {
+    const command = join(workspaceDir, "health-wrapper");
+    writeFileSync(command, '#!/bin/sh\n[ "$PWD" = "$EXPECTED_CWD" ] && [ "$AGENT_READY" = "yes" ] || exit 42\necho 1.2.3\n');
+    chmodSync(command, 0o755);
+    const configuredCwd = await import("node:fs/promises").then(fs => fs.realpath(workspaceDir));
+    const providerOptions = { acpLaunchSpec: {
+      displayName: "Custom", command, args: ["acp"], cwd: configuredCwd,
+      env: { EXPECTED_CWD: configuredCwd, AGENT_READY: "yes" },
+    } };
+    const health = await waitForResponse(sendRequest("provider/health", {
+      providerId: "acp-opencode", cwd: "/ignored-request-cwd", providerOptions,
+    }));
+    expect(health.result).toMatchObject({ health: { status: "ready", installedVersion: "1.2.3" } });
+    writeFileSync(command, '#!/bin/sh\necho "missing wrapper dependency" >&2\nexit 127\n');
+    const broken = await waitForResponse(sendRequest("provider/health", {
+      providerId: "acp-opencode", providerOptions,
+    }));
+    expect(broken.result).toMatchObject({ health: { status: "unknown", statusMessage: expect.stringContaining("missing wrapper dependency") } });
+  });
+
+  it("uses the request cwd when the configured launch has no native cwd", async () => {
+    const command = join(workspaceDir, "health-request-cwd");
+    writeFileSync(command, `#!${process.execPath}\nif (process.cwd() !== process.env.EXPECTED_CWD) process.exit(42);\nconsole.log("2.3.4");\n`);
+    chmodSync(command, 0o755);
+    const cwd = await import("node:fs/promises").then(fs => fs.realpath(workspaceDir));
+    const result = await waitForResponse(sendRequest("provider/health", {
+      providerId: "custom-acp",
+      cwd,
+      providerOptions: { acpLaunchSpec: {
+        displayName: "Custom", command, args: [], env: { EXPECTED_CWD: cwd },
+      } },
+    }));
+    expect(result.result).toMatchObject({ health: { status: "ready", installedVersion: "2.3.4" } });
+  });
+
+  it("reports unsupported maintenance when no launch profile or dialect is configured", async () => {
+    expect((await waitForResponse(sendRequest("provider/health", { providerId: "custom-acp" }))).result)
+      .toEqual({ supported: false });
+    expect((await waitForResponse(sendRequest("provider/usage", { providerId: "custom-acp" }))).result)
+      .toEqual({ supported: false });
+  });
+
+  it("dispatches Cursor maintenance and preserves configured health launch context", async () => {
+    const healthResult = { supported: false } as const;
+    const usageResult = { supported: true, usage: { status: "unauthenticated" } } as const;
+    const installResult: Awaited<ReturnType<typeof cursorMaintenance.getCursorProviderInstallationStatus>> = {
+      executableName: "cursor-agent",
+      executablePath: null,
+      installed: false,
+      installSource: "notInstalled",
+      currentVersion: null,
+      latestVersion: null,
+      minimumSupportedVersion: null,
+      npmPackageName: null,
+      npmGlobalPackageVersion: null,
+      installAction: null,
+      needsUpdate: false,
+      versionUnsupported: false,
+    };
+    const runResult = { available: false, message: "No update available" } as const;
+    const health = vi.spyOn(cursorMaintenance, "getCursorProviderHealth").mockResolvedValue(healthResult);
+    const usage = vi.spyOn(cursorMaintenance, "getCursorProviderUsage").mockResolvedValue(usageResult);
+    const installation = vi.spyOn(cursorMaintenance, "getCursorProviderInstallationStatus")
+      .mockResolvedValue(installResult);
+    const run = vi.spyOn(cursorMaintenance, "getCursorProviderInstallationRun").mockResolvedValue(runResult);
+    const launch = { command: "/configured/cursor-agent", cwd: workspaceDir, env: { HOME: workspaceDir } };
+    const params = { providerId: "custom-acp", providerOptions: { acpLaunchSpec: {
+      displayName: "Custom Cursor", args: [], ...launch,
+    } } };
+    try {
+      for (const [method, result] of [
+        ["provider/health", healthResult],
+        ["provider/usage", usageResult],
+        ["provider/installation/status", installResult],
+        ["provider/installation/run", runResult],
+      ] as const) {
+        expect((await waitForResponse(sendRequest(method, { ...params, action: "update" }))).result).toEqual(result);
+      }
+      expect(health).toHaveBeenCalledWith({}, launch);
+      expect(run).toHaveBeenCalledWith("update");
+      expect(usage).toHaveBeenCalledOnce();
+      expect(installation).toHaveBeenCalledOnce();
+    } finally {
+      health.mockRestore();
+      usage.mockRestore();
+      installation.mockRestore();
+      run.mockRestore();
+    }
   });
 
   it("acknowledges thread/discard without a live session", async () => {

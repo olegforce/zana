@@ -17,6 +17,7 @@ export function boundarySpecs(paths) {
     if (/^(apps\/|packages\/|plugins\/|e2e\/|scripts\/.*(electron|e2e|build)|electron\.vite|package\.json|pnpm-lock)/.test(path)) add('smoke');
     if (/threads|thread-view|agent-runtime|provider-bridge|provider-(acp|codex)|host-hub|control-sdk/.test(path)) add('thread-plan-ux', 'thread-refresh-progress', 'provider-bridge-framing', 'thread-loading');
     if (/plugin-host-artifact|plugin-service|build-plugin-host|prepare-plugin-runtime|before-pack-plugins|provider-(acp|codex|claude-code)|electron-builder|release\.yml/.test(path)) add('packaged-provider-startup');
+    if (/plugin-recovery|plugin-service|DevelopmentView|before-pack-plugins|release\.yml/.test(path)) add('development-recovery');
     if (/conversation-(pruning|output|history-maintenance)/.test(path)) add('thread-history-pruning');
     if (/inbox|feed-categories/.test(path)) add('inbox-read-persistence');
     if (/plugins\/tasks\//.test(path)) add('tasks-bb-parity', 'mobile-tasks');
@@ -31,7 +32,10 @@ export function boundarySpecs(paths) {
     if (/native-tool|harness\/(claude\/hooks|codex\/provider)|services\/mcp\/mcp-server|utility-entry|runtime-supervisor|fixtures\/plugins\/platform-hooks-probe/.test(path)) add('native-tool-policy-pty', 'platform-hooks-probe-fixture');
     // #421: StopFailure hook, resume service, wiring, IPC and the Settings section.
     if (/harness\/claude\/(hooks|interaction-hooks)|followups\/api-error-resume|api-error-resume-wiring|ipc\/api-error-resume|ApiErrorResumeSection/.test(path)) add('api-error-resume');
+    // #416: a Squad engineer that stops on an API error is nudged, restarted, then handed to the user.
+    if (/services\/execution\/(worker-api-error-recovery|service|store|projection)\.ts|squad-worker-restart|worker-api-error-recovery-wiring|api-error-resume-wiring|harness\/claude\/interaction-hooks|ExecutionJobDetails/.test(path)) add('job-team-api-error-recovery');
     if (/build-plugin-(app|server)\.ts/.test(path)) add('plugin-authoring-live');
+    if (/plugins\/design-docs\/src\/server\/(sync-store|peer-protocol)|(?:^|\/)isolated-plugin-runtime|e2e\/fixtures\/peer-design-docs-worker/.test(path)) add('peer-data-boundary');
     if (/opencode/.test(path)) add('opencode-launch-boundary');
     if (/desktop-browser/.test(path)) add('desktop-browser-broker');
     if (/mobile-relay|mobile\/|mobile-/.test(path)) add('mobile-shell', 'mobile-relay-upload');
