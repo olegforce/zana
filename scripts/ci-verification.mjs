@@ -41,7 +41,7 @@ export function boundarySpecs(paths) {
     // Owner report-back: the service, the MCP server that carries execution.start, and the notifier/report text.
     if (/services\/execution\/service\.ts|services\/mcp\/mcp-server|squad-proposals\/(notifier|report)/.test(path)) add('squad-direct-report');
     // Close with follow-up crosses the main/renderer seam: the summary, its failure reasons and the toast (#352).
-    if (/followups\/close-summary|lib\/close-idle-agents|claude-cli-provider|main-claude-binary/.test(path)) add('close-with-follow-up-needs-you');
+    if (/followups\/(close-summary|wrap-up-close|session-summary-text)|lib\/close-idle-agents|claude-cli-provider|main-claude-binary|wrap-up-close-wiring|threads\/thread-wrap-up/.test(path)) add('close-with-follow-up-needs-you', 'close-with-follow-up-wrap-up');
     if (/execution-source-picker|ipc\/execution-board|services\/execution\/source-registry|team-launch-support|TeamComposer|team-composer-sources/.test(path)) add('squad-source-retry');
     if (/ci-verification|\.github\/workflows\/ci\.yml/.test(path)) add('smoke');
   }

@@ -1,0 +1,183 @@
+/**
+ * Built-Electron: Close with follow-up with "Wrap up before closing" on (#537).
+ *
+ * A stub Claude CLI runs the REAL `UserPromptSubmit` and `Stop` hook commands main
+ * injected into its `--settings`, as Claude Code does, and writes a transcript the
+ * app reads. The wrap-up instructions must reach the PTY as ONE typed line, the
+ * agent must close only after its turn ended, and the inbox must hold a record made
+ * from the whole session. When the summary says the agent asks the user something,
+ * the agent stays open and its tab reads Needs you.
+ *
+ * The stub ends its turn with `Stop`, not `StopFailure` (that is the API-error path).
+ */
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Page } from '@playwright/test';
+import { test, expect, launchApp, closeApp } from './fixtures/app.js';
+import { captureElectronScreenshot } from './fixtures/native-screenshot.js';
+
+const CLAUDE_STUB = String.raw`
+const fs = require('node:fs');
+const os = require('node:os');
+const { join } = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { createInterface } = require('node:readline');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('2.1.296 (Claude Code)'); process.exit(0); }
+if (args.includes('--print')) {
+  const at = args.indexOf('--system-prompt');
+  if (at >= 0 && args[at + 1].includes('Asks the user')) {
+    const asks = fs.existsSync(join(__dirname, 'asks.flag')) ? 'yes' : 'no';
+    console.log(['**Goal** — Probe goal.', '', '**What it did**', '- Did the probe work.', '', '**Left / next**', '- Check the probe result.', '', 'Unfinished: yes', 'Asks the user: ' + asks].join('\n'));
+  } else console.log('Probe');
+  process.exit(0);
+}
+const sid = args[args.indexOf('--session-id') + 1];
+const at = args.indexOf('--settings');
+const hooks = (at >= 0 ? JSON.parse(args[at + 1]) : { hooks: {} }).hooks || {};
+const commands = (event) => (hooks[event] || []).flatMap((entry) => (entry.hooks || []).map((hook) => hook.command));
+const run = (event, input) => commands(event).forEach((command) =>
+  spawnSync('/bin/sh', ['-c', command], { input, env: process.env, timeout: 15000, encoding: 'utf8' }));
+const idle = () => process.stdout.write('\x1b]0;✳ Claude Code\x07');
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const writeTranscript = () => {
+  const dir = join(os.homedir(), '.claude', 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const user = { type: 'user', message: { role: 'user', content: 'Do the probe work' } };
+  const assistant = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'I did the probe work and wrapped up.' }] } };
+  fs.writeFileSync(join(dir, sid + '.jsonl'), JSON.stringify(user) + '\n' + JSON.stringify(assistant) + '\n');
+};
+writeTranscript();
+console.log('Claude wrap-up probe ready');
+idle();
+createInterface({ input: process.stdin }).on('line', (raw) => {
+  const line = raw.replace(/\x1b\[20[01]~/g, '').trim();
+  if (!line) return;
+  fs.appendFileSync(join(__dirname, 'typed.log'), line + '\n');
+  if (line.includes('Wrap up this session')) {
+    run('UserPromptSubmit', JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: line }));
+    sleep(1500); // long enough for the 250 ms status debounce to emit "working"
+    run('Stop', JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }));
+  }
+  idle();
+});
+`;
+
+// The stub's OSC title replaces the title the spec passes at create time.
+const TITLE = 'Claude Code';
+
+async function launchStub(home: string) {
+  const stubDir = mkdtempSync(join(tmpdir(), 'zcc-wrap-up-'));
+  writeFileSync(join(stubDir, 'claude-stub.cjs'), `#!${process.execPath}\n${CLAUDE_STUB}`, { mode: 0o700 });
+  const app = await launchApp(home, {
+    e2e: true,
+    initialConfig: {
+      sponsorPromptDismissed: true,
+      claudeBinary: join(stubDir, 'claude-stub.cjs'),
+      closeWrapUpEnabled: true,
+      autoRenameTabs: false
+    }
+  });
+  const typed = () => {
+    const file = join(stubDir, 'typed.log');
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  };
+  const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'zcc-wrap-up-project-')));
+  mkdirSync(projectDir, { recursive: true });
+  const win = app.window;
+  const projectId = await win.evaluate(async (path) => {
+    const result = await window.cc.projects.add(path);
+    if (!result.ok) throw new Error(result.message);
+    return result.value.id as string;
+  }, projectDir);
+  const sessionId = await win.evaluate(async (projectId) => {
+    const result = await window.cc.terminals.create({ projectId, profile: 'claude', cols: 100, rows: 32, title: 'Wrap Up Probe' });
+    const session = result && 'ok' in result ? result.value : result;
+    if (!session?.id) throw new Error(JSON.stringify(result));
+    return session.id as string;
+  }, projectId);
+  const state = () => win.evaluate(async (id) => {
+    const pairs = (await window.cc.terminals.agentStatusSnapshot()) as Array<[string, string]>;
+    return pairs.find(([sid]) => sid === id)?.[1];
+  }, sessionId);
+  const live = () => win.evaluate(async ({ pid, sid }) => {
+    const sessions = (await window.cc.terminals.list(pid)) as Array<{ id: string; status?: string }>;
+    return sessions.some((s) => s.id === sid && s.status !== 'exited');
+  }, { pid: projectId, sid: sessionId });
+  const inbox = (sid: string) => win.evaluate(async ({ pid, sid }) => {
+    const { entries } = await window.cc.inbox.history({ projectId: pid, limit: 50 });
+    return entries.filter((e) => e.sessionId === sid).map((e) => e.comments ?? '');
+  }, { pid: projectId, sid });
+  const cleanup = async () => {
+    await closeApp(app.electron);
+    rmSync(stubDir, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  };
+  return { app, win, stubDir, typed, sessionId, projectId, state, live, inbox, cleanup };
+}
+
+/** Open the agent in the Agents list and click Close with follow-up, answering the confirm. */
+async function clickClose(win: Page): Promise<() => string> {
+  await win.locator('[data-testid="nav-agents"]').click();
+  await win.getByLabel('List view').click();
+  await expect(win.locator('.agent-monitor-list')).toBeVisible({ timeout: 15_000 });
+  const card = win.locator('.agent-monitor-list').getByText(TITLE).first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.click();
+  const closeButton = win.getByRole('button', { name: 'Close with follow-up' });
+  await expect(closeButton).toBeVisible({ timeout: 15_000 });
+  let message = '';
+  win.once('dialog', (dialog) => { message = dialog.message(); void dialog.accept(); });
+  await closeButton.click();
+  return () => message;
+}
+
+test('Close with follow-up wraps the agent up, then closes it with a full record', async ({ home }, testInfo) => {
+  test.setTimeout(150_000);
+  const stub = await launchStub(home);
+  const { win } = stub;
+  try {
+    await expect.poll(stub.state, { timeout: 20_000 }).toBe('idle');
+    const confirmText = await clickClose(win);
+    expect(confirmText()).toContain('The agent first saves what it learnt and tidies up');
+    await expect(win.getByRole('button', { name: 'Wrapping up…' })).toBeVisible({ timeout: 8_000 });
+    await captureElectronScreenshot(stub.app.electron, win, testInfo.outputPath('wrap-up-busy.png'));
+    await testInfo.attach('wrap-up-busy', { path: testInfo.outputPath('wrap-up-busy.png'), contentType: 'image/png' });
+
+    await expect.poll(stub.live, { timeout: 60_000, message: 'the agent was not closed' }).toBe(false);
+
+    const typed = stub.typed();
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toMatch(/^Wrap up this session; it will be closed when you finish\. 1\. Summarise:/);
+
+    await expect.poll(async () => (await stub.inbox(stub.sessionId)).join('\n'), { timeout: 20_000 })
+      .toContain('Closed after it wrapped up.');
+    expect((await stub.inbox(stub.sessionId)).join('\n')).toContain('Probe goal');
+    const followUps = await win.evaluate(() => window.cc.followups.list());
+    expect(followUps.some((f) => f.title === 'Check the probe result.')).toBe(true);
+  } finally {
+    await stub.cleanup();
+  }
+});
+
+test('an agent that asks the user something stays open and reads Needs you', async ({ home }) => {
+  test.setTimeout(150_000);
+  const stub = await launchStub(home);
+  const { win } = stub;
+  try {
+    writeFileSync(join(stub.stubDir, 'asks.flag'), '1');
+    await expect.poll(stub.state, { timeout: 20_000 }).toBe('idle');
+    await clickClose(win);
+
+    await expect
+      .poll(async () => (await stub.inbox(stub.sessionId)).join('\n'), { timeout: 60_000 })
+      .toContain('Still open: it asked you something while wrapping up.');
+    await expect(win.locator('.toast').filter({ hasText: /Kept 1 agent open/ })).toBeVisible({ timeout: 10_000 });
+    await expect.poll(stub.state, { timeout: 10_000 }).toBe('blocked');
+    expect(await stub.live()).toBe(true);
+    expect(stub.typed()).toHaveLength(1);
+  } finally {
+    await stub.cleanup();
+  }
+});
