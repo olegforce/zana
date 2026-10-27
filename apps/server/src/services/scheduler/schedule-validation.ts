@@ -37,7 +37,7 @@ export function normalizeRetry(raw: unknown): ScheduleRetryPolicy | undefined {
 function normalizeConversation(raw: unknown): ScheduleRunConversation | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const { profile, id, cwd, startedAt } = raw as Record<string, unknown>;
-  if (typeof profile !== 'string' || typeof cwd !== 'string' || typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return undefined;
+  if (typeof profile !== 'string' || !VALID_PROFILES.includes(profile as LaunchProfileId) || typeof cwd !== 'string' || typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return undefined;
   if (id !== undefined && !isValidConversationId(id)) return undefined;
   return { profile: profile as LaunchProfileId, ...(id !== undefined ? { id } : {}), cwd, startedAt };
 }

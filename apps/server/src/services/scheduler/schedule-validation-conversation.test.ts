@@ -26,6 +26,8 @@ describe('schedule run conversation validation', () => {
     ['a flag-like id', { profile: 'claude', id: '--flag', cwd: '/p', startedAt: '2026-10-27T10:00:00Z' }],
     ['a non-string id', { profile: 'claude', id: 7, cwd: '/p', startedAt: '2026-10-27T10:00:00Z' }],
     ['a missing cwd', { profile: 'claude', startedAt: '2026-10-27T10:00:00Z' }],
+    ['an unregistered profile', { profile: 'not-a-harness', id: 'abc', cwd: '/p', startedAt: '2026-10-27T10:00:00Z' }],
+    ['a profile with different case', { profile: 'Claude', id: 'abc', cwd: '/p', startedAt: '2026-10-27T10:00:00Z' }],
     ['a non-string profile', { profile: 3, cwd: '/p', startedAt: '2026-10-27T10:00:00Z' }],
     ['an unparseable startedAt', { profile: 'claude', cwd: '/p', startedAt: 'x' }],
     ['a missing startedAt', { profile: 'claude', cwd: '/p' }],
