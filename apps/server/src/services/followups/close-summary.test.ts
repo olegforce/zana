@@ -520,6 +520,16 @@ describe('CloseSummaryService.summarizeAndFollowUp', () => {
     );
   });
 
+  it('shows a dash for an empty Did in the digest and the follow-up detail', async () => {
+    const deps = makeDeps({ runSummary: vi.fn(async () => okResult('{"did":"","left":"Tests failing"}')) });
+    await new CloseSummaryService(deps).summarizeAndFollowUp('p1', ['a']);
+    const arg = (deps.appendInbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.comments).toContain('**Did:** —');
+    expect(deps.createFollowUp).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: expect.stringContaining('**Did:** —') })
+    );
+  });
+
   it('writes the digest but NO follow-up when every agent finished (left empty)', async () => {
     const deps = makeDeps({
       runSummary: vi.fn(async () => okResult('{"did":"Shipped it","left":""}'))
