@@ -35,8 +35,14 @@ import type {
 export const SETTLE_MS = 5_000;
 /** An agent still busy this long after the click is left running. */
 export const TURN_TIMEOUT_MS = CLOSE_WRAP_UP_TIMEOUT_MINUTES * 60_000;
-/** Summary calls in flight across the whole service; wrap-ups themselves run in parallel. */
+/** Summary calls in flight across the whole service. */
 export const MAX_CONCURRENT_SUMMARIES = 5;
+/**
+ * Wrap-up turns running at once across the whole service. Every agent is
+ * registered at the click (so typing, auto-close-idle and heartbeat already
+ * see it); the rest wait in `queued` and are typed into as a slot frees.
+ */
+export const MAX_ACTIVE_WRAP_UPS = 4;
 
 /** Collapse every whitespace run, newlines included, to one space: one line for a TUI prompt. */
 export function oneLine(text: string): string {
@@ -103,8 +109,8 @@ interface Outcome {
 
 const EMPTY: Outcome = { summarized: 0, followedUp: 0, failures: [] };
 
-/** `pre`: waiting for a working agent to rest. `sent`: typed, waiting for it to start. `active`: working on the wrap-up. `finishing`: summarising. */
-type Phase = 'pre' | 'sent' | 'active' | 'finishing';
+/** `queued`: waiting for a wrap-up slot. `pre`: waiting for a working agent to rest. `sent`: typed, waiting for it to start. `active`: working on the wrap-up. `finishing`: summarising. */
+type Phase = 'queued' | 'pre' | 'sent' | 'active' | 'finishing';
 
 interface Active {
   projectId: string;
@@ -116,12 +122,16 @@ interface Active {
   settleOutcome: (outcome: Outcome) => void;
   promise: Promise<Outcome>;
   startedAt: number;
+  /** Holds one of the {@link MAX_ACTIVE_WRAP_UPS} slots. */
+  slot?: boolean;
 }
 
 export class WrapUpCloseService {
   private active = new Map<string, Active>();
   private summariesInFlight = 0;
   private summaryWaiters: Array<() => void> = [];
+  private slotsInUse = 0;
+  private waiting: Array<{ sessionId: string; entry: Active }> = [];
 
   constructor(private readonly deps: WrapUpCloseDeps) {}
 
@@ -154,6 +164,7 @@ export class WrapUpCloseService {
     const session = deps.getSession(sessionId);
     if (!session) return this.finish(sessionId, entry, EMPTY);
     if (session.lastKeyInputAt !== entry.keyAtClick) return this.finish(sessionId, entry, { ...EMPTY, keptOpen: 'typed' });
+    if (entry.phase === 'queued') return; // nothing typed yet; it waits for a slot
     if (entry.phase === 'pre') {
       if (state === 'blocked') void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'waiting-on-prompt'));
       else if (isRestfulAgentState(state as AgentState)) this.send(sessionId, entry);
@@ -197,6 +208,16 @@ export class WrapUpCloseService {
     this.observe(sessionId, this.deps.getAgentState(sessionId));
   }
 
+  /**
+   * Claude's StopFailure (an API error ended the turn): the wrap-up did not
+   * finish, so the agent stays open and the inbox says the turn failed.
+   */
+  onTurnFailed(sessionId: string): void {
+    const entry = this.active.get(sessionId);
+    if (entry?.phase !== 'sent' && entry?.phase !== 'active') return;
+    void this.settleAfter(sessionId, entry, this.turnErrorOutcome(sessionId, entry));
+  }
+
   private wrapUp(projectId: string, sessionId: string): Promise<Outcome> {
     const existing = this.active.get(sessionId);
     // Already wrapping up: do not type again, await the same outcome (counted once).
@@ -208,19 +229,42 @@ export class WrapUpCloseService {
     }
     let settleOutcome!: (outcome: Outcome) => void;
     const promise = new Promise<Outcome>((resolve) => { settleOutcome = resolve; });
-    const entry: Active = { projectId, phase: 'pre', keyAtClick: session.lastKeyInputAt, settleOutcome, promise, startedAt: deps.now() };
+    const entry: Active = { projectId, phase: 'queued', keyAtClick: session.lastKeyInputAt, settleOutcome, promise, startedAt: deps.now() };
+    // Registered at the click, before any slot is free: typing is measured from here, and
+    // auto-close-idle and heartbeat already leave the agent alone (isWrappingUp).
     this.active.set(sessionId, entry);
-    entry.timeout = deps.setTimer(() => this.onTimeout(sessionId, entry), TURN_TIMEOUT_MS);
+    this.dispatch(sessionId, entry);
+    return promise;
+  }
 
+  /** Decide what a registered session does now: a record without a wrap-up, a wrap-up turn, or wait for a slot. */
+  private dispatch(sessionId: string, entry: Active): void {
+    const { deps } = this;
+    const session = deps.getSession(sessionId);
+    if (!session) return this.finish(sessionId, entry, EMPTY);
     const state = deps.getAgentState(sessionId);
     if (!deps.isTypeable(session.profile) || session.remote || state === 'unknown') {
       void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'no-wrap-up'));
     } else if (state === 'blocked') {
       void this.settleAfter(sessionId, entry, this.summaryOutcome(sessionId, entry, 'waiting-on-prompt'));
-    } else if (isRestfulAgentState(state as AgentState)) {
-      this.send(sessionId, entry);
+    } else if (this.slotsInUse < MAX_ACTIVE_WRAP_UPS) {
+      this.slotsInUse++;
+      entry.slot = true;
+      entry.phase = 'pre';
+      entry.timeout = deps.setTimer(() => this.onTimeout(sessionId, entry), TURN_TIMEOUT_MS);
+      if (isRestfulAgentState(state as AgentState)) this.send(sessionId, entry);
+      // working: wait in `pre` until it rests (observe)
+    } else {
+      this.waiting.push({ sessionId, entry });
     }
-    return promise;
+  }
+
+  /** A slot freed: start the next waiting wrap-up that is still registered. */
+  private startWaiting(): void {
+    while (this.slotsInUse < MAX_ACTIVE_WRAP_UPS && this.waiting.length > 0) {
+      const { sessionId, entry } = this.waiting.shift()!;
+      if (this.active.get(sessionId) === entry && entry.phase === 'queued') this.dispatch(sessionId, entry);
+    }
   }
 
   /** Type the instructions into a resting agent, once, unless a draft or a key press says a person is there. */
@@ -274,6 +318,12 @@ export class WrapUpCloseService {
   private finish(sessionId: string, entry: Active, outcome: Outcome): void {
     this.clearTimers(entry);
     if (this.active.get(sessionId) === entry) this.active.delete(sessionId);
+    if (entry.phase === 'queued') this.waiting = this.waiting.filter((w) => w.entry !== entry);
+    if (entry.slot) {
+      entry.slot = false;
+      this.slotsInUse--;
+      this.startWaiting();
+    }
     this.deps.log(`[wrap-up-close] session=${sessionId.slice(0, 8)} done after ${Math.round((this.deps.now() - entry.startedAt) / 1000)}s${outcome.keptOpen ? ` kept open: ${outcome.keptOpen}` : ''}`);
     entry.settleOutcome(outcome);
   }
@@ -292,6 +342,8 @@ export class WrapUpCloseService {
 
   /** Summarise a session that is not typed into and record it as closed without a wrap-up. */
   private async summaryOutcome(sessionId: string, entry: Active, how: 'waiting-on-prompt' | 'no-wrap-up'): Promise<Outcome> {
+    // A forced close may start on an agent that is already working: only a change into working is new work.
+    const before = this.deps.getAgentState(sessionId);
     const res = await this.summarize(entry.projectId, sessionId);
     // A key press during the summary (for example answering the prompt) means a person took over.
     if (this.keysMoved(sessionId, entry)) return { ...EMPTY, keptOpen: 'typed' };
@@ -299,7 +351,7 @@ export class WrapUpCloseService {
     const written = this.closed(await this.deps.recordClose(entry.projectId, sessionId, res.title, res.note, how));
     // The record write takes a moment too: a key press or new work since then keeps the agent open.
     const now = this.deps.getAgentState(sessionId);
-    return this.keysMoved(sessionId, entry) || now === 'working' ? { ...written, keptOpen: 'typed' } : written;
+    return this.keysMoved(sessionId, entry) || (before !== 'working' && now === 'working') ? { ...written, keptOpen: 'typed' } : written;
   }
 
   private async restEndOutcome(sessionId: string, entry: Active): Promise<Outcome> {
@@ -343,6 +395,12 @@ export class WrapUpCloseService {
     const title = res.ok ? res.title : session.title;
     const kept = await this.deps.recordKeptOpen(entry.projectId, sessionId, title, 'asks-you', res.ok ? res.note : undefined);
     return { ...this.kept(kept, 'asks-you'), failures: [...failures, ...(kept.failures ?? [])] };
+  }
+
+  private async turnErrorOutcome(sessionId: string, entry: Active): Promise<Outcome> {
+    const session = this.deps.getSession(sessionId);
+    const kept = await this.deps.recordKeptOpen(entry.projectId, sessionId, session?.title ?? sessionId, 'turn-error');
+    return this.kept(kept, 'turn-error');
   }
 
   private async timeoutOutcome(sessionId: string, entry: Active): Promise<Outcome> {

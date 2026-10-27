@@ -72,10 +72,8 @@ export interface ThreadWrapUpHost {
   recordKeptOpen: (projectId: string, threadId: string, title: string, reason: KeptOpenReason, note?: SessionCloseNote) => Promise<unknown>;
   /** Today's last-turn record, for when the whole-thread summary failed. */
   recordLastTurn: (projectId: string, threadId: string, title: string, lastTurn: string) => Promise<{ summarized: number }>;
-  /** Ids of the queued sends of exactly this text (the wrap-up message waiting for the thread to rest). */
-  queuedSendIds: (threadId: string, text: string) => string[];
-  /** How many sends of any text are queued for the thread. */
-  queuedCount: (threadId: string) => number;
+  /** The thread's queued sends, oldest first: `queued`, then `dispatching` while being sent, or `failed`. */
+  queuedSends: (threadId: string) => Array<{ id: string; text?: string; status: string }>;
   dropQueuedSend: (threadId: string, id: string) => void;
   /** The thread still exists and is not archived (read from the store, not from an update). */
   isOpen: (threadId: string) => boolean;
@@ -101,7 +99,8 @@ class Job {
   private timeout: NodeJS.Timeout | undefined;
   private armed = false;
   private sent = false;
-  private queuedBefore = new Set<string>();
+  /** Our own queued row, when the send was queued behind a running turn; undefined when it went straight in. */
+  private ownRowId: string | undefined;
   private needIdle = false;
   private edge = false;
   private done = false;
@@ -126,14 +125,13 @@ class Job {
         return 'kept-open';
       }
       // Offline host, or other messages already queued ahead: the next turn would not be the wrap-up's.
-      if (!host.hostOnline(thread) || host.queuedCount(thread.id) > 0) {
+      if (!host.hostOnline(thread) || host.queuedSends(thread.id).length > 0) {
         this.finish();
         return 'fallback';
       }
       this.unsubscribe = host.subscribe((payload) => this.onUpdate(payload));
       this.timeout = host.setTimer(() => void this.keepOpen('timeout'), WRAP_UP_TIMEOUT_MS);
       this.seqBeforeSend = Math.max(0, ...host.messages(thread.id).map((m) => m.seq));
-      this.queuedBefore = new Set(host.queuedSendIds(thread.id, this.instructions));
       this.needIdle = isActive(host.getStatus(thread.id));
       this.armed = true;
       this.sent = true;
@@ -142,6 +140,15 @@ class Job {
       host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} could not start: ${err instanceof Error ? err.message : String(err)}`);
       this.finish();
       return 'fallback';
+    }
+    // The message is sent: from here on a failure is logged, never a fallback (that would archive mid wrap-up).
+    try {
+      // Nothing was queued before ours, so a queued row with our text is our own message: track it by id.
+      this.ownRowId = host.queuedSends(thread.id).find((row) => row.text === this.instructions.trim())?.id;
+      // Re-read once: an update during the send was judged before our row was known.
+      this.onUpdate({ id: thread.id, status: host.getStatus(thread.id), hasPendingInteraction: host.hasPendingInteraction(thread.id) });
+    } catch (err) {
+      host.log(`[thread-wrap-up] thread=${thread.id.slice(0, 8)} could not re-read after the send: ${err instanceof Error ? err.message : String(err)}`);
     }
     return 'wrapping-up';
   }
@@ -155,18 +162,21 @@ class Job {
       const view = payload as ThreadUpdate | null;
       if (this.done || !this.armed || !view || view.id !== this.thread.id) return;
       if (view.archivedAt != null) return this.finish(); // someone else archived it: nothing left to do
-      // An `error` before the wrap-up turn began is the earlier turn's, not the wrap-up's.
-      if (view.status === 'error' && this.edge) {
-        void this.keepOpen('turn-error');
-        return;
-      }
-      this.watchPending(view.hasPendingInteraction === true);
-      if (!this.edge) {
-        // The turn the wrap-up was queued behind failed: the queue drains only on idle, so it would never run.
-        if (this.needIdle && view.status === 'error') {
+      if (view.status === 'error') {
+        // Our own turn failed: it began, or our queued row has been taken out of the queue to be sent.
+        if (this.edge || this.ownRowLeftQueue()) {
+          void this.keepOpen('turn-error');
+          return;
+        }
+        // The turn our row is queued behind failed: the queue drains only on idle, so it would never run.
+        if (this.needIdle && this.wrapUpStillQueued()) {
           void this.closeAfterQueuedError();
           return;
         }
+        // Otherwise it is an error left over from before the send.
+      }
+      this.watchPending(view.hasPendingInteraction === true);
+      if (!this.edge) {
         if (this.needIdle) this.needIdle = isActive(view.status);
         // Only the turn our own message started counts: while it is still queued, this is someone else's turn.
         else if (view.status === 'active' && !this.wrapUpStillQueued()) this.edge = true;
@@ -207,6 +217,7 @@ class Job {
   private async closeAfterRest(): Promise<void> {
     const { host, thread } = this;
     if (this.done || host.getStatus(thread.id) !== 'idle' || host.hasPendingInteraction(thread.id)) return;
+    if (host.queuedSends(thread.id).length > 0) return; // more queued work runs first; archiving would delete it
     if (this.userWroteAfterWrapUp()) return this.finish(); // the user took over: keep it open, no record
     this.stop();
     const note = await this.summarize();
@@ -248,13 +259,24 @@ class Job {
       host.isOpen(thread.id) &&
       !isActive(host.getStatus(thread.id)) &&
       !host.hasPendingInteraction(thread.id) &&
+      host.queuedSends(thread.id).length === 0 &&
       !host.messages(thread.id).some((m) => m.role === 'user' && m.seq > this.seqBeforeSend)
     );
   }
 
-  /** Our own wrap-up message is still in the thread's queue. */
+  /** Our own queued row, if it still exists. */
+  private ownRow(): { id: string; status: string } | undefined {
+    return this.ownRowId ? this.host.queuedSends(this.thread.id).find((row) => row.id === this.ownRowId) : undefined;
+  }
+
+  /** Our own wrap-up message is still waiting in the thread's queue. */
   private wrapUpStillQueued(): boolean {
-    return this.host.queuedSendIds(this.thread.id, this.instructions).some((id) => !this.queuedBefore.has(id));
+    return this.ownRow()?.status === 'queued';
+  }
+
+  /** Our own queued message has been taken out of the queue: being sent, sent, or failed. */
+  private ownRowLeftQueue(): boolean {
+    return this.ownRowId !== undefined && !this.wrapUpStillQueued();
   }
 
   private lastAssistantText(): string {
@@ -269,6 +291,7 @@ class Job {
       host.isOpen(thread.id) &&
       host.getStatus(thread.id) === 'idle' &&
       !host.hasPendingInteraction(thread.id) &&
+      host.queuedSends(thread.id).length === 0 &&
       !this.userWroteAfterWrapUp()
     );
   }
@@ -358,11 +381,11 @@ class Job {
 
   /** Ended before the wrap-up turn began: take its message out of the queue, so it is not sent later with nobody watching. */
   private dropUnsentWrapUp(): void {
-    if (!this.sent || this.edge) return;
+    if (!this.sent || this.edge || !this.ownRowId) return;
     try {
-      for (const id of this.host.queuedSendIds(this.thread.id, this.instructions)) {
-        if (!this.queuedBefore.has(id)) this.host.dropQueuedSend(this.thread.id, id);
-      }
+      // Only our own row, by id: a person's message with the same text is never touched. A row being sent is left alone.
+      const row = this.ownRow();
+      if (row && row.status !== 'dispatching') this.host.dropQueuedSend(this.thread.id, row.id);
     } catch (err) {
       this.host.log(`[thread-wrap-up] thread=${this.thread.id.slice(0, 8)} could not drop the queued wrap-up: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -446,11 +469,8 @@ export function threadWrapUps(ctx: ProductHttpContext): ThreadWrapUpRegistry {
       recordKeptOpen: (...args) => ctx.closeSummary.recordKeptOpen(...args),
       recordLastTurn: (projectId, id, title, lastTurn) =>
         ctx.closeSummary.summarizeAndFollowUpFromLastTurn(projectId, { sessionId: id, title, lastTurn }),
-      queuedSendIds: (id, text) =>
-        listDeferredThreadMessages(ctx.db, id)
-          .filter((row) => deferredText(row) === text.trim())
-          .map((row) => row.id),
-      queuedCount: (id) => listDeferredThreadMessages(ctx.db, id).length,
+      queuedSends: (id) =>
+        listDeferredThreadMessages(ctx.db, id).map((row) => ({ id: row.id, text: deferredText(row), status: row.status })),
       dropQueuedSend: (id, itemId) => dropDeferredConversationMessage(ctx, id, itemId),
       isOpen: (id) => {
         const row = getConversationThread(ctx.db, id);

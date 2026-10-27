@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MAX_ACTIVE_WRAP_UPS,
   MAX_CONCURRENT_SUMMARIES,
   oneLine,
   SETTLE_MS,
@@ -641,6 +642,125 @@ describe('WrapUpCloseService races (Geoff review on #545)', () => {
     await settle();
     expect(deps.summarizeForClose).not.toHaveBeenCalled();
     expect(svc.isWrappingUp('s1')).toBe(true);
+    svc.forget('s1');
+    await p;
+  });
+});
+
+describe('WrapUpCloseService second review on #545', () => {
+  it(`types into at most ${MAX_ACTIVE_WRAP_UPS} agents at once, registering the rest at the click`, async () => {
+    const { svc, deps, add, set } = make();
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+    for (const id of ids) add(id);
+    const p = svc.run('p', ids);
+    expect(deps.reply).toHaveBeenCalledTimes(MAX_ACTIVE_WRAP_UPS);
+    for (const id of ids) expect(svc.isWrappingUp(id)).toBe(true); // auto-close and heartbeat already spare e and f
+    set('a', 'working');
+    set('a', 'idle');
+    await settle();
+    expect(deps.reply).toHaveBeenCalledTimes(MAX_ACTIVE_WRAP_UPS + 1); // a finished: e took its slot
+    expect(deps.reply).toHaveBeenLastCalledWith('e', expect.any(String));
+    for (const id of ['b', 'c', 'd', 'e']) { set(id, 'working'); set(id, 'idle'); }
+    await settle();
+    set('f', 'working');
+    set('f', 'idle');
+    await settle();
+    expect(await p).toMatchObject({ summarized: 6, keptOpen: [] });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps a waiting agent open as typed, untouched, when the person types into it before its slot frees', async () => {
+    const { svc, deps, add, set, sessions } = make();
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of ids) add(id, 'idle', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ids);
+    sessions.get('e')!.lastKeyInputAt = 2; // typed into the waiting agent
+    set('e', 'working');
+    for (const id of ['a', 'b', 'c', 'd']) { set(id, 'working'); set(id, 'idle'); }
+    await settle();
+    const res = await p;
+    expect(res.keptOpen).toEqual([{ sessionId: 'e', reason: 'typed' }]);
+    expect(deps.reply).not.toHaveBeenCalledWith('e', expect.any(String));
+  });
+
+  it('also measures typing from the click for an agent whose slot frees later', async () => {
+    const { svc, deps, add, set, sessions } = make();
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of ids) add(id, 'idle', { lastKeyInputAt: 1 });
+    const p = svc.run('p', ids);
+    sessions.get('e')!.lastKeyInputAt = 2; // no status event for e
+    set('a', 'working');
+    set('a', 'idle');
+    await settle(); // a frees its slot; e is checked against the click, not the slot time
+    expect(deps.reply).not.toHaveBeenCalledWith('e', expect.any(String));
+    for (const id of ['b', 'c', 'd']) { set(id, 'working'); set(id, 'idle'); }
+    await settle();
+    expect((await p).keptOpen).toEqual([{ sessionId: 'e', reason: 'typed' }]);
+  });
+
+  it('releases a waiting agent that exits or goes away', async () => {
+    const { svc, deps, add, set } = make();
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of ids) add(id);
+    const p = svc.run('p', ids);
+    svc.forget('e');
+    expect(svc.isWrappingUp('e')).toBe(false);
+    for (const id of ['a', 'b', 'c', 'd']) { set(id, 'working'); set(id, 'idle'); }
+    await settle();
+    await p;
+    expect(deps.reply).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('starts a waiting agent that went away before its slot freed as gone, and one that turned blocked on the blocked path', async () => {
+    const { svc, deps, add, set, sessions, states } = make();
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+    for (const id of ids) add(id);
+    const p = svc.run('p', ids);
+    sessions.delete('e');
+    states.set('f', 'blocked');
+    for (const id of ['a', 'b', 'c', 'd']) { set(id, 'working'); set(id, 'idle'); }
+    await settle();
+    await p;
+    expect(deps.reply).toHaveBeenCalledTimes(4);
+    expect(deps.recordClose).toHaveBeenCalledWith('p', 'f', 'Agent', note(), 'waiting-on-prompt');
+  });
+
+  it('still closes a forced no-wrap-up agent that was already working at the click', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const recordClose = vi.fn(async () => { await gate; return { summarized: 1 as const, followedUp: 0 as const }; });
+    const { svc, add } = make({ recordClose });
+    add('s1', 'working', { profile: 'codex' });
+    const p = svc.run('p', ['s1']);
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    expect(await p).toEqual({ summarized: 1, followedUp: 0, keptOpen: [] });
+  });
+
+  it('keeps the agent open with a turn-error note when an API error ends the wrap-up turn', async () => {
+    const { svc, deps, add, set } = make();
+    add('s1');
+    const p = svc.run('p', ['s1']);
+    svc.onTurnFailed('s1'); // sent, before any working
+    expect(await p).toEqual({ summarized: 0, followedUp: 0, keptOpen: [{ sessionId: 's1', reason: 'turn-error' }] });
+    expect(deps.recordKeptOpen).toHaveBeenCalledWith('p', 's1', 'T-s1', 'turn-error');
+    const second = make();
+    second.add('s2');
+    const q = second.svc.run('p', ['s2']);
+    second.set('s2', 'working');
+    second.svc.onTurnFailed('s2'); // active
+    expect((await q).keptOpen).toEqual([{ sessionId: 's2', reason: 'turn-error' }]);
+    void set;
+  });
+
+  it('ignores an API-error stop for a session that is not mid wrap-up', async () => {
+    const { svc, deps, add } = make();
+    add('s1', 'working');
+    const p = svc.run('p', ['s1']); // pre: never typed into
+    svc.onTurnFailed('s1');
+    svc.onTurnFailed('nope');
+    expect(deps.recordKeptOpen).not.toHaveBeenCalled();
     svc.forget('s1');
     await p;
   });

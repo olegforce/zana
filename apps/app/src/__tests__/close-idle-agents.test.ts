@@ -3,7 +3,6 @@ import {
   closeFollowupProgressMessage,
   closedToastMessage,
   selectCloseableIdleIds,
-  MAX_PARALLEL_WRAP_UPS,
   runCloseIdleAgents
 } from '../lib/close-idle-agents.js';
 import type { AgentState } from '@zana-ai/zcc-domain/product';
@@ -333,7 +332,7 @@ describe('Wrap up before closing', () => {
     expect(d.clearClosing).toHaveBeenCalledWith(['slow', 'fast']);
   });
 
-  it(`runs at most ${MAX_PARALLEL_WRAP_UPS} wrap-ups at a time and starts the next as one finishes`, async () => {
+  it('sends every agent to main at once, so main registers them all at the click', async () => {
     const gates: Record<string, (v: { summarized: number; followedUp: number }) => void> = {};
     const d = baseDeps({
       closeFollowup: vi.fn((_p: string, ids: string[]) => new Promise((resolve) => { gates[ids[0]] = resolve as never; })) as never
@@ -341,15 +340,8 @@ describe('Wrap up before closing', () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
     const p = run(d, ids, true);
     await Promise.resolve();
-    expect(d.closeFollowup).toHaveBeenCalledTimes(MAX_PARALLEL_WRAP_UPS);
-    expect(d.closeFollowup).not.toHaveBeenCalledWith('p1', ['e']);
-    gates.b({ summarized: 1, followedUp: 0 });
-    await vi.waitFor(() => expect(d.closeFollowup).toHaveBeenCalledWith('p1', ['e']));
-    expect(d.closeFollowup).toHaveBeenCalledTimes(MAX_PARALLEL_WRAP_UPS + 1);
-    for (const id of ['a', 'c', 'd']) gates[id]({ summarized: 1, followedUp: 0 });
-    await vi.waitFor(() => expect(d.closeFollowup).toHaveBeenCalledWith('p1', ['f']));
-    gates.e({ summarized: 1, followedUp: 0 });
-    gates.f({ summarized: 1, followedUp: 0 });
+    expect(d.closeFollowup).toHaveBeenCalledTimes(ids.length);
+    for (const id of ids) gates[id]({ summarized: 1, followedUp: 0 });
     expect(await p).toEqual({ closed: 6, summarized: 6, followedUp: 0 });
   });
 
@@ -401,6 +393,9 @@ describe('Wrap up before closing', () => {
     expect(closedToastMessage(0, 0, 0, undefined, asks)).toBe('Kept 1 agent open (see your inbox).');
     expect(closedToastMessage(0, 0, 0, undefined, [...typed, ...timeout])).toBe('Kept 2 agents open (see your inbox).');
     expect(closedToastMessage(0, 0, 0, undefined, typed)).toBe('Kept 1 agent open.');
+    // Kept open after its record was written (a key or new work during the write): the summary still counts.
+    expect(closedToastMessage(0, 1, 1, undefined, typed)).toBe('Kept 1 agent open · 1 summarized to inbox (see your inbox).');
+    expect(closedToastMessage(0, 0, 0, undefined, [{ sessionId: 'a', reason: 'turn-error' as const }])).toBe('Kept 1 agent open (see your inbox).');
   });
 
   it('keeps today\'s closed toast with default arguments', () => {

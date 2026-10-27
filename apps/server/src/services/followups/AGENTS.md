@@ -44,17 +44,17 @@ Touch `isFavorite` key resolution → verify reattach across restore.
 
 1. Types only into a resting, local, Claude-family agent with no pending draft, as ONE line (`oneLine`) through `reply()`. Codex, OpenCode, remote Claude, `blocked` and `unknown` agents are summarised and recorded without a wrap-up, never typed into.
 
-2. Yields to the human through `lastKeyInputAt` (real keys only), not `lastInputAt`, which also moves on mouse and focus reports. A change since the send keeps the agent open as `typed`, with no summary.
+2. Yields to the human through `lastKeyInputAt` (real keys only), not `lastInputAt`, which also moves on mouse and focus reports. The baseline is taken at the click, when the session is registered. A change keeps the agent open as `typed`.
 
-3. Every gate (state, `lastKeyInputAt`, session still there) is re-checked when the settle timer fires, after the summary, and again after the inbox record is written: a key press or new work at any of those points keeps the agent open as `typed`. Every timer and pending entry is released on every path (Rule 3).
+3. Every gate (state, `lastKeyInputAt`, session still there) is re-checked when the settle timer fires, after the summary, and again after the inbox record is written: a key press or new work at any of those points keeps the agent open as `typed`. On the no-wrap-up path only a change INTO `working` counts, so a forced close of an agent that was already working still closes. Every timer and pending entry is released on every path (Rule 3).
 
-4. While `isWrappingUp(sessionId)`, auto-close-idle spares the session (host.ts ORs it into `isFavorite`) and heartbeat sees no session (host.ts heartbeat `getSession` returns null), so no nudge, armed or new, types into it.
+4. Every session of a run is registered at the click, and at most `MAX_ACTIVE_WRAP_UPS` wrap-up turns run at once; the rest wait in `queued` until a slot frees (the renderer sends every agent at once on purpose). While `isWrappingUp(sessionId)`, which includes `queued`: auto-close-idle spares the session (host.ts ORs it into `isFavorite`); heartbeat sees no session (host.ts heartbeat `getSession` returns null), so no nudge, armed or new, types into it; peer messages stay queued (host.ts `injectToSession` declines and mail drain does not pull).
 
-7. The wrap-up turn is tracked through Claude's own hooks as well as the debounced status: `onTurnStarted` (UserPromptSubmit) and `onTurnFinished` (Stop), wired in host.ts `onNotifyHook`/`onStopHook`. A turn that starts and ends inside one 250 ms status debounce still finishes; a Stop before the wrap-up turn began is ignored.
+5. The wrap-up turn is tracked through Claude's own hooks as well as the debounced status: `onTurnStarted` (UserPromptSubmit) and `onTurnFinished` (Stop), wired in host.ts `onNotifyHook`/`onStopHook`. A turn that starts and ends inside one 250 ms status debounce still finishes; a Stop before the wrap-up turn began is ignored. `onTurnFailed` (StopFailure, an API error) keeps the agent open with a `turn-error` note.
 
-5. A failed summary never blocks the close: the agent stays closeable and the failure is reported. A question, an unanswered prompt, typing or the 15-minute timeout keep the agent open (`keptOpen`).
+6. A failed summary never blocks the close: the agent stays closeable and the failure is reported. A question, an unanswered prompt, typing, a failed turn or the 15-minute timeout keep the agent open (`keptOpen`).
 
-6. The off path is today's `summarizeAndFollowUp`: `IPC.terminals.closeFollowup` calls the service only when `closeWrapUpEnabled === true`.
+7. The off path is today's `summarizeAndFollowUp`: `IPC.terminals.closeFollowup` calls the service only when `closeWrapUpEnabled === true`.
 
 ### When changing
 

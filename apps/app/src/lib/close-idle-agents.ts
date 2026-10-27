@@ -21,10 +21,13 @@ export function closedToastMessage(
   failures?: CloseFollowupFailure[],
   keptOpen: CloseFollowupKeptOpen[] = []
 ): string {
-  // A kept-open agent that asked something or timed out left a note in the inbox; a `typed` one did not.
-  const seeInbox = keptOpen.some((k) => k.reason === 'asks-you' || k.reason === 'timeout') ? ' (see your inbox)' : '';
+  // A kept-open agent that asked something, timed out or hit an error left a note in the inbox, and so did
+  // one kept open after its summary was written; a `typed` one with no summary did not.
+  const noted = keptOpen.some((k) => k.reason !== 'typed') || (closed === 0 && keptOpen.length > 0 && summarized > 0);
+  const seeInbox = noted ? ' (see your inbox)' : '';
   if (closed === 0 && keptOpen.length > 0) {
-    return `Kept ${keptOpen.length} agent${keptOpen.length === 1 ? '' : 's'} open${seeInbox}.`;
+    const kept = `Kept ${keptOpen.length} agent${keptOpen.length === 1 ? '' : 's'} open`;
+    return `${summarized > 0 ? `${kept} · ${summarized} summarized to inbox` : kept}${seeInbox}.`;
   }
   const bits = [`Closed ${closed} agent${closed === 1 ? '' : 's'}`];
   if (summarized > 0) bits.push(`${summarized} summarized to inbox`);
@@ -137,9 +140,6 @@ export async function runCloseIdleAgents(input: {
   }
 }
 
-/** Wrap-ups run at most this many at a time: each types into an agent and makes its own summary call. */
-export const MAX_PARALLEL_WRAP_UPS = 4;
-
 type CloseIdleAgentsDeps = Parameters<typeof runCloseIdleAgents>[0]['deps'];
 
 /** What a close run adds up for its toast and result. */
@@ -186,9 +186,11 @@ async function closeBatch(
 }
 
 /**
- * "Wrap up before closing": one call per agent, at most {@link MAX_PARALLEL_WRAP_UPS}
- * at a time, and each agent closes as soon as its own result arrives, so a fast
- * one does not sit idle while a slow one wraps up.
+ * "Wrap up before closing": one call per agent, all sent at once so main registers
+ * every agent at the click (it measures typing from then, keeps auto-close and
+ * heartbeat away, and itself runs at most a few wrap-up turns at a time). Each
+ * agent closes as soon as its own result arrives, so a fast one does not sit idle
+ * while a slow one wraps up.
  */
 async function closeEachAfterWrapUp(
   deps: CloseIdleAgentsDeps,
@@ -196,11 +198,9 @@ async function closeEachAfterWrapUp(
   ids: string[],
   tally: CloseTally
 ): Promise<void> {
-  let next = 0;
   let errorShown = false;
-  const worker = async (): Promise<void> => {
-    while (next < ids.length) {
-      const id = ids[next++];
+  await Promise.all(
+    ids.map(async (id) => {
       let kept = false;
       try {
         const res = await deps.closeFollowup(projectId, [id]);
@@ -215,7 +215,6 @@ async function closeEachAfterWrapUp(
         errorShown = true;
       }
       if (!kept) await closeCounted(deps, projectId, id, tally);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_WRAP_UPS, ids.length) }, worker));
+    })
+  );
 }

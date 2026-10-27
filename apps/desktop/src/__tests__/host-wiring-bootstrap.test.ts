@@ -927,6 +927,45 @@ describe('host bootstrap wiring', () => {
     }
   });
 
+  it('tells the wrap-up service when an API error ends a Claude turn', async () => {
+    h.ptys.sessions.set('wu5', sessionFixture({ id: 'wu5', projectId: project.id, profile: 'claude' }));
+    const failed = vi.spyOn(ctx().wrapUpClose, 'onTurnFailed');
+    try {
+      const body = JSON.stringify({ hook_event_name: 'StopFailure', error: 'rate_limit', error_details: '429 slow down' });
+      h.mcpDeps.onNotifyHook(project.id, 'wu5', 'unblocked', body);
+      expect(failed).toHaveBeenCalledWith('wu5');
+      await settle();
+    } finally {
+      failed.mockRestore();
+    }
+  });
+
+  it('holds peer messages and mail for an agent while it wraps up', async () => {
+    h.ptys.sessions.set('wu6', sessionFixture({ id: 'wu6', projectId: project.id, profile: 'claude' }));
+    const reply = vi.fn(() => true);
+    h.ptys.reply = reply;
+    const wrapping = vi.spyOn(ctx().wrapUpClose, 'isWrappingUp').mockReturnValue(true);
+    const pull = vi.spyOn(h.mcpDeps.agentMessageLog, 'pull');
+    try {
+      expect(h.mcpDeps.injectToSession('wu6', 'hello')).toBe(false);
+      expect(reply).not.toHaveBeenCalled();
+      ctx().agentStatus.emit('status', 'wu6', 'working', 1);
+      ctx().agentStatus.emit('status', 'wu6', 'idle', 2);
+      expect(pull).not.toHaveBeenCalledWith('wu6');
+      wrapping.mockReturnValue(false);
+      expect(h.mcpDeps.injectToSession('wu6', 'hello')).toBe(true);
+      expect(reply).toHaveBeenCalledWith('wu6', 'hello');
+      ctx().agentStatus.emit('status', 'wu6', 'working', 3);
+      ctx().agentStatus.emit('status', 'wu6', 'idle', 4);
+      expect(pull).toHaveBeenCalledWith('wu6');
+      await settle();
+    } finally {
+      pull.mockRestore();
+      wrapping.mockRestore();
+      delete (h.ptys as { reply?: unknown }).reply;
+    }
+  });
+
   it('tells the wrap-up service when a Claude turn starts and stops', async () => {
     h.ptys.sessions.set('wu4', sessionFixture({ id: 'wu4', projectId: project.id, profile: 'claude' }));
     const started = vi.spyOn(ctx().wrapUpClose, 'onTurnStarted');

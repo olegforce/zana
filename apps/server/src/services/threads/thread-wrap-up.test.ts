@@ -17,13 +17,23 @@ const note = (over: Partial<SessionCloseNote> = {}): SessionCloseNote => ({ body
 function make(over: Partial<ThreadWrapUpHost> = {}) {
   const listeners = new Set<(payload: unknown) => void>();
   const order: string[] = [];
-  const state = { status: 'idle', pending: false, messages: [] as Array<{ seq: number; role: 'user' | 'assistant'; text: string }> };
+  const state = {
+    status: 'idle',
+    pending: false,
+    messages: [] as Array<{ seq: number; role: 'user' | 'assistant'; text: string }>,
+    // The thread's send queue, as `listDeferredThreadMessages` reports it.
+    queue: [] as Array<{ id: string; text?: string; status: string }>
+  };
   const host = {
     instructions: () => INSTRUCTIONS,
     hasPendingInteraction: vi.fn(() => state.pending),
     hostOnline: vi.fn(() => true),
     getStatus: vi.fn(() => state.status),
-    send: vi.fn(async () => { order.push('send'); }),
+    // Like 'queue-if-active': a busy thread queues the message, an idle one sends it straight away.
+    send: vi.fn(async (_id: string, text: string) => {
+      order.push('send');
+      if (state.status === 'active' || state.status === 'starting') state.queue.push({ id: 'ours', text: text.trim(), status: 'queued' });
+    }),
     subscribe: vi.fn((l: (payload: unknown) => void) => {
       order.push('subscribe');
       listeners.add(l);
@@ -35,9 +45,8 @@ function make(over: Partial<ThreadWrapUpHost> = {}) {
     recordClose: vi.fn(async () => undefined),
     recordKeptOpen: vi.fn(async () => undefined),
     recordLastTurn: vi.fn(async () => ({ summarized: 1 })),
-    queuedSendIds: vi.fn((): string[] => []),
-    queuedCount: vi.fn(() => 0),
-    dropQueuedSend: vi.fn(),
+    queuedSends: vi.fn(() => state.queue.map((row) => ({ ...row }))),
+    dropQueuedSend: vi.fn((_t: string, id: string) => { state.queue = state.queue.filter((row) => row.id !== id); }),
     isOpen: vi.fn(() => true),
     archive: vi.fn(async () => true),
     setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
@@ -111,6 +120,7 @@ describe('ThreadWrapUpRegistry', () => {
     h.emit({ status: 'idle' }); // the queued wrap-up message is sent after this
     await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
     expect(h.host.summarizeForClose).not.toHaveBeenCalled();
+    h.state.queue = []; // the drain sent our row
     h.emit({ status: 'active' });
     h.emit({ status: 'idle' });
     await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
@@ -410,34 +420,39 @@ describe('ThreadWrapUpRegistry', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('removes its queued wrap-up message when the job ends before the message was sent', async () => {
-    const queued = ['old', 'new'];
-    const h = make({ queuedSendIds: vi.fn(() => [...queued]) });
-    h.host.queuedSendIds.mockReturnValueOnce(['old']); // an identical earlier message is not ours
+  it('removes its own queued wrap-up message when the job ends before it was sent, never a person\'s identical one', async () => {
+    const h = make();
     h.state.status = 'active';
     await h.registry.request(thread);
+    // A person queues the same text behind ours: it is theirs, by id.
+    h.state.queue.push({ id: 'person', text: INSTRUCTIONS.trim(), status: 'queued' });
     await vi.advanceTimersByTimeAsync(WRAP_UP_TIMEOUT_MS);
     expect(h.host.recordKeptOpen).toHaveBeenCalledWith('p1', 't1', 'Build it', 'timeout', undefined);
     expect(h.host.dropQueuedSend).toHaveBeenCalledTimes(1);
-    expect(h.host.dropQueuedSend).toHaveBeenCalledWith('t1', 'new');
+    expect(h.host.dropQueuedSend).toHaveBeenCalledWith('t1', 'ours');
+    expect(h.state.queue).toEqual([{ id: 'person', text: INSTRUCTIONS.trim(), status: 'queued' }]);
   });
-
-  it('leaves the queue alone once the wrap-up turn began, and logs a failed removal', async () => {
-    const h = make({ queuedSendIds: vi.fn(() => ['q1']) });
-    await rest(h);
+  it('leaves the queue alone once the wrap-up turn began or while it is being sent, and logs a failed removal', async () => {
+    const h = make();
+    await rest(h); // sent straight away: nothing of ours queued
     expect(h.host.dropQueuedSend).not.toHaveBeenCalled();
-    const bad = make({ queuedSendIds: vi.fn((_t: string, _x: string) => ['q1']), dropQueuedSend: vi.fn(() => { throw new Error('gone'); }) });
-    bad.host.queuedSendIds.mockReturnValueOnce([]);
+    const sending = make();
+    sending.state.status = 'active';
+    await sending.registry.request(thread);
+    sending.state.queue[0].status = 'dispatching';
+    sending.registry.dispose();
+    expect(sending.host.dropQueuedSend).not.toHaveBeenCalled();
+    const bad = make({ dropQueuedSend: vi.fn(() => { throw new Error('gone'); }) });
+    bad.state.status = 'active';
     await bad.registry.request(thread);
     await vi.advanceTimersByTimeAsync(WRAP_UP_TIMEOUT_MS);
     expect(bad.host.log).toHaveBeenCalledWith(expect.stringContaining('could not drop the queued wrap-up: gone'));
-    const plain = make({ queuedSendIds: vi.fn(() => ['q1']), dropQueuedSend: vi.fn(() => { throw 'x'; }) });
-    plain.host.queuedSendIds.mockReturnValueOnce([]);
+    const plain = make({ dropQueuedSend: vi.fn(() => { throw 'x'; }) });
+    plain.state.status = 'active';
     await plain.registry.request(thread);
     await vi.advanceTimersByTimeAsync(WRAP_UP_TIMEOUT_MS);
     expect(plain.host.log).toHaveBeenCalledWith(expect.stringContaining('could not drop the queued wrap-up: x'));
   });
-
   it('falls back to today\'s close and leaves no job when a collaborator throws while starting', async () => {
     const pendingThrows = make({ hasPendingInteraction: vi.fn(() => { throw new Error('db locked'); }) });
     expect(await pendingThrows.registry.request(thread)).toBe('fallback');
@@ -511,11 +526,11 @@ describe('ThreadWrapUpRegistry', () => {
 
 describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
   it('drops the queued wrap-up and closes the way today does when the turn it waits behind fails', async () => {
-    const h = make({ queuedSendIds: vi.fn(() => ['ours']) });
-    h.host.queuedSendIds.mockReturnValueOnce([]); // nothing queued before the send
+    const h = make();
     h.state.status = 'active';
     h.state.messages = [{ seq: 1, role: 'user', text: 'go' }, { seq: 2, role: 'assistant', text: ' The full last answer. ' }];
     expect(await h.registry.request(thread)).toBe('wrapping-up');
+    expect(h.state.queue).toEqual([{ id: 'ours', text: INSTRUCTIONS.trim(), status: 'queued' }]);
     h.emit({ status: 'error' }); // the earlier turn ended in an error; the queue never drains
     await vi.advanceTimersByTimeAsync(0);
     expect(h.host.dropQueuedSend).toHaveBeenCalledWith('t1', 'ours');
@@ -527,7 +542,6 @@ describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
     expect(h.listeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
-
   it('archives without a record when the failed earlier turn left no assistant text, and logs a failed archive', async () => {
     const h = make({ archive: vi.fn(async () => { throw new Error('db gone'); }) });
     h.state.status = 'active';
@@ -562,8 +576,10 @@ describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
     expect(h.listeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     const plain = make({ getStatus: vi.fn(() => { throw 'x'; }) });
-    plain.host.getStatus.mockReturnValueOnce('idle'); // start reads the status once
+    plain.host.getStatus.mockReturnValueOnce('idle'); // start reads the status once before the send
     expect(await plain.registry.request(thread)).toBe('wrapping-up');
+    // The read right after the send failed: logged, and still reported as wrapping up, never a fallback.
+    expect(plain.host.log).toHaveBeenCalledWith(expect.stringContaining('could not re-read after the send: x'));
     plain.emit({ status: 'active' });
     plain.emit({ status: 'idle' });
     await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
@@ -644,30 +660,86 @@ describe('ThreadWrapUpRegistry review round 2 (F14-F16, F18)', () => {
 
 describe('ThreadWrapUpRegistry ownership (Geoff review on #545)', () => {
   it('falls back to today\'s close when other messages are queued ahead of the wrap-up', async () => {
-    const h = make({ queuedCount: vi.fn(() => 2) });
+    const h = make();
+    h.state.queue = [{ id: 'earlier', text: 'one more thing', status: 'queued' }];
     expect(await h.registry.request(thread)).toBe('fallback');
     expect(h.host.send).not.toHaveBeenCalled();
     expect(h.host.subscribe).not.toHaveBeenCalled();
     expect(h.registry.isWrappingUp('t1')).toBe(false);
   });
-
-  it('counts only the turn its own queued message started', async () => {
-    let queued = ['ours'];
-    const h = make({ queuedSendIds: vi.fn(() => [...queued]) });
-    h.host.queuedSendIds.mockReturnValueOnce([]); // nothing of ours queued before the send
+  it('counts only the turn its own queued message started, in the real order (dispatching, active, removed)', async () => {
+    const h = make();
+    h.state.status = 'active';
     await h.registry.request(thread);
-    h.emit({ status: 'active' }); // our message is still queued: this turn is not the wrap-up
+    h.emit({ status: 'active' }); // still the earlier turn: our row is queued
     h.emit({ status: 'idle' });
     await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
     expect(h.host.summarizeForClose).not.toHaveBeenCalled();
-    queued = []; // the queue drained our message
+    h.state.queue[0].status = 'dispatching'; // the drain takes our row
     h.emit({ status: 'active' });
+    h.state.queue = []; // sent and deleted
     h.emit({ status: 'idle' });
     await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
     expect(h.host.recordClose).toHaveBeenCalledTimes(1);
     expect(h.host.archive).toHaveBeenCalledWith('t1');
   });
 
+  it('records a turn error at once when the drained wrap-up fails while its row is being sent', async () => {
+    const h = make();
+    h.state.status = 'active';
+    await h.registry.request(thread);
+    h.emit({ status: 'idle' }); // the earlier turn ended; the drain starts on our row
+    h.state.queue[0].status = 'dispatching';
+    h.emit({ status: 'active' });
+    h.emit({ status: 'error' }); // the send failed
+    h.state.queue[0].status = 'failed';
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordKeptOpen).toHaveBeenCalledWith('p1', 't1', 'Build it', 'turn-error', undefined);
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('records a turn error when the drained wrap-up fails before any active update arrives', async () => {
+    const h = make();
+    h.state.status = 'active';
+    await h.registry.request(thread);
+    h.emit({ status: 'idle' });
+    h.state.queue[0].status = 'failed';
+    h.emit({ status: 'error' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordKeptOpen).toHaveBeenCalledWith('p1', 't1', 'Build it', 'turn-error', undefined);
+  });
+
+  it('does not archive while a person\'s message is still queued in the thread', async () => {
+    const h = make();
+    await h.registry.request(thread);
+    h.emit({ status: 'active' });
+    h.state.queue.push({ id: 'person', text: 'and also this', status: 'queued' }); // held: paused, editing or send-later
+    h.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    expect(h.host.summarizeForClose).not.toHaveBeenCalled();
+    expect(h.host.archive).not.toHaveBeenCalled();
+    expect(h.registry.isWrappingUp('t1')).toBe(true); // still watching
+    h.registry.dispose();
+  });
+
+  it('does not archive when a person queues a message while the summary runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = make({
+      summarizeForClose: vi.fn(async (): Promise<SummarizeForCloseResult> => { await gate; return { ok: true, title: 'Build it', note: note() }; })
+    });
+    await h.registry.request(thread);
+    h.emit({ status: 'active' });
+    h.emit({ status: 'idle' });
+    await vi.advanceTimersByTimeAsync(WRAP_UP_SETTLE_MS);
+    h.state.queue.push({ id: 'person', text: 'wait', status: 'queued' });
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.host.recordClose).not.toHaveBeenCalled();
+    expect(h.host.archive).not.toHaveBeenCalled();
+  });
   it('writes nothing and does not archive when the thread is archived while the summary runs', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -710,10 +782,9 @@ describe('ThreadWrapUpRegistry ownership (Geoff review on #545)', () => {
     expect(t.registry.isWrappingUp('t1')).toBe(false);
   });
 
-  it('does not close after the earlier error when the person wrote, the thread is busy, asking or archived', async () => {
-    for (const change of ['wrote', 'busy', 'asking', 'archived'] as const) {
-      const h = make({ queuedSendIds: vi.fn(() => ['ours']) });
-      h.host.queuedSendIds.mockReturnValueOnce([]);
+  it('does not close after the earlier error when the person wrote, the thread is busy, asking, archived or has more queued', async () => {
+    for (const change of ['wrote', 'busy', 'asking', 'archived', 'queued'] as const) {
+      const h = make();
       h.state.status = 'active';
       h.state.messages = [{ seq: 1, role: 'assistant', text: 'Earlier answer.' }];
       await h.registry.request(thread);
@@ -721,6 +792,7 @@ describe('ThreadWrapUpRegistry ownership (Geoff review on #545)', () => {
       if (change === 'asking') h.state.pending = true;
       if (change === 'archived') h.host.isOpen.mockReturnValue(false);
       if (change === 'busy') h.host.getStatus.mockReturnValue('active');
+      if (change === 'queued') h.state.queue.push({ id: 'person', text: 'later', status: 'queued' });
       h.emit({ status: 'error' });
       await vi.advanceTimersByTimeAsync(0);
       expect(h.host.recordLastTurn).not.toHaveBeenCalled();
@@ -728,15 +800,10 @@ describe('ThreadWrapUpRegistry ownership (Geoff review on #545)', () => {
       expect(h.registry.isWrappingUp('t1')).toBe(false);
     }
   });
-
   it('does not archive after the earlier error when the person writes while the last-turn record is written', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const h = make({
-      queuedSendIds: vi.fn(() => ['ours']),
-      recordLastTurn: vi.fn(async () => { await gate; return { summarized: 1 }; })
-    });
-    h.host.queuedSendIds.mockReturnValueOnce([]);
+    const h = make({ recordLastTurn: vi.fn(async () => { await gate; return { summarized: 1 }; }) });
     h.state.status = 'active';
     h.state.messages = [{ seq: 1, role: 'assistant', text: 'Earlier answer.' }];
     await h.registry.request(thread);

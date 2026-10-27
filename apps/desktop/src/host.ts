@@ -2282,8 +2282,10 @@ const autoCloseIdle = new AutoCloseIdleService({
  * off the same resolved-state edge as idle-triage/heartbeat below.
  */
 const mailDrain = new AgentMailDrainService({
-  pending: (sessionId) =>
-    agentMessageLog.pull(sessionId).map((m) => ({ id: m.id, fromHandle: m.fromHandle })),
+  // Queued peer mail waits while the agent wraps up, and is delivered later if it stays open.
+  pending: (sessionId) => wrapUpClose.isWrappingUp(sessionId)
+    ? []
+    : agentMessageLog.pull(sessionId).map((m) => ({ id: m.id, fromHandle: m.fromHandle })),
   reply: (sessionId, text) => ptys.reply(sessionId, text)
 });
   const executionDeliveryDrain = new ExecutionDeliveryDrainService({
@@ -8769,6 +8771,8 @@ async function bootstrapNormal() {
         else if (event?.kind === 'resolved') agentStatus.inputResolved(sessionId, event.keys);
         else if (event?.kind === 'interrupted') agentStatus.turnFinished(sessionId);
         else if (event?.kind === 'api-error-stop') {
+          // A wrap-up turn that an API error ended is not finished: it stays open, with an inbox note.
+          wrapUpClose.onTurnFailed(sessionId);
           routeApiErrorStop({ service: apiErrorResume, recovery: workerApiErrorRecovery, enabled: () => workerApiErrorRecoveryEnabled(store.getConfig()), agentStatus, logMainError }, sessionId, session, event);
         }
         return;
@@ -9069,7 +9073,8 @@ async function bootstrapNormal() {
     // Phase 1 messaging: agent_send audits to the message log (never the user
     // inbox) and injects into the target pty via reply() when it's idle.
     agentMessageLog,
-    injectToSession: (sessionId: string, text: string) => ptys.reply(sessionId, text),
+    // A peer's message must not type into an agent that is wrapping up: it stays queued in the mail log.
+    injectToSession: (sessionId: string, text: string) => !wrapUpClose.isWrappingUp(sessionId) && ptys.reply(sessionId, text),
     // close_session / close_session_with_summary: let an agent end its own
     // session. Gated on the opt-in `agentSelfCloseEnabled` flag, read here at
     // boot: when off we pass `undefined`, so the tools are never registered and
