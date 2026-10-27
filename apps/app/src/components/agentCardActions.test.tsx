@@ -37,11 +37,13 @@ vi.mock('../store.js', () => ({
 import {
   AgentCardMenu,
   AgentDeleteQuickAction,
+  CLI_AGENT_ARCHIVE_TITLE,
   canCloseWithFollowup,
   cliAgentArchives,
   cliAgentMenuProjectId,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
+  cliAgentRemoveTitle,
   cliAgentRestartConfirm,
   cliAgentRestartLiveTitle,
   closeAgentWithFollowup,
@@ -190,6 +192,37 @@ describe('cliAgentArchives / cliAgentRemoveLabel', () => {
     expect(cliAgentRemoveLabel(shell)).toBe('Delete');
     expect(cliAgentRemoveLabel({ status: 'exited', profile: 'claude' })).toBe('Dismiss');
     expect(cliAgentRemoveLabel({ status: 'exited', profile: 'shell' })).toBe('Dismiss');
+  });
+});
+
+describe('cliAgentRemoveTitle', () => {
+  const live = { status: 'running', profile: 'claude' } as never;
+  const shell = { status: 'running', profile: 'shell' } as never;
+  const exited = { status: 'exited', profile: 'claude' } as never;
+
+  it('board: archive, shell and exited wording', () => {
+    expect(cliAgentRemoveTitle(live, 'board')).toBe(CLI_AGENT_ARCHIVE_TITLE);
+    expect(cliAgentRemoveTitle(shell, 'board')).toBe('Terminate this agent and remove it from the board');
+    expect(cliAgentRemoveTitle(exited, 'board')).toBe('Dismiss this finished agent from the board');
+  });
+
+  it('modal: archive and shell wording', () => {
+    expect(cliAgentRemoveTitle(live, 'modal')).toBe(CLI_AGENT_ARCHIVE_TITLE);
+    expect(cliAgentRemoveTitle(shell, 'modal')).toBe("Terminate the agent's process and close this view");
+  });
+
+  it('focus: short labels, Dismiss for exited', () => {
+    expect(cliAgentRemoveTitle(live, 'focus')).toBe('Archive (stops the agent)');
+    expect(cliAgentRemoveTitle(shell, 'focus')).toBe('Delete (ends the process)');
+    expect(cliAgentRemoveTitle(exited, 'focus')).toBe('Dismiss');
+  });
+
+  it('tab: removes the tab', () => {
+    expect(cliAgentRemoveTitle(live, 'tab')).toBe(
+      'Stop the agent and remove the tab. Its conversation stays in History.'
+    );
+    expect(cliAgentRemoveTitle(shell, 'tab')).toBe('Terminate this session and remove the tab. Reopen with ⌘⇧T.');
+    expect(cliAgentRemoveTitle(exited, 'tab')).toBe('Terminate this session and remove the tab. Reopen with ⌘⇧T.');
   });
 });
 

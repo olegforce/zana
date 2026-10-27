@@ -6,10 +6,10 @@ import { isClaudeProfile } from '../lib/launchProfile.js';
 import { useData, useIdleTriage } from '../store.js';
 import {
   canCloseWithFollowup,
-  CLI_AGENT_ARCHIVE_TITLE,
   cliAgentArchives,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
+  cliAgentRemoveTitle,
   closeAgentWithFollowup
 } from './agentCardActions.js';
 import { idleSurfacesToNeedsYou } from './AgentBoard.js';
@@ -87,11 +87,7 @@ export function AgentSessionActions({
           type="button"
           className="agent-monitor-action danger"
           onClick={deleteAgent}
-          title={
-            cliAgentArchives(session)
-              ? CLI_AGENT_ARCHIVE_TITLE
-              : "Terminate the agent's process and close this view"
-          }
+          title={cliAgentRemoveTitle(session, 'modal')}
         >
           {cliAgentArchives(session) ? <Archive size={13} /> : <Trash2 size={13} />}{' '}
           {cliAgentRemoveLabel(session)}

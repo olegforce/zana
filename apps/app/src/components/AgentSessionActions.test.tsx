@@ -41,6 +41,8 @@ vi.mock('./agentCardActions.js', () => ({
   cliAgentArchives: (s: { status: string; profile: string }) => s.status !== 'exited' && s.profile !== 'shell',
   cliAgentRemoveLabel: (s: { status: string; profile: string }) =>
     s.status === 'exited' ? 'Dismiss' : s.profile === 'shell' ? 'Delete' : 'Archive',
+  cliAgentRemoveTitle: (s: { status: string; profile: string }) =>
+    s.profile === 'shell' ? "Terminate the agent's process and close this view" : 'archive-title',
   cliAgentRemoveConfirm: (s: { title: string; profile: string }) =>
     s.profile === 'shell'
       ? `Delete “${s.title}”? The process will be terminated.`

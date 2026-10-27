@@ -6,9 +6,9 @@ import { getTerminal } from '../lib/findRegistry.js';
 import { profileIcon, personaIcon } from '../lib/profileIcon.js';
 import type { AgentState } from '@zana-ai/zcc-domain/product';
 import {
-  cliAgentArchives,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
+  cliAgentRemoveTitle,
   cliAgentRestartLiveTitle
 } from './agentCardActions.js';
 import { platformShortcut } from '../lib/platformShortcut.js';
@@ -497,11 +497,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
               className="tab-context-danger"
               onClick={() => { setTabMenu(null); removeOne(t); }}
               disabled={!!t.pinned}
-              title={
-                cliAgentArchives(t)
-                  ? 'Stop the agent and remove the tab. Its conversation stays in History.'
-                  : platformShortcut('Terminate this session and remove the tab. Reopen with ⌘⇧T.')
-              }
+              title={platformShortcut(cliAgentRemoveTitle(t, 'tab'))}
             >
               {cliAgentRemoveLabel(t)}
             </button>

@@ -50,7 +50,7 @@ describe('AgentMonitor footer remove button', () => {
   it('keeps Dismiss for an exited session', () => {
     const button = mount({ profile: 'claude', status: 'exited' });
     expect(button.textContent).toContain('Dismiss');
-    expect(button.title).toBe('Dismiss this finished agent');
+    expect(button.title).toBe('Dismiss this finished agent from the board');
     expect(button.innerHTML).toContain('lucide-trash');
   });
 });

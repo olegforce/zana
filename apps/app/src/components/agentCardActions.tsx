@@ -97,6 +97,33 @@ export function cliAgentRemoveConfirm(session: Pick<TerminalSession, 'title' | '
 export const CLI_AGENT_ARCHIVE_TITLE =
   'Stop the agent and remove it from the board. Its conversation stays in History.';
 
+/** Where a Dismiss / Archive / Delete control sits; the wording differs by what the control removes. */
+export type CliAgentRemoveSurface = 'board' | 'modal' | 'focus' | 'tab';
+
+/** Tooltip for the remove control: one place for the exited / archives / shell choice on every surface. */
+export function cliAgentRemoveTitle(
+  session: Pick<TerminalSession, 'status' | 'profile'>,
+  surface: CliAgentRemoveSurface
+): string {
+  const exited = session.status === 'exited';
+  const archives = cliAgentArchives(session);
+  switch (surface) {
+    case 'focus':
+      if (exited) return cliAgentRemoveLabel(session);
+      return archives ? 'Archive (stops the agent)' : 'Delete (ends the process)';
+    case 'tab':
+      return archives
+        ? 'Stop the agent and remove the tab. Its conversation stays in History.'
+        : 'Terminate this session and remove the tab. Reopen with ⌘⇧T.';
+    case 'modal':
+      return archives ? CLI_AGENT_ARCHIVE_TITLE : "Terminate the agent's process and close this view";
+    case 'board':
+    default:
+      if (exited) return 'Dismiss this finished agent from the board';
+      return archives ? CLI_AGENT_ARCHIVE_TITLE : 'Terminate this agent and remove it from the board';
+  }
+}
+
 export function cliAgentRestartLiveTitle(): string {
   return 'Stop the process and relaunch this session with the same profile and args';
 }
@@ -396,13 +423,7 @@ export function AgentCardMenu({ menu, setMenu, actions }: AgentCardMenuProps) {
       <button
         className="tab-context-danger"
         onClick={() => { setMenu(null); actions.remove(card); }}
-        title={
-          exited
-            ? 'Dismiss this finished agent from the board'
-            : cliAgentArchives(card.session)
-              ? CLI_AGENT_ARCHIVE_TITLE
-              : 'Terminate this agent and remove it from the board'
-        }
+        title={cliAgentRemoveTitle(card.session, 'board')}
       >
         {cliAgentRemoveLabel(card.session)}
       </button>
