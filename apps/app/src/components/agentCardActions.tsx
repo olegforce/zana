@@ -78,7 +78,7 @@ export function cliAgentArchives(session: Pick<TerminalSession, 'status' | 'prof
   return session.status !== 'exited' && session.profile !== 'shell';
 }
 
-/** Live agents archive: the process stops and the conversation stays in History. Plain shells keep Delete. */
+/** Exited: drop the card. Live agent: archive. Live plain shell: delete. */
 export function cliAgentRemoveLabel(
   session: Pick<TerminalSession, 'status' | 'profile'>
 ): 'Dismiss' | 'Archive' | 'Delete' {
@@ -86,7 +86,7 @@ export function cliAgentRemoveLabel(
   return cliAgentArchives(session) ? 'Archive' : 'Delete';
 }
 
-/** Live agents archive: the process stops and the conversation stays in History. Plain shells keep Delete. */
+/** Confirm before ending a live session: Archive for an agent, Delete for a plain shell. */
 export function cliAgentRemoveConfirm(session: Pick<TerminalSession, 'title' | 'profile'>): string {
   return session.profile === 'shell'
     ? `Delete “${session.title}”? The process will be terminated.`
