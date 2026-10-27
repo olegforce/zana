@@ -2,6 +2,7 @@ import { listNativeCapabilities } from "../services/skills/native-capabilities.j
 import { normalizePortableAttachments } from '../services/projects/portable-attachments.js';
 import { withoutSecretValues } from '../plugins/plugin-settings-redaction.js';
 import { handlePreviewsApi } from './previews-api.js';
+import { handlePluginPacksApi } from './product-plugin-packs.js';
 import { libraryDocumentOperation } from '../services/library/library-documents.js';
 import { classifyExpectedRpcError } from '@zana-ai/zcc-contracts/rpc-error';
 import { LibraryDocumentRequestSchema, LIBRARY_DOCUMENT_BODY_LIMIT } from '@zana-ai/zcc-contracts/library-documents';
@@ -527,6 +528,7 @@ export async function handleProductHttp(
 
   try {
     if (await handlePreviewsApi(request, response, ctx, path, method)) return true;
+    if (await handlePluginPacksApi(request, response, ctx.plugins?.pluginPacks, path, method)) return true;
     if (await handleScopedLinkApi(request, response, ctx, path, method)) return true;
     if (await handlePeerInstallerApi(request, response, ctx, path, method)) return true;
     if (await handlePeerApi(request, response, ctx, path, method)) return true;
@@ -3097,6 +3099,17 @@ export async function handleProductHttp(
     if (path === '/api/v1/plugin-apps/update-all' && method === 'POST') {
       if (!ctx.plugins) { sendJson(response, 503, { error: 'plugin host is unavailable' }); return true; }
       sendJson(response, 200, { ok: true, value: await ctx.plugins.applyAllUpdates() });
+      return true;
+    }
+
+    if (path === '/api/v1/plugin-apps/recovery' && method === 'GET') {
+      if (!ctx.plugins) { sendJson(response, 503, { error: 'plugin host is unavailable' }); return true; }
+      sendJson(response, 200, ctx.plugins.recoveryStatus());
+      return true;
+    }
+    if (path === '/api/v1/plugin-apps/hard-reload' && method === 'POST') {
+      if (!ctx.plugins) { sendJson(response, 503, { error: 'plugin host is unavailable' }); return true; }
+      sendJson(response, 202, await ctx.plugins.hardReload());
       return true;
     }
 
