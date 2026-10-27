@@ -68,7 +68,9 @@ createInterface({ input: process.stdin }).on('line', (raw) => {
   fs.appendFileSync(join(__dirname, 'typed.log'), line + '\n');
   if (line.includes('Wrap up this session')) {
     run('UserPromptSubmit', JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: line }));
-    sleep(1500); // long enough for the 250 ms status debounce to emit "working"
+    // Normally long enough for the 250 ms status debounce to emit "working". With fast.flag the turn ends
+    // at once, inside one debounce, so "working" is never emitted and only the turn hooks show it ran.
+    if (!fs.existsSync(join(__dirname, 'fast.flag'))) sleep(1500);
     run('Stop', JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }));
   }
   idle();
@@ -130,10 +132,21 @@ async function launchStub(home: string) {
 
 /** Open the agent in the Agents list and click Close with follow-up, answering the confirm. */
 async function clickClose(win: Page): Promise<() => string> {
-  await win.locator('[data-testid="nav-agents"]').click();
-  await win.getByLabel('List view').click();
-  await expect(win.locator('.agent-monitor-list')).toBeVisible({ timeout: 15_000 });
+  const openList = async () => {
+    await win.locator('[data-testid="nav-agents"]').click();
+    await win.getByLabel('List view').click({ timeout: 10_000 });
+    await expect(win.locator('.agent-monitor-list')).toBeVisible({ timeout: 15_000 });
+  };
   const card = win.locator('.agent-monitor-list').getByText(TITLE).first();
+  // A renderer that started before the spec created the session can miss it ("No agents"); a reload
+  // re-reads the session list, the same way agents-list-view.spec.ts does before it navigates.
+  const listed = await openList()
+    .then(() => card.waitFor({ state: 'visible', timeout: 10_000 }))
+    .then(() => true, () => false);
+  if (!listed) {
+    await win.reload();
+    await openList();
+  }
   await expect(card).toBeVisible({ timeout: 15_000 });
   await card.click();
   const closeButton = win.getByRole('button', { name: 'Close with follow-up' });
@@ -167,6 +180,23 @@ test('Close with follow-up wraps the agent up, then closes it with a full record
     expect((await stub.inbox(stub.sessionId)).join('\n')).toContain('Probe goal');
     const followUps = await win.evaluate(() => window.cc.followups.list());
     expect(followUps.some((f) => f.title === 'Check the probe result.')).toBe(true);
+  } finally {
+    await stub.cleanup();
+  }
+});
+
+test('a wrap-up turn too quick for the status to show working still closes, through the turn hooks', async ({ home }) => {
+  test.setTimeout(150_000);
+  const stub = await launchStub(home);
+  const { win } = stub;
+  try {
+    writeFileSync(join(stub.stubDir, 'fast.flag'), '1');
+    await expect.poll(stub.state, { timeout: 20_000 }).toBe('idle');
+    await clickClose(win);
+    await expect.poll(stub.live, { timeout: 60_000, message: 'the fast wrap-up turn never finished' }).toBe(false);
+    expect(stub.typed()).toHaveLength(1);
+    await expect.poll(async () => (await stub.inbox(stub.sessionId)).join('\n'), { timeout: 20_000 })
+      .toContain('Closed after it wrapped up.');
   } finally {
     await stub.cleanup();
   }
