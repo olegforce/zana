@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Folder,
   FileText,
+  MessageSquareReply,
   Play,
   Square
 } from 'lucide-react';
@@ -29,6 +30,7 @@ import {
   cadenceLabel,
   PROFILE_LABEL
 } from './schedulerUtils.js';
+import { canResumeRun } from './resumeScheduledRun.js';
 
 interface SchedulerOverviewProps {
   tasks: ScheduledTask[];
@@ -41,6 +43,8 @@ interface SchedulerOverviewProps {
   onToggle: (t: ScheduledTask) => void;
   onRunNow: (t: ScheduledTask) => void;
   onStopLive: (t: ScheduledTask, sessionId: string) => void;
+  /** Reopen a finished run's conversation in a new tab (Recent activity). */
+  onResumeRun?: (task: ScheduledTask, runId: string | undefined) => void;
   /** Hide the cross-project "By project" breakdown — redundant when the
    *  overview is already scoped to a single project (the per-project tab). */
   hideByProject?: boolean;
@@ -66,6 +70,7 @@ export function SchedulerOverview({
   onToggle,
   onRunNow,
   onStopLive,
+  onResumeRun,
   hideByProject = false,
   onOpenProject,
   onBrowse,
@@ -270,7 +275,7 @@ export function SchedulerOverview({
           : <button type="button" className="settings-btn" onClick={reviewIssues}>Review schedules</button>}
       </section>}
       <section className="overview-kpis">
-        <KpiCard label="Schedules" value={tasks.length} sub={`${enabled.length} enabled · ${disabled} paused`} />
+        <KpiCard label="Schedules" value={tasks.length} sub={`${enabled.length} enabled · ${disabled} off`} />
         <KpiCard
           label="Running now"
           value={working.length}
@@ -469,6 +474,17 @@ export function SchedulerOverview({
                       <FileText size={13} strokeWidth={1.75} />
                     </button>
                   )}
+                  {onResumeRun && run.id && canResumeRun(task, run) && !(run.sessionId && (terminalsByProject[task.projectId] ?? []).some((s) => s.id === run.sessionId && (s.status === 'running' || s.status === 'starting'))) && (
+                    <button
+                      type="button"
+                      className="scheduler-run-report-btn"
+                      title="Resume this run"
+                      aria-label="Resume this run"
+                      onClick={() => onResumeRun(task, run.id)}
+                    >
+                      <MessageSquareReply size={13} strokeWidth={1.75} />
+                    </button>
+                  )}
                   <div className="overview-item-when">
                     <div className="overview-item-abs">{formatRelative(new Date(ts))}</div>
                   </div>
@@ -524,7 +540,7 @@ export function SchedulerOverview({
                       onClick={(e) => e.stopPropagation()}
                       title={t.enabled ? 'Disable schedule' : 'Enable schedule'}
                     >
-                      <input type="checkbox" aria-label={`${t.enabled ? 'Pause' : 'Enable'} ${t.name}`} checked={t.enabled} onChange={() => onToggle(t)} />
+                      <input type="checkbox" aria-label={`${t.enabled ? 'Disable' : 'Enable'} ${t.name}`} checked={t.enabled} onChange={() => onToggle(t)} />
                       <span aria-hidden />
                     </label>
                   )}
@@ -599,7 +615,7 @@ export function SchedulerOverview({
                       </>
                     ) : (
                       <span className="scheduler-card-compact-next scheduler-card-compact-next--muted">
-                        {t.enabled ? '—' : 'paused'}
+                        {t.enabled ? '—' : 'off'}
                       </span>
                     )}
                   </div>

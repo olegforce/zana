@@ -1155,6 +1155,7 @@ const api: CcApi = {
     runNow: (id) => ipcRenderer.invoke(IPC.scheduler.runNow, id),
     queryRuns: (query) => ipcRenderer.invoke(IPC.scheduler.queryRuns, query),
     retryRuns: (refs) => ipcRenderer.invoke(IPC.scheduler.retryRuns, refs),
+    resumeRun: (input) => ipcRenderer.invoke(IPC.scheduler.resumeRun, input),
     dismissRuns: (refs) => ipcRenderer.invoke(IPC.scheduler.dismissRuns, refs),
     reconcile: (id) => ipcRenderer.invoke(IPC.scheduler.reconcile, id),
     onChanged: (cb) => {

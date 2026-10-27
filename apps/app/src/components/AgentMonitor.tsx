@@ -459,7 +459,7 @@ function AgentMonitorRow({ item, laneKey, active, showProject, onSelect, onConte
             <span className="agent-monitor-row-harness"><Calendar size={11} aria-hidden="true" /></span>
             {project}
             <FleetKindChip kind="schedule" />
-            <span className="agent-monitor-row-dur">{item.task.enabled ? 'Armed' : 'Paused'}</span>
+            <span className="agent-monitor-row-dur">{item.task.enabled ? 'Armed' : 'Off'}</span>
           </span>
         </span>
       </button>
