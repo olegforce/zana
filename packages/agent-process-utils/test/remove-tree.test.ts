@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { removeTreeWithoutFollowingLinks } from "../src/index.js";
+import {
+  removeTreeWithoutFollowingLinks,
+  removeUnlessRealDirectory,
+} from "../src/index.js";
 
 describe("removeTreeWithoutFollowingLinks", () => {
   let base: string;
@@ -76,5 +79,67 @@ describe("removeTreeWithoutFollowingLinks", () => {
     expect(() =>
       removeTreeWithoutFollowingLinks(join(base, "never-created")),
     ).not.toThrow();
+  });
+});
+
+describe("removeUnlessRealDirectory", () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "zcc-remove-unless-dir-"));
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("removes a link as a link and leaves its target alone", () => {
+    const target = join(base, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "SKILL.md"), "keep me\n");
+    const link = join(base, "skills");
+    symlinkSync(target, link, "junction");
+
+    expect(removeUnlessRealDirectory(link)).toBe(true);
+
+    expect(existsSync(link)).toBe(false);
+    expect(readFileSync(join(target, "SKILL.md"), "utf8")).toBe("keep me\n");
+  });
+
+  it("removes a link whose target is gone", () => {
+    const target = join(base, "target");
+    mkdirSync(target);
+    const link = join(base, "skills");
+    symlinkSync(target, link, "junction");
+    rmSync(target, { recursive: true });
+
+    expect(removeUnlessRealDirectory(link)).toBe(true);
+
+    expect(existsSync(join(base, "skills"))).toBe(false);
+  });
+
+  it("removes a plain file", () => {
+    const file = join(base, "skills");
+    writeFileSync(file, "stale\n");
+
+    expect(removeUnlessRealDirectory(file)).toBe(true);
+
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("treats a missing path as removed", () => {
+    expect(removeUnlessRealDirectory(join(base, "never-created"))).toBe(true);
+  });
+
+  it("leaves a real directory and its contents in place", () => {
+    const directory = join(base, "skills");
+    mkdirSync(join(directory, "mine"), { recursive: true });
+    writeFileSync(join(directory, "mine", "SKILL.md"), "keep me\n");
+
+    expect(removeUnlessRealDirectory(directory)).toBe(false);
+
+    expect(readFileSync(join(directory, "mine", "SKILL.md"), "utf8")).toBe(
+      "keep me\n",
+    );
   });
 });

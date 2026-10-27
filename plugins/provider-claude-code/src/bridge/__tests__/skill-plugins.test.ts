@@ -100,6 +100,22 @@ describe("claude skill plugins", () => {
     );
   });
 
+  it("replaces a plain file left at the skills path", () => {
+    const pluginsRoot = createClaudeSkillPluginsRoot(baseDir);
+    const first = stageSkills("a");
+    const pluginPath = ensureClaudeSkillPlugin({
+      pluginsRoot,
+      root: { id: "r", path: first },
+    });
+    const skillsLink = join(pluginPath, "skills");
+    rmSync(skillsLink);
+    writeFileSync(skillsLink, "stale\n");
+
+    ensureClaudeSkillPlugin({ pluginsRoot, root: { id: "r", path: first } });
+
+    expect(readlinkSync(skillsLink)).toBe(first);
+  });
+
   it("refuses to replace a real skills directory and leaves it intact", () => {
     const pluginsRoot = createClaudeSkillPluginsRoot(baseDir);
     const first = stageSkills("a");

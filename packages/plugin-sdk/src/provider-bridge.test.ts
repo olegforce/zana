@@ -1,9 +1,13 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   approvalInteractionOutcomeSchema,
   experimental_buildBridgeToolCallContent,
   experimental_planStepsPresentation,
   experimental_recordProviderChildIo,
+  experimental_removeUnlessRealDirectory,
   experimental_runPortableCommand,
   experimental_spawnPortablePipedProcess,
   experimental_spawnPortableProcess,
@@ -20,6 +24,24 @@ describe('provider-bridge facade', () => {
     expect(result).toEqual({ stdout: 'x'.repeat(16000), stderr: 'diagnostic' });
     expect(typeof experimental_spawnPortablePipedProcess).toBe('function');
     expect(typeof experimental_spawnPortableProcess).toBe('function');
+  });
+  it('lets bridges remove a link they made without touching its target', () => {
+    const base = mkdtempSync(join(tmpdir(), 'zcc-sdk-remove-link-'));
+    try {
+      const target = join(base, 'user-skills');
+      mkdirSync(target);
+      writeFileSync(join(target, 'SKILL.md'), 'keep me\n');
+      const link = join(base, 'skills');
+      symlinkSync(target, link, 'junction');
+
+      expect(experimental_removeUnlessRealDirectory(link)).toBe(true);
+      expect(existsSync(link)).toBe(false);
+      expect(existsSync(join(target, 'SKILL.md'))).toBe(true);
+      expect(experimental_removeUnlessRealDirectory(target)).toBe(false);
+      expect(existsSync(join(target, 'SKILL.md'))).toBe(true);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
   it('exports approvalInteractionOutcomeSchema for provider host bundles', () => {
     expect(typeof approvalInteractionOutcomeSchema.parse).toBe('function');

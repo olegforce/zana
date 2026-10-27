@@ -130,6 +130,19 @@ describe("claude skill plugins on Windows-like runtimes", () => {
     );
   });
 
+  it("re-points a junction reported as a directory whose target is gone", () => {
+    windows.linksLookLikeDirectories = true;
+    rmSync(skillsLink);
+    const removed = join(baseDir, "removed");
+    mkdirSync(removed);
+    symlinkSync(removed, skillsLink, "junction");
+    rmSync(removed, { recursive: true });
+
+    repoint();
+
+    expect(readlinkSync(skillsLink)).toBe(otherRoot);
+  });
+
   it("removes the junction with rmdir when unlink refuses it", () => {
     windows.unlinkError = "EPERM";
 

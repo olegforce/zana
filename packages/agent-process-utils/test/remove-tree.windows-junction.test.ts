@@ -11,7 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { removeTreeWithoutFollowingLinks } from "../src/index.js";
+import {
+  removeTreeWithoutFollowingLinks,
+  removeUnlessRealDirectory,
+} from "../src/index.js";
 
 /**
  * Reproduces, on any OS, the two Windows behaviours behind the skills wipe:
@@ -109,6 +112,39 @@ describe("removeTreeWithoutFollowingLinks on Windows-like runtimes", () => {
       "keep me\n",
     );
     expect(existsSync(join(target, ".git", "objects", "ab12"))).toBe(true);
+  });
+
+  it("does not walk into a root that is a junction reported as a directory", () => {
+    windows.linksLookLikeDirectories = true;
+    const rootLink = join(base, "root-link");
+    symlinkSync(target, rootLink, "junction");
+
+    removeTreeWithoutFollowingLinks(rootLink);
+
+    expect(existsSync(rootLink)).toBe(false);
+    expect(readFileSync(join(target, "my-skill", "SKILL.md"), "utf8")).toBe(
+      "keep me\n",
+    );
+    expect(existsSync(join(target, ".git", "objects", "ab12"))).toBe(true);
+  });
+
+  it("removes a junction whose target is gone as a link", () => {
+    windows.linksLookLikeDirectories = true;
+    rmSync(target, { recursive: true, force: true });
+
+    removeTreeWithoutFollowingLinks(tree);
+
+    expect(existsSync(tree)).toBe(false);
+  });
+
+  it("removes a junction reported as a directory and reports a real directory", () => {
+    windows.linksLookLikeDirectories = true;
+
+    expect(removeUnlessRealDirectory(link)).toBe(true);
+    expect(existsSync(link)).toBe(false);
+    expect(existsSync(join(target, "my-skill", "SKILL.md"))).toBe(true);
+    expect(removeUnlessRealDirectory(target)).toBe(false);
+    expect(existsSync(join(target, "my-skill", "SKILL.md"))).toBe(true);
   });
 
   it("falls back to rmdir when unlink refuses a junction", () => {
