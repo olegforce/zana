@@ -134,7 +134,9 @@ export function registerSchedulerIpc(): void {
         realpath: (path) => realpathSync(path)
       });
     } catch (err) {
-      return { ok: false, code: 'RESUME_FAILED', message: err instanceof Error ? err.message : String(err) };
+      // The exception can carry paths and internals: keep it in the log, with the ids needed to find it.
+      ctx.logMainError(`scheduler resume run (scheduleId=${parsed.data.scheduleId}, runId=${parsed.data.runId ?? 'latest'})`, err);
+      return { ok: false, code: 'RESUME_FAILED', message: "Couldn't reopen this run's conversation. Try again in a moment." };
     }
   });
   // The UI list merges native schedules with Claude /loop rows read from disk,

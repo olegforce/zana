@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   resume: vi.fn(),
   get: vi.fn(), list: vi.fn(), create: vi.fn(),
-  listProjects: vi.fn(), realpath: vi.fn()
+  listProjects: vi.fn(), realpath: vi.fn(), logMainError: vi.fn()
 }));
 vi.mock('./shared-product-registration.js', () => ({
   productHandle: (channel: string, handler: (...args: unknown[]) => unknown) => h.handlers.set(channel, handler),
@@ -16,7 +16,7 @@ vi.mock('./shared-product-registration.js', () => ({
 vi.mock('./ctx.js', () => ({ ctx: {
   scheduler: { get: h.get, on: vi.fn() },
   ptys: { list: h.list },
-  createInteractiveTerminal: h.create,
+  createInteractiveTerminal: h.create, logMainError: h.logMainError,
   goals: { on: vi.fn() }, followups: { on: vi.fn() }, feedStore: { on: vi.fn() },
   templates: { on: vi.fn() }, scheduleGroups: { on: vi.fn() }
 } }));
@@ -55,11 +55,18 @@ describe('scheduler:resumeRun', () => {
     expect(h.resume).toHaveBeenCalledWith({ scheduleId: 's1', runId: 'r1' }, expect.any(Object));
   });
 
-  it('turns a thrown error into RESUME_FAILED, with a plain message for non-errors', async () => {
-    h.resume.mockRejectedValueOnce(new Error('boom'));
-    await expect(call({ scheduleId: 's1' })).resolves.toEqual({ ok: false, code: 'RESUME_FAILED', message: 'boom' });
+  it('turns a thrown error into a stable RESUME_FAILED without leaking the exception, and logs it with the ids', async () => {
+    h.resume.mockRejectedValueOnce(new Error('ENOENT: /Users/someone/secret/path'));
+    const result = await call({ scheduleId: 's1', runId: 'r9' });
+    expect(result).toEqual({ ok: false, code: 'RESUME_FAILED', message: "Couldn't reopen this run's conversation. Try again in a moment." });
+    expect(JSON.stringify(result)).not.toContain('secret');
+    expect(h.logMainError).toHaveBeenCalledWith('scheduler resume run (scheduleId=s1, runId=r9)', expect.objectContaining({ message: expect.stringContaining('secret') }));
+  });
+
+  it('logs the latest run as "latest" and keeps non-Error throws in the log, not the result', async () => {
     h.resume.mockRejectedValueOnce('odd');
-    await expect(call({ scheduleId: 's1' })).resolves.toEqual({ ok: false, code: 'RESUME_FAILED', message: 'odd' });
+    await expect(call({ scheduleId: 's1' })).resolves.toMatchObject({ ok: false, code: 'RESUME_FAILED' });
+    expect(h.logMainError).toHaveBeenCalledWith('scheduler resume run (scheduleId=s1, runId=latest)', 'odd');
   });
 
   it('builds each dependency from main services at call time', async () => {
