@@ -97,12 +97,14 @@ describe('ensureProcessPath login-shell probe', () => {
    * directories in front of whatever PATH it received, and records that PATH.
    * Pass `printsMarkers: false` for a shell whose output can't be parsed.
    */
-  function fakeLoginShell(printsMarkers = true): { dir: string; received: string } {
+  function fakeLoginShell(printsMarkers = true, fixedLoginPath?: string): { dir: string; received: string } {
     const dir = mkdtempSync(join(tmpdir(), 'zcc-login-shell-'));
     chmodSync(dir, 0o700);
     tmpDirs.push(dir);
     const received = join(dir, 'received-path');
-    const body = printsMarkers
+    const body = printsMarkers && fixedLoginPath
+      ? `printf '__ZCC_PATH_START__${fixedLoginPath}__ZCC_PATH_END__'`
+      : printsMarkers
       ? `printf '__ZCC_PATH_START__/usr/local/bin:/opt/homebrew/bin:%s__ZCC_PATH_END__' "$PATH"`
       : 'echo no markers here';
     const shell = join(dir, 'fake-shell');
@@ -170,6 +172,31 @@ describe('ensureProcessPath login-shell probe', () => {
     const launched = `${join(dir, 'fake-bin')}:/usr/bin:/bin`;
     run(launched);
     expect(readFileSync(received, 'utf8')).toBe(launched);
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(g) a terminal launch: PATH dirs outside the leading run never reach the probe and land behind the login PATH', () => {
+    setPlatform('darwin');
+    const { dir, received } = fakeLoginShell(true, '/usr/local/bin:/usr/bin:/bin');
+    const lead = join(dir, 'lead-bin');
+    const midOnly = join(dir, 'terminal-only-bin');
+    const segments = run(`${lead}:/usr/bin:${midOnly}:/bin`);
+    // The probe sees exactly the baseline, not the terminal's extra dirs.
+    expect(readFileSync(received, 'utf8')).toBe(LOGIN_SHELL_BASE_PATH);
+    expect(readFileSync(received, 'utf8')).not.toContain(midOnly);
+    // The leading run still wins; the mid-PATH extra stays behind the login PATH.
+    expect(segments[0]).toBe(lead);
+    expect(segments.indexOf(midOnly)).toBeGreaterThan(segments.indexOf('/bin'));
+  }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('(h) Linux: a mid-PATH dir the login shell drops goes behind the login PATH, not in front', () => {
+    setPlatform('linux');
+    const { dir } = fakeLoginShell(true, '/usr/local/bin:/usr/bin:/bin');
+    const lead = join(dir, 'lead-bin');
+    const mid = join(dir, 'mid-bin');
+    const segments = run(`${lead}:/usr/bin:${mid}:/bin`);
+    expect(segments[0]).toBe(lead);
+    expect(segments.slice(1, 4)).toEqual(['/usr/local/bin', '/usr/bin', '/bin']);
+    expect(segments.indexOf(mid)).toBeGreaterThan(segments.indexOf('/bin'));
   }, 15_000);
 });
 
