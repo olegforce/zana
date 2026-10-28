@@ -53,8 +53,8 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
   const [tick, setTick] = useState(0);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ScheduleFilter>('all');
-  /** When the user hits "Pause all", we stash the ids that were enabled so
-   *  "Resume all" only re-enables those. Session-local — by design. */
+  /** When the user hits "Disable all", we stash the ids that were enabled so
+   *  "Re-enable all" only re-enables those. Session-local — by design. */
   const [pausedSet, setPausedSet] = useState<Set<string> | null>(null);
   const [view, setView] = useState<'overview' | 'schedules' | 'problems'>('overview');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -318,9 +318,9 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
                 <button
                   className="settings-btn scheduler-pause-all"
                   onClick={resumeAll}
-                  title="Re-enable schedules that were on before Pause all"
+                  title="Turn back on the schedules that were on before Disable all"
                 >
-                  <PlayCircle size={14} /> Resume all
+                  <PlayCircle size={14} /> Re-enable all
                 </button>
               ) : (
                 <button
@@ -329,9 +329,9 @@ export function SchedulerView({ projectId }: { projectId?: string } = {}) {
                   disabled={
                     !scopedTasks.some((t) => t.enabled && t.external?.kind !== 'claude-loop')
                   }
-                  title="Disable every enabled schedule (session-local)"
+                  title="Disable every enabled schedule for now"
                 >
-                  <Pause size={14} /> Pause all
+                  <Pause size={14} /> Disable all
                 </button>
               )}
             </div>

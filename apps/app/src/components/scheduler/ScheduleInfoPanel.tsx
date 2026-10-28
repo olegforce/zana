@@ -182,7 +182,7 @@ export function ScheduleInfoPanel({
         <dl className="schedule-info-facts">
           <div>
             <dt>Enabled</dt>
-            <dd>{task.enabled ? 'On' : 'Paused'}</dd>
+            <dd>{task.enabled ? 'On' : 'Off'}</dd>
           </div>
           <div>
             <dt>Last run</dt>
@@ -194,7 +194,7 @@ export function ScheduleInfoPanel({
           </div>
           <div>
             <dt>Next</dt>
-            <dd>{task.enabled && nextRun ? `in ${formatCountdown(nextRun)}` : 'paused'}</dd>
+            <dd>{task.enabled && nextRun ? `in ${formatCountdown(nextRun)}` : 'off'}</dd>
           </div>
           <div>
             <dt>Runs</dt>
@@ -377,7 +377,7 @@ function ScheduleInfoFooter({
         </button>
       )}
       <button type="button" className="settings-btn" disabled={pending && !enabled} onClick={onToggle}>
-        {enabled ? <><PowerOff size={13} /> Pause</> : <><Power size={13} /> Resume</>}
+        {enabled ? <><PowerOff size={13} /> Disable</> : <><Power size={13} /> Enable</>}
       </button>
       {onDuplicate ? (
         <button type="button" className="settings-btn" onClick={onDuplicate}>

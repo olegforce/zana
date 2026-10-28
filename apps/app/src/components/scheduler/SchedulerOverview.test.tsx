@@ -55,6 +55,15 @@ describe('schedule filtering and health', () => {
 });
 
 describe('SchedulerOverview', () => {
+  it('says off, Disable and Enable for turning schedules on and off', () => {
+    const { props, inventory } = mount([task('Alpha'), task('Beta', { enabled: false })]);
+    expect(screen.getByText('1 enabled · 1 off')).toBeTruthy();
+    expect(within(inventory()).getByText('off')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Off' }).getAttribute('value')).toBe('paused');
+    fireEvent.click(screen.getAllByLabelText('Disable Alpha')[0]!);
+    expect(props.onToggle).toHaveBeenCalledOnce();
+    expect(screen.getAllByLabelText('Enable Beta').length).toBeGreaterThan(0);
+  });
   it('reviews attention schedules without changing their enabled state', () => {
     const { props, inventory } = mount([task('Missing', { projectId: 'gone' }), withRun('Failed', 'error'), task('Healthy')]);
     expect(screen.getByText('2 schedules need attention')).toBeTruthy();

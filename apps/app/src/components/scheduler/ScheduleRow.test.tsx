@@ -116,6 +116,21 @@ describe('ScheduleRow', () => {
     expect(onOpenInSplit).toHaveBeenCalledTimes(1);
   });
 
+  it('says off in the next column of a disabled schedule', () => {
+    const view = render(<MemoryRouter><ScheduleRow task={{ ...task, enabled: false }} projectName="Demo" onOpen={vi.fn()} onOpenInSplit={vi.fn()} onDuplicate={vi.fn()} onAskDelete={vi.fn()} /></MemoryRouter>);
+    expect(view.container.querySelector('.scheduler-card-compact-next--muted')?.textContent).toBe('off');
+    expect(view.queryByText('paused')).toBeNull();
+  });
+
+  it('shows the countdown for an enabled schedule with a next run, and off without one', () => {
+    const wrap = (t: ScheduledTask) => <MemoryRouter><ScheduleRow task={t} projectName="Demo" onOpen={vi.fn()} onOpenInSplit={vi.fn()} onDuplicate={vi.fn()} onAskDelete={vi.fn()} /></MemoryRouter>;
+    const soon = render(wrap({ ...task, status: { runCount: 0, runs: [], nextRunAt: new Date(Date.now() + 3_600_000).toISOString() } }));
+    expect(soon.container.querySelector('.scheduler-card-compact-next')?.textContent).toMatch(/^in /);
+    soon.unmount();
+    const none = render(wrap({ ...task, status: { runCount: 0, runs: [] } }));
+    expect(none.getByText('off')).toBeTruthy();
+  });
+
   it('shows neutral queued and retry pending indicators', () => {
     const wrap = (t: ScheduledTask) => <MemoryRouter><ScheduleRow task={t} projectName="Demo" onOpen={vi.fn()} onOpenInSplit={vi.fn()} onDuplicate={vi.fn()} onAskDelete={vi.fn()} /></MemoryRouter>;
     const queued = render(wrap({ ...task, status: { runCount: 0, runs: [], queuedAt: '2026-01-01T00:00:00Z' } }));

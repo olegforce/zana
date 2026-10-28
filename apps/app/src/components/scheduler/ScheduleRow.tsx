@@ -204,7 +204,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
               in {formatCountdown(nextRun)}
             </span>
           ) : (
-            <span className="scheduler-card-compact-next scheduler-card-compact-next--muted">paused</span>
+            <span className="scheduler-card-compact-next scheduler-card-compact-next--muted">off</span>
           )}
         </div>
         <div className="scheduler-card-actions" onClick={stop}>

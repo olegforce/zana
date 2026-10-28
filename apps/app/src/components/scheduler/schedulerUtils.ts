@@ -68,7 +68,7 @@ export function missedRunChoices(cadence: 'interval' | 'cron', includeOriginal: 
       : {
           value: 'original',
           title: 'Run once, skip when busy',
-          hint: 'Run once for the latest missed time, but skip it when too many runs are going. Resuming a paused schedule also runs the time it missed.'
+          hint: 'Run once for the latest missed time, but skip it when too many runs are going. Turning a schedule back on also runs the time it missed.'
         });
   }
   return choices;

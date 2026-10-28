@@ -81,10 +81,10 @@ Scheduler tab to know what happened.
 changelog scan). Group related schedules together from the schedule's edit
 dialog — the Scheduler tab lets you filter by group.
 
-## 4. Pausing / editing
+## 4. Turning off / editing
 
-Toggle a schedule off without deleting it, or edit its prompt/cadence at any
-time — the next run picks up the change.
+Disable a schedule to stop it without deleting it, or edit its prompt/cadence at
+any time — the next run picks up the change.
 `,
   personas: `
 A persona is a reusable agent identity: role, model, permission mode, system

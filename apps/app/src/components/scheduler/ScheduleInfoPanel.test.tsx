@@ -56,7 +56,7 @@ describe('ScheduleInfoPanel', () => {
     render(<ScheduleInfoPanel task={{ ...baseTask, enabled: false, status: { runCount: 0, runs: [{ at: new Date().toISOString(), launchState: 'pending', sessionId: 'reserved', result: 'skipped' }] } }} />);
     expect(screen.getByTestId('pending-worker-recovery')).toBeTruthy();
     expect((screen.getByRole('button', { name: /Run now/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: /Resume/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Enable', exact: true }) as HTMLButtonElement).disabled).toBe(true);
   });
   it('lists the cause of a failed run and hides messages on successful runs', () => {
     render(<ScheduleInfoPanel task={{ ...baseTask, status: { runCount: 2, runs: [
@@ -121,7 +121,7 @@ describe('ScheduleInfoPanel', () => {
     expect(screen.getByTestId('schedule-run-report').textContent).toContain('Done');
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await vi.waitFor(() => expect(runNow).toHaveBeenCalledWith('sched-1'));
-    fireEvent.click(screen.getByRole('button', { name: /Pause/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Disable', exact: true }));
     await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledWith('sched-1', false));
     fireEvent.click(screen.getByRole('button', { name: /Duplicate/ }));
     expect(onDuplicate).toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe('ScheduleInfoPanel', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /Run now/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Pause/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Disable', exact: true })).toBeNull();
   });
 
   it('stops a live session and surfaces failures', async () => {
@@ -183,14 +183,15 @@ describe('ScheduleInfoPanel', () => {
     );
   });
 
-  it('toasts when run-now or pause fail', async () => {
+  it('toasts when run-now or disable fail', async () => {
     runNow.mockResolvedValue({ ok: false, message: 'busy' });
     setEnabled.mockResolvedValue({ ok: false, message: 'denied' });
     render(<ScheduleInfoPanel task={{ ...baseTask, enabled: false } as ScheduledTask} />);
-    expect(screen.getByText('Paused')).toBeTruthy();
+    expect(screen.getByText('Off')).toBeTruthy();
+    expect(screen.getByText('off')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith('Run failed: busy', 'error'));
-    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable', exact: true }));
     await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith('denied', 'error'));
   });
 

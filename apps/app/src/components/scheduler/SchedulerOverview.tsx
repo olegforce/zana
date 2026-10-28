@@ -270,7 +270,7 @@ export function SchedulerOverview({
           : <button type="button" className="settings-btn" onClick={reviewIssues}>Review schedules</button>}
       </section>}
       <section className="overview-kpis">
-        <KpiCard label="Schedules" value={tasks.length} sub={`${enabled.length} enabled · ${disabled} paused`} />
+        <KpiCard label="Schedules" value={tasks.length} sub={`${enabled.length} enabled · ${disabled} off`} />
         <KpiCard
           label="Running now"
           value={working.length}
@@ -524,7 +524,7 @@ export function SchedulerOverview({
                       onClick={(e) => e.stopPropagation()}
                       title={t.enabled ? 'Disable schedule' : 'Enable schedule'}
                     >
-                      <input type="checkbox" aria-label={`${t.enabled ? 'Pause' : 'Enable'} ${t.name}`} checked={t.enabled} onChange={() => onToggle(t)} />
+                      <input type="checkbox" aria-label={`${t.enabled ? 'Disable' : 'Enable'} ${t.name}`} checked={t.enabled} onChange={() => onToggle(t)} />
                       <span aria-hidden />
                     </label>
                   )}
@@ -599,7 +599,7 @@ export function SchedulerOverview({
                       </>
                     ) : (
                       <span className="scheduler-card-compact-next scheduler-card-compact-next--muted">
-                        {t.enabled ? '—' : 'paused'}
+                        {t.enabled ? '—' : 'off'}
                       </span>
                     )}
                   </div>
