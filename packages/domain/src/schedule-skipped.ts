@@ -8,7 +8,7 @@
 import type { ScheduleRun, ScheduleRunReasonCode, ScheduledTask } from './product.js';
 import { parseEvery } from './parse-every.js';
 import { runReason } from './schedule-health.js';
-import { isCronCadence, previousCronSlots } from './schedule-spec.js';
+import { isCronCadence, nextRunMsFrom, previousCronSlots } from './schedule-spec.js';
 
 /** A due time this recent may still be starting, so the gap signal waits. */
 export const SKIPPED_GRACE_MS = 2 * 60 * 1000;
@@ -47,7 +47,15 @@ function newestFirst(runs: ScheduleRun[]): ScheduleRun[] {
 function newestDueSlot(task: ScheduledTask, nowMs: number, limit: number): number | undefined {
   const status = task.status;
   if (isCronCadence(task.schedule)) {
-    return previousCronSlots(task.schedule.cron!, task.schedule.tz, limit, 1)[0];
+    const slot = previousCronSlots(task.schedule.cron!, task.schedule.tz, limit, 1)[0];
+    if (slot === undefined) return undefined;
+    // A catch-up for this slot is armed (the timer fires before the slot after it), so it is about to run.
+    const nextMs = parseMs(status?.nextRunAt);
+    if (Number.isFinite(nextMs) && nextMs > nowMs) {
+      const following = nextRunMsFrom(task.schedule, new Date(slot));
+      if (following !== null && nextMs < following) return undefined;
+    }
+    return slot;
   }
   const intervalMs = parseEvery(task.schedule.every ?? '');
   if (!intervalMs) return undefined;

@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ScheduledTask } from '@zana-ai/zcc-domain/product';
 
@@ -208,8 +208,10 @@ describe('ScheduleRow Resume latest run', () => {
 });
 
 describe('ScheduleRow skipped last run', () => {
-  afterEach(() => { cleanup(); terminalState.terminals = {}; });
-  const slot = new Date(Date.now() - 60_000);
+  // A fixed clock keeps the slot on the same local day, whatever time the suite runs.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(2026, 9, 14, 12, 0)); });
+  afterEach(() => { vi.useRealTimers(); cleanup(); terminalState.terminals = {}; });
+  const slot = new Date(2026, 9, 14, 11, 59);
   const time = slot.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const overlap = { id: 'o1', at: slot.toISOString(), result: 'skipped' as const, reasonCode: 'overlap' as const };
   const mount = (t: ScheduledTask) => render(

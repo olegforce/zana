@@ -148,6 +148,21 @@ describe('lastRunSkipped: gap signal, cron', () => {
   });
 });
 
+describe('lastRunSkipped: gap signal, cron catch-up armed', () => {
+  it('is null while the catch-up for the overdue slot is armed', () => {
+    const armed = task([run({ at: iso(DAY + 3 * H) })], {}, { lastRunAt: iso(DAY + 3 * H), nextRunAt: new Date(NOW + 5000).toISOString() });
+    expect(lastRunSkipped(armed, NOW)).toBeNull();
+  });
+  it('still flags the slot when nextRunAt is the slot after it', () => {
+    const steady = task([run({ at: iso(DAY + 3 * H) })], {}, { nextRunAt: '2026-10-15T09:00:00.000Z' });
+    expect(lastRunSkipped(steady, NOW)).toEqual({ slotAt: SLOT_9 });
+  });
+  it('ignores a nextRunAt in the past', () => {
+    const stale = task([run({ at: iso(DAY + 3 * H) })], {}, { nextRunAt: iso(H) });
+    expect(lastRunSkipped(stale, NOW)).toEqual({ slotAt: SLOT_9 });
+  });
+});
+
 describe('lastRunSkipped: gap signal, interval', () => {
   it('flags the newest grid time after lastRunAt', () => {
     expect(lastRunSkipped(every('1h', [], { lastRunAt: iso(3 * H) }), NOW)).toEqual({ slotAt: iso(H) });
