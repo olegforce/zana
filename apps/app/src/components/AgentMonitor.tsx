@@ -30,6 +30,7 @@ import {
   clampMenuAnchor,
   canCloseWithFollowup,
   cliAgentArchives,
+  cliAgentKeepsHistory,
   cliAgentRemoveLabel,
   cliAgentRemoveTitle,
   cliAgentRestartLiveTitle,
@@ -733,7 +734,7 @@ function AgentMonitorSession({
         type="button"
         className="agent-monitor-action danger"
         onClick={() => actions.remove(card)}
-        title={cliAgentRemoveTitle(card.session, 'board')}
+        title={cliAgentRemoveTitle(card.session, 'board', cliAgentKeepsHistory(card.session, project))}
       >
         {cliAgentArchives(card.session) ? <Archive size={13} /> : <Trash2 size={13} />}{' '}
         {cliAgentRemoveLabel(card.session)}

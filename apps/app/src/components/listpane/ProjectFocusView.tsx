@@ -20,6 +20,7 @@ import {
   useAgentCardActions,
   AgentCardMenu,
   clampMenuAnchor,
+  cliAgentKeepsHistory,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
   cliAgentRemoveTitle
@@ -360,7 +361,7 @@ export function ProjectFocusView({ project }: { project: Project }) {
                               e.stopPropagation();
                               if (
                                 !exited &&
-                                !window.confirm(cliAgentRemoveConfirm(t))
+                                !window.confirm(cliAgentRemoveConfirm(t, cliAgentKeepsHistory(t, project)))
                               ) {
                                 return;
                               }

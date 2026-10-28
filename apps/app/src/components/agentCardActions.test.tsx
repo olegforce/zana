@@ -6,7 +6,9 @@ import { MemoryRouter } from 'react-router-dom';
 const h = vi.hoisted(() => ({
   closeTerminal: vi.fn(),
   closeIdleAgents: vi.fn(async () => ({ closed: 1, summarized: 1, followedUp: 1 })),
-  closingFollowupIds: new Set<string>()
+  closingFollowupIds: new Set<string>(),
+  projects: [{ id: 'p1' }] as Array<Record<string, unknown>>,
+  terminals: {} as Record<string, Array<Record<string, unknown>>>
 }));
 
 vi.mock('../store.js', () => ({
@@ -20,14 +22,16 @@ vi.mock('../store.js', () => ({
       selector({
         closeTerminal: h.closeTerminal,
         closingFollowupIds: h.closingFollowupIds,
-        projects: [],
+        projects: h.projects,
         idleAttentionSensitivity: 'balanced'
       }),
     {
       getState: () => ({
         closeTerminal: h.closeTerminal,
         closeIdleAgents: h.closeIdleAgents,
-        closingFollowupIds: h.closingFollowupIds
+        closingFollowupIds: h.closingFollowupIds,
+        projects: h.projects,
+        terminals: h.terminals
       })
     }
   ),
@@ -37,9 +41,9 @@ vi.mock('../store.js', () => ({
 import {
   AgentCardMenu,
   AgentDeleteQuickAction,
-  CLI_AGENT_ARCHIVE_TITLE,
   canCloseWithFollowup,
   cliAgentArchives,
+  cliAgentKeepsHistory,
   cliAgentMenuProjectId,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
@@ -165,6 +169,16 @@ describe('AgentCardMenu remove item', () => {
     );
   });
 
+  it('uses neutral wording for a harness without History and for a remote project', () => {
+    expect(removeButton({ profile: 'mastracode' }).title).toBe(NEUTRAL_TITLE);
+    h.projects = [{ id: 'p1', remote: { host: 'h' } }];
+    try {
+      expect(removeButton({}).title).toBe(NEUTRAL_TITLE);
+    } finally {
+      h.projects = [{ id: 'p1' }];
+    }
+  });
+
   it('keeps Delete for a live plain shell', () => {
     const button = removeButton({ profile: 'shell' });
     expect(button.label).toBe('Delete');
@@ -195,19 +209,48 @@ describe('cliAgentArchives / cliAgentRemoveLabel', () => {
   });
 });
 
+const HISTORY_TITLE = 'Stop the agent and remove it from the board. Its conversation stays in History.';
+const NEUTRAL_TITLE = 'Stop the agent and remove it from the board.';
+
+describe('cliAgentKeepsHistory', () => {
+  const local = {};
+  const remote = { remote: { host: 'h' } };
+  const hosted = { hostId: 'host-2' };
+  it('is true for a live agent with a History adapter in a local project, all postures', () => {
+    for (const profile of ['claude', 'claude-yolo', 'cursor', 'codex-resume', 'pi', 'opencode', 'grok'] as const) {
+      expect(cliAgentKeepsHistory({ status: 'running', profile }, local)).toBe(true);
+    }
+  });
+  it('is false for harnesses without an adapter', () => {
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'mastracode' }, local)).toBe(false);
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'afcode-yolo' }, local)).toBe(false);
+  });
+  it('is false for remote, other-host and unknown projects', () => {
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'claude' }, remote)).toBe(false);
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'claude' }, hosted)).toBe(false);
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'claude' }, undefined)).toBe(false);
+  });
+  it('is false for shells and exited sessions', () => {
+    expect(cliAgentKeepsHistory({ status: 'running', profile: 'shell' }, local)).toBe(false);
+    expect(cliAgentKeepsHistory({ status: 'exited', profile: 'claude' }, local)).toBe(false);
+  });
+});
+
 describe('cliAgentRemoveTitle', () => {
   const live = { status: 'running', profile: 'claude' } as never;
   const shell = { status: 'running', profile: 'shell' } as never;
   const exited = { status: 'exited', profile: 'claude' } as never;
 
   it('board: archive, shell and exited wording', () => {
-    expect(cliAgentRemoveTitle(live, 'board')).toBe(CLI_AGENT_ARCHIVE_TITLE);
+    expect(cliAgentRemoveTitle(live, 'board', true)).toBe(HISTORY_TITLE);
+    expect(cliAgentRemoveTitle(live, 'board')).toBe(NEUTRAL_TITLE);
     expect(cliAgentRemoveTitle(shell, 'board')).toBe('Terminate this agent and remove it from the board');
     expect(cliAgentRemoveTitle(exited, 'board')).toBe('Dismiss this finished agent from the board');
   });
 
   it('modal: archive and shell wording', () => {
-    expect(cliAgentRemoveTitle(live, 'modal')).toBe(CLI_AGENT_ARCHIVE_TITLE);
+    expect(cliAgentRemoveTitle(live, 'modal', true)).toBe(HISTORY_TITLE);
+    expect(cliAgentRemoveTitle(live, 'modal')).toBe(NEUTRAL_TITLE);
     expect(cliAgentRemoveTitle(shell, 'modal')).toBe("Terminate the agent's process and close this view");
   });
 
@@ -218,17 +261,21 @@ describe('cliAgentRemoveTitle', () => {
   });
 
   it('tab: removes the tab', () => {
-    expect(cliAgentRemoveTitle(live, 'tab')).toBe(
+    expect(cliAgentRemoveTitle(live, 'tab', true)).toBe(
       'Stop the agent and remove the tab. Its conversation stays in History.'
     );
+    expect(cliAgentRemoveTitle(live, 'tab')).toBe('Stop the agent and remove the tab.');
     expect(cliAgentRemoveTitle(shell, 'tab')).toBe('Terminate this session and remove the tab. Reopen with ⌘⇧T.');
     expect(cliAgentRemoveTitle(exited, 'tab')).toBe('Terminate this session and remove the tab. Reopen with ⌘⇧T.');
   });
 });
 
 describe('cliAgentRemoveConfirm', () => {
-  it('tells an agent it stays in History', () => {
+  it('is neutral by default and tells an agent it stays in History only when asked', () => {
     expect(cliAgentRemoveConfirm({ title: 'Review', profile: 'claude' })).toBe(
+      'Archive “Review”? The agent stops and is removed from the board.'
+    );
+    expect(cliAgentRemoveConfirm({ title: 'Review', profile: 'claude' }, true)).toBe(
       'Archive “Review”? The agent stops and its conversation stays in History.'
     );
   });
@@ -269,13 +316,70 @@ describe('useAgentCardActions remove', () => {
     expect(h.closeTerminal).not.toHaveBeenCalled();
   });
 
-  it('keeps the Close wording for a shell lead', () => {
+  const LEAD_NEUTRAL =
+    'Archive “Boss”? It\'s the orchestrator, so archiving it also stops every other agent in “Crew”.';
+
+  it('drops the History sentence for a lead whose harness has no History', () => {
+    const confirm = vi.fn(() => false);
+    captureActions(confirm).remove(card({ ...lead, profile: 'mastracode' }));
+    expect(confirm).toHaveBeenCalledWith(LEAD_NEUTRAL);
+  });
+
+  it('drops the History sentence in a remote project', () => {
+    h.projects = [{ id: 'p1', remote: { host: 'h' } }];
+    const confirm = vi.fn(() => false);
+    try {
+      captureActions(confirm).remove(card(lead));
+    } finally {
+      h.projects = [{ id: 'p1' }];
+    }
+    expect(confirm).toHaveBeenCalledWith(LEAD_NEUTRAL);
+  });
+
+  it('drops the History sentence when a live teammate has no History, ignoring exited and other cohorts', () => {
+    const teamLead = { cohort: { role: 'orchestrator', teamName: 'Crew', cohortId: 'c1' } };
+    const member = (id: string, profile: string, status: string, cohortId: string) => ({
+      id, profile, status, cohort: { role: 'worker', cohortId }
+    });
+    h.terminals = {
+      p1: [
+        member('w1', 'claude', 'running', 'c1'),
+        member('w2', 'mastracode', 'exited', 'c1'),
+        member('w3', 'mastracode', 'running', 'c2')
+      ]
+    };
+    const confirm = vi.fn(() => false);
+    try {
+      captureActions(confirm).remove(card(teamLead));
+      expect(confirm).toHaveBeenLastCalledWith(
+        LEAD_NEUTRAL + ' Their conversations stay in History.'
+      );
+      h.terminals = { p1: [member('w4', 'mastracode', 'running', 'c1')] };
+      captureActions(confirm).remove(card(teamLead));
+      expect(confirm).toHaveBeenLastCalledWith(LEAD_NEUTRAL);
+    } finally {
+      h.terminals = {};
+    }
+  });
+
+  it('keeps the Close wording for a shell lead (reachable: a live shell does not archive)', () => {
     const confirm = vi.fn(() => false);
     const actions = captureActions(confirm);
     actions.remove(card({ ...lead, profile: 'shell' }));
     expect(confirm).toHaveBeenCalledWith(
       'Close “Boss”? It\'s the orchestrator — closing it will also stop every other agent in “Crew”.'
     );
+  });
+
+  it('uses neutral wording for a non-lead in a remote project', () => {
+    h.projects = [{ id: 'p1', remote: { host: 'h' } }];
+    const confirm = vi.fn(() => false);
+    try {
+      captureActions(confirm).remove(card({}));
+    } finally {
+      h.projects = [{ id: 'p1' }];
+    }
+    expect(confirm).toHaveBeenCalledWith('Archive “Boss”? The agent stops and is removed from the board.');
   });
 
   it('uses the shared confirm for a non-lead and closes when accepted', () => {

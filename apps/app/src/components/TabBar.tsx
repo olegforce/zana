@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X, Pin } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@zana-ai/zcc-domain/product';
-import { useUi, useAgentStatus, usePersonas } from '../store.js';
+import { useData, useUi, useAgentStatus, usePersonas } from '../store.js';
 import { getTerminal } from '../lib/findRegistry.js';
 import { profileIcon, personaIcon } from '../lib/profileIcon.js';
 import type { AgentState } from '@zana-ai/zcc-domain/product';
 import {
+  cliAgentKeepsHistory,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
   cliAgentRemoveTitle,
@@ -42,6 +43,8 @@ function AgentStatusDot({ sessionId }: { sessionId: string }) {
 }
 
 interface Props {
+  /** Project these tabs belong to; decides whether Archive can promise History. Absent ⇒ neutral wording. */
+  projectId?: string;
   tabs: TerminalSession[];
   activeTabId: string | undefined;
   onSelect: (id: string) => void;
@@ -88,7 +91,7 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTerminal, onReorder, onRename, onDuplicate, onRestart, onReconnect, onPin, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ projectId, tabs, activeTabId, onSelect, onClose, onDetach, onNewTerminal, onReorder, onRename, onDuplicate, onRestart, onReconnect, onPin, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -101,6 +104,9 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   // Raw personas slice (stable ref; only changes on an actual update) so a tab
   // launched as a persona can show that persona's icon/label on its chip.
   const personas = usePersonas((s) => s.personas);
+  const projects = useData((s) => s.projects);
+  const keepsHistory = (t: TerminalSession) =>
+    cliAgentKeepsHistory(t, projectId ? projects.find((p) => p.id === projectId) : undefined);
 
   const startRename = (t: TerminalSession) => {
     if (!onRename) return;
@@ -150,7 +156,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
   const removeOne = (t: TerminalSession) => {
     if (
       t.status === 'exited' ||
-      window.confirm(cliAgentRemoveConfirm(t))
+      window.confirm(cliAgentRemoveConfirm(t, keepsHistory(t)))
     ) {
       onClose(t.id);
     }
@@ -497,7 +503,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNewTe
               className="tab-context-danger"
               onClick={() => { setTabMenu(null); removeOne(t); }}
               disabled={!!t.pinned}
-              title={platformShortcut(cliAgentRemoveTitle(t, 'tab'))}
+              title={platformShortcut(cliAgentRemoveTitle(t, 'tab', keepsHistory(t)))}
             >
               {cliAgentRemoveLabel(t)}
             </button>

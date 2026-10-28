@@ -5,7 +5,9 @@ import { Archive, Puzzle, Trash2 } from 'lucide-react';
 import { product } from '../lib/product-client.js';
 import { useData, useIdleTriage } from '../store.js';
 import { cardNeedsAttention, type AgentCard } from './AgentBoard.js';
-import type { TerminalSession } from '@zana-ai/zcc-domain/product';
+import type { Project, TerminalSession } from '@zana-ai/zcc-domain/product';
+import { profileHasNativeHistory } from '@zana-ai/zcc-domain/launch-provider';
+import { isRemoteWorkspaceProject } from './composer-project-default.js';
 import { isClaudeProfile } from '../lib/launchProfile.js';
 import { resolveIcon } from '../lib/resolveIcon.js';
 import { getScopedProjectId } from '../lib/windowScope.js';
@@ -86,16 +88,60 @@ export function cliAgentRemoveLabel(
   return cliAgentArchives(session) ? 'Archive' : 'Delete';
 }
 
-/** Confirm before ending a live session: Archive for an agent, Delete for a plain shell. */
-export function cliAgentRemoveConfirm(session: Pick<TerminalSession, 'title' | 'profile'>): string {
-  return session.profile === 'shell'
-    ? `Delete “${session.title}”? The process will be terminated.`
-    : `Archive “${session.title}”? The agent stops and its conversation stays in History.`;
+/**
+ * True only when archiving this agent leaves a conversation that History can
+ * show: a live agent whose harness has a native History adapter, in a local
+ * project. Remote projects and harnesses without an adapter (Mastra Code,
+ * Agentforce Code) get neutral wording. An unknown project counts as not local.
+ */
+export function cliAgentKeepsHistory(
+  session: Pick<TerminalSession, 'status' | 'profile'>,
+  project: Pick<Project, 'remote' | 'hostId'> | null | undefined
+): boolean {
+  return (
+    !!project &&
+    cliAgentArchives(session) &&
+    profileHasNativeHistory(session.profile) &&
+    !isRemoteWorkspaceProject(project)
+  );
 }
 
-/** Tooltip for the Archive action on the board surfaces (card menu, modal and monitor footers). */
-export const CLI_AGENT_ARCHIVE_TITLE =
-  'Stop the agent and remove it from the board. Its conversation stays in History.';
+/** {@link cliAgentKeepsHistory} for event handlers, resolving the project from the store by id. */
+export function cliAgentKeepsHistoryIn(
+  session: Pick<TerminalSession, 'status' | 'profile'>,
+  projectId: string
+): boolean {
+  return cliAgentKeepsHistory(
+    session,
+    useData.getState().projects.find((p) => p.id === projectId)
+  );
+}
+
+/** Confirm before ending a live session: Archive for an agent, Delete for a plain shell. */
+export function cliAgentRemoveConfirm(
+  session: Pick<TerminalSession, 'title' | 'profile'>,
+  keepsHistory = false
+): string {
+  if (session.profile === 'shell') return `Delete “${session.title}”? The process will be terminated.`;
+  return keepsHistory
+    ? `Archive “${session.title}”? The agent stops and its conversation stays in History.`
+    : `Archive “${session.title}”? The agent stops and is removed from the board.`;
+}
+
+function archiveBoardTitle(keepsHistory: boolean): string {
+  return keepsHistory
+    ? 'Stop the agent and remove it from the board. Its conversation stays in History.'
+    : 'Stop the agent and remove it from the board.';
+}
+
+/** Every other live member of the lead's cohort also keeps a conversation in History. */
+function teamKeepsHistory(lead: AgentCard): boolean {
+  const cohortId = lead.session.cohort?.cohortId;
+  const members = (useData.getState().terminals[lead.projectId] ?? []).filter(
+    (t) => t.id !== lead.session.id && t.status !== 'exited' && !!cohortId && t.cohort?.cohortId === cohortId
+  );
+  return members.every((t) => cliAgentKeepsHistoryIn(t, lead.projectId));
+}
 
 /** Where a Dismiss / Archive / Delete control sits; the wording differs by what the control removes. */
 export type CliAgentRemoveSurface = 'board' | 'modal' | 'focus' | 'tab';
@@ -103,7 +149,8 @@ export type CliAgentRemoveSurface = 'board' | 'modal' | 'focus' | 'tab';
 /** Tooltip for the remove control: one place for the exited / archives / shell choice on every surface. */
 export function cliAgentRemoveTitle(
   session: Pick<TerminalSession, 'status' | 'profile'>,
-  surface: CliAgentRemoveSurface
+  surface: CliAgentRemoveSurface,
+  keepsHistory = false
 ): string {
   const exited = session.status === 'exited';
   const archives = cliAgentArchives(session);
@@ -113,14 +160,16 @@ export function cliAgentRemoveTitle(
       return archives ? 'Archive (stops the agent)' : 'Delete (ends the process)';
     case 'tab':
       return archives
-        ? 'Stop the agent and remove the tab. Its conversation stays in History.'
+        ? keepsHistory
+          ? 'Stop the agent and remove the tab. Its conversation stays in History.'
+          : 'Stop the agent and remove the tab.'
         : 'Terminate this session and remove the tab. Reopen with ⌘⇧T.';
     case 'modal':
-      return archives ? CLI_AGENT_ARCHIVE_TITLE : "Terminate the agent's process and close this view";
+      return archives ? archiveBoardTitle(keepsHistory) : "Terminate the agent's process and close this view";
     case 'board':
     default:
       if (exited) return 'Dismiss this finished agent from the board';
-      return archives ? CLI_AGENT_ARCHIVE_TITLE : 'Terminate this agent and remove it from the board';
+      return archives ? archiveBoardTitle(keepsHistory) : 'Terminate this agent and remove it from the board';
   }
 }
 
@@ -243,11 +292,14 @@ export function useAgentCardActions(): {
       // about that consequence so it's never a surprise — a plain worker/solo
       // close keeps the default single-session prompt.
       const isLead = c.session.cohort?.role === 'orchestrator';
+      const keepsHistory = cliAgentKeepsHistoryIn(c.session, c.projectId);
       const message = isLead
         ? cliAgentArchives(c.session)
-          ? `Archive “${c.session.title}”? It's the orchestrator, so archiving it also stops every other agent in “${c.session.cohort?.teamName}”. Their conversations stay in History.`
+          ? `Archive “${c.session.title}”? It's the orchestrator, so archiving it also stops every other agent in “${c.session.cohort?.teamName}”.${
+              keepsHistory && teamKeepsHistory(c) ? ' Their conversations stay in History.' : ''
+            }`
           : `Close “${c.session.title}”? It's the orchestrator — closing it will also stop every other agent in “${c.session.cohort?.teamName}”.`
-        : cliAgentRemoveConfirm(c.session);
+        : cliAgentRemoveConfirm(c.session, keepsHistory);
       if (live && !window.confirm(message)) {
         return;
       }
@@ -299,6 +351,9 @@ export function AgentCardMenu({ menu, setMenu, actions }: AgentCardMenuProps) {
   // box (the sleep-recovery path), unlike a local exited session which is truly
   // dead — so show Reconnect only for exited sessions in a remote project.
   const isRemote = useData((s) => !!s.projects.find((p) => p.id === card.projectId)?.remote);
+  const keepsHistory = useData((s) =>
+    cliAgentKeepsHistory(card.session, s.projects.find((p) => p.id === card.projectId))
+  );
   const canReconnect = exited && isRemote;
   // "Mark as Idle" clears the "Needs you" lane. A card reaches that lane two ways
   // (see AgentBoard LANES): a real `blocked` overlay, OR a triage-promoted idle
@@ -423,7 +478,7 @@ export function AgentCardMenu({ menu, setMenu, actions }: AgentCardMenuProps) {
       <button
         className="tab-context-danger"
         onClick={() => { setMenu(null); actions.remove(card); }}
-        title={cliAgentRemoveTitle(card.session, 'board')}
+        title={cliAgentRemoveTitle(card.session, 'board', keepsHistory)}
       >
         {cliAgentRemoveLabel(card.session)}
       </button>
