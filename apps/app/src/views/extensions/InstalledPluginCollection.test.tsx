@@ -19,6 +19,16 @@ const setup = (input = rows()) => {
 const collectionButton = (name: string) => within(screen.getByRole('navigation', { name: 'Plugin collections' })).getByRole('button', { name: new RegExp(`^${name}`) });
 afterEach(cleanup);
 
+it('keeps saved packs in Installed and hides them while reviewing plugin updates', () => {
+  render(<InstalledPluginCollection rows={rows()} onOpen={vi.fn()} onBrowse={vi.fn()}
+    packs={<section aria-label="Saved plugin packs">Starter pack</section>} />);
+  expect(screen.getByRole('region', { name: 'Saved plugin packs' })).toBeTruthy();
+  fireEvent.click(collectionButton('Updates'));
+  expect(screen.queryByRole('region', { name: 'Saved plugin packs' })).toBeNull();
+  fireEvent.click(collectionButton('Installed'));
+  expect(screen.getByRole('region', { name: 'Saved plugin packs' })).toBeTruthy();
+});
+
 it('renders cards and counts with a collapsible coding-agent section and real navigation callbacks', () => {
   const { onOpen, onBrowse } = setup();
   expect(screen.getByRole('heading', { name: 'Plugins' })).toBeTruthy();
@@ -118,10 +128,9 @@ it('filters by capabilities and recovers when the last matching plugin is remove
 
 it('opens directly to Updates and explains distinct update policies', () => {
   render(<InstalledPluginCollection rows={buildHubRows([], [], [plugin('Local', { sourceKind: 'path' }), plugin('Bundled', { sourceKind: 'builtin' }), plugin('Remote', { sourceKind: 'git' })])}
-    onOpen={vi.fn()} onBrowse={vi.fn()} defaultUpdates inspector={<aside>Inspector</aside>} />);
+    onOpen={vi.fn()} onBrowse={vi.fn()} defaultUpdates />);
   expect(screen.getByRole('heading', { name: 'No pending updates' })).toBeTruthy();
   expect(screen.getByText('Local development')).toBeTruthy();
   expect(screen.getByText('Updates with Zana releases')).toBeTruthy();
   expect(screen.getByText('Automatic checks; manual updates')).toBeTruthy();
-  expect(screen.getByText('Inspector')).toBeTruthy();
 });
