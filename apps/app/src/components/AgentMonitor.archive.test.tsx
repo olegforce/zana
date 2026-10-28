@@ -16,6 +16,9 @@ import { agentFleetItem } from './fleet-item.js';
 import { useData, useUi } from '../store.js';
 
 const ARCHIVE_TITLE = 'Stop the agent and remove it from the board. Its conversation stays in History.';
+const NEUTRAL_TITLE = 'Stop the agent and remove it from the board.';
+const localProject = { id: 'p', name: 'Project', path: '/tmp' } as never;
+const remoteProject = { id: 'p', name: 'Project', path: '/tmp', remote: { host: 'h' } } as never;
 
 function mount(session: { profile: string; status: string }) {
   const card = agentFleetItem({
@@ -28,7 +31,7 @@ function mount(session: { profile: string; status: string }) {
 }
 
 beforeEach(() => {
-  useData.setState({ projects: [], terminals: {}, agentsListOrganization: 'status', includeScheduledAgentsInAgentView: false });
+  useData.setState({ projects: [localProject], terminals: {}, agentsListOrganization: 'status', includeScheduledAgentsInAgentView: false });
 });
 afterEach(cleanup);
 
@@ -38,6 +41,13 @@ describe('AgentMonitor footer remove button', () => {
     expect(button.textContent).toContain('Archive');
     expect(button.title).toBe(ARCHIVE_TITLE);
     expect(button.innerHTML).toContain('lucide-archive');
+  });
+
+  it('uses neutral wording for a harness without History, and for a remote project', () => {
+    expect(mount({ profile: 'mastracode', status: 'running' }).title).toBe(NEUTRAL_TITLE);
+    cleanup();
+    useData.setState({ projects: [remoteProject] });
+    expect(mount({ profile: 'claude', status: 'running' }).title).toBe(NEUTRAL_TITLE);
   });
 
   it('keeps Delete and the bin for a live plain shell', () => {
@@ -50,7 +60,7 @@ describe('AgentMonitor footer remove button', () => {
   it('keeps Dismiss for an exited session', () => {
     const button = mount({ profile: 'claude', status: 'exited' });
     expect(button.textContent).toContain('Dismiss');
-    expect(button.title).toBe('Dismiss this finished agent');
+    expect(button.title).toBe('Dismiss this finished agent from the board');
     expect(button.innerHTML).toContain('lucide-trash');
   });
 });

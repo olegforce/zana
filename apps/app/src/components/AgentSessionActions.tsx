@@ -6,11 +6,12 @@ import { isClaudeProfile } from '../lib/launchProfile.js';
 import { useData, useIdleTriage } from '../store.js';
 import {
   canCloseWithFollowup,
-  CLI_AGENT_ARCHIVE_TITLE,
   closeFollowupTitle,
   cliAgentArchives,
+  cliAgentKeepsHistory,
   cliAgentRemoveConfirm,
   cliAgentRemoveLabel,
+  cliAgentRemoveTitle,
   closeAgentWithFollowup
 } from './agentCardActions.js';
 import { idleSurfacesToNeedsYou } from './AgentBoard.js';
@@ -31,6 +32,9 @@ export function AgentSessionActions({
   onSessionClosed?: () => void;
 }) {
   const exited = session.status === 'exited';
+  const keepsHistory = useData((s) =>
+    cliAgentKeepsHistory(session, s.projects.find((p) => p.id === projectId))
+  );
   const summaryEnabled = useData((s) => s.catchUpSummaryEnabled);
   const canSummarize = summaryEnabled && isClaudeProfile(session.profile);
   const [summarizing, setSummarizing] = useState(false);
@@ -51,7 +55,7 @@ export function AgentSessionActions({
   };
 
   const deleteAgent = () => {
-    if (!window.confirm(cliAgentRemoveConfirm(session))) return;
+    if (!window.confirm(cliAgentRemoveConfirm(session, keepsHistory))) return;
     void useData.getState().closeTerminal(session.id, projectId);
     onSessionClosed?.();
   };
@@ -89,11 +93,7 @@ export function AgentSessionActions({
           type="button"
           className="agent-monitor-action danger"
           onClick={deleteAgent}
-          title={
-            cliAgentArchives(session)
-              ? CLI_AGENT_ARCHIVE_TITLE
-              : "Terminate the agent's process and close this view"
-          }
+          title={cliAgentRemoveTitle(session, 'modal', keepsHistory)}
         >
           {cliAgentArchives(session) ? <Archive size={13} /> : <Trash2 size={13} />}{' '}
           {cliAgentRemoveLabel(session)}

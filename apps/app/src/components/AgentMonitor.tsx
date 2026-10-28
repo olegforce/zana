@@ -29,10 +29,11 @@ import {
   AgentCardMenu,
   clampMenuAnchor,
   canCloseWithFollowup,
-  CLI_AGENT_ARCHIVE_TITLE,
   closeFollowupTitle,
   cliAgentArchives,
+  cliAgentKeepsHistory,
   cliAgentRemoveLabel,
+  cliAgentRemoveTitle,
   cliAgentRestartLiveTitle,
   closeAgentWithFollowup
 } from './agentCardActions.js';
@@ -735,13 +736,7 @@ function AgentMonitorSession({
         type="button"
         className="agent-monitor-action danger"
         onClick={() => actions.remove(card)}
-        title={
-          exited
-            ? 'Dismiss this finished agent'
-            : cliAgentArchives(card.session)
-              ? CLI_AGENT_ARCHIVE_TITLE
-              : 'Terminate this agent and remove it from the board'
-        }
+        title={cliAgentRemoveTitle(card.session, 'board', cliAgentKeepsHistory(card.session, project))}
       >
         {cliAgentArchives(card.session) ? <Archive size={13} /> : <Trash2 size={13} />}{' '}
         {cliAgentRemoveLabel(card.session)}

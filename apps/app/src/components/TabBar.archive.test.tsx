@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalSession } from '@zana-ai/zcc-domain/product';
 import { TabBar } from './TabBar';
+import { useData } from '../store.js';
 
 const realConfirm = window.confirm;
 
@@ -10,12 +11,15 @@ const tab = (over: Partial<TerminalSession>) =>
   ({ id: 't1', projectId: 'p1', title: 'Review', status: 'running', profile: 'claude', ...over }) as unknown as TerminalSession;
 
 function open(t: TerminalSession, onClose = vi.fn()) {
-  render(<TabBar tabs={[t]} activeTabId={t.id} onSelect={() => {}} onClose={onClose} onNewTerminal={() => {}} />);
+  render(<TabBar projectId="p1" tabs={[t]} activeTabId={t.id} onSelect={() => {}} onClose={onClose} onNewTerminal={() => {}} />);
   fireEvent.contextMenu(screen.getByText(t.title));
   return onClose;
 }
 
-beforeEach(() => vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' }));
+beforeEach(() => {
+  vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' });
+  useData.setState({ projects: [{ id: 'p1', name: 'P', path: '/tmp' }] as never });
+});
 afterEach(() => { cleanup(); window.confirm = realConfirm; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('TabBar Archive wording', () => {
@@ -25,6 +29,23 @@ describe('TabBar Archive wording', () => {
       'Stop the agent and remove the tab. Its conversation stays in History.'
     );
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('uses neutral wording for a harness without History and for a remote project', () => {
+    const confirm = vi.fn(() => false);
+    window.confirm = confirm;
+    open(tab({ profile: 'mastracode' }));
+    expect(screen.getByRole('button', { name: 'Archive' }).getAttribute('title')).toBe(
+      'Stop the agent and remove the tab.'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(confirm).toHaveBeenCalledWith('Archive “Review”? The agent stops and is removed from the board.');
+    cleanup();
+    useData.setState({ projects: [{ id: 'p1', name: 'P', path: '/tmp', remote: { host: 'h' } }] as never });
+    open(tab({}));
+    expect(screen.getByRole('button', { name: 'Archive' }).getAttribute('title')).toBe(
+      'Stop the agent and remove the tab.'
+    );
   });
 
   it('points the X tooltip at Archive', () => {

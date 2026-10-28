@@ -1,7 +1,7 @@
 import { useData, useUi, usePersonas, sortProjectsForDisplay } from './store.js';
 import { getActiveTerminalId, getTerminal } from './lib/findRegistry.js';
 import { projectDefaultLaunch, type ProjectDefaultLaunch } from './lib/launchProfile.js';
-import { cliAgentRemoveConfirm, cliAgentRestartConfirm } from './components/agentCardActions.js';
+import { cliAgentKeepsHistoryIn, cliAgentRemoveConfirm, cliAgentRestartConfirm } from './components/agentCardActions.js';
 import { shortcutForCommand } from './lib/keyboard-shortcut-settings.js';
 import { openThreadFind } from './lib/thread-find.js';
 import { appNavigate } from './lib/app-navigate.js';
@@ -236,7 +236,7 @@ export function installShortcuts(): () => void {
       if (
         active &&
         active.status !== 'exited' &&
-        !window.confirm(cliAgentRemoveConfirm(active))
+        !window.confirm(cliAgentRemoveConfirm(active, cliAgentKeepsHistoryIn(active, projectId)))
       ) {
         return;
       }
