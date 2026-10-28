@@ -252,6 +252,7 @@ function AppShell() {
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectedTabId = useUi((s) => s.selectedTabId);
   const projects = useData((s) => s.projects);
+  const projectsLoaded = useData((s) => s.configLoaded);
   const terminals = useData((s) => s.terminals);
   const suggestionsEnabled = useData((s) => s.suggestionsEnabled);
   useEffect(() => {
@@ -322,12 +323,13 @@ function AppShell() {
     : null;
 
   // A stale persisted focus must not strand the main workspace after a project
-  // is removed in another window.
+  // is removed in another window. Before the list loads every project looks
+  // removed: a project window's route lock and this exit would bounce forever.
   useEffect(() => {
-    if (focusedProjectId && !projects.some((project) => project.id === focusedProjectId)) {
+    if (projectsLoaded && focusedProjectId && !projects.some((project) => project.id === focusedProjectId)) {
       useUi.getState().exitProjectFocus();
     }
-  }, [focusedProjectId, projects]);
+  }, [focusedProjectId, projects, projectsLoaded]);
 
   // Reflect the current project + active tab into the OS window title so
   // ⌘-Tab / Mission Control disambiguates Zana across projects.
