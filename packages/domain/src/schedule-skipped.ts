@@ -49,10 +49,10 @@ function newestDueSlot(task: ScheduledTask, nowMs: number, limit: number): numbe
   if (isCronCadence(task.schedule)) {
     const slot = previousCronSlots(task.schedule.cron!, task.schedule.tz, limit, 1)[0];
     if (slot === undefined) return undefined;
-    // A catch-up for this slot is armed (the timer fires before the slot after it), so it is about to run.
+    // A catch-up is armed (the timer fires before the next slot after now), so the overdue slot is about to run.
     const nextMs = parseMs(status?.nextRunAt);
     if (Number.isFinite(nextMs) && nextMs > nowMs) {
-      const following = nextRunMsFrom(task.schedule, new Date(slot));
+      const following = nextRunMsFrom(task.schedule, new Date(nowMs));
       if (following !== null && nextMs < following) return undefined;
     }
     return slot;

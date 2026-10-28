@@ -153,6 +153,16 @@ describe('lastRunSkipped: gap signal, cron catch-up armed', () => {
     const armed = task([run({ at: iso(DAY + 3 * H) })], {}, { lastRunAt: iso(DAY + 3 * H), nextRunAt: new Date(NOW + 5000).toISOString() });
     expect(lastRunSkipped(armed, NOW)).toBeNull();
   });
+  it.each([
+    ['*/5 * * * *', '2026-10-14T10:01:00Z'],
+    ['0 * * * *', '2026-10-14T10:01:30Z'],
+    ['0 9 * * *', '2026-10-15T09:01:00Z']
+  ])('is null for %s opened %s, inside the grace of a slot with two or more missed', (cron, openedAt) => {
+    const now = Date.parse(openedAt);
+    const lastRunAt = '2026-10-14T08:00:00.200Z';
+    const armed = task([run({ at: lastRunAt })], { schedule: { cron, tz: 'UTC' } }, { lastRunAt, nextRunAt: new Date(now + 5000).toISOString() });
+    expect(lastRunSkipped(armed, now)).toBeNull();
+  });
   it('still flags the slot when nextRunAt is the slot after it', () => {
     const steady = task([run({ at: iso(DAY + 3 * H) })], {}, { nextRunAt: '2026-10-15T09:00:00.000Z' });
     expect(lastRunSkipped(steady, NOW)).toEqual({ slotAt: SLOT_9 });
