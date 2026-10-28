@@ -4,6 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { boundarySpecs, changedLines, codeLines, coverageFailures, runVerification, mergeCoverage } from './ci-verification.mjs';
 
+it('checks recovery through the built app whenever its UI, service or distribution changes', () => {
+  for (const path of ['apps/app/src/views/settings/DevelopmentView.tsx', 'apps/server/src/plugins/plugin-recovery-runtime.ts', 'apps/server/src/plugins/plugin-service.ts', 'scripts/plugin-recovery-artifacts.mjs', 'scripts/before-pack-plugins.mjs', '.github/workflows/release.yml']) {
+    expect(boundarySpecs([path])).toContain('e2e/development-recovery.spec.ts');
+  }
+});
+
 it('selects required ownership boundaries, deduplicates specs and leaves docs alone', () => {
   expect(boundarySpecs(['docs/readme.md'])).toEqual([]);
   expect(boundarySpecs(['apps/server/src/services/threads/conversation-history-maintenance.ts', 'plugins/tasks/views/list/data.ts', 'apps/app/src/monacoSetup.ts', 'apps/host-daemon/src/pty.ts', 'apps/desktop/src/desktop-browser-broker.ts', 'services/mobile-relay/server.mjs', 'apps/server/src/services/inbox/inbox-store.ts', 'apps/server/src/services/execution-service.ts', 'scripts/ci-verification.mjs'])).toEqual(expect.arrayContaining([
@@ -23,6 +29,19 @@ it('selects required ownership boundaries, deduplicates specs and leaves docs al
     expect(boundarySpecs([path])).toContain('e2e/renderer-resource-budget.spec.ts');
   }
   expect(boundarySpecs(['apps/app/src/App.tsx'])).toEqual([...new Set(boundarySpecs(['apps/app/src/App.tsx']))].sort());
+});
+
+it('checks the built peer data boundary when large document transfer or its worker fence changes', () => {
+  for (const path of [
+    'plugins/design-docs/src/server/sync-store.ts',
+    'plugins/design-docs/src/server/peer-protocol.ts',
+    'apps/server/src/plugins/isolated-plugin-runtime.ts',
+    'apps/server/src/plugins/isolated-plugin-runtime.test.ts',
+    'e2e/fixtures/peer-design-docs-worker.ts'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/peer-data-boundary.spec.ts');
+  }
+  expect(boundarySpecs(['docs/readme.md'])).not.toContain('e2e/peer-data-boundary.spec.ts');
 });
 
 it('selects the Squad proposal specs for proposal, team and composer seams', () => {
@@ -63,6 +82,19 @@ it('selects the Squad proposal specs for proposal, team and composer seams', () 
     'apps/app/src/components/settings/ApiErrorResumeSection.tsx'
   ]) {
     expect(boundarySpecs([path])).toContain('e2e/api-error-resume.spec.ts');
+  }
+  for (const path of [
+    'apps/server/src/services/execution/worker-api-error-recovery.ts',
+    'apps/server/src/services/execution/service.ts',
+    'apps/server/src/services/execution/store.ts',
+    'apps/server/src/services/execution/projection.ts',
+    'apps/desktop/src/squad-worker-restart.ts',
+    'apps/desktop/src/worker-api-error-recovery-wiring.ts',
+    'apps/desktop/src/api-error-resume-wiring.ts',
+    'apps/host-daemon/src/harness/claude/interaction-hooks.ts',
+    'apps/app/src/components/ExecutionJobDetails.tsx'
+  ]) {
+    expect(boundarySpecs([path])).toContain('e2e/job-team-api-error-recovery.spec.ts');
   }
   // Unrelated Squad and launcher files must not pull in the slow proposal specs.
   for (const path of [
