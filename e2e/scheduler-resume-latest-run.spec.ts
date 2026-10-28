@@ -14,6 +14,9 @@ import { makeFakeAgentBinary } from './sdk/harness.js';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+// A scheduled run is an automated Claude launch, which is refused without auth (#561).
+test.use({ launchEnv: { ANTHROPIC_API_KEY: 'scheduler-resume-latest-run-e2e-key' } });
+
 interface Launch { session: string; argv: string[] }
 
 const PROMPT = 'E2E-RESUME-PROMPT summarise the open pull requests';
