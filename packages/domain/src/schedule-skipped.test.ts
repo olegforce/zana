@@ -80,6 +80,16 @@ describe('lastRunSkipped: record signal', () => {
   it('still flags an overlap skip that is running with a session but no execution', () => {
     expect(lastRunSkipped(task([skip({ reasonCode: 'overlap', launchState: 'running', sessionId: 's1' })]), NOW)?.reason).toBe('overlap');
   });
+  it('gives a merged overlap skip the due time at the skip, not the live run\'s older slotAt', () => {
+    // An on-time overlap skip is merged into the live catch-up run's record, which keeps yesterday's slotAt.
+    const merged = skip({ reasonCode: 'overlap', launchState: 'running', sessionId: 's1', at: '2026-10-14T09:00:00.200Z', slotAt: '2026-10-13T09:00:00.000Z' });
+    expect(lastRunSkipped(task([merged]), NOW)).toEqual({ slotAt: SLOT_9, reason: 'overlap' });
+    expect(lastRunSkipped(every('6h', [merged]), NOW)).toEqual({ slotAt: '2026-10-14T09:00:00.200Z', reason: 'overlap' });
+    // Interval: the skip's own time wins over an older slotAt. Cron: a slotAt newer than the due slot is kept.
+    const late = skip({ reasonCode: 'overlap', sessionId: 's1', at: '2026-10-14T09:00:00.200Z', slotAt: '2026-10-14T09:00:00.100Z' });
+    expect(lastRunSkipped(every('6h', [late]), NOW)?.slotAt).toBe('2026-10-14T09:00:00.200Z');
+    expect(lastRunSkipped(task([late]), NOW)?.slotAt).toBe('2026-10-14T09:00:00.100Z');
+  });
   it('reads records stored oldest first as newest first', () => {
     expect(lastRunSkipped(task([run({ at: iso(5 * H) }), skip({ reasonCode: 'overlap', at: iso(H) })]), NOW)?.reason).toBe('overlap');
     expect(lastRunSkipped(task([skip({ reasonCode: 'overlap', at: iso(5 * H) }), run({ at: iso(H) })]), NOW)).toBeNull();
@@ -205,6 +215,18 @@ describe('lastRunSkipped: gap signal, interval', () => {
   });
   it('ignores a nextRunAt in the past', () => {
     expect(lastRunSkipped(every('1h', [], { lastRunAt: iso(3 * H), nextRunAt: iso(2 * H) }), NOW)).toEqual({ slotAt: iso(H) });
+  });
+  it('is null while a Recovery catch-up for an overdue grid time is armed, and flags it in steady state', () => {
+    // Opened two and a half intervals late: Recovery arms the catch-up at now + 5 s.
+    const now = NOW + 30 * MIN;
+    const recovery = { catchUp: { mode: 'once' as const } };
+    expect(lastRunSkipped(every('1h', [], { lastRunAt: iso(3 * H), nextRunAt: new Date(now + 5_000).toISOString() }, recovery), now)).toBeNull();
+    // The timer sits on the next grid time after now: nothing is about to run, so the missed time shows.
+    expect(lastRunSkipped(every('1h', [], { lastRunAt: iso(3 * H), nextRunAt: new Date(NOW + H).toISOString() }, recovery), now))
+      .toEqual({ slotAt: new Date(NOW).toISOString() });
+    // A Classic schedule with the same armed timer keeps the re-arm cap instead.
+    expect(lastRunSkipped(every('1h', [], { lastRunAt: iso(3 * H), nextRunAt: new Date(now + 5_000).toISOString() }), now))
+      .toEqual({ slotAt: iso(H) });
   });
   it('is null when a newer run already covers the grid time', () => {
     expect(lastRunSkipped(every('1h', [run({ at: iso(H) })], { lastRunAt: iso(3 * H) }), NOW)).toBeNull();

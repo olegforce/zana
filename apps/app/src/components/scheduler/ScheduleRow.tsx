@@ -21,9 +21,9 @@ import { useNavigate } from 'react-router-dom';
 import { groupIcon, GROUP_FALLBACK_COLOR } from '../scheduleGroupMeta.js';
 import {
   pickLiveRun,
+  skippedLastRunLabel,
   isSessionAlive as isSessionOpen,
   formatCountdown,
-  skippedLastRunLabel,
   PROFILE_LABEL
 } from './schedulerUtils.js';
 import { openScheduledLive } from './openScheduledLive.js';

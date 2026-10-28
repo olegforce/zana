@@ -7,7 +7,7 @@
  */
 import type { ScheduleRun, ScheduleRunReasonCode, ScheduledTask } from './product.js';
 import { parseEvery } from './parse-every.js';
-import { runReason } from './schedule-health.js';
+import { isRecoveryMode, runReason } from './schedule-health.js';
 import { isCronCadence, nextRunMsFrom, previousCronSlots } from './schedule-spec.js';
 
 /** A due time this recent may still be starting, so the gap signal waits. */
@@ -65,9 +65,12 @@ function newestDueSlot(task: ScheduledTask, nowMs: number, limit: number): numbe
       .filter((ms) => ms <= nowMs)
   );
   if (anchor === undefined) return undefined;
-  // After Zana was closed, Classic re-armed the timer off the old grid, so grid times past that re-arm were never due.
   const nextMs = parseMs(status?.nextRunAt);
-  const cap = Number.isFinite(nextMs) && nextMs > nowMs ? Math.min(limit, nextMs - intervalMs) : limit;
+  const armed = Number.isFinite(nextMs) && nextMs > nowMs;
+  // Recovery replays an overdue grid time at once: a timer armed before the next grid time after now is that catch-up.
+  if (armed && isRecoveryMode(task) && nextMs < anchor + (Math.floor((nowMs - anchor) / intervalMs) + 1) * intervalMs) return undefined;
+  // After Zana was closed, Classic re-armed the timer off the old grid, so grid times past that re-arm were never due.
+  const cap = armed ? Math.min(limit, nextMs - intervalMs) : limit;
   if (anchor + intervalMs > cap) return undefined;
   return anchor + Math.floor((cap - anchor) / intervalMs) * intervalMs;
 }
@@ -88,7 +91,14 @@ export function lastRunSkipped(task: ScheduledTask, nowMs: number): SkippedLastR
       newest && newest.result === 'skipped' && runReason(newest) !== 'in-flight'
       && !(newest.launchState === 'running' && newest.executionId)
     ) {
-      const slotMs = [parseMs(newest.slotAt), parseMs(newest.missed?.to), parseMs(newest.at)].find(Number.isFinite)!;
+      let slotMs = [parseMs(newest.slotAt), parseMs(newest.missed?.to), parseMs(newest.at)].find(Number.isFinite)!;
+      // An on-time overlap skip is merged into the live run's record (matched by its session), which keeps that
+      // run's own older slotAt: the skipped time is the due time at the skip itself.
+      if (newest.sessionId) {
+        const atMs = parseMs(newest.at);
+        const due = isCronCadence(task.schedule) ? previousCronSlots(task.schedule.cron!, task.schedule.tz, atMs, 1)[0] : atMs;
+        if (due !== undefined && due > slotMs) slotMs = due;
+      }
       const reason = runReason(newest);
       return reason ? { slotAt: new Date(slotMs).toISOString(), reason } : { slotAt: new Date(slotMs).toISOString() };
     }

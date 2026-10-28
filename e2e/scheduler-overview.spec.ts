@@ -91,6 +91,14 @@ test('scheduler overview: triage, filters, pagination and responsive layout', as
   await expect(page.getByTestId('schedule-skipped-last'), 'the row pill gives the time').toContainText('skipped');
   await expect(page.getByTestId('schedule-skipped-last'), 'the row pill gives the reason').toContainText('Previous run still active');
   await page.screenshot({ path: testInfo.outputPath('scheduler-skipped-last-run.png') });
+  // The pill must not squeeze the schedule name out of a narrow row.
+  await win.setViewportSize({ width: 430, height: 932 });
+  const skippedCard = page.locator('.scheduler-card').first();
+  await expect.poll(() => skippedCard.evaluate(el => el.scrollWidth <= el.clientWidth + 1), { message: 'the skipped row fits a narrow window' }).toBe(true);
+  await expect.poll(() => skippedCard.locator('.scheduler-card-title').evaluate(el => Math.round(el.getBoundingClientRect().width)),
+    { message: 'the schedule name keeps room beside the pill' }).toBeGreaterThan(90);
+  await page.screenshot({ path: testInfo.outputPath('scheduler-skipped-last-run-430.png') });
+  await win.setViewportSize({ width: 1440, height: 1100 });
   await page.getByRole('combobox').selectOption('all');
   await page.getByRole('searchbox').fill('dependency');
   await page.getByRole('combobox').selectOption('attention');

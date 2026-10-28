@@ -19657,11 +19657,13 @@ body.resizing-col .explorer-resizer::after {
 }
 
 .scheduler-card-compact-when {
-  flex: 0 0 auto;
+  /* Shrinks (down to min-width) so a long skipped pill never squeezes the schedule name out of a narrow row. */
+  flex: 0 1 auto;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
   min-width: 88px;
+  max-width: 45%;
 }
 
 /* ---- Follow-ups: kind-typed leading tile + structured meta row ------------ */
@@ -19821,7 +19823,7 @@ body.resizing-col .explorer-resizer::after {
 .scheduler-pill--skipped-last {
   display: inline-block;
   vertical-align: middle;
-  max-width: 260px;
+  max-width: min(320px, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
