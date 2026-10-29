@@ -20,8 +20,7 @@ import { filterSchedules, scheduleIssue, type ScheduleFilter } from './schedule-
 import { ScheduleFilters } from './ScheduleFilters.js';
 import { RecoveryCard } from './RecoveryOptIn.js';
 import { countOpenProblems } from '@zana-ai/zcc-domain/schedule-health';
-import { lastRunSkipped } from '@zana-ai/zcc-domain/schedule-skipped';
-import { skippedLastRunLabel } from './schedulerUtils.js';
+import { skippedLastRunPill } from './schedulerUtils.js';
 import './scheduler-overview.css';
 import { KpiCard } from './KpiCard.js';
 import { ProjectDot } from '../listpane/ProjectDot.js';
@@ -522,8 +521,7 @@ export function SchedulerOverview({
               const nextValid = nextRun && !Number.isNaN(nextRun.getTime());
               const external = t.external?.kind === 'claude-loop';
               const issue = scheduleIssue(t, projectMap);
-              const skipped = external ? null : lastRunSkipped(t, Date.now());
-              const skippedLabel = skipped ? skippedLastRunLabel(skipped, Date.now(), t.kind === 'team') : null;
+              const skippedLabel = skippedLastRunPill(t, Date.now());
               const { liveSessionId, lastReportRun } = rowActionState.get(t.id) ?? {
                 liveSessionId: null,
                 lastReportRun: null

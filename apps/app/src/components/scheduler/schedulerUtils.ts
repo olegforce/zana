@@ -1,7 +1,7 @@
 import type { ScheduledTask, LaunchProfileId, Project, ScheduleTemplate, ScheduleRun, TerminalSession } from '@zana-ai/zcc-domain/product';
 import { parseEvery, formatInterval } from '@zana-ai/zcc-domain/parse-every';
 import { reasonHint, reasonLabel } from '@zana-ai/zcc-domain/schedule-health';
-import type { SkippedLastRun } from '@zana-ai/zcc-domain/schedule-skipped';
+import { lastRunSkipped, type SkippedLastRun } from '@zana-ai/zcc-domain/schedule-skipped';
 import {
   ShieldCheck,
   Sun,
@@ -263,4 +263,11 @@ export function skippedLastRunLabel(skipped: SkippedLastRun, nowMs: number, squa
     detail = 'No run was recorded for this time. Press Run now to run it.';
   }
   return { text, title: `Skipped the ${when} run. ${detail}` };
+}
+
+/** The skipped pill for a schedule row, or null: /loop rows and schedules that ran their last due time get none. */
+export function skippedLastRunPill(task: ScheduledTask, nowMs: number): { text: string; title: string } | null {
+  if (task.external?.kind === 'claude-loop') return null;
+  const skipped = lastRunSkipped(task, nowMs);
+  return skipped ? skippedLastRunLabel(skipped, nowMs, task.kind === 'team') : null;
 }

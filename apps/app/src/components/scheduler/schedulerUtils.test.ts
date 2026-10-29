@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ScheduledTask } from '@zana-ai/zcc-domain/product';
 import { reasonHint } from '@zana-ai/zcc-domain/schedule-health';
-import { isSessionAlive, liveSessionIdForTask, skippedLastRunLabel } from './schedulerUtils.js';
+import { isSessionAlive, liveSessionIdForTask, skippedLastRunLabel, skippedLastRunPill } from './schedulerUtils.js';
 
 const sessions = [
   { id: 'run', status: 'running' }, { id: 'boot', status: 'starting' }, { id: 'done', status: 'exited' }
@@ -66,5 +66,28 @@ describe('skippedLastRunLabel', () => {
     const label = skippedLastRunLabel({ slotAt: at(slot) }, now);
     expect(label.text).toBe(`skipped ${time(slot)}`);
     expect(label.title).toBe(`Skipped the ${time(slot)} run. No run was recorded for this time. Press Run now to run it.`);
+  });
+});
+
+describe('skippedLastRunPill', () => {
+  const now = new Date(2026, 9, 14, 12, 0).getTime();
+  const slot = new Date(2026, 9, 14, 7, 40).toISOString();
+  const task = (over: Partial<ScheduledTask> = {}, result: 'skipped' | 'success' = 'skipped') => ({
+    id: 't1', name: 'Digest', enabled: true, projectId: 'p1', profile: 'claude',
+    schedule: { every: '24h' }, overlap: 'skip', history: { retain: 10 },
+    status: { runCount: 1, lastRunAt: slot, runs: [{ at: slot, result, reasonCode: result === 'skipped' ? 'overlap' : undefined }] },
+    createdAt: new Date(2026, 9, 1).toISOString(), updatedAt: new Date(2026, 9, 1).toISOString(),
+    ...over
+  }) as ScheduledTask;
+
+  it('labels a schedule whose last run was skipped, as skippedLastRunLabel does', () => {
+    expect(skippedLastRunPill(task(), now)).toEqual(skippedLastRunLabel({ slotAt: slot, reason: 'overlap' }, now));
+  });
+  it('words the overlap for a Squad schedule', () => {
+    expect(skippedLastRunPill(task({ kind: 'team' }), now)?.title).toContain('The previous Squad run was still running');
+  });
+  it('is null for a /loop row and for a schedule that ran', () => {
+    expect(skippedLastRunPill(task({ external: { kind: 'claude-loop' } } as Partial<ScheduledTask>), now)).toBeNull();
+    expect(skippedLastRunPill(task({}, 'success'), now)).toBeNull();
   });
 });

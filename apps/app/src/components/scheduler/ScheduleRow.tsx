@@ -15,13 +15,12 @@ import {
 } from 'lucide-react';
 import type { ScheduledTask, ScheduleGroup } from '@zana-ai/zcc-domain/product';
 import { latestResumableRun } from '@zana-ai/zcc-domain/schedule-health';
-import { lastRunSkipped } from '@zana-ai/zcc-domain/schedule-skipped';
 import { useData, useUi } from '../../store.js';
 import { useNavigate } from 'react-router-dom';
 import { groupIcon, GROUP_FALLBACK_COLOR } from '../scheduleGroupMeta.js';
 import {
   pickLiveRun,
-  skippedLastRunLabel,
+  skippedLastRunPill,
   isSessionAlive as isSessionOpen,
   formatCountdown,
   PROFILE_LABEL
@@ -50,8 +49,7 @@ export const ScheduleRow = React.memo(function ScheduleRow({
 }: ScheduleRowProps) {
   const isExternal = task.external?.kind === 'claude-loop';
   const nextRun = task.status.nextRunAt ? new Date(task.status.nextRunAt) : null;
-  const skipped = isExternal ? null : lastRunSkipped(task, Date.now());
-  const skippedLabel = skipped ? skippedLastRunLabel(skipped, Date.now(), task.kind === 'team') : null;
+  const skippedLabel = skippedLastRunPill(task, Date.now());
   const terminals = useData((s) => s.terminals);
   const pushToast = useUi((s) => s.pushToast);
   const navigate = useNavigate();
